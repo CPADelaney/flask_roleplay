@@ -47,6 +47,7 @@ function resetPendingUniversalUpdates() {
 
 // Socket.IO reference
 let socket = null;
+let reconnectionInProgress = false;
 
 // We accumulate the partial streamed content in a single bubble
 let currentAssistantBubble = null;
@@ -61,60 +62,62 @@ function setupSocketListeners() {
   // Connection events
   socket.on("connect", () => {
     console.log("Socket.IO connected with ID:", socket.id);
+    
+    // If reconnection was in progress, add a system message
+    if (reconnectionInProgress) {
+      const reconnectMsg = { sender: "system", content: "Connection restored!" };
+      appendMessage(reconnectMsg, true);
+      reconnectionInProgress = false;
+    }
+    
+    // Join conversation room if one is active
     if (currentConvId) {
       socket.emit('join', { conversation_id: currentConvId });
+      console.log(`Joined room: ${currentConvId}`);
     }
   });
 
-  socket.on('disconnect', (reason) => {
+  socket.on("disconnect", (reason) => {
     console.log("Socket.IO disconnected:", reason);
-    
+    reconnectionInProgress = true;
     const disconnectMsg = { sender: "system", content: "Connection lost. Attempting to reconnect..." };
     appendMessage(disconnectMsg, true);
     
-    // Server initiated disconnect needs manual reconnection
+    // Server-initiated disconnect needs manual reconnection
     if (reason === 'io server disconnect') {
-      socket.connect();
+      setTimeout(() => socket.connect(), 1000);
     }
-    // For ping timeout, try clearing any zombie connections
-    if (reason === 'ping timeout') {
-      setTimeout(() => {
-        if (!socket.connected) {
-          console.log("Attempting recovery from ping timeout...");
-          socket.connect();
-        }
-      }, 1000);
-    }
-  });
-
-  socket.on('reconnect_attempt', (attemptNumber) => {
-    console.log(`Socket.IO reconnection attempt #${attemptNumber}`);
-  });
-  
-  socket.on('reconnect', (attemptNumber) => {
-    console.log(`Socket.IO reconnected after ${attemptNumber} attempts`);
-    const reconnectMsg = { sender: "system", content: "Connection restored!" };
-    appendMessage(reconnectMsg, true);
-    
-    // Rejoin any active conversation
-    if (currentConvId) {
-      socket.emit('join', { conversation_id: currentConvId });
-      console.log(`Rejoined room: ${currentConvId} after reconnection`);
-    }
-  });
-  
-  socket.on('reconnect_error', (error) => {
-    console.error("Socket.IO reconnection error:", error);
-  });
-  
-  socket.on('reconnect_failed', () => {
-    console.error("Socket.IO reconnection failed after all attempts");
-    const failMsg = { sender: "system", content: "Unable to reconnect to server. Please refresh the page." };
-    appendMessage(failMsg, true);
   });
 
   socket.on("connect_error", (error) => {
     console.error("Socket.IO connection error:", error);
+  });
+  
+  socket.on("reconnect_attempt", (attemptNumber) => {
+    console.log(`Socket.IO reconnection attempt #${attemptNumber}`);
+    
+    // After several reconnection attempts, try alternate transports
+    if (attemptNumber % 3 === 0) {
+      console.log("Trying alternate transport strategy...");
+    }
+  });
+  
+  socket.on("reconnect", (attemptNumber) => {
+    console.log(`Socket.IO reconnected after ${attemptNumber} attempts`);
+    
+    // Reset reconnection state
+    reconnectionInProgress = false;
+    
+    // Rejoin the conversation room if active
+    if (currentConvId) {
+      socket.emit('join', { conversation_id: currentConvId });
+    }
+  });
+  
+  socket.on("reconnect_failed", () => {
+    console.error("Socket.IO reconnection failed");
+    const failMsg = { sender: "system", content: "Unable to reconnect. Please refresh the page." };
+    appendMessage(failMsg, true);
   });
 
   // Room events
@@ -126,7 +129,6 @@ function setupSocketListeners() {
 
   // Message streaming events
   socket.on("new_token", function(payload) {
-    // console.log("Received token:", payload.token); // Too verbose for regular console
     handleNewToken(payload.token);
   });
 
@@ -172,6 +174,18 @@ function setupSocketListeners() {
      console.log("Game state updated:", data);
      // Example: if (data.type === "npc_update") updateNPCInfo(data.npc_data);
   });
+  
+  // Heartbeat handler to keep connection alive
+  socket.on("server_heartbeat", function(data) {
+    console.log("Received server heartbeat:", data.timestamp);
+  });
+  
+  // Set up client heartbeat to keep connection alive
+  setInterval(() => {
+    if (socket && socket.connected) {
+      socket.emit('client_heartbeat', { timestamp: Date.now() });
+    }
+  }, 20000); // Send heartbeat every 20 seconds
 }
 
  function appendImageToChat(imageUrl, reason) {
@@ -390,6 +404,12 @@ async function selectConversation(convId) {
     socket.emit('join', { conversation_id: convId });
   } else {
     console.warn('Socket not connected, cannot join room for convo:', convId);
+    
+    // Try to reconnect the socket if it's not connected
+    if (socket) {
+      console.log('Attempting to reconnect socket...');
+      socket.connect();
+    }
   }
   await loadMessages(convId, true); // true to replace existing messages
   await checkForWelcomeImage(convId);
@@ -500,28 +520,60 @@ async function sendMessage() {
   partialAssistantText = "";
 
   console.log(`Sending storybeat to server for conversation ${currentConvId}`);
+  
+  // Check if socket is connected before sending
   if (!socket || !socket.connected) {
     console.warn("Socket disconnected, attempting to reconnect before sending...");
-    // Optionally, you could try to reconnect here or queue the message
-    // For now, we'll just log and potentially fail if not connected.
-    // A better UX would show a "connecting..." message and retry.
-    if (socket) socket.connect(); // Attempt to reconnect
-    // You might want to wait for connection here, or disable send button if not connected.
-    // This example will proceed, which might lead to message loss if not reconnected quickly.
-    // A robust solution would involve checking socket.connected before emitting and handling failures.
+    
+    // Add reconnection message
+    const reconnectingMsg = { sender: "system", content: "Connection lost. Reconnecting before sending your message..." };
+    appendMessage(reconnectingMsg, true);
+    
+    // Try to reconnect
+    if (socket) {
+      socket.connect();
+      
+      // Wait for connection to establish before proceeding
+      let attempts = 0;
+      const maxAttempts = 5;
+      const waitForConnection = setInterval(() => {
+        attempts++;
+        if (socket.connected) {
+          clearInterval(waitForConnection);
+          console.log("Socket reconnected. Proceeding with message send.");
+          proceedWithSend();
+        } else if (attempts >= maxAttempts) {
+          clearInterval(waitForConnection);
+          console.error("Failed to reconnect after multiple attempts.");
+          const errorMsg = { sender: "system", content: "Could not connect to server. Please refresh the page and try again." };
+          appendMessage(errorMsg, true);
+        }
+      }, 1000);
+      
+      return; // Exit here and let the interval handler call proceedWithSend
+    } else {
+      const errorMsg = { sender: "system", content: "Connection error. Please refresh the page." };
+      appendMessage(errorMsg, true);
+      return;
+    }
   }
+  
+  // If socket is connected, proceed with sending
+  proceedWithSend();
+  
+  function proceedWithSend() {
+    // Ensure joined to the correct room (socket might have reconnected)
+    socket.emit('join', { conversation_id: currentConvId });
 
-  // Ensure joined to the correct room (socket might have reconnected)
-  socket.emit('join', { conversation_id: currentConvId });
-
-  socket.emit("storybeat", {
-    user_input: userText,
-    conversation_id: currentConvId,
-    player_name: "Chase", // This should ideally come from logged-in user data
-    advance_time: false,
-    universal_update: pendingUniversalUpdates
-  });
-  resetPendingUniversalUpdates();
+    socket.emit("storybeat", {
+      user_input: userText,
+      conversation_id: currentConvId,
+      player_name: "Chase", // This should ideally come from logged-in user data
+      advance_time: false,
+      universal_update: pendingUniversalUpdates
+    });
+    resetPendingUniversalUpdates();
+  }
 }
 
 function advanceTime() {
@@ -535,15 +587,38 @@ function advanceTime() {
   currentAssistantBubble = null; // Reset
   partialAssistantText = "";
 
-  socket.emit('join', { conversation_id: currentConvId }); // Ensure joined
-  socket.emit("storybeat", {
-    user_input: "Let's advance to the next time period.", // Or a specific system command
-    conversation_id: currentConvId,
-    player_name: "Chase",
-    advance_time: true,
-    universal_update: pendingUniversalUpdates
-  });
-  resetPendingUniversalUpdates();
+  // Check if socket is connected
+  if (!socket || !socket.connected) {
+    console.warn("Socket disconnected, attempting to reconnect...");
+    
+    if (socket) {
+      socket.connect();
+      
+      // Wait briefly for connection
+      setTimeout(() => {
+        if (socket.connected) {
+          sendAdvanceTimeCommand();
+        } else {
+          const errorMsg = { sender: "system", content: "Not connected to server. Please refresh the page." };
+          appendMessage(errorMsg, true);
+        }
+      }, 1000);
+    }
+  } else {
+    sendAdvanceTimeCommand();
+  }
+  
+  function sendAdvanceTimeCommand() {
+    socket.emit('join', { conversation_id: currentConvId }); // Ensure joined
+    socket.emit("storybeat", {
+      user_input: "Let's advance to the next time period.", // Or a specific system command
+      conversation_id: currentConvId,
+      player_name: "Chase",
+      advance_time: true,
+      universal_update: pendingUniversalUpdates
+    });
+    resetPendingUniversalUpdates();
+  }
 }
 
 // Context Menu
@@ -640,6 +715,25 @@ async function deleteConversation(convId) {
   }
 }
 
+// Improved Socket.IO initialization with robust configuration
+function initializeSocket() {
+  socket = io({
+    path: '/socket.io',
+    transports: ['websocket', 'polling'],
+    auth: { user_id: window.CURRENT_USER_ID },
+    reconnection: true,
+    reconnectionAttempts: Infinity,
+    reconnectionDelay: 1000,
+    reconnectionDelayMax: 5000,
+    timeout: 120000, // Match server's pingTimeout (120 seconds)
+    pingTimeout: 120000,
+    pingInterval: 25000, // Match server's pingInterval
+    forceNew: false, // Don't force a new connection each time
+    autoConnect: true
+  });
+  
+  setupSocketListeners();
+}
 
 // DOMContentLoaded to initialize everything
 document.addEventListener('DOMContentLoaded', async function() {
@@ -656,50 +750,14 @@ document.addEventListener('DOMContentLoaded', async function() {
   contextMenuDiv = document.getElementById("contextMenu");
   leftPanelInner = document.getElementById("leftPanelInner");
 
-
   // Initial setup
   await checkLoggedIn(); // This might redirect, so subsequent calls might not happen if not logged in
   attachEnterKey();
   loadDarkModeFromStorage();
   await loadConversations();
 
-  // Socket.IO connection
-  socket = io({
-      path: '/socket.io',
-      transports: ['websocket', 'polling'],
-      auth: { user_id: window.CURRENT_USER_ID },
-      reconnection: true,
-      reconnectionAttempts: Infinity,
-      reconnectionDelay: 1000,
-      reconnectionDelayMax: 5000,
-      timeout: 120000, // Match server's pingTimeout (120 seconds)
-      pingTimeout: 120000,
-      pingInterval: 25000, // Match server's pingInterval
-      forceNew: false, // Don't force a new connection each time
-      autoConnect: true
-  });
-  setupSocketListeners();
-
-  // Add more debug logging
-  socket.on('connect', () => {
-    console.log("Socket.IO connected!", socket.id);
-    if (currentConvId) {
-      socket.emit('join', { conversation_id: currentConvId });
-      console.log(`Joined room: ${currentConvId}`);
-    }
-  });
-  
-  socket.on('connect_error', (error) => {
-    console.error("Socket.IO connection error:", error);
-  });
-  
-  socket.on('reconnect_attempt', (attemptNumber) => {
-    console.log(`Socket.IO reconnection attempt #${attemptNumber}`);
-  });
-  
-  socket.on('reconnect_failed', () => {
-    console.error("Socket.IO reconnection failed");
-  });
+  // Socket.IO connection with improved configuration
+  initializeSocket();
 
   // Attach global event listeners
   if (logoutBtn) logoutBtn.addEventListener("click", logout);
@@ -714,5 +772,39 @@ document.addEventListener('DOMContentLoaded', async function() {
      if (contextMenuDiv && !contextMenuDiv.contains(e.target)) {
          contextMenuDiv.style.display = "none";
      }
+  });
+  
+  // Add page visibility change handler to detect when browser tab becomes inactive/active
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") {
+      console.log("Page is now visible, checking connection status");
+      // If socket exists but disconnected, try to reconnect
+      if (socket && !socket.connected) {
+        console.log("Page became visible but socket disconnected. Reconnecting...");
+        socket.connect();
+      }
+    }
+  });
+  
+  // Add window focus handler as well (sometimes more reliable than visibilitychange)
+  window.addEventListener("focus", () => {
+    console.log("Window regained focus, checking connection status");
+    if (socket && !socket.connected) {
+      console.log("Window focused but socket disconnected. Reconnecting...");
+      socket.connect();
+    }
+  });
+  
+  // Add window online/offline handlers
+  window.addEventListener("online", () => {
+    console.log("Browser reports online status, attempting to reconnect socket");
+    if (socket && !socket.connected) {
+      socket.connect();
+    }
+  });
+  
+  window.addEventListener("offline", () => {
+    console.log("Browser reports offline status");
+    // No action needed - the socket's internal events will handle this
   });
 });
