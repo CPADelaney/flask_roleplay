@@ -2,8 +2,6 @@
 FROM python:3.10-slim
 
 WORKDIR /app
-COPY hypercorn_config.toml . # Make sure this line exists and is correct
-COPY . .
 
 # Install OS dependencies as root
 RUN apt-get update && apt-get install -y --no-install-recommends \
