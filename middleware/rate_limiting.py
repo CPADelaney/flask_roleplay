@@ -404,6 +404,9 @@ async def async_ip_block_middleware():
             return Response("Your IP has been blocked due to suspicious activity", status=403)
     except Exception as e:
         logger.error(f"Error in IP block middleware: {e}")
+    
+    # Add this line to explicitly return None (allow request to proceed)
+    return None
 
 # In your main.py or app factory:
 # from middleware.rate_limiting import rate_limit, async_ip_block_middleware
