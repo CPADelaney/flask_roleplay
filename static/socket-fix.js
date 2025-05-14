@@ -17,30 +17,25 @@
       console.log(`[SocketFix]`, ...args);
     }
   }
-  
-  // Function to create a robust Socket.IO connection
-  window.createRobustSocketConnection = function(options = {}) {
-    if (!isBrowser || typeof io === 'undefined') {
-      console.error('Socket.IO not available');
-      return null;
-    }
-    
-    // Combine default options with provided options
-    const config = {
+
+  function createRobustSocketConnection() {
+    const socket = io({
       path: '/socket.io',
-      transports: ['websocket', 'polling'],
-      auth: { user_id: window.CURRENT_USER_ID || 'anonymous' },
+      transports: ['websocket', 'polling'], // Try websocket first, fallback to polling
+      auth: { user_id: window.CURRENT_USER_ID },
       reconnection: true,
-      reconnectionAttempts: Infinity,
+      reconnectionAttempts: 10, // Limit max attempts to prevent flooding
       reconnectionDelay: 1000,
       reconnectionDelayMax: 5000,
-      timeout: 120000, // Match server's pingTimeout
-      pingTimeout: 120000,
-      pingInterval: 25000, // Match server's pingInterval
-      forceNew: false,
-      ...options
-    };
+      timeout: 60000, // Reduce from 120000 to match more common configurations
+      pingTimeout: 60000, // Reduce from 120000
+      pingInterval: 25000
+    });
     
+    return socket;
+  }
+  
+
     debugLog('Creating new socket connection with config:', config);
     
     // Create the Socket.IO connection
