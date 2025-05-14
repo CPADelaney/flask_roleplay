@@ -509,6 +509,51 @@ def create_quart_app():
 
 
     # 5) Socket.IO event handlers
+    @sio.on("storybeat")
+    async def on_storybeat(sid, data):
+        sock_sess = await sio.get_session(sid)
+        user_id = sock_sess.get("user_id", "anonymous")
+        conversation_id = data.get("conversation_id")
+        user_input = data.get("user_input")
+        universal_update = data.get("universal_update") # Make sure client sends this if needed
+    
+        app.logger.info(f"Received 'storybeat' from sid={sid}, user_id={user_id}, conv_id={conversation_id}")
+    
+        # Basic validation
+        if not all([isinstance(conversation_id, (int, str)), user_input is not None]): # user_input can be an empty string
+            error_msg = "Invalid 'storybeat' payload: missing or invalid conversation_id or user_input."
+            app.logger.error(f"{error_msg} SID: {sid}. Data: {data}")
+            # Emit error to the specific room or SID
+            target_room = str(conversation_id) if conversation_id else sid
+            await sio.emit('error', {'error': error_msg}, room=target_room)
+            return
+    
+        try:
+            # Acknowledge receipt to the client before starting the long background task
+            await sio.emit("processing", {"message": "Your request is being processed..."}, to=sid)
+    
+            # Use the built-in way to run background tasks with python-socketio
+            # This correctly manages the application context for the background task.
+            sio.start_background_task(
+                background_chat_task, # Your async background function
+                conversation_id,
+                user_input,
+                user_id,
+                universal_update # Pass this along if your background_chat_task expects it
+            )
+            app.logger.info(f"Started background_chat_task for sid={sid}, conv_id={conversation_id}")
+    
+        except Exception as e:
+            app.logger.error(f"Error dispatching background_chat_task for sid={sid}: {e}", exc_info=True)
+            target_room = str(conversation_id) if conversation_id else sid
+            await sio.emit('error', {'error': 'Server failed to initiate message processing.'}, room=target_room)
+
+    @sio.event
+    async def disconnect(sid):
+        sock_sess = await sio.get_session(sid) # Use await
+        user_id = sock_sess.get("user_id", "anonymous") if sock_sess else "unknown (session not found)"
+        app.logger.warning(f"Socket DISCONNECTED: sid={sid}, user_id={user_id}. Current active SIDs: {list(sio.manager.sockets.keys())}")
+        
     @sio.event
     async def client_heartbeat(sid, data):
         """Handle client heartbeat to keep connections alive."""
