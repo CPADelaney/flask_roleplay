@@ -78,9 +78,9 @@ function setupSocketListeners() {
   });
 
   socket.on("disconnect", (reason) => {
-    console.log("Socket.IO disconnected:", reason);
+    console.error("Socket.IO disconnected DETAILED:", reason, "Current socket ID:", socket.id, "Connected:", socket.connected); // More detail
     reconnectionInProgress = true;
-    const disconnectMsg = { sender: "system", content: "Connection lost. Attempting to reconnect..." };
+    const disconnectMsg = { sender: "system", content: `Connection lost (${reason}). Attempting to reconnect...` };
     appendMessage(disconnectMsg, true);
     
     // Server-initiated disconnect needs manual reconnection
