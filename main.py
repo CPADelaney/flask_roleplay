@@ -413,7 +413,6 @@ def create_quart_app():
         logger=True,
         engineio_logger=True,
         async_handlers=True, # Enable async event handlers
-        max_http_buffer_size=5*1024*1024,
         always_connect=True, # Be more permissive in connections
         http_compression=True # Enable HTTP compression
     )
