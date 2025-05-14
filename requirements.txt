@@ -16,11 +16,11 @@ openai-agents==0.0.4
 asyncpg
 celery
 gunicorn
-eventlet>=0.24.1
+eventlet==0.33.3
 asgiref
 quart>=0.20.0
-python-socketio
-python-engineio
+python-socketio==5.11.2
+python-engineio==4.7.1
 quart-cors>=0.8
 quart-schema
 asyncio-extras
