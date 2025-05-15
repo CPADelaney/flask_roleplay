@@ -264,10 +264,10 @@ async def initialize_systems(app: Quart):
 
     try:
         # --- 1. Database Connection Pool ---
-        logger.info("Initializing database connection pool...")
-        if not await initialize_connection_pool(app=app):
-            raise RuntimeError("Database pool initialization failed critically.")
-        logger.info("Database connection pool initialized successfully.")
+#        logger.info("Initializing database connection pool...")
+#        if not await initialize_connection_pool(app=app):
+#            raise RuntimeError("Database pool initialization failed critically.")
+#        logger.info("Database connection pool initialized successfully.")
 
         # --- 2. Redis Connection Pools (Centralized Here) ---
 #        logger.info("Initializing aioredis pools...")
