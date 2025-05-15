@@ -346,18 +346,18 @@ async def initialize_systems(app: Quart):
             logger.warning("NyxBrain initialization failed. Some features might be unavailable.")
 
 
-        logger.info("Initializing MCP orchestrator...")
-        try:
-            app.mcp_orchestrator = MCPOrchestrator()
-            await app.mcp_orchestrator.initialize()
-            logger.info("MCP orchestrator initialized.")
-        except Exception as e:
-             logger.error(f"Error initializing MCP Orchestrator: {e}", exc_info=True)
+#        logger.info("Initializing MCP orchestrator...")
+#        try:
+#            app.mcp_orchestrator = MCPOrchestrator()
+#            await app.mcp_orchestrator.initialize()
+#            logger.info("MCP orchestrator initialized.")
+#        except Exception as e:
+#             logger.error(f"Error initializing MCP Orchestrator: {e}", exc_info=True)
 
         # --- 4. Other System Initializations ---
-        logger.info("Initializing Aggregator SDK singletons...")
-        await init_singletons()
-        logger.info("Aggregator SDK singletons are ready.")
+#        logger.info("Initializing Aggregator SDK singletons...")
+#        await init_singletons()
+#        logger.info("Aggregator SDK singletons are ready.")
 
         # --- 5. Configuration Settings ---
         admin_ids_str = os.getenv("ADMIN_USER_IDS", "1")
