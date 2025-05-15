@@ -311,9 +311,9 @@ async def initialize_systems(app: Quart):
             # raise RuntimeError(f"Unexpected critical Redis initialization failure: {e}")
 
         # --- 3. Core Application Logic (Nyx, MCP, etc.) ---
-        logger.info("Initializing Nyx memory system...")
-        await initialize_nyx_memory_system()
-        logger.info("Nyx memory system initialized successfully.")
+#        logger.info("Initializing Nyx memory system...")
+#        await initialize_nyx_memory_system()
+#        logger.info("Nyx memory system initialized successfully.")
 
 #        logger.info("Initializing global NyxBrain instance...")
 #        try:
