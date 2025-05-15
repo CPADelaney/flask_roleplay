@@ -15,7 +15,6 @@ openai==1.66.2
 openai-agents==0.0.4
 asyncpg
 celery
-gunicorn
 eventlet==0.33.3
 asgiref
 quart>=0.20.0
