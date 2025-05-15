@@ -315,35 +315,35 @@ async def initialize_systems(app: Quart):
         await initialize_nyx_memory_system()
         logger.info("Nyx memory system initialized successfully.")
 
-        logger.info("Initializing global NyxBrain instance...")
-        try:
-            system_user_id = 0
-            system_conversation_id = 0
-            if hasattr(NyxBrain, "get_instance"):
-                app.nyx_brain = await NyxBrain.get_instance(system_user_id, system_conversation_id)
-                logger.info("Global NyxBrain instance obtained/initialized.")
-                if app.nyx_brain:
-                    await app.nyx_brain.restore_entity_from_distributed_checkpoints()
-                    from nyx.nyx_agent_sdk import process_user_input, process_user_input_with_openai
-                    app.nyx_brain.response_processors = {
-                        "default": background_chat_task,
-                        "openai": process_user_input_with_openai,
-                        "base": process_user_input
-                    }
-                    logger.info("Response processors registered with NyxBrain.")
-            else:
-                logger.warning("NyxBrain.get_instance method not available. Skipping NyxBrain initialization.")
-                app.nyx_brain = None
-        except ImportError as e:
-             logger.error(f"Could not import or use NyxBrain components: {e}. NyxBrain might be unavailable.", exc_info=True)
-             app.nyx_brain = None
-        except Exception as e:
-             logger.error(f"Error initializing NyxBrain: {e}", exc_info=True)
-             app.nyx_brain = None
+#        logger.info("Initializing global NyxBrain instance...")
+#        try:
+ #           system_user_id = 0
+ #           system_conversation_id = 0
+#            if hasattr(NyxBrain, "get_instance"):
+#                app.nyx_brain = await NyxBrain.get_instance(system_user_id, system_conversation_id)
+#                logger.info("Global NyxBrain instance obtained/initialized.")
+#                if app.nyx_brain:
+#                    await app.nyx_brain.restore_entity_from_distributed_checkpoints()
+#                    from nyx.nyx_agent_sdk import process_user_input, process_user_input_with_openai
+#                    app.nyx_brain.response_processors = {
+#                        "default": background_chat_task,
+#                        "openai": process_user_input_with_openai,
+#                        "base": process_user_input
+ #                   }
+#                    logger.info("Response processors registered with NyxBrain.")
+#            else:
+#                logger.warning("NyxBrain.get_instance method not available. Skipping NyxBrain initialization.")
+#                app.nyx_brain = None
+#        except ImportError as e:
+#             logger.error(f"Could not import or use NyxBrain components: {e}. NyxBrain might be unavailable.", exc_info=True)
+#             app.nyx_brain = None
+#        except Exception as e:
+#             logger.error(f"Error initializing NyxBrain: {e}", exc_info=True)
+#             app.nyx_brain = None
         
-        if not app.nyx_brain: # Example of a critical check
+#        if not app.nyx_brain: # Example of a critical check
             # raise RuntimeError("NyxBrain initialization failed, which is critical.")
-            logger.warning("NyxBrain initialization failed. Some features might be unavailable.")
+#            logger.warning("NyxBrain initialization failed. Some features might be unavailable.")
 
 
 #        logger.info("Initializing MCP orchestrator...")
