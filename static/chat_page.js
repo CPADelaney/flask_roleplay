@@ -398,8 +398,16 @@ function renderConvoList(conversations) {
 }
 
 async function selectConversation(convId) {
+  if (convId === nyxSpaceConvId) {
+    console.log("Chat with Nyx selected, clearing window");
+  } else {
+    console.log(`selectConversation called with ${convId}`);
+  }
   currentConvId = convId;
   messagesOffset = 0;
+  // Debug socket connection
+  console.log(`Socket state: ${socket ? (socket.connected ? 'connected' : 'disconnected') : 'null'}`);
+  
 
   if (socket && socket.connected) {
     socket.emit('join', { conversation_id: convId });
