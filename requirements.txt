@@ -1,5 +1,6 @@
 # Core dependencies
 pandas
+Tensorflow
 aiohttp==3.9.1
 aiomysql==0.2.0
 asyncio==3.4.3
