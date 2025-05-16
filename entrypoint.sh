@@ -6,6 +6,5 @@ if [ "$SERVICE_TYPE" = "worker" ]; then
 else
     echo "Starting Web Server with SocketIO..."
     PORT=${PORT:-8080}
-    # Add the --workers=1 flag to ensure a single worker process
-    exec hypercorn --workers 1 --worker-class asyncio --keep-alive 120 --graceful-timeout 10 --bind 0.0.0.0:${PORT} wsgi:app
+    exec uvicorn wsgi:app --host 0.0.0.0 --port ${PORT}
 fi
