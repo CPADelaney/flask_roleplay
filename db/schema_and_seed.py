@@ -1257,9 +1257,9 @@ async def create_all_tables():
                 ''',
                 '''
                 CREATE TABLE IF NOT EXISTS NyxConversations (
-                    id SERIAL PRIMARY KEY,
+                    nyx_conv_id SERIAL PRIMARY KEY,
                     user_id INTEGER NOT NULL,
-                    conversation_name VARCHAR(100) NOT NULL,
+                    nyx_conversation_name VARCHAR(100) NOT NULL,
                     status VARCHAR(20) NOT NULL DEFAULT 'processing',
                     created_at TIMESTAMP DEFAULT NOW(),
                     folder_id INTEGER,
