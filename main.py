@@ -878,6 +878,37 @@ def create_quart_app():
             return jsonify({"error": "Server error starting game"}), 500
 
     # --- Admin/Debug Routes ---
+    @app.route('/nyx_space/messages', methods=['GET'])
+    async def get_nyx_space_messages():
+        if "user_id" not in session:
+            return jsonify({"error": "Not authenticated"}), 401
+        user_id = session["user_id"]
+        async with get_db_connection_context() as conn:
+            rows = await conn.fetch(
+                "SELECT message FROM nyx_dm_messages WHERE user_id = $1 ORDER BY created_at ASC", user_id)
+            messages = [row['message'] for row in rows]
+        return jsonify({"messages": messages})
+
+    @app.route('/nyx_space/messages', methods=['POST'])
+    async def post_nyx_space_message():
+        if "user_id" not in session:
+            return jsonify({"error": "Not authenticated"}), 401
+        user_id = session["user_id"]
+        data = await request.get_json()
+        msg_obj = {
+            "sender": data.get("sender"),
+            "content": data.get("content"),
+            "timestamp": data.get("timestamp"), # or time.time()
+        }
+        async with get_db_connection_context() as conn:
+            await conn.execute(
+                "INSERT INTO nyx_dm_messages (user_id, message) VALUES ($1, $2)",
+                user_id, json.dumps(msg_obj)
+            )
+        return jsonify({"ok": True})
+
+
+    
     @app.route("/admin/nyx_direct", methods=["POST"])
     async def admin_nyx_direct(): # Make async
         """Direct access to NyxBrain for admin users only"""
