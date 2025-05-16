@@ -541,6 +541,37 @@ async function sendMessage() {
   if (!userText || !currentConvId) return;
 
   userMsgInputEl.value = "";
+
+  if (currentConvId === nyxSpaceConvId) {
+      // 1. Save the user message
+      await fetch('/nyx_space/messages', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({sender: "user", content: userText, timestamp: Date.now()})
+      });
+
+      appendMessage({sender: "user", content: userText, timestamp: Date.now()}, true);
+
+      // 3. Get Nyx's reply
+      const replyRes = await fetch('/nyx_response', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({user_input: userText, conversation_id: 0 })
+      });
+      const replyData = await replyRes.json();
+      const aiReply = replyData.message || replyData.reply || "...";
+      appendMessage({sender: "Nyx", content: aiReply, timestamp: Date.now()}, true);
+
+      // 4. Save Nyx's reply to the DB
+      await fetch('/nyx_space/messages', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({sender: "Nyx", content: aiReply, timestamp: Date.now()})
+      });
+      return;
+  }
+
+  userMsgInputEl.value = "";
   const userMsgObj = { sender: "user", content: userText };
   appendMessage(userMsgObj, true);
 
