@@ -854,7 +854,7 @@ def create_quart_app():
 
                     # Optionally, insert default player stats immediately
                     # Assuming insert_default_player_stats_chase uses asyncpg or can be awaited
-                    await insert_default_player_stats_chase(user_id, conversation_id, conn) # Pass connection
+                    await insert_default_player_stats_chase(user_id, conversation_id) # Pass connection
 
 
             # 2. Trigger the heavy lifting asynchronously via Celery
