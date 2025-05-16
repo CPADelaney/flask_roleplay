@@ -1268,6 +1268,14 @@ async def create_all_tables():
                 );
                 ''',
                 '''
+                CREATE TABLE IF NOT EXISTS nyx_dm_messages (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    message JSONB NOT NULL,
+                    created_at TIMESTAMP DEFAULT NOW()
+                );
+                ''',
+                '''
                 CREATE TABLE IF NOT EXISTS NyxAgentCommunication (
                     id SERIAL PRIMARY KEY,
                     user_id INTEGER NOT NULL,
