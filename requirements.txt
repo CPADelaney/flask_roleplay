@@ -1,5 +1,6 @@
 # Core dependencies
 pandas
+tf-keras
 Tensorflow
 aiohttp==3.9.1
 aiomysql==0.2.0
