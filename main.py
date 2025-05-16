@@ -842,19 +842,17 @@ def create_quart_app():
 
         try:
             # Create initial conversation record
-            async with get_db_connection_context() as conn: # Use async context
-                 async with conn.transaction():
-                    conv_row = await conn.fetchrow( # Use await and $n params
+            async with get_db_connection_context() as conn:
+                async with conn.transaction():
+                    conv_row = await conn.fetchrow(
                         """INSERT INTO conversations (user_id, conversation_name, status)
                         VALUES ($1, $2, 'processing') RETURNING id""",
                         user_id, "New Game - Initializing..."
                     )
                     conversation_id = conv_row['id']
-                    logger.info(f"Created conversation {conversation_id} for user {user_id}")
-
-                    # Optionally, insert default player stats immediately
-                    # Assuming insert_default_player_stats_chase uses asyncpg or can be awaited
-                    await insert_default_player_stats_chase(user_id, conversation_id) # Pass connection
+                    
+                    # Use the existing connection with its transaction
+                    await insert_default_player_stats_chase(user_id, conversation_id, conn)
 
 
             # 2. Trigger the heavy lifting asynchronously via Celery
