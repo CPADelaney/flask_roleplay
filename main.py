@@ -264,100 +264,100 @@ async def initialize_systems(app: Quart):
 
     try:
         # --- 1. Database Connection Pool ---
-#        logger.info("Initializing database connection pool...")
-#        if not await initialize_connection_pool(app=app):
-#            raise RuntimeError("Database pool initialization failed critically.")
-#        logger.info("Database connection pool initialized successfully.")
+        logger.info("Initializing database connection pool...")
+        if not await initialize_connection_pool(app=app):
+            raise RuntimeError("Database pool initialization failed critically.")
+        logger.info("Database connection pool initialized successfully.")
 
         # --- 2. Redis Connection Pools (Centralized Here) ---
-#        logger.info("Initializing aioredis pools...")
-#        try:
+        logger.info("Initializing aioredis pools...")
+        try:
             # Ensure REDIS_URL is available on app.config or os.environ
             # It's good practice for create_quart_app to load .env or set app.config['REDIS_URL']
             # Defaulting here if not on app.config for robustness
-#            redis_url_from_env = os.environ.get('REDIS_URL', 'redis://localhost:6379/0')
-#            redis_url = app.config.get('REDIS_URL', redis_url_from_env)
+            redis_url_from_env = os.environ.get('REDIS_URL', 'redis://localhost:6379/0')
+            redis_url = app.config.get('REDIS_URL', redis_url_from_env)
 
-#            if redis_url:
+            if redis_url:
                 # For Rate Limiter & IP Blocking (shared pool)
                 # aioredis.from_url creates a connection pool internally
-#                shared_redis_pool = await aioredis.from_url(
-#                    redis_url,
-#                    decode_responses=True,
-#                    max_connections=int(os.getenv("REDIS_MAX_CONNECTIONS", 10)), # Make configurable
-#                    socket_timeout=int(os.getenv("REDIS_SOCKET_TIMEOUT", 5)),
-#                    socket_connect_timeout=int(os.getenv("REDIS_CONNECT_TIMEOUT", 5))
-#                )
-#                await shared_redis_pool.ping() # Test connection
+                shared_redis_pool = await aioredis.from_url(
+                    redis_url,
+                    decode_responses=True,
+                    max_connections=int(os.getenv("REDIS_MAX_CONNECTIONS", 10)), # Make configurable
+                    socket_timeout=int(os.getenv("REDIS_SOCKET_TIMEOUT", 5)),
+                    socket_connect_timeout=int(os.getenv("REDIS_CONNECT_TIMEOUT", 5))
+                )
+                await shared_redis_pool.ping() # Test connection
                 
-#                app.aioredis_rate_limit_pool = shared_redis_pool
-#                app.aioredis_ip_block_pool = shared_redis_pool # Use the same pool
+                app.aioredis_rate_limit_pool = shared_redis_pool
+                app.aioredis_ip_block_pool = shared_redis_pool # Use the same pool
 
-#                logger.info("Shared aioredis pool for Rate Limiter and IP Blocking initialized.")
-#            else:
-#                logger.warning("REDIS_URL not configured. Distributed rate limiting and IP blocking will be unavailable or fall back to local.")
-#                app.aioredis_rate_limit_pool = None
-#                app.aioredis_ip_block_pool = None
-#        except (aioredis.RedisError, ConnectionRefusedError, asyncio.TimeoutError) as e:
-#            logger.error(f"Failed to initialize aioredis pools: {e}. This might affect rate limiting and IP blocking.")
-#            app.aioredis_rate_limit_pool = None
-#            app.aioredis_ip_block_pool = None
+                logger.info("Shared aioredis pool for Rate Limiter and IP Blocking initialized.")
+            else:
+                logger.warning("REDIS_URL not configured. Distributed rate limiting and IP blocking will be unavailable or fall back to local.")
+                app.aioredis_rate_limit_pool = None
+                app.aioredis_ip_block_pool = None
+        except (aioredis.RedisError, ConnectionRefusedError, asyncio.TimeoutError) as e:
+            logger.error(f"Failed to initialize aioredis pools: {e}. This might affect rate limiting and IP blocking.")
+            app.aioredis_rate_limit_pool = None
+            app.aioredis_ip_block_pool = None
             # Consider if this is a critical failure. If so, raise an error.
             # raise RuntimeError(f"Critical Redis initialization failure: {e}")
-#        except Exception as e:
-#            logger.error(f"Unexpected error initializing aioredis pools: {e}", exc_info=True)
-#            app.aioredis_rate_limit_pool = None
-#            app.aioredis_ip_block_pool = None
+        except Exception as e:
+            logger.error(f"Unexpected error initializing aioredis pools: {e}", exc_info=True)
+            app.aioredis_rate_limit_pool = None
+            app.aioredis_ip_block_pool = None
             # raise RuntimeError(f"Unexpected critical Redis initialization failure: {e}")
 
         # --- 3. Core Application Logic (Nyx, MCP, etc.) ---
-#        logger.info("Initializing Nyx memory system...")
-#        await initialize_nyx_memory_system()
-#        logger.info("Nyx memory system initialized successfully.")
+        logger.info("Initializing Nyx memory system...")
+        await initialize_nyx_memory_system()
+        logger.info("Nyx memory system initialized successfully.")
 
-#        logger.info("Initializing global NyxBrain instance...")
-#        try:
- #           system_user_id = 0
- #           system_conversation_id = 0
-#            if hasattr(NyxBrain, "get_instance"):
-#                app.nyx_brain = await NyxBrain.get_instance(system_user_id, system_conversation_id)
-#                logger.info("Global NyxBrain instance obtained/initialized.")
-#                if app.nyx_brain:
-#                    await app.nyx_brain.restore_entity_from_distributed_checkpoints()
-#                    from nyx.nyx_agent_sdk import process_user_input, process_user_input_with_openai
-#                    app.nyx_brain.response_processors = {
-#                        "default": background_chat_task,
-#                        "openai": process_user_input_with_openai,
-#                        "base": process_user_input
- #                   }
-#                    logger.info("Response processors registered with NyxBrain.")
-#            else:
-#                logger.warning("NyxBrain.get_instance method not available. Skipping NyxBrain initialization.")
-#                app.nyx_brain = None
-#        except ImportError as e:
-#             logger.error(f"Could not import or use NyxBrain components: {e}. NyxBrain might be unavailable.", exc_info=True)
-#             app.nyx_brain = None
-#        except Exception as e:
-#             logger.error(f"Error initializing NyxBrain: {e}", exc_info=True)
-#             app.nyx_brain = None
+        logger.info("Initializing global NyxBrain instance...")
+        try:
+            system_user_id = 0
+            system_conversation_id = 0
+            if hasattr(NyxBrain, "get_instance"):
+                app.nyx_brain = await NyxBrain.get_instance(system_user_id, system_conversation_id)
+                logger.info("Global NyxBrain instance obtained/initialized.")
+                if app.nyx_brain:
+                    await app.nyx_brain.restore_entity_from_distributed_checkpoints()
+                    from nyx.nyx_agent_sdk import process_user_input, process_user_input_with_openai
+                    app.nyx_brain.response_processors = {
+                        "default": background_chat_task,
+                        "openai": process_user_input_with_openai,
+                        "base": process_user_input
+                    }
+                    logger.info("Response processors registered with NyxBrain.")
+            else:
+                logger.warning("NyxBrain.get_instance method not available. Skipping NyxBrain initialization.")
+                app.nyx_brain = None
+        except ImportError as e:
+             logger.error(f"Could not import or use NyxBrain components: {e}. NyxBrain might be unavailable.", exc_info=True)
+             app.nyx_brain = None
+        except Exception as e:
+             logger.error(f"Error initializing NyxBrain: {e}", exc_info=True)
+             app.nyx_brain = None
         
-#        if not app.nyx_brain: # Example of a critical check
+        if not app.nyx_brain: # Example of a critical check
             # raise RuntimeError("NyxBrain initialization failed, which is critical.")
-#            logger.warning("NyxBrain initialization failed. Some features might be unavailable.")
+            logger.warning("NyxBrain initialization failed. Some features might be unavailable.")
 
 
-#        logger.info("Initializing MCP orchestrator...")
-#        try:
-#            app.mcp_orchestrator = MCPOrchestrator()
-#            await app.mcp_orchestrator.initialize()
-#            logger.info("MCP orchestrator initialized.")
-#        except Exception as e:
-#             logger.error(f"Error initializing MCP Orchestrator: {e}", exc_info=True)
+        logger.info("Initializing MCP orchestrator...")
+        try:
+            app.mcp_orchestrator = MCPOrchestrator()
+            await app.mcp_orchestrator.initialize()
+            logger.info("MCP orchestrator initialized.")
+        except Exception as e:
+             logger.error(f"Error initializing MCP Orchestrator: {e}", exc_info=True)
 
         # --- 4. Other System Initializations ---
-#        logger.info("Initializing Aggregator SDK singletons...")
-#        await init_singletons()
-#        logger.info("Aggregator SDK singletons are ready.")
+        logger.info("Initializing Aggregator SDK singletons...")
+        await init_singletons()
+        logger.info("Aggregator SDK singletons are ready.")
 
         # --- 5. Configuration Settings ---
         admin_ids_str = os.getenv("ADMIN_USER_IDS", "1")
