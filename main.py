@@ -25,6 +25,6 @@ def create_quart_app():
 
     @app.route("/")
     async def index():
-        return "Hello, World!"
+        return "Memento Mori"
 
     return app
