@@ -267,7 +267,7 @@ Decreases: Failing endurance-based tasks."""
 # 3. Default Player Stats
 ############################
 
-async def insert_default_player_stats_chase(user_id, conversation_id):
+async def insert_default_player_stats_chase(user_id, conversation_id, provided_conn=None):
     """
     Insert row for 'Chase' in PlayerStats, scoping by user_id + conversation_id.
     """
@@ -283,7 +283,19 @@ async def insert_default_player_stats_chase(user_id, conversation_id):
         "physical_endurance": 40
     }
 
-    async with get_db_connection_context() as conn:
+    if provided_conn:
+        conn = provided_conn
+        # Use the existing connection/transaction
+        row = await conn.fetchrow("""
+            SELECT id FROM PlayerStats
+            WHERE user_id=$1
+              AND conversation_id=$2
+              AND player_name=$3
+        """, user_id, conversation_id, chase_stats["player_name"])
+
+    else:
+        # Create our own connection context if none was provided
+        async with get_db_connection_context() as conn:
         # Check if a row already exists for these user+conversation+player
         row = await conn.fetchrow("""
             SELECT id FROM PlayerStats
