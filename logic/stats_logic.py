@@ -283,20 +283,10 @@ async def insert_default_player_stats_chase(user_id, conversation_id, provided_c
         "physical_endurance": 40
     }
 
+    # Use the provided connection if available, otherwise get a new one
     if provided_conn:
         conn = provided_conn
         # Use the existing connection/transaction
-        row = await conn.fetchrow("""
-            SELECT id FROM PlayerStats
-            WHERE user_id=$1
-              AND conversation_id=$2
-              AND player_name=$3
-        """, user_id, conversation_id, chase_stats["player_name"])
-
-    else:
-        # Create our own connection context if none was provided
-        async with get_db_connection_context() as conn:
-        # Check if a row already exists for these user+conversation+player
         row = await conn.fetchrow("""
             SELECT id FROM PlayerStats
             WHERE user_id=$1
@@ -323,6 +313,36 @@ async def insert_default_player_stats_chase(user_id, conversation_id, provided_c
                 chase_stats["mental_resilience"], chase_stats["physical_endurance"]
             )
             print(f"Inserted default stats for Chase in user={user_id}, conv={conversation_id}")
+    else:
+        # Create our own connection context if none was provided
+        async with get_db_connection_context() as conn:
+            # Check if a row already exists for these user+conversation+player
+            row = await conn.fetchrow("""
+                SELECT id FROM PlayerStats
+                WHERE user_id=$1
+                  AND conversation_id=$2
+                  AND player_name=$3
+            """, user_id, conversation_id, chase_stats["player_name"])
+
+            if row:
+                print("Default stats for Chase already exist in this user/conversation. Skipping insert.")
+            else:
+                await conn.execute("""
+                    INSERT INTO PlayerStats (
+                        user_id, conversation_id,
+                        player_name,
+                        corruption, confidence, willpower,
+                        obedience, dependency, lust,
+                        mental_resilience, physical_endurance
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                """, 
+                    user_id, conversation_id,
+                    chase_stats["player_name"],
+                    chase_stats["corruption"], chase_stats["confidence"], chase_stats["willpower"],
+                    chase_stats["obedience"], chase_stats["dependency"], chase_stats["lust"],
+                    chase_stats["mental_resilience"], chase_stats["physical_endurance"]
+                )
+                print(f"Inserted default stats for Chase in user={user_id}, conv={conversation_id}")
 
 
 ############################
