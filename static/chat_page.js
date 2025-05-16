@@ -1,11 +1,5 @@
 // chat_page.js
 console.log("Main JS file loaded!");
-document.addEventListener('DOMContentLoaded', function() {
-  console.log("DOMContentLoaded fired!");
-  const btn = document.getElementById("nyxSpaceBtn");
-  console.log("nyxSpaceBtn is:", btn);
-  if (btn) btn.addEventListener("click", () => console.log("Nyx Button Clicked!"));
-});
 
 // Utility: Markdown + sanitization
 function sanitizeAndRenderMarkdown(markdownText) {
