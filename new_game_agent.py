@@ -157,7 +157,7 @@ class NewGameAgent:
         """Initialize the directive handler for this agent"""
         from nyx.integrate import get_central_governance, register_with_governance
         governance = await get_central_governance(user_id, conversation_id)
-        handler = DirectiveHandler(
+        self.directive_handler = DirectiveHandler(
             user_id=user_id,
             conversation_id=conversation_id,
             agent_type=NEW_GAME_AGENT_NYX_TYPE, 
