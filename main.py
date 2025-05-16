@@ -87,22 +87,6 @@ logger = logging.getLogger(__name__)
 
 logging.basicConfig(level=logging.INFO)
 
-# 2) Silence noisy libraries
-NOISY = (
-    "asyncio",
-    "hypercorn",
-#    "socketio",
-#    "engineio",
-    "httpx",
-    "openai",
-    "mcp_orchestrator",
-    "celery.utils.functional",
-)
-for lib in NOISY:
-    logging.getLogger(lib).setLevel(logging.WARNING)
-    logging.getLogger("socketio").setLevel(logging.INFO)
-    logging.getLogger("engineio").setLevel(logging.INFO)
-
 # Database DSN
 DB_DSN = os.getenv("DB_DSN", "postgresql://user:password@host:port/database")
 if not DB_DSN:
