@@ -400,20 +400,48 @@ function renderConvoList(conversations) {
 async function selectConversation(convId) {
   currentConvId = convId;
   messagesOffset = 0;
+
   if (socket && socket.connected) {
     socket.emit('join', { conversation_id: convId });
   } else {
-    console.warn('Socket not connected, cannot join room for convo:', convId);
-    
-    // Try to reconnect the socket if it's not connected
-    if (socket) {
-      console.log('Attempting to reconnect socket...');
-      socket.connect();
-    }
+    if (socket) socket.connect();
   }
-  await loadMessages(convId, true); // true to replace existing messages
-  await checkForWelcomeImage(convId);
+
+  if (convId === nyxSpaceConvId) {
+    (chatWindow || document.getElementById("chatWindow")).innerHTML = ""; // Clear previous
+    // Show loading indication while fetching
+    appendMessage({sender: "system", content: "Loading Nyx's Space..."}, true);
+    // Fetch chat messages
+    try {
+      let res = await fetch("/nyx_space/messages");
+      if (res.ok) {
+        let data = await res.json();
+        (chatWindow || document.getElementById("chatWindow")).innerHTML = ""; // Remove loading
+        if (data.messages && data.messages.length > 0) {
+          data.messages.forEach(msg => appendMessage(msg, false)); // false = don't auto-scroll yet
+          // After all, then scroll:
+          (chatWindow || document.getElementById("chatWindow")).scrollTop = (chatWindow || document.getElementById("chatWindow")).scrollHeight;
+        } else {
+          appendMessage({sender: "Nyx", content: "Welcome to Nyx's Space! You can chat with me here anytime."}, true);
+        }
+      } else {
+        appendMessage({sender: "Nyx", content: "Could not fetch Nyx's Space messages."}, true);
+      }
+    } catch (err) {
+      (chatWindow || document.getElementById("chatWindow")).innerHTML = "";
+      appendMessage({sender: "Nyx", content: "There was an error loading Nyx's Space."}, true);
+      console.error(err);
+    }
+    if (advanceTimeBtn) advanceTimeBtn.style.display = "none";
+    if (loadMoreBtn) loadMoreBtn.style.display = "none";
+  } else {
+    if (advanceTimeBtn) advanceTimeBtn.style.display = "";
+    if (loadMoreBtn) loadMoreBtn.style.display = "";
+    await loadMessages(convId, true);
+    await checkForWelcomeImage(convId);
+  }
 }
+
 
  async function loadMessages(convId, replace = false) {
      const chatWindowEl = chatWindow || document.getElementById("chatWindow");
@@ -833,11 +861,23 @@ async function sendMessage() {
   if (!userText || !currentConvId) return;
 
   userMsgInputEl.value = "";
-  const userMsgObj = { sender: "user", content: userText };
+  const userMsgObj = { sender: "user", content: userText, timestamp: Date.now() };
   appendMessage(userMsgObj, true);
 
-  currentAssistantBubble = null; // Reset for new assistant message
+  currentAssistantBubble = null;
   partialAssistantText = "";
+
+  // Nyx's Space
+  if (currentConvId === nyxSpaceConvId) {
+    // Persist user message
+    await fetch('/nyx_space/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(userMsgObj)
+    });
+    // You will add Nyx's reply here after backend is ready
+    return;
+  }
 
   console.log(`Sending storybeat to server for conversation ${currentConvId}`);
   
@@ -910,12 +950,16 @@ async function sendMessage() {
 }
 
 // DOMContentLoaded to initialize everything
+const nyxSpaceConvId = "__nyx_space__";
+
 document.addEventListener('DOMContentLoaded', async function() {
   // Cache DOM elements
   logoutBtn = document.getElementById("logoutBtn");
   toggleDarkModeBtn = document.getElementById("toggleDarkModeBtn");
   advanceTimeBtn = document.getElementById("advanceTimeBtn");
   newGameBtn = document.getElementById("newGameBtn");
+  const nyxSpaceBtn = document.getElementById("nyxSpaceBtn");
+  if (nyxSpaceBtn) nyxSpaceBtn.addEventListener("click", () => selectConversation(nyxSpaceConvId));
   convListDiv = document.getElementById("convList");
   chatWindow = document.getElementById("chatWindow");
   loadMoreBtn = document.getElementById("loadMore");
