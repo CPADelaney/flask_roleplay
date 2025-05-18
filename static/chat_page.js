@@ -551,7 +551,9 @@ async function sendMessage() {
 
   userMsgInputEl.value = "";
 
+  // Nyx's Space handling
   if (currentConvId === nyxSpaceConvId) {
+    try {
       // 1. Save the user message
       await fetch('/nyx_space/messages', {
           method: 'POST',
@@ -561,26 +563,34 @@ async function sendMessage() {
 
       appendMessage({sender: "user", content: userText, timestamp: Date.now()}, true);
 
-      // 3. Get Nyx's reply
+      // 2. Get Nyx's reply
+      console.log("Sending request to /nyx_response:", userText);
       const replyRes = await fetch('/nyx_response', {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({user_input: userText, conversation_id: 0 })
+          body: JSON.stringify({user_input: userText, conversation_id: 0})
       });
+      console.log("Response status:", replyRes.status);
       const replyData = await replyRes.json();
+      console.log("Response data:", replyData);
       const aiReply = replyData.message || replyData.reply || "...";
       appendMessage({sender: "Nyx", content: aiReply, timestamp: Date.now()}, true);
 
-      // 4. Save Nyx's reply to the DB
+      // 3. Save Nyx's reply to the DB
       await fetch('/nyx_space/messages', {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
           body: JSON.stringify({sender: "Nyx", content: aiReply, timestamp: Date.now()})
       });
       return;
+    } catch (error) {
+      console.error("Error processing Nyx message:", error);
+      appendMessage({sender: "Nyx", content: "Sorry, an error occurred processing your message.", timestamp: Date.now()}, true);
+      return;
+    }
   }
 
-  userMsgInputEl.value = "";
+  // Regular conversation handling with Socket.IO
   const userMsgObj = { sender: "user", content: userText };
   appendMessage(userMsgObj, true);
 
@@ -633,6 +643,19 @@ async function sendMessage() {
     // Ensure joined to the correct room (socket might have reconnected)
     socket.emit('join', { conversation_id: currentConvId });
 
+    // Set a timeout to detect if server doesn't respond
+    const messageTimeout = setTimeout(() => {
+      const timeoutMsg = { sender: "system", content: "Server taking longer than expected to respond. Please wait..." };
+      appendMessage(timeoutMsg, true);
+    }, 15000); // 15 seconds timeout
+    
+    // Listen for any response to clear the timeout
+    const clearTimeoutHandler = () => clearTimeout(messageTimeout);
+    socket.once('new_token', clearTimeoutHandler);
+    socket.once('error', clearTimeoutHandler);
+    socket.once('processing', clearTimeoutHandler);
+    
+    // Send the message
     socket.emit("storybeat", {
       user_input: userText,
       conversation_id: currentConvId,
@@ -892,101 +915,6 @@ function setupSocketMessageListeners() {
     console.log("Game state updated:", data);
     // Example: if (data.type === "npc_update") updateNPCInfo(data.npc_data);
   });
-}
-
-// Improved send message function with better error handling
-async function sendMessage() {
-  const userMsgInputEl = userMsgInput || document.getElementById("userMsg");
-  const userText = userMsgInputEl.value.trim();
-  if (!userText || !currentConvId) return;
-
-  userMsgInputEl.value = "";
-  const userMsgObj = { sender: "user", content: userText, timestamp: Date.now() };
-  appendMessage(userMsgObj, true);
-
-  currentAssistantBubble = null;
-  partialAssistantText = "";
-
-  // Nyx's Space
-  if (currentConvId === nyxSpaceConvId) {
-    // Persist user message
-    await fetch('/nyx_space/messages', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(userMsgObj)
-    });
-    // You will add Nyx's reply here after backend is ready
-    return;
-  }
-
-  console.log(`Sending storybeat to server for conversation ${currentConvId}`);
-  
-  // Check if socket is connected before sending
-  if (!socket || !socket.connected) {
-    console.warn("Socket disconnected, attempting to reconnect before sending...");
-    
-    // Add reconnection message
-    const reconnectingMsg = { sender: "system", content: "Connection lost. Reconnecting before sending your message..." };
-    appendMessage(reconnectingMsg, true);
-    
-    // Try to reconnect
-    if (socket) {
-      socket.connect();
-      
-      // Wait for connection to establish before proceeding
-      let attempts = 0;
-      const maxAttempts = 5;
-      const waitForConnection = setInterval(() => {
-        attempts++;
-        if (socket.connected) {
-          clearInterval(waitForConnection);
-          console.log("Socket reconnected. Proceeding with message send.");
-          proceedWithSend();
-        } else if (attempts >= maxAttempts) {
-          clearInterval(waitForConnection);
-          console.error("Failed to reconnect after multiple attempts.");
-          const errorMsg = { sender: "system", content: "Could not connect to server. Please refresh the page and try again." };
-          appendMessage(errorMsg, true);
-        }
-      }, 1000);
-      
-      return; // Exit here and let the interval handler call proceedWithSend
-    } else {
-      const errorMsg = { sender: "system", content: "Connection error. Please refresh the page." };
-      appendMessage(errorMsg, true);
-      return;
-    }
-  }
-  
-  // If socket is connected, proceed with sending
-  proceedWithSend();
-  
-  function proceedWithSend() {
-    // Double check joined to the correct room
-    socket.emit('join', { conversation_id: currentConvId });
-
-    // Set a timeout to detect if server doesn't respond
-    const messageTimeout = setTimeout(() => {
-      const timeoutMsg = { sender: "system", content: "Server taking longer than expected to respond. Please wait..." };
-      appendMessage(timeoutMsg, true);
-    }, 15000); // 15 seconds timeout
-    
-    // Listen for any response to clear the timeout
-    const clearTimeoutHandler = () => clearTimeout(messageTimeout);
-    socket.once('new_token', clearTimeoutHandler);
-    socket.once('error', clearTimeoutHandler);
-    socket.once('processing', clearTimeoutHandler);
-    
-    // Send the message
-    socket.emit("storybeat", {
-      user_input: userText,
-      conversation_id: currentConvId,
-      player_name: "Chase", // This should ideally come from logged-in user data
-      advance_time: false,
-      universal_update: pendingUniversalUpdates
-    });
-    resetPendingUniversalUpdates();
-  }
 }
 
 // DOMContentLoaded to initialize everything
