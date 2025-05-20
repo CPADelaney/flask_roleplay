@@ -1,6 +1,5 @@
 # Core dependencies
 pandas
-tf-keras
 Tensorflow
 aiohttp==3.9.1
 aiomysql==0.2.0
@@ -31,6 +30,11 @@ werkzeug
 starlette
 aioprometheus
 hf_xet
+sentencepiece
+jax
+accelerate
+tree
+flax
 
 # Database
 SQLAlchemy==2.0.23
