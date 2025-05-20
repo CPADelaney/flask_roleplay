@@ -106,7 +106,7 @@ protobuf==4.25.1  # Required by gRPC
 
 chromadb==1.0.8
 chroma-hnswlib==0.7.6
-fastapi==0.115.9
+fastapi==0.115.10
 pulsar-client==3.7.0
 faiss-cpu==1.10.0  # Use faiss-gpu if you have CUDA support
 
