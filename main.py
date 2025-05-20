@@ -956,36 +956,36 @@ def create_quart_app():
 
 
     @app.route("/nyx_response", methods=["POST"])
-async def get_nyx_response():
-    """Regular user access via nyx_agent_sdk"""
-    user_id = session.get("user_id")
-    if not user_id:
-        return jsonify({"error": "Not authenticated"}), 401
-
-    data = await request.get_json()  # Add 'await' here
-    if not data or "user_input" not in data or "conversation_id" not in data:
-         return jsonify({"error": "Missing user_input or conversation_id"}), 400
-
-    user_input = data.get("user_input")
-    conversation_id = data.get("conversation_id")
-    # TODO: Add validation to ensure user owns this conversation_id
-
-    # Use the distilled agent SDK
-    from nyx.nyx_agent_sdk import process_user_input
-
-    try:
-        logger.info(f"Processing Nyx SDK request for user={user_id}, conv={conversation_id}")
-        # Call the async SDK function directly
-        result = await process_user_input(
-            user_id,
-            conversation_id,
-            user_input,
-            {} # Add relevant context if needed
-        )
-        return jsonify(result) # Ensure result is JSON serializable
-    except Exception as e:
-        logger.error(f"Error processing Nyx SDK request for user={user_id}, conv={conversation_id}: {e}", exc_info=True)
-        return jsonify({"error": "Error processing request via Nyx SDK", "details": str(e)}), 500
+    async def get_nyx_response():
+        """Regular user access via nyx_agent_sdk"""
+        user_id = session.get("user_id")
+        if not user_id:
+            return jsonify({"error": "Not authenticated"}), 401
+    
+        data = await request.get_json()  # Add 'await' here
+        if not data or "user_input" not in data or "conversation_id" not in data:
+             return jsonify({"error": "Missing user_input or conversation_id"}), 400
+    
+        user_input = data.get("user_input")
+        conversation_id = data.get("conversation_id")
+        # TODO: Add validation to ensure user owns this conversation_id
+    
+        # Use the distilled agent SDK
+        from nyx.nyx_agent_sdk import process_user_input
+    
+        try:
+            logger.info(f"Processing Nyx SDK request for user={user_id}, conv={conversation_id}")
+            # Call the async SDK function directly
+            result = await process_user_input(
+                user_id,
+                conversation_id,
+                user_input,
+                {} # Add relevant context if needed
+            )
+            return jsonify(result) # Ensure result is JSON serializable
+        except Exception as e:
+            logger.error(f"Error processing Nyx SDK request for user={user_id}, conv={conversation_id}: {e}", exc_info=True)
+            return jsonify({"error": "Error processing request via Nyx SDK", "details": str(e)}), 500
 
 
     ###########################################################################
