@@ -8,8 +8,7 @@ from .nyx_profile_agents import TeasingAgent, ProfilingAgent, ResponseAnalysisAg
 
 logger = logging.getLogger("nyx_profile_integration")
 
-class ProfileIntegration(BaseModel):
-    """Manages integration of profile agents with NyxPlanner"""
+class ProfileIntegration:  # Remove BaseModel inheritance
     
     def __init__(self):
         self.teasing_agent = TeasingAgent()
