@@ -97,7 +97,7 @@ jsonschema==4.20.0
 pendulum==2.1.2
 
 playwright==1.52.0
-pyee==12.1.1
+pyee==13.0.0
 
 # Vector Database
 qdrant-client==1.7.0
