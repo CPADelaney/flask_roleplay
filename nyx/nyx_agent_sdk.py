@@ -390,7 +390,7 @@ class AgentContext:
     async def _initialize_systems(self):
         """Initialize core systems and load initial state."""
         # Initialize memory system
-        self.memory_system = await NyxMemorySystem.get_instance(
+        self.memory_system = await get_memory_nyx_bridge(
             self.user_id,
             self.conversation_id
         )
