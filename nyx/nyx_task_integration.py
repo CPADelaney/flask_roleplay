@@ -34,6 +34,31 @@ class NarrativeResponse(BaseModel):
 class NyxTaskIntegration:
     """Integrates task and activity agents with Nyx's workflow using the OpenAI Agents SDK"""
     
+    _instances = {}
+    
+    @classmethod
+    async def get_instance(cls, user_id: int, conversation_id: int) -> 'NyxTaskIntegration':
+        """
+        Get or create a NyxTaskIntegration instance for the specified user and conversation.
+        
+        Args:
+            user_id: User ID
+            conversation_id: Conversation ID
+            
+        Returns:
+            NyxTaskIntegration instance
+        """
+        # Create a unique key for this user/conversation combination
+        key = f"{user_id}:{conversation_id}"
+        
+        # Check if an instance already exists for this key
+        if key not in cls._instances:
+            # Create a new instance if none exists
+            cls._instances[key] = cls()
+            
+        return cls._instances[key]
+    
+    
     def __init__(self):
         # No need to instantiate the agents - we'll use the pre-defined ones from the modules
         pass
