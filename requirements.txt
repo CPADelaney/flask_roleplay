@@ -32,8 +32,8 @@ aioprometheus==23.12.0
 hf-xet==1.1.2
 Tree==0.2.4
 sentencepiece==0.2.0
-jax==0.4.29
-jaxlib==0.4.30
+jax>=0.5.1,<0.6.0
+jaxlib>=0.5.1,<0.6.0
 accelerate==1.7.0
 Flax==0.10.6
 
