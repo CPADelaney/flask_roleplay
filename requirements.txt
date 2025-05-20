@@ -123,4 +123,5 @@ scikit-learn==1.6.1
 torch==2.7.0  # Required by sentence-transformers
 sentence-transformers==2.2.2
 
+tf-keras
 transformers==4.47.0
