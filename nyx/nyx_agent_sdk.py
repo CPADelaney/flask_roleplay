@@ -16,7 +16,7 @@ from npcs.npc_agent import NPCAgent, ResourcePool
 from pydantic import BaseModel, Field
 
 from db.connection import get_db_connection_context
-from memory.memory_nyx_integration import MemoryNyxBridge
+from memory.memory_nyx_integration import MemoryNyxBridge, get_memory_nyx_bridge
 from nyx.user_model_sdk import UserModelContext, ResponseGuidance, UserModelAnalysis
 from nyx.nyx_task_integration import NyxTaskIntegration
 from nyx.core.emotions.emotional_core import EmotionalCore
