@@ -49,7 +49,7 @@ from logic.stats_logic import insert_default_player_stats_chase
 from nyx.core.brain.base import NyxBrain
 
 # MCP Orchestrator
-from mcp_orchestrator import MCPOrchestrator
+# from mcp_orchestrator import MCPOrchestrator
 
 # NPC creation / learning
 from npcs.new_npc_creation import NPCCreationHandler, RunContextWrapper
@@ -244,7 +244,7 @@ async def initialize_systems(app: Quart):
     from story_agent.story_director_agent import initialize_story_director, register_with_governance
     from db.connection import initialize_connection_pool, close_connection_pool
     from logic.nyx_enhancements_integration import initialize_nyx_memory_system
-    from mcp_orchestrator import MCPOrchestrator
+  #  from mcp_orchestrator import MCPOrchestrator
 
     try:
         # --- 1. Database Connection Pool ---
@@ -330,13 +330,13 @@ async def initialize_systems(app: Quart):
             logger.warning("NyxBrain initialization failed. Some features might be unavailable.")
 
 
-        logger.info("Initializing MCP orchestrator...")
-        try:
-            app.mcp_orchestrator = MCPOrchestrator()
-            await app.mcp_orchestrator.initialize()
-            logger.info("MCP orchestrator initialized.")
-        except Exception as e:
-             logger.error(f"Error initializing MCP Orchestrator: {e}", exc_info=True)
+#        logger.info("Initializing MCP orchestrator...")
+#        try:
+ #           app.mcp_orchestrator = MCPOrchestrator()
+ #           await app.mcp_orchestrator.initialize()
+#            logger.info("MCP orchestrator initialized.")
+#        except Exception as e:
+#             logger.error(f"Error initializing MCP Orchestrator: {e}", exc_info=True)
 
         # --- 4. Other System Initializations ---
         logger.info("Initializing Aggregator SDK singletons...")
