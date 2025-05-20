@@ -836,114 +836,114 @@ class MemoryNyxBridge:
         
         return bridge
     
-    # Convenience functions for memory operations through Nyx
-    async def remember_through_nyx(
-        user_id: int,
-        conversation_id: int,
-        entity_type: str,
-        entity_id: int,
-        memory_text: str,
-        importance: str = "medium",
-        emotional: bool = True,
-        tags: Optional[List[str]] = None
-    ) -> Dict[str, Any]:
-        """
-        Create a memory through Nyx governance.
-        
-        Args:
-            user_id: User ID
-            conversation_id: Conversation ID
-            entity_type: Type of entity ("player", "npc", etc.)
-            entity_id: ID of the entity
-            memory_text: The memory text to record
-            importance: Importance level ("trivial", "low", "medium", "high", "critical")
-            emotional: Whether to analyze emotional content
-            tags: Optional tags for the memory
-        """
-        bridge = await get_memory_nyx_bridge(user_id, conversation_id)
-        return await bridge.remember(
-            entity_type=entity_type,
-            entity_id=entity_id,
-            memory_text=memory_text,
-            importance=importance,
-            emotional=emotional,
-            tags=tags
-        )
+# Convenience functions for memory operations through Nyx
+async def remember_through_nyx(
+    user_id: int,
+    conversation_id: int,
+    entity_type: str,
+    entity_id: int,
+    memory_text: str,
+    importance: str = "medium",
+    emotional: bool = True,
+    tags: Optional[List[str]] = None
+) -> Dict[str, Any]:
+    """
+    Create a memory through Nyx governance.
     
-    async def recall_through_nyx(
-        user_id: int,
-        conversation_id: int,
-        entity_type: str,
-        entity_id: int,
-        query: Optional[str] = None,
-        context: Optional[str] = None,
-        limit: int = 5
-    ) -> Dict[str, Any]:
-        """
-        Recall memories through Nyx governance.
-        
-        Args:
-            user_id: User ID
-            conversation_id: Conversation ID
-            entity_type: Type of entity ("player", "npc", etc.)
-            entity_id: ID of the entity
-            query: Optional search query
-            context: Current context that might influence recall
-            limit: Maximum number of memories to return
-        """
-        bridge = await get_memory_nyx_bridge(user_id, conversation_id)
-        return await bridge.recall(
-            entity_type=entity_type,
-            entity_id=entity_id,
-            query=query,
-            context=context,
-            limit=limit
-        )
+    Args:
+        user_id: User ID
+        conversation_id: Conversation ID
+        entity_type: Type of entity ("player", "npc", etc.)
+        entity_id: ID of the entity
+        memory_text: The memory text to record
+        importance: Importance level ("trivial", "low", "medium", "high", "critical")
+        emotional: Whether to analyze emotional content
+        tags: Optional tags for the memory
+    """
+    bridge = await get_memory_nyx_bridge(user_id, conversation_id)
+    return await bridge.remember(
+        entity_type=entity_type,
+        entity_id=entity_id,
+        memory_text=memory_text,
+        importance=importance,
+        emotional=emotional,
+        tags=tags
+    )
+
+async def recall_through_nyx(
+    user_id: int,
+    conversation_id: int,
+    entity_type: str,
+    entity_id: int,
+    query: Optional[str] = None,
+    context: Optional[str] = None,
+    limit: int = 5
+) -> Dict[str, Any]:
+    """
+    Recall memories through Nyx governance.
     
-    async def create_belief_through_nyx(
-        user_id: int,
-        conversation_id: int,
-        entity_type: str,
-        entity_id: int,
-        belief_text: str,
-        confidence: float = 0.7
-    ) -> Dict[str, Any]:
-        """
-        Create a belief through Nyx governance.
-        
-        Args:
-            user_id: User ID
-            conversation_id: Conversation ID
-            entity_type: Type of entity ("player", "npc", etc.)
-            entity_id: ID of the entity
-            belief_text: The belief statement
-            confidence: Confidence in this belief (0.0-1.0)
-        """
-        bridge = await get_memory_nyx_bridge(user_id, conversation_id)
-        return await bridge.create_belief(
-            entity_type=entity_type,
-            entity_id=entity_id,
-            belief_text=belief_text,
-            confidence=confidence
-        )
+    Args:
+        user_id: User ID
+        conversation_id: Conversation ID
+        entity_type: Type of entity ("player", "npc", etc.)
+        entity_id: ID of the entity
+        query: Optional search query
+        context: Current context that might influence recall
+        limit: Maximum number of memories to return
+    """
+    bridge = await get_memory_nyx_bridge(user_id, conversation_id)
+    return await bridge.recall(
+        entity_type=entity_type,
+        entity_id=entity_id,
+        query=query,
+        context=context,
+        limit=limit
+    )
+
+async def create_belief_through_nyx(
+    user_id: int,
+    conversation_id: int,
+    entity_type: str,
+    entity_id: int,
+    belief_text: str,
+    confidence: float = 0.7
+) -> Dict[str, Any]:
+    """
+    Create a belief through Nyx governance.
     
-    async def run_maintenance_through_nyx(
-        user_id: int,
-        conversation_id: int,
-        entity_type: str,
-        entity_id: int
-    ) -> Dict[str, Any]:
-        """
-        Run memory maintenance through Nyx governance.
-        
-        Args:
-            user_id: User ID
-            conversation_id: Conversation ID
-            entity_type: Type of entity ("player", "npc", etc.)
-            entity_id: ID of the entity
-        """
-        bridge = await get_memory_nyx_bridge(user_id, conversation_id)
-        return await bridge.run_maintenance(
-            entity_type=entity_type,
-            entity_id=entity_id
-        )
+    Args:
+        user_id: User ID
+        conversation_id: Conversation ID
+        entity_type: Type of entity ("player", "npc", etc.)
+        entity_id: ID of the entity
+        belief_text: The belief statement
+        confidence: Confidence in this belief (0.0-1.0)
+    """
+    bridge = await get_memory_nyx_bridge(user_id, conversation_id)
+    return await bridge.create_belief(
+        entity_type=entity_type,
+        entity_id=entity_id,
+        belief_text=belief_text,
+        confidence=confidence
+    )
+
+async def run_maintenance_through_nyx(
+    user_id: int,
+    conversation_id: int,
+    entity_type: str,
+    entity_id: int
+) -> Dict[str, Any]:
+    """
+    Run memory maintenance through Nyx governance.
+    
+    Args:
+        user_id: User ID
+        conversation_id: Conversation ID
+        entity_type: Type of entity ("player", "npc", etc.)
+        entity_id: ID of the entity
+    """
+    bridge = await get_memory_nyx_bridge(user_id, conversation_id)
+    return await bridge.run_maintenance(
+        entity_type=entity_type,
+        entity_id=entity_id
+    )
