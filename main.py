@@ -564,7 +564,7 @@ def create_quart_app():
         sock_sess = await sio.get_session(sid)
         user_id  = sock_sess.get("user_id", "anonymous")
         room = str(data["conversation_id"])
-        sio.enter_room(sid, room)
+        await sio.enter_room(sid, room)
         await sio.emit("joined", {"room": room}, to=sid)
 
     @sio.on("message")
