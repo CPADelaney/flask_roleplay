@@ -805,36 +805,36 @@ class MemoryNyxBridge:
             "result": result
         }
 
-    # Helper function to get the memory-nyx bridge
-    async def get_memory_nyx_bridge(user_id: int, conversation_id: int) -> MemoryNyxBridge:
-        """
-        Get (or create) the memory-nyx bridge for a user/conversation.
+# Helper function to get the memory-nyx bridge
+async def get_memory_nyx_bridge(user_id: int, conversation_id: int) -> MemoryNyxBridge:
+    """
+    Get (or create) the memory-nyx bridge for a user/conversation.
+    
+    Args:
+        user_id: User ID
+        conversation_id: Conversation ID
         
-        Args:
-            user_id: User ID
-            conversation_id: Conversation ID
-            
-        Returns:
-            The memory-nyx bridge
-        """
-        # Use a cache to avoid recreating the bridge unnecessarily
-        cache_key = f"memory_nyx_bridge:{user_id}:{conversation_id}"
-        
-        # Check if it's already in global dict
-        if not hasattr(get_memory_nyx_bridge, "cache"):
-            get_memory_nyx_bridge.cache = {}
-        
-        if cache_key in get_memory_nyx_bridge.cache:
-            return get_memory_nyx_bridge.cache[cache_key]
-        
-        # Create new bridge
-        bridge = MemoryNyxBridge(user_id, conversation_id)
-        await bridge.initialize()
-        
-        # Cache it
-        get_memory_nyx_bridge.cache[cache_key] = bridge
-        
-        return bridge
+    Returns:
+        The memory-nyx bridge
+    """
+    # Use a cache to avoid recreating the bridge unnecessarily
+    cache_key = f"memory_nyx_bridge:{user_id}:{conversation_id}"
+    
+    # Check if it's already in global dict
+    if not hasattr(get_memory_nyx_bridge, "cache"):
+        get_memory_nyx_bridge.cache = {}
+    
+    if cache_key in get_memory_nyx_bridge.cache:
+        return get_memory_nyx_bridge.cache[cache_key]
+    
+    # Create new bridge
+    bridge = MemoryNyxBridge(user_id, conversation_id)
+    await bridge.initialize()
+    
+    # Cache it
+    get_memory_nyx_bridge.cache[cache_key] = bridge
+    
+    return bridge
     
 # Convenience functions for memory operations through Nyx
 async def remember_through_nyx(
