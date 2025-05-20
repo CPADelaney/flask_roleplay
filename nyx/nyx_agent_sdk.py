@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field
 
 from db.connection import get_db_connection_context
 from memory.memory_nyx_integration import MemoryNyxBridge, get_memory_nyx_bridge
-from nyx.user_model_sdk import UserModelContext, ResponseGuidance, UserModelAnalysis
+from nyx.user_model_sdk import UserModelContext, ResponseGuidance, UserModelAnalysis, UserModelManager
 from nyx.nyx_task_integration import NyxTaskIntegration
 from nyx.core.emotions.emotional_core import EmotionalCore
 from nyx.performance_monitor import PerformanceMonitor
