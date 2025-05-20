@@ -1559,28 +1559,23 @@ async def seed_initial_vitals():
                     logger.info("No players found requiring initial vitals seeding.")
                     return
 
-                # Prepare the insert statement once
-                insert_stmt = await conn.prepare("""
-                    INSERT INTO PlayerVitals (user_id, conversation_id, player_name, energy, hunger)
-                    VALUES ($1, $2, 'Chase', 100, 100)
-                    ON CONFLICT (user_id, conversation_id, player_name) DO NOTHING
-                """)
-
-                # Execute for each player found
+                # Insert for each player directly without prepared statement
                 count = 0
                 for row in player_rows:
-                    # Use execute() for INSERT ON CONFLICT DO NOTHING as fetch() expects rows back
-                    status = await insert_stmt.execute(row['user_id'], row['conversation_id'])
-                    # status string like 'INSERT 0 1' means 1 row inserted
-                    # 'INSERT 0 0' means conflict occurred, 0 rows inserted
-                    if status.endswith(' 1'):
-                         count += 1
-                rows_affected = count # Count actual inserts
+                    result = await conn.execute("""
+                        INSERT INTO PlayerVitals (user_id, conversation_id, player_name, energy, hunger)
+                        VALUES ($1, $2, 'Chase', 100, 100)
+                        ON CONFLICT (user_id, conversation_id, player_name) DO NOTHING
+                    """, row['user_id'], row['conversation_id'])
+                    
+                    # Check if rows were affected
+                    if result.endswith(" 1"):
+                        count += 1
+                rows_affected = count
 
         logger.info(f"Seeded initial vitals for {rows_affected} players (others may have existed).")
 
     except (asyncpg.PostgresError, ConnectionError) as e:
-        # Rollback is handled automatically by the transaction context manager
         logger.error(f"Error seeding initial vitals: {e}", exc_info=True)
     except Exception as e:
         logger.error(f"Unexpected error seeding vitals: {e}", exc_info=True)
@@ -1633,18 +1628,17 @@ async def seed_initial_resources():
                     logger.info("No players found requiring initial resource seeding.")
                     return
 
-                insert_stmt = await conn.prepare("""
-                    INSERT INTO PlayerResources (user_id, conversation_id, player_name, money, supplies, influence)
-                    VALUES ($1, $2, $3, 100, 20, 10)
-                    ON CONFLICT (user_id, conversation_id, player_name) DO NOTHING
-                """)
-
+                # Insert for each player directly without prepared statement
                 count = 0
                 for row in player_rows:
-                    status = await insert_stmt.execute(
-                        row['user_id'], row['conversation_id'], row['player_name']
-                    )
-                    if status.endswith(' 1'):
+                    result = await conn.execute("""
+                        INSERT INTO PlayerResources (user_id, conversation_id, player_name, money, supplies, influence)
+                        VALUES ($1, $2, $3, 100, 20, 10)
+                        ON CONFLICT (user_id, conversation_id, player_name) DO NOTHING
+                    """, row['user_id'], row['conversation_id'], row['player_name'])
+                    
+                    # Check if rows were affected
+                    if result.endswith(" 1"):
                         count += 1
                 rows_affected = count
 
