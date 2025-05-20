@@ -1,21 +1,7 @@
 # nyx/core/repo_refactor_pipeline.py
-
+"""
 from __future__ import annotations
-"""
-Repo‑Refactor Pipeline (v1.2)
-=============================
-GitHub‑friendly, non‑interactive pipeline:
 
-* Uses OpenAI **chat.responses** endpoint.
-* Stores LLM patch as `_llm_patch.md` and in SQLite.
-* **If not auto‑approved**, pushes a *draft PR* so you can review in the
-  GitHub UI.
-* If an approval callback (or later, a PR comment trigger) returns `True`,
-  applies patch → runs `pytest` → commits to a new branch and opens a
-  normal PR.
-
-No TTY interaction required.
-"""
 
 import asyncio, json, os, subprocess, textwrap
 from dataclasses import dataclass
@@ -512,3 +498,4 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     asyncio.run(RepoRefactorPipeline().run(args.goal, open_pr=args.pr))
+"""
