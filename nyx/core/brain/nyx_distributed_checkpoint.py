@@ -255,7 +255,7 @@ Respond ONLY with a valid JSON object matching this exact structure: {"merged_st
         try:
             # Ensure OpenAI client is configured (API key etc.)
             completion = await openai.ChatCompletion.acreate(
-                model="gpt-4o", # Or your preferred merge model
+                model="gpt-4.1-nano", # Or your preferred merge model
                 messages=[
                     {"role": "system", "content": prompt.strip()},
                     {"role": "user", "content": user_content}
