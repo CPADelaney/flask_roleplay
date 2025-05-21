@@ -125,7 +125,7 @@ class MemoryRetrieverAgent:
             if not openai_api_key:
                 raise ValueError("OPENAI_API_KEY environment variable is required for OpenAI")
             
-            model_name = self.config.get("openai_model_name", "gpt-4.1-nano.1-nano")
+            model_name = self.config.get("openai_model_name", "gpt-4.1-nano")
             temperature = self.config.get("temperature", 0.0)  # Low temperature for factual responses
             
             self.llm = await loop.run_in_executor(
