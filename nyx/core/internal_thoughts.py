@@ -243,7 +243,7 @@ class InternalThoughtsManager:
             Keep thoughts concise and natural - they should feel like genuine thought snippets, 
             not overly formal analysis.
             """,
-            model="gpt-4o",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(
                 temperature=0.7,
                 top_p=0.95,
@@ -271,7 +271,7 @@ class InternalThoughtsManager:
             Do not simply repeat the thought - provide genuine critical perspective
             that challenges, refines, or extends the original thought.
             """,
-            model="gpt-4o",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(
                 temperature=0.4,
                 max_tokens=150  # Keep critiques brief
