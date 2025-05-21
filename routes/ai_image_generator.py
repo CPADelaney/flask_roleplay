@@ -308,10 +308,10 @@ async def process_gpt_scene_data(gpt_response, user_id, conversation_id):
 
 
 # ======================================================
-# 3️⃣ UPDATE VISUAL ATTRIBUTES VIA GPT-4o
+# 3️⃣ UPDATE VISUAL ATTRIBUTES VIA gpt-4.1-nano
 # ======================================================
 async def update_npc_visual_attributes(user_id, conversation_id, npc_id, prompt_data, image_path=None):
-    """Use GPT-4o to extract and update visual attributes from the image prompt."""
+    """Use gpt-4.1-nano to extract and update visual attributes from the image prompt."""
     async with get_db_connection_context() as conn:
         # Fetch current attributes
         async with conn.cursor() as cursor:
@@ -336,7 +336,7 @@ async def update_npc_visual_attributes(user_id, conversation_id, npc_id, prompt_
             "accessories": json.loads(current_attrs[9] or "[]") if current_attrs else []
         }
 
-        # GPT-4o extraction
+        # gpt-4.1-nano extraction
         gpt_prompt = f"""
 Given this image generation prompt from a femdom visual novel:
 '{prompt_data}'
@@ -356,7 +356,7 @@ Extract detailed visual attributes for an NPC:
 Return a JSON object with these keys, using 'unknown' if not specified."""
         client = get_openai_client()
         response = client.chat.completions.create(
-            model="gpt-4o",
+            model="gpt-4.1-nano",
             messages=[{"role": "system", "content": gpt_prompt}],
             temperature=0.5,
             response_format={"type": "json_object"}
@@ -430,10 +430,10 @@ Return a JSON object with these keys, using 'unknown' if not specified."""
 
 
 # ======================================================
-# 4️⃣ GENERATE IMAGE-OPTIMIZED PROMPT VIA GPT-4o
+# 4️⃣ GENERATE IMAGE-OPTIMIZED PROMPT VIA gpt-4.1-nano
 # ======================================================
 def generate_image_prompt(scene_data):
-    """Use GPT-4o to summarize NPCStats, scene context, SocialLinks, and PlayerJournal into an image-optimized prompt."""
+    """Use gpt-4.1-nano to summarize NPCStats, scene context, SocialLinks, and PlayerJournal into an image-optimized prompt."""
     if not scene_data:
         return None
 
@@ -510,7 +510,7 @@ Return JSON with 'image_prompt' and 'negative_prompt' (e.g., 'low quality, blurr
     
     client = get_openai_client()
     response = client.chat.completions.create(
-        model="gpt-4o",
+        model="gpt-4.1-nano",
         messages=[{"role": "system", "content": prompt}],
         temperature=0.7,
         response_format={"type": "json_object"}
