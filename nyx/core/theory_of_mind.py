@@ -89,7 +89,7 @@ class TheoryOfMind:
                 
                 Respond ONLY with a JSON object matching the UserMentalState structure (excluding user_id and last_updated).
                 """,
-                model="gpt-4o",
+                model="gpt-4.1-nano",
                 model_settings=ModelSettings(
                     temperature=0.4
                 ),
