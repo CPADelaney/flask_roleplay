@@ -1036,6 +1036,123 @@ class AgentContext:
             context.get("mood", "unknown")
         ]
         return "_".join(features)
+
+    async def determine_image_generation_impl(ctx, response_text: str) -> str:
+        """
+        Determine if an image should be generated based on response content.
+        """
+        # Check for keywords indicating action or state changes
+        action_keywords = ["now you see", "suddenly", "appears", "reveals", "wearing", "dressed in"]
+        scene_keywords = ["the room", "the chamber", "the area", "the location", "the environment"]
+        visual_keywords = ["looks like", "is visible", "can be seen", "comes into view"]
+        
+        # Create a scoring system
+        score = 0
+        
+        # Check for action keywords
+        has_action = any(keyword in response_text.lower() for keyword in action_keywords)
+        if has_action:
+            score += 3
+        
+        # Check for scene description
+        has_scene = any(keyword in response_text.lower() for keyword in scene_keywords)
+        if has_scene:
+            score += 2
+            
+        # Check for visual descriptions
+        has_visual = any(keyword in response_text.lower() for keyword in visual_keywords)
+        if has_visual:
+            score += 2
+        
+        # Only generate images occasionally to avoid overwhelming
+        should_generate = score >= 4
+        
+        # If we're generating an image, extract a prompt
+        image_prompt = None
+        if should_generate:
+            # Try to extract a good image prompt
+            try:
+                prompt = f"""
+                Extract a concise image generation prompt from this text. Focus on describing the visual scene, characters, lighting, and mood:
+    
+                {response_text}
+    
+                Provide only the image prompt with no additional text or explanations. Keep it under 100 words.
+                """
+                
+                response = await openai.ChatCompletion.acreate(
+                    model="gpt-4",
+                    messages=[
+                        {"role": "system", "content": "You extract image generation prompts from text."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    temperature=0.3,
+                    max_tokens=150
+                )
+                
+                image_prompt = response.choices[0].message.content.strip()
+            except:
+                # If extraction fails, use first 100 words of response
+                words = response_text.split()[:100]
+                image_prompt = " ".join(words)
+        
+        return json.dumps({
+            "should_generate": should_generate,
+            "score": score,
+            "has_action": has_action,
+            "has_scene": has_scene,
+            "has_visual": has_visual,
+            "image_prompt": image_prompt
+        })
+    
+    async def get_emotional_state_impl(ctx) -> str:
+        """
+        Get Nyx's current emotional state from the database.
+        """
+        user_id = ctx.context.user_id
+        conversation_id = ctx.context.conversation_id
+        
+        async with get_db_connection_context() as conn:
+            row = await conn.fetchrow("""
+                SELECT emotional_state FROM NyxAgentState
+                WHERE user_id = $1 AND conversation_id = $2
+            """, user_id, conversation_id)
+            
+            if row and row["emotional_state"]:
+                return row["emotional_state"]
+        
+        # Default emotional state
+        default_state = {
+            "primary_emotion": "neutral",
+            "intensity": 0.3,
+            "secondary_emotions": {
+                "curiosity": 0.4,
+                "amusement": 0.2
+            },
+            "confidence": 0.7
+        }
+        
+        return json.dumps(default_state)
+    
+    async def update_emotional_state_impl(ctx, emotional_state: Dict[str, Any]) -> str:
+        """
+        Update Nyx's emotional state in the database.
+        """
+        user_id = ctx.context.user_id
+        conversation_id = ctx.context.conversation_id
+        
+        async with get_db_connection_context() as conn:
+            await conn.execute("""
+                INSERT INTO NyxAgentState (user_id, conversation_id, emotional_state, updated_at)
+                VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
+                ON CONFLICT (user_id, conversation_id) 
+                DO UPDATE SET emotional_state = $3, updated_at = CURRENT_TIMESTAMP
+            """, user_id, conversation_id, json.dumps(emotional_state))
+        
+        return json.dumps({
+            "updated": True,
+            "emotional_state": emotional_state
+        })
     
     def _update_learning_metrics(self, success: bool):
         """Update learning-related performance metrics."""
@@ -2567,124 +2684,6 @@ Always maintain your dominant persona in responses while being attentive to user
     )
 )
 
-# Add to nyx_agent_sdk.py
-
-async def determine_image_generation_impl(ctx, response_text: str) -> str:
-    """
-    Determine if an image should be generated based on response content.
-    """
-    # Check for keywords indicating action or state changes
-    action_keywords = ["now you see", "suddenly", "appears", "reveals", "wearing", "dressed in"]
-    scene_keywords = ["the room", "the chamber", "the area", "the location", "the environment"]
-    visual_keywords = ["looks like", "is visible", "can be seen", "comes into view"]
-    
-    # Create a scoring system
-    score = 0
-    
-    # Check for action keywords
-    has_action = any(keyword in response_text.lower() for keyword in action_keywords)
-    if has_action:
-        score += 3
-    
-    # Check for scene description
-    has_scene = any(keyword in response_text.lower() for keyword in scene_keywords)
-    if has_scene:
-        score += 2
-        
-    # Check for visual descriptions
-    has_visual = any(keyword in response_text.lower() for keyword in visual_keywords)
-    if has_visual:
-        score += 2
-    
-    # Only generate images occasionally to avoid overwhelming
-    should_generate = score >= 4
-    
-    # If we're generating an image, extract a prompt
-    image_prompt = None
-    if should_generate:
-        # Try to extract a good image prompt
-        try:
-            prompt = f"""
-            Extract a concise image generation prompt from this text. Focus on describing the visual scene, characters, lighting, and mood:
-
-            {response_text}
-
-            Provide only the image prompt with no additional text or explanations. Keep it under 100 words.
-            """
-            
-            response = await openai.ChatCompletion.acreate(
-                model="gpt-4",
-                messages=[
-                    {"role": "system", "content": "You extract image generation prompts from text."},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.3,
-                max_tokens=150
-            )
-            
-            image_prompt = response.choices[0].message.content.strip()
-        except:
-            # If extraction fails, use first 100 words of response
-            words = response_text.split()[:100]
-            image_prompt = " ".join(words)
-    
-    return json.dumps({
-        "should_generate": should_generate,
-        "score": score,
-        "has_action": has_action,
-        "has_scene": has_scene,
-        "has_visual": has_visual,
-        "image_prompt": image_prompt
-    })
-
-async def get_emotional_state_impl(ctx) -> str:
-    """
-    Get Nyx's current emotional state from the database.
-    """
-    user_id = ctx.context.user_id
-    conversation_id = ctx.context.conversation_id
-    
-    async with get_db_connection_context() as conn:
-        row = await conn.fetchrow("""
-            SELECT emotional_state FROM NyxAgentState
-            WHERE user_id = $1 AND conversation_id = $2
-        """, user_id, conversation_id)
-        
-        if row and row["emotional_state"]:
-            return row["emotional_state"]
-    
-    # Default emotional state
-    default_state = {
-        "primary_emotion": "neutral",
-        "intensity": 0.3,
-        "secondary_emotions": {
-            "curiosity": 0.4,
-            "amusement": 0.2
-        },
-        "confidence": 0.7
-    }
-    
-    return json.dumps(default_state)
-
-async def update_emotional_state_impl(ctx, emotional_state: Dict[str, Any]) -> str:
-    """
-    Update Nyx's emotional state in the database.
-    """
-    user_id = ctx.context.user_id
-    conversation_id = ctx.context.conversation_id
-    
-    async with get_db_connection_context() as conn:
-        await conn.execute("""
-            INSERT INTO NyxAgentState (user_id, conversation_id, emotional_state, updated_at)
-            VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
-            ON CONFLICT (user_id, conversation_id) 
-            DO UPDATE SET emotional_state = $3, updated_at = CURRENT_TIMESTAMP
-        """, user_id, conversation_id, json.dumps(emotional_state))
-    
-    return json.dumps({
-        "updated": True,
-        "emotional_state": emotional_state
-    })
 
 # ===== Main Functions =====
 
