@@ -20,7 +20,7 @@ DEFAULT_CONFIG = {
     "decision_engine": {
         "default_temperature": 0.7,       # Default temperature for response generation
         "max_tokens": 1000,               # Maximum tokens for generated responses
-        "model_name": "gpt-4",            # Model to use for decision engine
+        "model_name": "gpt-4.1-nano",            # Model to use for decision engine
         "instruction_depth": "detailed",  # Instruction depth (minimal, moderate, detailed)
         "response_guidance_weight": 0.8,  # Weight given to user model guidance (0.0-1.0)
         "memory_weight": 0.7              # Weight given to memories in decision-making (0.0-1.0)
