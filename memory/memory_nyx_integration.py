@@ -97,7 +97,7 @@ class MemoryNyxBridge:
             self.memory_agent = MemoryAgentWrapper(base_agent, self.memory_context)
             
             # Initialize memory system
-            self.memory_system = MemorySystem.get_instance(
+            self.memory_system = await MemorySystem.get_instance(
                 self.user_id, self.conversation_id
             )
             self.memory_context.memory_system = self.memory_system
