@@ -223,7 +223,7 @@ class NoveltyEngine:
                       tool_description_override="Evaluate the novelty, usefulness, and feasibility of an idea")
             ],
             output_type=NoveltyIdea,
-            model="gpt-4o",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.7)
         )
     
@@ -249,7 +249,7 @@ class NoveltyEngine:
                 function_tool(self._find_connections)
             ],
             output_type=CreativeTechniqueOutput,
-            model="gpt-4o",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.7)
         )
     
@@ -275,7 +275,7 @@ class NoveltyEngine:
                 function_tool(self._create_blended_space)
             ],
             output_type=CreativeTechniqueOutput,
-            model="gpt-4o",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.7)
         )
     
@@ -302,7 +302,7 @@ class NoveltyEngine:
                 function_tool(self._explore_constraint_removal)
             ],
             output_type=CreativeTechniqueOutput,
-            model="gpt-4o",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.8)
         )
     
@@ -328,7 +328,7 @@ class NoveltyEngine:
                 function_tool(self._force_connections)
             ],
             output_type=CreativeTechniqueOutput,
-            model="gpt-4o",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.9)
         )
     
@@ -355,7 +355,7 @@ class NoveltyEngine:
                 function_tool(self._analyze_from_perspective)
             ],
             output_type=CreativeTechniqueOutput,
-            model="gpt-4o",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.7)
         )
     
@@ -381,7 +381,7 @@ class NoveltyEngine:
                 function_tool(self._map_across_domains)
             ],
             output_type=CreativeTechniqueOutput,
-            model="gpt-4o",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.7)
         )
     
@@ -408,7 +408,7 @@ class NoveltyEngine:
                 function_tool(self._assess_feasibility)
             ],
             output_type=IdeaEvaluationOutput,
-            model="gpt-4o",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.3)
         )
     
@@ -1235,7 +1235,7 @@ class NoveltyEngine:
                 function_tool(self._extract_novel_ideas_from_blend)
             ],
             output_type=CreativeTechniqueOutput,
-            model="gpt-4o",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.7)
         )
     
@@ -1262,7 +1262,7 @@ class NoveltyEngine:
                 function_tool(self._reason_counterfactually)
             ],
             output_type=CreativeTechniqueOutput,
-            model="gpt-4o",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.7)
         )
     
@@ -1290,7 +1290,7 @@ class NoveltyEngine:
                 function_tool(self._refine_idea_from_simulation)
             ],
             output_type=CreativeTechniqueOutput,
-            model="gpt-4o",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.8)
         )
     
