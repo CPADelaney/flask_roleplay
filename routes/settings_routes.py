@@ -141,7 +141,7 @@ async def generate_mega_setting_logic():
     messages = [{"role": "system", "content": fusion_prompt}]
     try:
         response = gpt_client.chat.completions.create(
-            model="gpt-4.1-nano.1-nano",
+            model="gpt-4.1-nano",
             messages=messages,
             temperature=0.7,
             max_tokens=300
