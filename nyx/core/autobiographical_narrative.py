@@ -156,7 +156,7 @@ class AutobiographicalNarrative:
                 input_guardrails=[
                     InputGuardrail(guardrail_function=self.memory_validation_guardrail)
                 ],
-                model="gpt-4o",
+                model="gpt-4.1-nano",
                 model_settings=ModelSettings(
                     response_format={"type": "json_object"}, 
                     temperature=0.6
@@ -187,7 +187,7 @@ class AutobiographicalNarrative:
                 function_tool(self._identify_memory_themes),
                 function_tool(self._calculate_memory_significance)
             ],
-            model="gpt-4o-mini",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.4),
             output_type=MemoryAnalysisOutput
         )
@@ -212,7 +212,7 @@ class AutobiographicalNarrative:
                 function_tool(self._extract_core_values),
                 function_tool(self._calculate_identity_stability)
             ],
-            model="gpt-4o-mini",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.3),
             output_type=IdentityAnalysisOutput
         )
@@ -237,7 +237,7 @@ class AutobiographicalNarrative:
                 function_tool(self._verify_continuity),
                 function_tool(self._validate_emotional_authenticity)
             ],
-            model="gpt-4o-mini",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.2),
             output_type=NarrativeValidationOutput
         )
