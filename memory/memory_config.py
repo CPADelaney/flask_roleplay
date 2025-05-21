@@ -53,7 +53,7 @@ DEFAULT_MEMORY_CONFIG = {
     # LLM settings for memory retrieval
     "llm": {
         "type": "openai",  # Options: "openai", "huggingface"
-        "openai_model": "gpt-3.5-turbo",  # For OpenAI
+        "openai_model": "gpt-4.1-nano",  # For OpenAI
         "huggingface_model": "mistralai/Mistral-7B-Instruct-v0.2",  # For HuggingFace
         "temperature": 0.0,  # Low temperature for factual responses
         "max_tokens": 256
