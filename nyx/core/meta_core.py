@@ -243,7 +243,7 @@ class MetaCore:
                 function_tool(self._check_attention_focus),
                 function_tool(self._detect_performance_drop)
             ],
-            model="gpt-4o",
+            model="gpt-4.1-nano",
             output_type=dict
         )
         
@@ -273,7 +273,7 @@ class MetaCore:
                 function_tool(self._reallocate_resources),
                 function_tool(self._identify_inefficient_dependencies)
             ],
-            model="gpt-4o",
+            model="gpt-4.1-nano",
             output_type=dict
         )
         
@@ -302,7 +302,7 @@ class MetaCore:
                 function_tool(self._calculate_resource_trend),
                 function_tool(self._generate_meta_cognitive_insights)
             ],
-            model="gpt-4o",
+            model="gpt-4.1-nano",
             output_type=StrategyResult
         )
         
@@ -332,7 +332,7 @@ class MetaCore:
                 function_tool(self._identify_improvement_areas),
                 function_tool(self._create_improvement_plan)
             ],
-            model="gpt-4o",
+            model="gpt-4.1-nano",
             output_type=dict
         )
         
@@ -361,7 +361,7 @@ class MetaCore:
                 function_tool(self._improve_meta_parameters),
                 function_tool(self._generate_cognitive_strategies)
             ],
-            model="gpt-4o",
+            model="gpt-4.1-nano",
             output_type=ImproveResult
         )
         
@@ -495,7 +495,7 @@ class MetaCore:
             input_guardrails=[input_guardrail],
             output_guardrails=[output_guardrail],
             output_type=MetaCognitiveOutput,
-            model="gpt-4o"
+            model="gpt-4.1-nano"
         )
         
         self.agents_initialized = True
