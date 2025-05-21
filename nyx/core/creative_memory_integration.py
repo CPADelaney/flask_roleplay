@@ -146,7 +146,7 @@ class CreativeMemoryIntegration:
                       tool_name_override="blend_memory_with_novelty",
                       tool_description_override="Blend recognized memory with novel idea generation")
             ],
-            model="gpt-4o",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.6)
         )
     
@@ -178,7 +178,7 @@ class CreativeMemoryIntegration:
                 function_tool(self._create_wordplay)
             ],
             output_type=ContextualWit,
-            model="gpt-4o",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.7)
         )
     
@@ -205,7 +205,7 @@ class CreativeMemoryIntegration:
                 function_tool(self._abstract_principles)
             ],
             output_type=CreativeInsight,
-            model="gpt-4o",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.6)
         )
     
@@ -232,7 +232,7 @@ class CreativeMemoryIntegration:
                 function_tool(self._apply_creative_technique),
                 function_tool(self._transform_memory)
             ],
-            model="gpt-4o",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.7)
         )
     
