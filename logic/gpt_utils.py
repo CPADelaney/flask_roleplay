@@ -97,7 +97,7 @@ def parse_json_str(text: str) -> dict:
     return {}
 
 
-async def call_gpt_json(conversation_id, context, prompt, model="gpt-4o", temperature=0.7, max_retries=2) -> dict:
+async def call_gpt_json(conversation_id, context, prompt, model="gpt-4.1-nano", temperature=0.7, max_retries=2) -> dict:
     """
     Calls GPT with the given context and prompt, attempting to parse valid JSON from the response.
     If it fails, tries multiple fallback methods. Returns a Python dict or empty {}.
