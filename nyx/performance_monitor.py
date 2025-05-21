@@ -7,6 +7,16 @@ logger = logging.getLogger(__name__)
 
 class PerformanceMonitor:
     """Monitors and optimizes performance across autonomous systems"""
+    # Singleton instance
+    _instance = None
+    
+    @classmethod
+    def get_instance(cls, user_id=None, conversation_id=None):
+        """Get or create the singleton instance."""
+        if cls._instance is None:
+            cls._instance = cls()
+        return cls._instance
+        
     
     def __init__(self):
         self.metrics = {
