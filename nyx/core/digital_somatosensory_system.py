@@ -469,7 +469,7 @@ class DigitalSomatosensorySystem:
                 tools=[self._get_valid_body_regions],
                 # ---------------------------------------------------------------
                 output_type=StimulusValidationOutput,
-                model="gpt-4o",
+                model="gpt-4.1-nano",
                 model_settings=ModelSettings(temperature=0.1)
             )
             # logger.info(">>> Successfully created validation_agent (or crashed before this)") # Keep if needed
@@ -499,7 +499,7 @@ class DigitalSomatosensorySystem:
                 self._get_arousal_expression_data
             ],
             output_type=SensoryExpression,
-            model="gpt-4o",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.7)  # Higher creativity for expressions
         )
 
@@ -527,7 +527,7 @@ class DigitalSomatosensorySystem:
                 self._get_arousal_expression_data
             ],
             output_type=BodyStateOutput,
-            model="gpt-4o",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.2)  # Lower temperature for consistency
         )
     
@@ -553,7 +553,7 @@ class DigitalSomatosensorySystem:
                 self._get_temperature_comfort
             ],
             output_type=TemperatureEffect,
-            model="gpt-4o",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.4)  # Moderate temperature for variation
         )
     
@@ -616,7 +616,7 @@ class DigitalSomatosensorySystem:
                 InputGuardrail(guardrail_function=DigitalSomatosensorySystem._validate_input)
                 # -------------------------------------------------
             ],
-            model="gpt-4o",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.2),
             output_type=StimulusProcessingResult
         )
