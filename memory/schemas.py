@@ -295,7 +295,7 @@ class MemorySchemaManager:
             """
             
             response = await openai.ChatCompletion.acreate(
-                model="gpt-4",
+                model="gpt-4.1-nano",
                 messages=[
                     {"role": "system", "content": "You detect patterns in memories to form schemas."},
                     {"role": "user", "content": prompt}
@@ -841,7 +841,7 @@ class MemorySchemaManager:
             """
             
             response = await openai.ChatCompletion.acreate(
-                model="gpt-4",
+                model="gpt-4.1-nano",
                 messages=[
                     {"role": "system", "content": "You calculate relevance scores between schemas and memories."},
                     {"role": "user", "content": prompt}
@@ -1051,7 +1051,7 @@ class MemorySchemaManager:
             """
             
             response = await openai.ChatCompletion.acreate(
-                model="gpt-4",
+                model="gpt-4.1-nano",
                 messages=[
                     {"role": "system", "content": "You interpret memories through the lens of cognitive schemas."},
                     {"role": "user", "content": prompt}
@@ -1233,7 +1233,7 @@ class MemorySchemaManager:
             """
             
             response = await openai.ChatCompletion.acreate(
-                model="gpt-4",
+                model="gpt-4.1-nano",
                 messages=[
                     {"role": "system", "content": "You calculate conflict scores between memories and schemas."},
                     {"role": "user", "content": prompt}
@@ -1281,7 +1281,7 @@ class MemorySchemaManager:
             """
             
             response = await openai.ChatCompletion.acreate(
-                model="gpt-4",
+                model="gpt-4.1-nano",
                 messages=[
                     {"role": "system", "content": "You explain conflicts between memories and schemas."},
                     {"role": "user", "content": prompt}
@@ -1441,7 +1441,7 @@ class MemorySchemaManager:
             """
             
             response = await openai.ChatCompletion.acreate(
-                model="gpt-4",
+                model="gpt-4.1-nano",
                 messages=[
                     {"role": "system", "content": "You evolve schemas to accommodate conflicting memories."},
                     {"role": "user", "content": prompt}
@@ -1620,7 +1620,7 @@ class MemorySchemaManager:
             """
             
             response = await openai.ChatCompletion.acreate(
-                model="gpt-4",
+                model="gpt-4.1-nano",
                 messages=[
                     {"role": "system", "content": "You merge multiple schemas into more comprehensive patterns."},
                     {"role": "user", "content": prompt}
@@ -1840,7 +1840,7 @@ class MemorySchemaManager:
             """
             
             response = await openai.ChatCompletion.acreate(
-                model="gpt-4",
+                model="gpt-4.1-nano",
                 messages=[
                     {"role": "system", "content": "You calculate similarity between schemas."},
                     {"role": "user", "content": prompt}
