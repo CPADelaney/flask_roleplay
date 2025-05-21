@@ -386,6 +386,46 @@ class AgentContext:
         context = cls(user_id, conversation_id)
         await context._initialize_systems()
         return context
+
+    async def _load_initial_state(self):
+        """Load initial state for agent context."""
+        # Initialize empty states if no existing data
+        # No need to load anything for a new context
+        self.current_goals = []
+        self.active_tasks = []
+        self.decision_history = []
+        self.state_history = []
+        self.last_action = None
+        self.last_result = None
+        self.current_emotional_state = {}
+        
+        # Try to load from memory system if available
+        if self.memory_system:
+            try:
+                # Attempt to get any saved agent state
+                state_data = await self.memory_system.recall(
+                    entity_type="agent",
+                    entity_id=self.user_id,
+                    query="agent state",
+                    limit=1
+                )
+                
+                # If we found state data, use it
+                if state_data and "memories" in state_data and state_data["memories"]:
+                    memory = state_data["memories"][0]
+                    if "metadata" in memory and "state" in memory["metadata"]:
+                        state = memory["metadata"]["state"]
+                        
+                        # Apply saved state where appropriate
+                        if "goals" in state:
+                            self.current_goals = state["goals"]
+                        if "emotional_state" in state:
+                            self.current_emotional_state = state["emotional_state"]
+            except Exception as e:
+                # Silently continue with default state if loading fails
+                pass
+        
+        logger.debug(f"Agent context state initialized for user {self.user_id}")
     
     async def _initialize_systems(self):
         """Initialize core systems and load initial state."""
