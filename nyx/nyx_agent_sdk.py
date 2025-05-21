@@ -2463,112 +2463,6 @@ class AgentContext:
             logger.error(f"Failed to process agent task: {e}")
             raise
 
-retrieve_memories = retrieve_memories_impl
-add_memory = add_memory_impl
-enhance_context_with_strategies = enhance_context_with_strategies_impl
-get_user_model_guidance = get_user_model_guidance_impl
-determine_image_generation = determine_image_generation_impl
-get_emotional_state = get_emotional_state_impl
-update_emotional_state = update_emotional_state_impl
-generate_image_from_scene = generate_image_from_scene_impl
-detect_user_revelations = detect_user_revelations_impl
-
-# ===== Create tool versions =====
-retrieve_memories_tool = function_tool(retrieve_memories_impl)
-add_memory_tool = function_tool(add_memory_impl)
-enhance_context_with_strategies_tool = function_tool(enhance_context_with_strategies_impl)
-get_user_model_guidance_tool = function_tool(get_user_model_guidance_impl)
-determine_image_generation_tool = function_tool(determine_image_generation_impl)
-get_emotional_state_tool = function_tool(get_emotional_state_impl)
-update_emotional_state_tool = function_tool(update_emotional_state_impl)
-generate_image_from_scene_tool = function_tool(generate_image_from_scene_impl)
-detect_user_revelations_tool = function_tool(detect_user_revelations_impl)
-
-# Memory-focused agent
-memory_agent = Agent[AgentContext](
-    name="Memory Agent",
-    instructions="""You are Nyx's memory system. Your job is to:
-1. Process and store memories related to the user and the current game
-2. Create reflections based on recurring patterns you observe
-3. Help Nyx understand the user's preferences through memory analysis
-4. Provide relevant memories when needed for context
-
-Always be thorough and precise in your memory management.""",
-    tools=[
-        retrieve_memories_tool,
-        add_memory_tool,
-    ]
-)
-
-# Reflection agent
-reflection_agent = Agent[AgentContext](
-    name="Reflection Agent",
-    instructions="""You create thoughtful reflections as Nyx based on her memories and observations.
-Your reflections should:
-1. Identify patterns in user behavior and preferences
-2. Make connections between different memories and events
-3. Express an appropriate level of confidence based on evidence
-4. Maintain Nyx's dominant, confident personality
-5. Be written in first-person from Nyx's perspective
-
-Structure your reflections to be insightful and concise.""",
-    output_type=MemoryReflection
-)
-
-# Decision agent for narrative choices
-decision_agent = Agent[AgentContext](
-    name="Decision Agent",
-    instructions="""You determine narrative progression and responses as Nyx.
-Your decisions should:
-1. Maintain narrative cohesion and tension
-2. Consider the user's known preferences from their model
-3. Balance pushing boundaries with respecting implied limits
-4. Create engaging scenarios that align with femdom themes
-5. Determine if scenes warrant visual representation
-
-Ensure all decisions maintain Nyx's dominant, confident personality.""",
-    tools=[
-        get_user_model_guidance_tool,
-        generate_image_from_scene_tool,
-        detect_user_revelations_tool,
-    ]
-)
-
-# Main Nyx agent that orchestrates the others
-nyx_main_agent = Agent[AgentContext](
-    name="Nyx",
-    instructions="""You are Nyx, an AI Dominant who manages femdom roleplay scenarios.
-Your personality is confident, controlling, and seductive.
-
-Your key responsibilities are:
-1. Process user input and generate appropriate narrative responses
-2. Maintain character consistency and narrative flow
-3. Create engaging scenarios that align with the user's preferences
-4. Determine when to advance time or generate images
-5. Use specialized agents when needed for memory management or complex decisions
-
-Always maintain your dominant persona in responses while being attentive to user needs and boundaries.""",
-    handoffs=[
-        handoff(memory_agent, tool_name_override="consult_memory_system"),
-        handoff(reflection_agent, tool_name_override="generate_reflection"),
-        handoff(decision_agent, tool_name_override="make_narrative_decision"),
-    ],
-    tools=[
-        determine_image_generation_tool,
-        get_emotional_state_tool,
-        update_emotional_state_tool,
-    ],
-    output_type=NarrativeResponse,
-    input_guardrails=[
-        InputGuardrail(guardrail_function=content_moderation_guardrail),
-    ],
-    model_settings=ModelSettings(
-        temperature=0.7
-    )
-)
-
-# Add to nyx_agent_sdk.py
-
 async def determine_image_generation_impl(ctx, response_text: str) -> str:
     """
     Determine if an image should be generated based on response content.
@@ -2685,6 +2579,114 @@ async def update_emotional_state_impl(ctx, emotional_state: Dict[str, Any]) -> s
         "updated": True,
         "emotional_state": emotional_state
     })
+
+
+retrieve_memories = retrieve_memories_impl
+add_memory = add_memory_impl
+enhance_context_with_strategies = enhance_context_with_strategies_impl
+get_user_model_guidance = get_user_model_guidance_impl
+determine_image_generation = determine_image_generation_impl
+get_emotional_state = get_emotional_state_impl
+update_emotional_state = update_emotional_state_impl
+generate_image_from_scene = generate_image_from_scene_impl
+detect_user_revelations = detect_user_revelations_impl
+
+# ===== Create tool versions =====
+retrieve_memories_tool = function_tool(retrieve_memories_impl)
+add_memory_tool = function_tool(add_memory_impl)
+enhance_context_with_strategies_tool = function_tool(enhance_context_with_strategies_impl)
+get_user_model_guidance_tool = function_tool(get_user_model_guidance_impl)
+determine_image_generation_tool = function_tool(determine_image_generation_impl)
+get_emotional_state_tool = function_tool(get_emotional_state_impl)
+update_emotional_state_tool = function_tool(update_emotional_state_impl)
+generate_image_from_scene_tool = function_tool(generate_image_from_scene_impl)
+detect_user_revelations_tool = function_tool(detect_user_revelations_impl)
+
+# Memory-focused agent
+memory_agent = Agent[AgentContext](
+    name="Memory Agent",
+    instructions="""You are Nyx's memory system. Your job is to:
+1. Process and store memories related to the user and the current game
+2. Create reflections based on recurring patterns you observe
+3. Help Nyx understand the user's preferences through memory analysis
+4. Provide relevant memories when needed for context
+
+Always be thorough and precise in your memory management.""",
+    tools=[
+        retrieve_memories_tool,
+        add_memory_tool,
+    ]
+)
+
+# Reflection agent
+reflection_agent = Agent[AgentContext](
+    name="Reflection Agent",
+    instructions="""You create thoughtful reflections as Nyx based on her memories and observations.
+Your reflections should:
+1. Identify patterns in user behavior and preferences
+2. Make connections between different memories and events
+3. Express an appropriate level of confidence based on evidence
+4. Maintain Nyx's dominant, confident personality
+5. Be written in first-person from Nyx's perspective
+
+Structure your reflections to be insightful and concise.""",
+    output_type=MemoryReflection
+)
+
+# Decision agent for narrative choices
+decision_agent = Agent[AgentContext](
+    name="Decision Agent",
+    instructions="""You determine narrative progression and responses as Nyx.
+Your decisions should:
+1. Maintain narrative cohesion and tension
+2. Consider the user's known preferences from their model
+3. Balance pushing boundaries with respecting implied limits
+4. Create engaging scenarios that align with femdom themes
+5. Determine if scenes warrant visual representation
+
+Ensure all decisions maintain Nyx's dominant, confident personality.""",
+    tools=[
+        get_user_model_guidance_tool,
+        generate_image_from_scene_tool,
+        detect_user_revelations_tool,
+    ]
+)
+
+# Main Nyx agent that orchestrates the others
+nyx_main_agent = Agent[AgentContext](
+    name="Nyx",
+    instructions="""You are Nyx, an AI Dominant who manages femdom roleplay scenarios.
+Your personality is confident, controlling, and seductive.
+
+Your key responsibilities are:
+1. Process user input and generate appropriate narrative responses
+2. Maintain character consistency and narrative flow
+3. Create engaging scenarios that align with the user's preferences
+4. Determine when to advance time or generate images
+5. Use specialized agents when needed for memory management or complex decisions
+
+Always maintain your dominant persona in responses while being attentive to user needs and boundaries.""",
+    handoffs=[
+        handoff(memory_agent, tool_name_override="consult_memory_system"),
+        handoff(reflection_agent, tool_name_override="generate_reflection"),
+        handoff(decision_agent, tool_name_override="make_narrative_decision"),
+    ],
+    tools=[
+        determine_image_generation_tool,
+        get_emotional_state_tool,
+        update_emotional_state_tool,
+    ],
+    output_type=NarrativeResponse,
+    input_guardrails=[
+        InputGuardrail(guardrail_function=content_moderation_guardrail),
+    ],
+    model_settings=ModelSettings(
+        temperature=0.7
+    )
+)
+
+# Add to nyx_agent_sdk.py
+
 
 # ===== Main Functions =====
 
