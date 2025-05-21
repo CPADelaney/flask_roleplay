@@ -1114,7 +1114,7 @@ class AgentEnhancedMemoryManager:
         
         await agent_memory.create_procedure(
             name="quid_pro_quo_exchange",
-            steps=quid_pro_quo_steps,
+            steps=quid_pro_quo_steps,  # Pass the Python list, not a JSON string
             description="Establish reciprocal exchanges that gradually shift power balance",
             domain="dominance_tactics"
         )
