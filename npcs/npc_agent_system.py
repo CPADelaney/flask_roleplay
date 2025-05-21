@@ -195,7 +195,7 @@ class NPCAgentSystem:
                 
                 Your responses should be efficient and focused on the specific task requested.
                 """,
-                model="gpt-4o",
+                model="gpt-4.1-nano",
                 model_settings=ModelSettings(temperature=0.2),
                 tools=[
                     function_tool(self.handle_player_action),
