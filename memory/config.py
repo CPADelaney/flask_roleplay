@@ -40,7 +40,7 @@ DEFAULT_CONFIG = {
         "reveal_probability": 0.15
     },
     "openai": {
-        "model": "gpt-4",
+        "model": "gpt-4.1-nano",
         "temperature": 0.4,
         "max_tokens": 200
     },
