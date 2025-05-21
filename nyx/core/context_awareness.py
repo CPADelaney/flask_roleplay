@@ -435,7 +435,7 @@ class ContextAwarenessSystem:
                 InputGuardrail(guardrail_function=self._message_validation_guardrail)
             ],
             output_type=BlendedContextDetectionOutput,
-            model="gpt-4o",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(
                 temperature=0.3
             )
@@ -467,7 +467,7 @@ class ContextAwarenessSystem:
                 function_tool(self._identify_implicit_signals)
             ],
             output_type=SignalAnalysisOutput,
-            model="gpt-4o-mini",
+            model="gpt-4.1-nano-mini",
             model_settings=ModelSettings(temperature=0.2)
         )
     
@@ -496,7 +496,7 @@ class ContextAwarenessSystem:
                 function_tool(self._calculate_emotional_impact)
             ],
             output_type=EmotionalBaselineOutput,
-            model="gpt-4o-mini",
+            model="gpt-4.1-nano-mini",
             model_settings=ModelSettings(temperature=0.2)
         )
     
@@ -526,7 +526,7 @@ class ContextAwarenessSystem:
                 function_tool(self._analyze_distribution_transition)
             ],
             output_type=ContextValidationOutput,
-            model="gpt-4o-mini",
+            model="gpt-4.1-nano-mini",
             model_settings=ModelSettings(temperature=0.1)
         )
 
