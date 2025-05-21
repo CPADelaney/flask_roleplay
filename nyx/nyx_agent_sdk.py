@@ -408,17 +408,9 @@ class AgentContext:
         )
         
         # Initialize belief system
-        self.belief_system = await BeliefSystem.get_instance(
-            self.user_id,
-            self.conversation_id
-        )
-        
-        # Initialize emotional system
-        self.emotional_system = await EmotionalSystem.get_instance(
-            self.user_id,
-            self.conversation_id
-        )
-        
+        self.belief_system = None
+        self.emotional_system = None
+            
         # Initialize performance monitoring
         self.performance_monitor = PerformanceMonitor.get_instance(
             self.user_id,
@@ -994,14 +986,15 @@ class AgentContext:
     async def process_emotional_state(self, context: Dict[str, Any], user_emotion: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         Process and update emotional state based on context and user emotion.
-        
-        Args:
-            context: Current context information
-            user_emotion: Optional user emotional state
-            
-        Returns:
-            Updated emotional state
         """
+        # Check if emotional system is available
+        if self.emotional_system is None:
+            # Return a default emotional state if the system isn't available
+            return {
+                "valence": 0.0,
+                "arousal": 0.5,
+                "dominance": 0.7
+            }
         try:
             # Get current emotional state
             current_state = await self.get_emotional_state()
@@ -1843,6 +1836,18 @@ class AgentContext:
     
     async def _get_relationship_state(self, entity1_id: str, entity2_id: str) -> Dict[str, Any]:
         """Get current relationship state between two entities."""
+        # Check if belief system is available
+        if self.belief_system is None:
+            # Return a default relationship if the system isn't available
+            return {
+                "trust": 0.5,
+                "power_dynamic": 0.5,
+                "emotional_bond": 0.3,
+                "interaction_count": 0,
+                "last_interaction": None,
+                "relationship_type": "neutral",
+                "stability": 0.5
+            }
         try:
             # Get relationship from belief system
             relationship = await self.belief_system.get_relationship(
