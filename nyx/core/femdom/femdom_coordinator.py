@@ -131,7 +131,7 @@ Delegate specialized tasks to the appropriate agent via handoffs.
                        tool_name_override="delegate_to_training_agent",
                        tool_description_override="Delegate to the training agent for training programs")
             ],
-            model="gpt-4o"
+            model="gpt-4.1-nano"
         )
     
     def _create_dominance_agent(self):
@@ -152,7 +152,7 @@ Use the available tools to gather information and generate responses.
                 self._process_dominance_action,
                 self._respond_to_violation
             ],
-            model="gpt-4o"
+            model="gpt-4.1-nano"
         )
     
     def _create_protocol_agent(self):
@@ -173,7 +173,7 @@ Use the available tools to check protocols and generate responses.
                 self._assign_protocol,
                 self._record_violation
             ],
-            model="gpt-4o"
+            model="gpt-4.1-nano"
         )
     
     def _create_psychological_agent(self):
@@ -194,7 +194,7 @@ Use the available tools to generate psychological dominance responses.
                 self._check_subspace,
                 self._get_psychological_state
             ],
-            model="gpt-4o"
+            model="gpt-4.1-nano"
         )
     
     def _create_submission_agent(self):
@@ -216,7 +216,7 @@ Use the available tools to work with submission progression.
                 self._update_submission_metric,
                 self._check_milestone_progress
             ],
-            model="gpt-4o"
+            model="gpt-4.1-nano"
         )
     
     def _create_training_agent(self):
@@ -237,7 +237,7 @@ Use the available tools to manage training programs.
                 self._assign_task,
                 self._check_task_completion
             ],
-            model="gpt-4o"
+            model="gpt-4.1-nano"
         )
     
     async def initialize(self):
