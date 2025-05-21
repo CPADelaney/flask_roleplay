@@ -47,14 +47,13 @@ async def get_roleplay_value():
         return jsonify({"error": "Missing required parameters"}), 400
     
     async with get_db_connection_context() as conn:
-        async with conn.cursor() as cursor:
-            await cursor.execute("""
-                SELECT value FROM CurrentRoleplay
-                WHERE user_id=%s AND conversation_id=%s AND key=%s
-            """, (user_id, conversation_id, key))
-            row = await cursor.fetchone()
+        # Change from cursor pattern to direct query
+        row = await conn.fetchrow("""
+            SELECT value FROM CurrentRoleplay
+            WHERE user_id=$1 AND conversation_id=$2 AND key=$3
+        """, user_id, conversation_id, key)
     
     if row:
-        return jsonify({"value": row[0]})
+        return jsonify({"value": row['value']})
     else:
         return jsonify({"value": None})
