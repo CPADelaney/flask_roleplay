@@ -497,7 +497,7 @@ Your response MUST be valid JSON with exactly this structure:
             
             # Call the OpenAI API asynchronously using the new Responses API
             response = await openai_client.chat.responses.create(
-                model="gpt-4o", 
+                model="gpt-4.1-nano", 
                 messages=messages,
                 temperature=0.7,
                 response_format={"type": "json_object"}
