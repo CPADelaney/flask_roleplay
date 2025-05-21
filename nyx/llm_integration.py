@@ -57,7 +57,7 @@ async def generate_text_completion(
         
         # Call OpenAI API
         response = await openai.ChatCompletion.acreate(
-            model="gpt-4.1-nano.1-nano",
+            model="gpt-4.1-nano",
             messages=messages,
             temperature=temperature,
             max_tokens=max_tokens,
