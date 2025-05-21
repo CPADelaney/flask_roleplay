@@ -574,7 +574,7 @@ def create_story_director_agent():
         instructions=agent_instructions,
         tools=all_tools,
         handoffs=list(specialized_agents.values()),
-        model="gpt-4o", # Consider making configurable
+        model="gpt-4.1-nano", # Consider making configurable
         model_settings=ModelSettings(temperature=0.2, max_tokens=2048),
     )
     return agent
