@@ -788,7 +788,7 @@ class PassiveObservationSystem:
         Your observations should feel like genuine realizations that emerge organically from Nyx's consciousness rather than
         pre-formatted templates. They should have depth and nuance that reflects Nyx's sophisticated understanding
         of herself and her environment.""",
-            model="gpt-4o",
+            model="gpt-4.1-nano",
             tools=[generate_observation_from_source, check_observation_patterns, 
                    categorize_time_elapsed_obs, generate_observation_from_action],
             output_type=ObservationGenerationOutput
@@ -814,7 +814,7 @@ class PassiveObservationSystem:
         - For observations about actions, consider their value for self-understanding and agency
         
         Generate detailed evaluation notes that explain your reasoning process.""",
-            model="gpt-4o",
+            model="gpt-4.1-nano",
             tools=[evaluate_observation_relevance],
             output_type=ObservationEvaluationOutput
         )
