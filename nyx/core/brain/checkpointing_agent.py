@@ -38,7 +38,7 @@ class CheckpointingPlannerAgent:
         self.agent = Agent(
             name="Checkpointing Planner",
             instructions=_CHECKPOINT_PROMPT,
-            model="gpt-4o", # Or your preferred model
+            model="gpt-4.1-nano", # Or your preferred model
             output_type=None, # We expect raw JSON string output
             model_settings={"response_format": {"type": "json_object"}} # Request JSON output
         )
