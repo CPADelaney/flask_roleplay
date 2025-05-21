@@ -402,7 +402,7 @@ class ReconsolidationManager:
             """
             
             response = await openai.ChatCompletion.acreate(
-                model="gpt-4",
+                model="gpt-4.1-nano",
                 messages=[
                     {"role": "system", "content": "You are simulating human memory reconsolidation effects."},
                     {"role": "user", "content": prompt}
