@@ -60,9 +60,9 @@ async def retrieve_memories_impl(ctx, query: str, limit: int = 5) -> str:
         query: Search query to find memories
         limit: Maximum number of memories to return
     """
-    memory_system = ctx.context.memory_system
-    user_id = ctx.context.user_id
-    conversation_id = ctx.context.conversation_id
+    memory_system = ctx.memory_system
+    user_id = ctx.user_id
+    conversation_id = ctx.conversation_id
     
     memories = await memory_system.retrieve_memories(
         query=query,
@@ -99,7 +99,7 @@ async def add_memory_impl(ctx, memory_text: str, memory_type: str = "observation
         memory_type: Type of memory (observation, reflection, abstraction)
         significance: Importance of memory (1-10)
     """
-    memory_system = ctx.context.memory_system
+    memory_system = ctx.memory_system
     
     memory_id = await memory_system.add_memory(
         memory_text=memory_text,
@@ -221,7 +221,7 @@ async def get_user_model_guidance_impl(ctx) -> str:
     """
     Get guidance for how Nyx should respond based on the user model.
     """
-    user_model_manager = ctx.context.user_model
+    user_model_manager = ctx.user_model
     guidance = await user_model_manager.get_response_guidance()
     
     # Format guidance for return
@@ -2507,7 +2507,7 @@ async def determine_image_generation_impl(ctx, response_text: str) -> str:
             """
             
             response = await openai.ChatCompletion.acreate(
-                model="gpt-4",
+                model="gpt-4.1",
                 messages=[
                     {"role": "system", "content": "You extract image generation prompts from text."},
                     {"role": "user", "content": prompt}
@@ -2535,8 +2535,8 @@ async def get_emotional_state_impl(ctx) -> str:
     """
     Get Nyx's current emotional state from the database.
     """
-    user_id = ctx.context.user_id
-    conversation_id = ctx.context.conversation_id
+    user_id = ctx.user_id
+    conversation_id = ctx.conversation_id
     
     async with get_db_connection_context() as conn:
         row = await conn.fetchrow("""
@@ -2564,8 +2564,8 @@ async def update_emotional_state_impl(ctx, emotional_state: Dict[str, Any]) -> s
     """
     Update Nyx's emotional state in the database.
     """
-    user_id = ctx.context.user_id
-    conversation_id = ctx.context.conversation_id
+    user_id = ctx.user_id
+    conversation_id = ctx.conversation_id
     
     async with get_db_connection_context() as conn:
         await conn.execute("""
