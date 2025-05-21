@@ -130,7 +130,7 @@ Use the available tools to generate appropriate sadistic amusement.
                 self._record_amusement_response,
                 self._get_humiliation_level
             ],
-            model="gpt-4o"
+            model="gpt-4.1-nano"
         )
     
     def _create_mockery_agent(self):
@@ -156,7 +156,7 @@ Use the available tools to generate appropriate sadistic mockery.
                 self._record_mockery_response,
                 self._get_user_mockery_preferences
             ],
-            model="gpt-4o"
+            model="gpt-4.1-nano"
         )
     
     def _create_degradation_agent(self):
@@ -182,7 +182,7 @@ Use the available tools to generate appropriate degradation responses.
                 self._record_degradation_response,
                 self._get_degradation_preferences
             ],
-            model="gpt-4o"
+            model="gpt-4.1-nano"
         )
     
     def _create_humiliation_detection_agent(self):
@@ -211,7 +211,7 @@ Use the available tools to detect and process humiliation signals.
                 self._categorize_humiliation_type,
                 self._get_humiliation_history
             ],
-            model="gpt-4o"
+            model="gpt-4.1-nano"
         )
     
     def _create_state_tracking_agent(self):
@@ -240,7 +240,7 @@ Use the available tools to maintain accurate state tracking.
                 self._record_response_event,
                 self._generate_response_report
             ],
-            model="gpt-4o"
+            model="gpt-4.1-nano"
         )
     
     def _load_default_templates(self):
