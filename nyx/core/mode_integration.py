@@ -184,7 +184,7 @@ class ModeIntegrationManager:
                 function_tool(self._suggest_mode_adjustments),
                 function_tool(self._calculate_feedback_reward)
             ],
-            model="gpt-4o",
+            model="gpt-4.1-nano",
             output_type=FeedbackOutput
         )
         
@@ -210,7 +210,7 @@ class ModeIntegrationManager:
                 function_tool(self._get_conversation_style),
                 function_tool(self._blend_guidance_elements)
             ],
-            model="gpt-4o",
+            model="gpt-4.1-nano",
             output_type=ModeGuidance
         )
         
@@ -235,7 +235,7 @@ class ModeIntegrationManager:
                 function_tool(self._check_blend_coherence),
                 function_tool(self._extract_blended_guidance)
             ],
-            model="gpt-4o",
+            model="gpt-4.1-nano",
             output_type=Dict[str, Any]
         )
         
@@ -305,7 +305,7 @@ class ModeIntegrationManager:
                        tool_description_override="Blend outputs from multiple mode systems")
             ],
             input_guardrails=[input_guardrail],
-            model="gpt-4o",
+            model="gpt-4.1-nano",
             output_type=ModeOutput
         )
         
