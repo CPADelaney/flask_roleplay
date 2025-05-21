@@ -153,14 +153,14 @@ class ConditioningSystem:
             Adjust association strengths based on reinforcement history, intensity of stimuli,
             and decay over time. Consider the generalization of similar stimuli.
             """,
+            model="gpt-4.1-nano",
             tools=[
                 self._get_association,
                 self._create_or_update_classical_association,
                 self._calculate_association_strength,
                 self._check_similar_associations
             ],
-            output_type=ClassicalConditioningOutput,
-            model_settings=ModelSettings(temperature=0.2)
+            output_type=ClassicalConditioningOutput
         )
     
     def _create_operant_conditioning_agent(self) -> Agent:
@@ -187,14 +187,14 @@ class ConditioningSystem:
             
             Adjust association strengths based on the intensity of consequences and timing.
             """,
+            model="gpt-4.1-nano",
             tools=[
                 self._get_association,
                 self._create_or_update_operant_association,
                 self._calculate_valence_and_reward,
                 self._generate_reward_signal_tool
             ],
-            output_type=OperantConditioningOutput,
-            model_settings=ModelSettings(temperature=0.2)
+            output_type=OperantConditioningOutput
         )
     
     def _create_behavior_evaluation_agent(self) -> Agent:
@@ -217,14 +217,14 @@ class ConditioningSystem:
             Balance exploration (trying new behaviors) with exploitation (relying on known outcomes).
             Consider both immediate and delayed consequences when evaluating behaviors.
             """,
+            model="gpt-4.1-nano",
             tools=[
                 self._get_behavior_associations,
                 self._calculate_expected_valence,
                 self._check_context_relevance,
                 self._get_reinforcement_history
             ],
-            output_type=BehaviorEvaluationOutput,
-            model_settings=ModelSettings(temperature=0.3)
+            output_type=BehaviorEvaluationOutput
         )
     
     def _create_personality_development_agent(self) -> Agent:
@@ -247,13 +247,13 @@ class ConditioningSystem:
             Balance stable personality characteristics with adaptability to new experiences.
             Ensure personality development is consistent with overall identity and values.
             """,
+            model="gpt-4.1-nano",
             tools=[
                 self._identify_trait_behaviors,
                 self._calculate_conditioning_trait_adjustment,
                 self._update_identity_trait
             ],
-            output_type=TraitConditioningOutput,
-            model_settings=ModelSettings(temperature=0.4)
+            output_type=TraitConditioningOutput
         )
         
     def _create_conditioning_orchestrator(self) -> Agent:
@@ -275,6 +275,7 @@ class ConditioningSystem:
             Determine which conditioning approach (classical, operant, etc.) is most
             appropriate for each learning scenario and coordinate between agents accordingly.
             """,
+            model="gpt-4.1-nano",
             handoffs=[
                 handoff(self.classical_conditioning_agent, 
                        tool_name_override="process_classical_conditioning",
