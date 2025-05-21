@@ -198,7 +198,7 @@ class BodyImage:
                 function_tool(self._extract_visual_part_features),
                 function_tool(self._calculate_visual_confidence)
             ],
-            model="gpt-4o-mini",
+            model="gpt-4.1-nano.1-nano",
             model_settings=ModelSettings(temperature=0.1)
         )
     
@@ -221,7 +221,7 @@ class BodyImage:
                 function_tool(self._extract_somatic_features),
                 function_tool(self._calculate_somatic_confidence)
             ],
-            model="gpt-4o-mini",
+            model="gpt-4.1-nano.1-nano",
             model_settings=ModelSettings(temperature=0.1)
         )
     
