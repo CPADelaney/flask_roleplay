@@ -64,12 +64,15 @@ async def retrieve_memories_impl(ctx, query: str, limit: int = 5) -> str:
     user_id = ctx.user_id
     conversation_id = ctx.conversation_id
     
-    memories = await memory_system.retrieve_memories(
+    # Use recall instead of retrieve_memories
+    result = await memory_system.recall(
+        entity_type="integrated",
+        entity_id=0,
         query=query,
-        scopes=["game", "user"],
-        memory_types=["observation", "reflection", "abstraction"],
         limit=limit
     )
+    
+    memories = result.get("memories", [])
     
     # Format memories for return
     formatted_memories = []
@@ -80,7 +83,7 @@ async def retrieve_memories_impl(ctx, query: str, limit: int = 5) -> str:
                           "think I recall" if relevance > 0.4 else \
                           "vaguely remember"
         
-        formatted_memories.append(f"I {confidence_marker}: {memory['memory_text']}")
+        formatted_memories.append(f"I {confidence_marker}: {memory['text']}")
     
     return "\n".join(formatted_memories)
 
