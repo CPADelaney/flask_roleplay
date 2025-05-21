@@ -528,7 +528,7 @@ async def get_chatgpt_response(
         messages.extend(raw_history)
 
         response = openai_client.chat.responses.create(
-            model="gpt-4o",
+            model="gpt-4.1-nano",
             messages=messages,
             temperature=0.2,
             max_tokens=10_000,
@@ -600,7 +600,7 @@ DO NOT produce user-facing text here; only the JSON.
         ]
 
         reflection_response = openai_client.chat.responses.create(
-            model="gpt-4o",
+            model="gpt-4.1-nano",
             messages=reflection_messages,
             temperature=0.2,
             max_tokens=2500,
@@ -649,7 +649,7 @@ DO NOT produce user-facing text here; only the JSON.
         # final_messages.extend(await build_message_history(conversation_id, aggregator_text, user_input, limit=15))
 
         final_response = openai_client.chat.responses.create(
-            model="gpt-4o",
+            model="gpt-4.1-nano",
             messages=final_messages,
             temperature=0.2,
             max_tokens=10000,
@@ -757,6 +757,6 @@ def get_agents_openai_model() -> OpenAIResponsesModel:
         raise RuntimeError("OPENAI_API_KEY not found in environment")
     
     return OpenAIResponsesModel(
-        model="gpt-4o",
+        model="gpt-4.1-nano",
         openai_client=AsyncOpenAI(api_key=api_key)
     )
