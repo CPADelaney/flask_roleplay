@@ -1,7 +1,7 @@
 # routes/multiuser_routes.py
 
 from quart import Blueprint, request, jsonify, session
-from db.connection import get_db_connection_context  # Updated import
+from db.connection import get_db_connection_context
 import logging
 import asyncpg
 from db.connection import get_db_dsn, get_db_connection_context
@@ -14,22 +14,19 @@ async def create_folder():
     if not user_id:
         return jsonify({"error": "Not logged in"}), 401
 
-    data = request.get_json() or {}
+    data = await request.get_json() or {}
     folder_name = data.get("folder_name", "").strip()
     if not folder_name:
         return jsonify({"error": "No folder name provided"}), 400
 
     async with get_db_connection_context() as conn:
         # Insert new folder
-        async with conn.cursor() as cur:
-            await cur.execute("""
-                INSERT INTO folders (user_id, folder_name)
-                VALUES (%s, %s)
-                RETURNING id
-            """, (user_id, folder_name))
-            row = await cur.fetchone()
-            folder_id = row[0]
-        await conn.commit()
+        row = await conn.fetchrow("""
+            INSERT INTO folders (user_id, folder_name)
+            VALUES ($1, $2)
+            RETURNING id
+        """, user_id, folder_name)
+        folder_id = row['id']
 
     return jsonify({"folder_id": folder_id, "folder_name": folder_name})
 
@@ -40,21 +37,19 @@ async def list_folders():
         return jsonify({"error": "Not logged in"}), 401
 
     async with get_db_connection_context() as conn:
-        async with conn.cursor() as cur:
-            await cur.execute("""
-                SELECT id, folder_name, created_at
-                FROM folders
-                WHERE user_id = %s
-                ORDER BY created_at
-            """, (user_id,))
-            rows = await cur.fetchall()
+        rows = await conn.fetch("""
+            SELECT id, folder_name, created_at
+            FROM folders
+            WHERE user_id = $1
+            ORDER BY created_at
+        """, user_id)
 
     results = []
     for r in rows:
         results.append({
-            "folder_id": r[0],
-            "folder_name": r[1],
-            "created_at": r[2].isoformat() if r[2] else None
+            "folder_id": r['id'],
+            "folder_name": r['folder_name'],
+            "created_at": r['created_at'].isoformat() if r['created_at'] else None
         })
     return jsonify({"folders": results})
 
@@ -64,24 +59,21 @@ async def rename_folder(folder_id):
     if not user_id:
         return jsonify({"error": "Not logged in"}), 401
 
-    data = request.get_json() or {}
+    data = await request.get_json() or {}
     new_name = data.get("folder_name", "").strip()
     if not new_name:
         return jsonify({"error": "No folder name"}), 400
 
     async with get_db_connection_context() as conn:
         # check folder ownership
-        async with conn.cursor() as cur:
-            await cur.execute("SELECT user_id FROM folders WHERE id=%s", (folder_id,))
-            row = await cur.fetchone()
-            if not row:
-                return jsonify({"error":"Folder not found"}), 404
-            if row[0] != user_id:
-                return jsonify({"error":"Unauthorized"}), 403
+        row = await conn.fetchrow("SELECT user_id FROM folders WHERE id=$1", folder_id)
+        if not row:
+            return jsonify({"error":"Folder not found"}), 404
+        if row['user_id'] != user_id:
+            return jsonify({"error":"Unauthorized"}), 403
 
-            # rename
-            await cur.execute("UPDATE folders SET folder_name=%s WHERE id=%s", (new_name, folder_id))
-        await conn.commit()
+        # rename
+        await conn.execute("UPDATE folders SET folder_name=$1 WHERE id=$2", new_name, folder_id)
 
     return jsonify({"message":"Folder renamed"})
 
@@ -94,50 +86,44 @@ async def move_folder_auto_create(conv_id):
     if not user_id:
         return jsonify({"error": "Not logged in"}), 401
 
-    data = request.get_json() or {}
+    data = await request.get_json() or {}
     folder_name = data.get("folder_name", "").strip()
     if not folder_name:
         return jsonify({"error": "No folder name provided"}), 400
 
     async with get_db_connection_context() as conn:
         # Check conversation ownership
-        async with conn.cursor() as cur:
-            await cur.execute("SELECT user_id FROM conversations WHERE id=%s", (conv_id,))
-            row = await cur.fetchone()
-            if not row:
-                return jsonify({"error":"Conversation not found"}),404
-            if row[0] != user_id:
-                return jsonify({"error":"Unauthorized"}),403
+        row = await conn.fetchrow("SELECT user_id FROM conversations WHERE id=$1", conv_id)
+        if not row:
+            return jsonify({"error":"Conversation not found"}), 404
+        if row['user_id'] != user_id:
+            return jsonify({"error":"Unauthorized"}), 403
 
-            # Check if folder already exists for this user
-            await cur.execute("""
-                SELECT id FROM folders
-                WHERE user_id=%s AND folder_name ILIKE %s
-            """, (user_id, folder_name))
-            frow = await cur.fetchone()
+        # Check if folder already exists for this user
+        frow = await conn.fetchrow("""
+            SELECT id FROM folders
+            WHERE user_id=$1 AND folder_name ILIKE $2
+        """, user_id, folder_name)
 
-            if frow:
-                # folder already exists
-                folder_id = frow[0]
-            else:
-                # Create a new folder
-                await cur.execute("""
-                    INSERT INTO folders (user_id, folder_name)
-                    VALUES (%s, %s) RETURNING id
-                """, (user_id, folder_name))
-                row = await cur.fetchone()
-                folder_id = row[0]
+        if frow:
+            # folder already exists
+            folder_id = frow['id']
+        else:
+            # Create a new folder
+            row = await conn.fetchrow("""
+                INSERT INTO folders (user_id, folder_name)
+                VALUES ($1, $2) RETURNING id
+            """, user_id, folder_name)
+            folder_id = row['id']
 
-            # Now update the conversation's folder_id
-            await cur.execute("""
-                UPDATE conversations
-                SET folder_id=%s
-                WHERE id=%s
-            """, (folder_id, conv_id))
-        await conn.commit()
+        # Now update the conversation's folder_id
+        await conn.execute("""
+            UPDATE conversations
+            SET folder_id=$1
+            WHERE id=$2
+        """, folder_id, conv_id)
 
     return jsonify({"message": f"Conversation moved to folder '{folder_name}' (ID={folder_id})"})
-
 
 @multiuser_bp.route("/folders/<int:folder_id>", methods=["DELETE"])
 async def delete_folder(folder_id):
@@ -147,18 +133,14 @@ async def delete_folder(folder_id):
 
     async with get_db_connection_context() as conn:
         # check ownership
-        async with conn.cursor() as cur:
-            await cur.execute("SELECT user_id FROM folders WHERE id=%s", (folder_id,))
-            row = await cur.fetchone()
-            if not row:
-                return jsonify({"error":"Folder not found"}), 404
-            if row[0] != user_id:
-                return jsonify({"error":"Unauthorized"}),403
+        row = await conn.fetchrow("SELECT user_id FROM folders WHERE id=$1", folder_id)
+        if not row:
+            return jsonify({"error":"Folder not found"}), 404
+        if row['user_id'] != user_id:
+            return jsonify({"error":"Unauthorized"}), 403
 
-            # If using ON DELETE SET NULL, removing folder won't remove convos.
-            # If you used ON DELETE CASCADE, removing folder would also remove convos.
-            await cur.execute("DELETE FROM folders WHERE id=%s", (folder_id,))
-        await conn.commit()
+        # Delete the folder
+        await conn.execute("DELETE FROM folders WHERE id=$1", folder_id)
 
     return jsonify({"message":"Folder deleted"})
 
@@ -193,7 +175,7 @@ async def list_conversations():
         finally:
             await conn.close()
     except Exception as e:
-        logger.error(f"Error listing conversations for user {user_id}: {e}", exc_info=True)
+        logging.error(f"Error listing conversations for user {user_id}: {e}", exc_info=True)
         return jsonify({"error": f"Database error: {str(e)}"}), 500
 
 @multiuser_bp.route("/conversations", methods=["POST"])
@@ -202,18 +184,15 @@ async def create_conversation():
     if not user_id:
         return jsonify({"error": "Not logged in"}), 401
 
-    data = request.get_json()
+    data = await request.get_json()
     name = data.get("conversation_name", "Untitled Session")
 
     async with get_db_connection_context() as conn:
-        async with conn.cursor() as cur:
-            await cur.execute("""
-                INSERT INTO conversations (user_id, conversation_name)
-                VALUES (%s, %s) RETURNING id
-            """, (user_id, name))
-            row = await cur.fetchone()
-            new_id = row[0]
-        await conn.commit()
+        row = await conn.fetchrow("""
+            INSERT INTO conversations (user_id, conversation_name)
+            VALUES ($1, $2) RETURNING id
+        """, user_id, name)
+        new_id = row['id']
 
     return jsonify({"conversation_id": new_id, "conversation_name": name})
 
@@ -225,25 +204,22 @@ async def get_messages(conv_id):
 
     async with get_db_connection_context() as conn:
         # Check conversation ownership
-        async with conn.cursor() as cur:
-            await cur.execute("SELECT user_id FROM conversations WHERE id = %s", (conv_id,))
-            row = await cur.fetchone()
-            if not row:
-                return jsonify({"error": "Conversation not found"}), 404
-            if row[0] != user_id:
-                return jsonify({"error": "Unauthorized"}), 403
+        row = await conn.fetchrow("SELECT user_id FROM conversations WHERE id = $1", conv_id)
+        if not row:
+            return jsonify({"error": "Conversation not found"}), 404
+        if row['user_id'] != user_id:
+            return jsonify({"error": "Unauthorized"}), 403
 
-            # Fetch messages
-            await cur.execute("""
-                SELECT sender, content, created_at
-                FROM messages
-                WHERE conversation_id = %s
-                ORDER BY id ASC
-            """, (conv_id,))
-            rows = await cur.fetchall()
+        # Fetch messages
+        rows = await conn.fetch("""
+            SELECT sender, content, created_at
+            FROM messages
+            WHERE conversation_id = $1
+            ORDER BY id ASC
+        """, conv_id)
 
     messages = [
-        {"sender": r[0], "content": r[1], "created_at": r[2].isoformat()}
+        {"sender": r['sender'], "content": r['content'], "created_at": r['created_at'].isoformat()}
         for r in rows
     ]
     return jsonify({"messages": messages})
@@ -256,24 +232,21 @@ async def add_message(conv_id):
 
     async with get_db_connection_context() as conn:
         # Check ownership again
-        async with conn.cursor() as cur:
-            await cur.execute("SELECT user_id FROM conversations WHERE id = %s", (conv_id,))
-            row = await cur.fetchone()
-            if not row:
-                return jsonify({"error": "Conversation not found"}), 404
-            if row[0] != user_id:
-                return jsonify({"error": "Unauthorized"}), 403
+        row = await conn.fetchrow("SELECT user_id FROM conversations WHERE id = $1", conv_id)
+        if not row:
+            return jsonify({"error": "Conversation not found"}), 404
+        if row['user_id'] != user_id:
+            return jsonify({"error": "Unauthorized"}), 403
 
-            # Insert the message
-            data = request.get_json()
-            sender = data.get("sender", "user")
-            content = data.get("content", "")
+        # Insert the message
+        data = await request.get_json()
+        sender = data.get("sender", "user")
+        content = data.get("content", "")
 
-            await cur.execute("""
-                INSERT INTO messages (conversation_id, sender, content)
-                VALUES (%s, %s, %s)
-            """, (conv_id, sender, content))
-        await conn.commit()
+        await conn.execute("""
+            INSERT INTO messages (conversation_id, sender, content)
+            VALUES ($1, $2, $3)
+        """, conv_id, sender, content)
 
     return jsonify({"status": "ok"})
 
@@ -284,26 +257,23 @@ async def rename_conversation(conv_id):
     if not user_id:
         return jsonify({"error": "Not logged in"}), 401
 
-    data = request.get_json()
+    data = await request.get_json()
     new_name = data.get("conversation_name", "New Chat")
 
     async with get_db_connection_context() as conn:
         # Check ownership
-        async with conn.cursor() as cur:
-            await cur.execute("SELECT user_id FROM conversations WHERE id=%s", (conv_id,))
-            row = await cur.fetchone()
-            if not row:
-                return jsonify({"error": "Conversation not found"}), 404
-            if row[0] != user_id:
-                return jsonify({"error": "Unauthorized"}), 403
+        row = await conn.fetchrow("SELECT user_id FROM conversations WHERE id=$1", conv_id)
+        if not row:
+            return jsonify({"error": "Conversation not found"}), 404
+        if row['user_id'] != user_id:
+            return jsonify({"error": "Unauthorized"}), 403
 
-            # Rename
-            await cur.execute("""
-                UPDATE conversations
-                SET conversation_name = %s
-                WHERE id = %s
-            """, (new_name, conv_id))
-        await conn.commit()
+        # Rename
+        await conn.execute("""
+            UPDATE conversations
+            SET conversation_name = $1
+            WHERE id = $2
+        """, new_name, conv_id)
 
     return jsonify({"message": "Renamed"})
 
@@ -314,7 +284,7 @@ async def move_conversation_to_folder(conv_id):
     if not user_id:
         return jsonify({"error": "Not logged in"}), 401
 
-    data = request.get_json() or {}
+    data = await request.get_json() or {}
     new_folder_id = data.get("folder_id")
 
     # For 'inbox' or 'no folder', you can pass folder_id=None
@@ -322,51 +292,44 @@ async def move_conversation_to_folder(conv_id):
 
     async with get_db_connection_context() as conn:
         # check conversation ownership
-        async with conn.cursor() as cur:
-            await cur.execute("SELECT user_id FROM conversations WHERE id=%s", (conv_id,))
-            row = await cur.fetchone()
-            if not row:
-                return jsonify({"error":"Conversation not found"}), 404
-            if row[0] != user_id:
-                return jsonify({"error":"Unauthorized"}), 403
+        row = await conn.fetchrow("SELECT user_id FROM conversations WHERE id=$1", conv_id)
+        if not row:
+            return jsonify({"error":"Conversation not found"}), 404
+        if row['user_id'] != user_id:
+            return jsonify({"error":"Unauthorized"}), 403
 
-            # If new_folder_id is not None, verify that folder belongs to user
-            if new_folder_id:
-                await cur.execute("SELECT user_id FROM folders WHERE id=%s",(new_folder_id,))
-                frow = await cur.fetchone()
-                if not frow:
-                    return jsonify({"error":"Folder not found"}),404
-                if frow[0] != user_id:
-                    return jsonify({"error":"Unauthorized folder"}),403
+        # If new_folder_id is not None, verify that folder belongs to user
+        if new_folder_id:
+            frow = await conn.fetchrow("SELECT user_id FROM folders WHERE id=$1", new_folder_id)
+            if not frow:
+                return jsonify({"error":"Folder not found"}), 404
+            if frow['user_id'] != user_id:
+                return jsonify({"error":"Unauthorized folder"}), 403
 
-            # set folder_id
-            await cur.execute("""
-                UPDATE conversations
-                SET folder_id=%s
-                WHERE id=%s
-            """, (new_folder_id, conv_id))
-        await conn.commit()
+        # set folder_id
+        await conn.execute("""
+            UPDATE conversations
+            SET folder_id=$1
+            WHERE id=$2
+        """, new_folder_id, conv_id)
+
     return jsonify({"message":"Conversation moved"})
-
 
 # DELETE
 @multiuser_bp.route("/conversations/<int:conv_id>", methods=["DELETE"])
 async def delete_conversation(conv_id):
     user_id = session.get("user_id")
     if not user_id:
-        return jsonify({"error":"Not logged in"}),401
+        return jsonify({"error":"Not logged in"}), 401
 
     async with get_db_connection_context() as conn:
-        async with conn.cursor() as cur:
-            await cur.execute("SELECT user_id FROM conversations WHERE id=%s",(conv_id,))
-            row = await cur.fetchone()
-            if not row:
-                return jsonify({"error":"Conversation not found"}),404
-            if row[0]!=user_id:
-                return jsonify({"error":"Unauthorized"}),403
+        row = await conn.fetchrow("SELECT user_id FROM conversations WHERE id=$1", conv_id)
+        if not row:
+            return jsonify({"error":"Conversation not found"}), 404
+        if row['user_id'] != user_id:
+            return jsonify({"error":"Unauthorized"}), 403
 
-            # This will also delete all messages referencing conversation_id
-            await cur.execute("DELETE FROM conversations WHERE id=%s",(conv_id,))
-        await conn.commit()
+        # This will also delete all messages referencing conversation_id
+        await conn.execute("DELETE FROM conversations WHERE id=$1", conv_id)
 
     return jsonify({"message":"Deleted"})
