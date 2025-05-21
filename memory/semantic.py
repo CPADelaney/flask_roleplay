@@ -136,7 +136,7 @@ class SemanticMemoryManager:
             """
             
             response = await openai.ChatCompletion.acreate(
-                model="gpt-4",
+                model="gpt-4.1-nano",
                 messages=[
                     {"role": "system", "content": "You are an AI that extracts semantic meaning from specific observations."},
                     {"role": "user", "content": prompt}
@@ -316,7 +316,7 @@ class SemanticMemoryManager:
             """
             
             response = await openai.ChatCompletion.acreate(
-                model="gpt-4",
+                model="gpt-4.1-nano",
                 messages=[
                     {"role": "system", "content": "You are an AI that extracts patterns from memories."},
                     {"role": "user", "content": prompt}
@@ -641,7 +641,7 @@ class SemanticMemoryManager:
             """
             
             response = await openai.ChatCompletion.acreate(
-                model="gpt-4",
+                model="gpt-4.1-nano",
                 messages=[
                     {"role": "system", "content": "You generate counterfactual variations of memories."},
                     {"role": "user", "content": prompt}
@@ -812,7 +812,7 @@ class SemanticMemoryManager:
             """
             
             response = await openai.ChatCompletion.acreate(
-                model="gpt-4",
+                model="gpt-4.1-nano",
                 messages=[
                     {"role": "system", "content": "You extract related topics from semantic memories."},
                     {"role": "user", "content": prompt}
