@@ -506,7 +506,7 @@ class EnhancedAgenticActionGenerator:
                          f"Write a {content_type} based on the following title and prompt. "
                          f"Title: {title}\nPrompt: {prompt}\n\n"
                          f"Output only the generated {content_type}.",
-            model="gpt-4o-mini", # Or your preferred model
+            model="gpt-4.1-nano", # Or your preferred model
             model_settings=ModelSettings(temperature=0.8, max_tokens=1000)
         )
         try:
