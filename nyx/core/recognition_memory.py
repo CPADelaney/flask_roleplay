@@ -274,7 +274,7 @@ class RecognitionMemorySystem:
                 )
             ],
             output_type=List[RecognitionResult],
-            model="gpt-4o",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.4)
         )
     
@@ -312,7 +312,7 @@ class RecognitionMemorySystem:
                 function_tool(self._leverage_context_awareness)
             ],
             output_type=SalienceAnalysisOutput,
-            model="gpt-4o-mini",
+            model="gpt-4.1-nano-mini",
             model_settings=ModelSettings(temperature=0.3)
         )
         
@@ -348,7 +348,7 @@ class RecognitionMemorySystem:
                 function_tool(self._combine_query_results),
                 function_tool(self._track_query_performance)
             ],
-            model="gpt-4o-mini",
+            model="gpt-4.1-nano-mini",
             model_settings=ModelSettings(temperature=0.3)
         )
         
@@ -382,7 +382,7 @@ class RecognitionMemorySystem:
                 function_tool(self._calibrate_trigger_parameters)
             ],
             output_type=TriggerExtractionOutput,
-            model="gpt-4o-mini",
+            model="gpt-4.1-nano-mini",
             model_settings=ModelSettings(temperature=0.4)
         )
         
@@ -420,7 +420,7 @@ class RecognitionMemorySystem:
                 function_tool(self._assess_conversational_impact)
             ],
             output_type=RecognitionFilterOutput,
-            model="gpt-4o-mini",
+            model="gpt-4.1-nano-mini",
             model_settings=ModelSettings(temperature=0.3)
         )
     
