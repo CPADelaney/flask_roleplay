@@ -507,6 +507,41 @@ class AgentContext:
             except Exception as e:
                 logger.error(f"Error monitoring performance: {e}")
                 await asyncio.sleep(300)
+
+    async def _update_performance_metrics(self):
+        """Update performance metrics based on current state."""
+        # Calculate success rate
+        if self.performance_metrics["total_actions"] > 0:
+            success_rate = (
+                self.performance_metrics["successful_actions"] / 
+                self.performance_metrics["total_actions"]
+            )
+        else:
+            success_rate = 1.0
+        
+        # Calculate error rate
+        if self.performance_metrics["total_actions"] > 0:
+            error_rate = (
+                self.performance_metrics["error_rates"]["total"] / 
+                self.performance_metrics["total_actions"]
+            )
+        else:
+            error_rate = 0.0
+        
+        # Update the metrics
+        self.performance_metrics["success_rate"] = success_rate
+        self.performance_metrics["error_rate"] = error_rate
+        
+        # Update resource usage metrics
+        try:
+            self.performance_metrics["memory_usage"] = psutil.Process().memory_info().rss
+            self.performance_metrics["cpu_usage"] = psutil.Process().cpu_percent()
+        except:
+            # Handle the case where psutil isn't available
+            pass
+        
+        # Log the updates
+        logger.debug(f"Updated performance metrics: success_rate={success_rate:.2f}, error_rate={error_rate:.2f}")
     
     async def _cleanup_resources(self):
         """Clean up resources periodically."""
