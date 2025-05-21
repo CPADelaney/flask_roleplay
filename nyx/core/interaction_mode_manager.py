@@ -640,7 +640,7 @@ class InteractionModeManager:
             
             Create distributions that blend modes naturally and coherently.
             """,
-            model="gpt-4o",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.3),
             tools=[
                 function_tool(self._get_current_context),
@@ -667,7 +667,7 @@ class InteractionModeManager:
             Create blended parameters that reflect the proportional mixture of modes,
             while maintaining coherence and naturalness.
             """,
-            model="gpt-4o",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.2),
             tools=[
                 function_tool(self._get_mode_parameters),
@@ -692,7 +692,7 @@ class InteractionModeManager:
             Rather than switching between styles, create a natural blend that
             incorporates elements proportionally based on the mode distribution.
             """,
-            model="gpt-4o",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.3),
             tools=[
                 function_tool(self._get_conversation_style),
@@ -718,7 +718,7 @@ class InteractionModeManager:
             Effects should maintain coherence during transitions while ensuring
             the new mode distribution is properly expressed.
             """,
-            model="gpt-4o",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.2),
             tools=[
                 function_tool(self._apply_emotional_effects),
