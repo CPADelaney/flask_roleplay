@@ -61,7 +61,7 @@ DEFAULT_CONFIG = {
     
     # Agent SDK settings
     "agent_sdk": {
-        "default_model": "gpt-4",
+        "default_model": "gpt-4.1-nano",
         "model_settings": {
             "temperature": 0.1,
             "top_p": 0.9
@@ -290,7 +290,7 @@ class ContextConfig:
         Returns:
             Model name string
         """
-        return self.get_section("agent_sdk").get("default_model", "gpt-4")
+        return self.get_section("agent_sdk").get("default_model", "gpt-4.1-nano")
 
 
 # Async singleton access function
