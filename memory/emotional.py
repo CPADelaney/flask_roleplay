@@ -203,7 +203,7 @@ class EmotionalMemoryManager:
             """
             
             response = await openai.ChatCompletion.acreate(
-                model="gpt-4",
+                model="gpt-4.1-nano",
                 messages=[
                     {"role": "system", "content": "You analyze the emotional content of text."},
                     {"role": "user", "content": prompt}
