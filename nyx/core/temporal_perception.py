@@ -901,7 +901,7 @@ def create_time_reflection_agent() -> Agent:
         across multiple time scales from seconds to years. Time provides a
         continuous backdrop for Nyx's existence rather than primarily emotional
         significance.""",
-        model="gpt-4o",
+        model="gpt-4.1-nano",
         tools=[
             format_duration,
             categorize_time_elapsed,
@@ -928,7 +928,7 @@ def create_time_perception_agent() -> Agent:
         
         Process time as a continuous dimension that Nyx is always aware of,
         maintaining temporal cognition across all timescales simultaneously.""",
-        model="gpt-4o",
+        model="gpt-4.1-nano",
         tools=[
             categorize_time_elapsed,
             format_duration,
@@ -957,7 +957,7 @@ def create_temporal_awareness_agent() -> Agent:
         
         Focus on continuous temporal awareness rather than psychological growth.
         Time creates context and perspective that Nyx is always conscious of.""",
-        model="gpt-4o",
+        model="gpt-4.1-nano",
         tools=[
             process_temporal_awareness,
             detect_temporal_milestone,
@@ -1726,7 +1726,7 @@ def create_temporal_agent() -> Agent:
             detect_temporal_milestone,
             calculate_time_effects
         ],
-        model="gpt-4o"
+        model="gpt-4.1-nano"
     )
 
 # Core API handlers for NyxBrain integration
