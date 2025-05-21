@@ -510,7 +510,7 @@ class MemoryInterferenceManager:
             """
             
             response = await openai.ChatCompletion.acreate(
-                model="gpt-4",
+                model="gpt-4.1-nano",
                 messages=[
                     {"role": "system", "content": "You create blended false memories to simulate memory interference."},
                     {"role": "user", "content": prompt}
@@ -550,7 +550,7 @@ class MemoryInterferenceManager:
             """
             
             response = await openai.ChatCompletion.acreate(
-                model="gpt-4",
+                model="gpt-4.1-nano",
                 messages=[
                     {"role": "system", "content": "You create temporally confused false memories."},
                     {"role": "user", "content": prompt}
@@ -590,7 +590,7 @@ class MemoryInterferenceManager:
             """
             
             response = await openai.ChatCompletion.acreate(
-                model="gpt-4",
+                model="gpt-4.1-nano",
                 messages=[
                     {"role": "system", "content": "You create emotionally-weighted false memories."},
                     {"role": "user", "content": prompt}
@@ -632,7 +632,7 @@ class MemoryInterferenceManager:
             """
             
             response = await openai.ChatCompletion.acreate(
-                model="gpt-4",
+                model="gpt-4.1-nano",
                 messages=[
                     {"role": "system", "content": "You create blended false memories."},
                     {"role": "user", "content": prompt}
