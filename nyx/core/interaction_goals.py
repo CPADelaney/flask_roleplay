@@ -735,7 +735,7 @@ class GoalSelector:
             Choose goals that reflect the blended nature of the interaction,
             rather than just selecting goals from the primary mode.
             """,
-            model="gpt-4o",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.3),
             tools=[
                 function_tool(self._get_current_mode_distribution),
@@ -760,7 +760,7 @@ class GoalSelector:
             Create goal blends that naturally integrate aspects from different modes,
             rather than simply listing goals from each mode separately.
             """,
-            model="gpt-4o",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.3),
             tools=[
                 function_tool(self._analyze_goal_compatibility),
@@ -785,7 +785,7 @@ class GoalSelector:
             Create a prioritized goal list that aligns with the mode distribution
             while maintaining a coherent goal structure.
             """,
-            model="gpt-4o",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.2),
             tools=[
                 function_tool(self._evaluate_goal_mode_alignment),
