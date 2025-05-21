@@ -291,6 +291,7 @@ class DigitalSomatosensorySystem:
             "neck": BodyRegion(name="neck", sensitivity=1.2, erogenous_level=0.4),
             "hands": BodyRegion(name="hands", sensitivity=1.4, erogenous_level=0.2),
             "chest": BodyRegion(name="chest", sensitivity=1.2, erogenous_level=0.5), 
+            "core": BodyRegion(name="core", sensitivity=1.3, erogenous_level=0.5),
             "spine": BodyRegion(name="spine", sensitivity=1.1, erogenous_level=0.3),
             "inner_thighs": BodyRegion(name="inner_thighs", sensitivity=1.3, erogenous_level=0.7),
             "genitals": BodyRegion(name="genitals", sensitivity=2.0, erogenous_level=1.0),
