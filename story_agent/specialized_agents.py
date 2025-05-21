@@ -25,8 +25,8 @@ MAX_RETRIES = 3
 RETRY_INTERVAL = 1.0  # seconds
 
 # Agent models configuration
-DEFAULT_MODEL = "gpt-4o"
-FAST_MODEL = "gpt-4o"  # You could use a faster model like "gpt-3.5-turbo" for less complex tasks
+DEFAULT_MODEL = "gpt-4.1-nano"
+FAST_MODEL = "gpt-4.1-nano"  # You could use a faster model like "gpt-3.5-turbo" for less complex tasks
 
 # ----- Agent Context -----
 
