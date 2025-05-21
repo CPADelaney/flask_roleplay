@@ -153,7 +153,7 @@ Use the available tools to create compelling psychological dynamics.
                 self._end_mind_game,
                 self._get_active_mind_games
             ],
-            model="gpt-4o"
+            model="gpt-4.1-nano"
         )
     
     def _create_gaslighting_agent(self):
@@ -182,7 +182,7 @@ Use the available tools to create subtle psychological effects without causing h
                 self._update_gaslighting_level,
                 self._check_trust_threshold
             ],
-            model="gpt-4o"
+            model="gpt-4.1-nano"
         )
     
     def _create_subspace_agent(self):
@@ -211,7 +211,7 @@ Use the available tools to detect and respond to subspace appropriately.
                 self._generate_subspace_guidance,
                 self._monitor_subspace_exit
             ],
-            model="gpt-4o"
+            model="gpt-4.1-nano"
         )
     
     def _create_state_tracking_agent(self):
@@ -240,7 +240,7 @@ Use the available tools to maintain accurate psychological state tracking.
                 self._record_psychological_event,
                 self._generate_psychological_report
             ],
-            model="gpt-4o"
+            model="gpt-4.1-nano"
         )
     
     def _load_default_mind_games(self):
