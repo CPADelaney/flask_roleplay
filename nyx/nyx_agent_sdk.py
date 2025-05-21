@@ -52,8 +52,7 @@ class ContentModeration(BaseModel):
 
 # ===== Function Tools =====
 
-@function_tool
-async def retrieve_memories(ctx, query: str, limit: int = 5) -> str:
+async def retrieve_memories_impl(ctx, query: str, limit: int = 5) -> str:
     """
     Retrieve relevant memories for Nyx.
     
@@ -91,8 +90,7 @@ def enhance_context_with_memories(context, memories):
     enhanced_context['relevant_memories'] = memories
     return enhanced_context
 
-@function_tool
-async def add_memory(ctx, memory_text: str, memory_type: str = "observation", significance: int = 5) -> str:
+async def add_memory_impl(ctx, memory_text: str, memory_type: str = "observation", significance: int = 5) -> str:
     """
     Add a new memory for Nyx.
     
@@ -116,6 +114,7 @@ async def add_memory(ctx, memory_text: str, memory_type: str = "observation", si
     )
     
     return f"Memory added with ID: {memory_id}"
+    
 
 async def get_scene_guidance(self, context: Dict[str, Any]) -> Dict[str, Any]:
     """Generate guidance for scene based on context."""
@@ -139,7 +138,7 @@ async def get_scene_guidance(self, context: Dict[str, Any]) -> Dict[str, Any]:
     return npc_guidance
 
 @function_tool
-async def detect_user_revelations(ctx, user_message: str) -> str:
+async def detect_user_revelations_impl(ctx, user_message: str) -> str:
     """
     Detect if user is revealing new preferences or patterns.
     
@@ -208,15 +207,17 @@ async def detect_user_revelations(ctx, user_message: str) -> str:
     
     return json.dumps(revelations)
 
-@function_tool
-async def enhance_context_with_strategies(context: Dict[str, Any], conn) -> Dict[str, Any]:
+async def enhance_context_with_strategies_impl(context: Dict[str, Any], conn) -> Dict[str, Any]:
+    """
+    Enhance context with active strategies
+    """
     strategies = await get_active_strategies(conn)
     context["nyx2_strategies"] = strategies
     return context
 
 
-@function_tool
-async def get_user_model_guidance(ctx) -> str:
+
+async def get_user_model_guidance_impl(ctx) -> str:
     """
     Get guidance for how Nyx should respond based on the user model.
     """
@@ -243,7 +244,7 @@ Reflections:
 """
 
 @function_tool
-async def generate_image_from_scene(
+async def generate_image_from_scene_impl(
     ctx, 
     scene_description: str, 
     characters: List[str], 
@@ -276,6 +277,7 @@ async def generate_image_from_scene(
         return f"Image generated: {result['image_urls'][0]}"
     else:
         return "Failed to generate image"
+
 
 # ===== Guardrail Functions =====
 
@@ -2461,6 +2463,27 @@ class AgentContext:
             logger.error(f"Failed to process agent task: {e}")
             raise
 
+retrieve_memories = retrieve_memories_impl
+add_memory = add_memory_impl
+enhance_context_with_strategies = enhance_context_with_strategies_impl
+get_user_model_guidance = get_user_model_guidance_impl
+determine_image_generation = determine_image_generation_impl
+get_emotional_state = get_emotional_state_impl
+update_emotional_state = update_emotional_state_impl
+generate_image_from_scene = generate_image_from_scene_impl
+detect_user_revelations = detect_user_revelations_impl
+
+# ===== Create tool versions =====
+retrieve_memories_tool = function_tool(retrieve_memories_impl)
+add_memory_tool = function_tool(add_memory_impl)
+enhance_context_with_strategies_tool = function_tool(enhance_context_with_strategies_impl)
+get_user_model_guidance_tool = function_tool(get_user_model_guidance_impl)
+determine_image_generation_tool = function_tool(determine_image_generation_impl)
+get_emotional_state_tool = function_tool(get_emotional_state_impl)
+update_emotional_state_tool = function_tool(update_emotional_state_impl)
+generate_image_from_scene_tool = function_tool(generate_image_from_scene_impl)
+detect_user_revelations_tool = function_tool(detect_user_revelations_impl)
+
 # Memory-focused agent
 memory_agent = Agent[AgentContext](
     name="Memory Agent",
@@ -2472,8 +2495,8 @@ memory_agent = Agent[AgentContext](
 
 Always be thorough and precise in your memory management.""",
     tools=[
-        retrieve_memories,
-        add_memory,
+        retrieve_memories_tool,
+        add_memory_tool,
     ]
 )
 
@@ -2505,8 +2528,9 @@ Your decisions should:
 
 Ensure all decisions maintain Nyx's dominant, confident personality.""",
     tools=[
-        get_user_model_guidance,
-        generate_image_from_scene,
+        get_user_model_guidance_tool,
+        generate_image_from_scene_tool,
+        detect_user_revelations_tool,
     ]
 )
 
@@ -2529,6 +2553,11 @@ Always maintain your dominant persona in responses while being attentive to user
         handoff(reflection_agent, tool_name_override="generate_reflection"),
         handoff(decision_agent, tool_name_override="make_narrative_decision"),
     ],
+    tools=[
+        determine_image_generation_tool,
+        get_emotional_state_tool,
+        update_emotional_state_tool,
+    ],
     output_type=NarrativeResponse,
     input_guardrails=[
         InputGuardrail(guardrail_function=content_moderation_guardrail),
@@ -2540,8 +2569,7 @@ Always maintain your dominant persona in responses while being attentive to user
 
 # Add to nyx_agent_sdk.py
 
-@function_tool
-async def determine_image_generation(ctx, response_text: str) -> str:
+async def determine_image_generation_impl(ctx, response_text: str) -> str:
     """
     Determine if an image should be generated based on response content.
     """
@@ -2609,8 +2637,7 @@ async def determine_image_generation(ctx, response_text: str) -> str:
         "image_prompt": image_prompt
     })
 
-@function_tool
-async def get_emotional_state(ctx) -> str:
+async def get_emotional_state_impl(ctx) -> str:
     """
     Get Nyx's current emotional state from the database.
     """
@@ -2639,8 +2666,7 @@ async def get_emotional_state(ctx) -> str:
     
     return json.dumps(default_state)
 
-@function_tool
-async def update_emotional_state(ctx, emotional_state: Dict[str, Any]) -> str:
+async def update_emotional_state_impl(ctx, emotional_state: Dict[str, Any]) -> str:
     """
     Update Nyx's emotional state in the database.
     """
@@ -2659,7 +2685,6 @@ async def update_emotional_state(ctx, emotional_state: Dict[str, Any]) -> str:
         "updated": True,
         "emotional_state": emotional_state
     })
-
 
 # ===== Main Functions =====
 
@@ -2680,14 +2705,14 @@ async def process_user_input(
     ctx = await AgentContext.create(user_id, conversation_id)
     
     try:
-        # Get memories and enhance context
+        # Get memories and enhance context - using the callable functions
         memories = await retrieve_memories(ctx, user_input)
         enhanced_context = enhance_context_with_memories(context_data or {}, memories)
 
         conn = await get_db_connection_context().__aenter__()
         enhanced_context = await enhance_context_with_strategies(enhanced_context, conn)
         
-        # Get user model guidance
+        # Get user model guidance - using the callable function
         user_guidance = await get_user_model_guidance(ctx)
         enhanced_context["user_guidance"] = user_guidance
         
@@ -2741,7 +2766,7 @@ async def process_user_input(
                     activity_result["recommendations"]
                 )
         
-        # Store interaction in memory
+        # Store interaction in memory - using the callable function
         await add_memory(
             ctx,
             f"User said: {user_input}\nI responded with: {narrative_response.narrative}",
