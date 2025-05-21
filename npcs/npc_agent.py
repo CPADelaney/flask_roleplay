@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 class ResourcePool:
     """Manages shared resources with limits to prevent overwhelming systems."""
     
-    def __init__(self, max_concurrent=10, timeout=30.0):
+    def __init__(self, max_concurrent=10, timeout=30.0, max_memory=1024*1024*100): 
         self.semaphore = asyncio.Semaphore(max_concurrent)
         self.timeout = timeout
         self.stats = {
@@ -37,6 +37,7 @@ class ResourcePool:
             "current_usage": 0,
             "peak_usage": 0
         }
+        self.max_memory = max_memory
     
     async def acquire(self):
         """Acquire resource from pool with timeout."""
