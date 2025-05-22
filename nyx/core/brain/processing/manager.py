@@ -189,6 +189,25 @@ class ProcessingManager:
     
     async def _determine_processing_mode(self, user_input: str, context: Dict[str, Any]) -> str:
             """Legacy method to determine optimal processing mode (used as fallback)"""
+            # Quick decision tree:
+            if "urgent" in task_types and task_types["urgent"] > 0.7:
+                return "reflexive"  # Use reflexive for urgent needs
+            
+            elif complexity_score < 0.3 and not requires_reasoning:
+                return "reflexive"  # Simple patterns can use reflexive
+            
+            elif agent_score > 0.8:
+                return "integrated"  # Roleplay/narrative needs agent
+            
+            elif complexity_score > 0.8 or "multi_step" in task_types:
+                return "distributed"  # Complex queries need distributed
+            
+            elif complexity_score > 0.5:
+                return "parallel"  # Medium complexity benefits from parallelism
+            
+            else:
+                return "serial"  # Default comprehensive processing
+                
             # Define thresholds
             input_length_threshold = 100  # Characters
             
