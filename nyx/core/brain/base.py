@@ -2443,6 +2443,20 @@ System Prompt End
             "steps_count": len(steps),
             "domain": domain
         }
+
+    async def process_input_enhanced(self, user_input: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
+        """Use coordinated processing when available, fallback to original"""
+        if self.context_distribution:
+            return await self.process_input_coordinated(user_input, context)
+        else:
+            return await self.process_input(user_input, context)
+    
+    async def generate_response_enhanced(self, user_input: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
+        """Use coordinated response generation when available, fallback to original"""
+        if self.context_distribution:
+            return await self.generate_response_coordinated(user_input, context)
+        else:
+            return await self.generate_response(user_input, context)
     
     async def _provide_activity_feedback(self, activity: Dict[str, Any], result: Dict[str, Any], used_procedure: bool) -> None:
         """
