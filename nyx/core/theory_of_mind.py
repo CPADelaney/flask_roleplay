@@ -1161,3 +1161,94 @@ def create_subspace_detection_agent(subspace_system: SubspaceDetectionSystem) ->
             subspace_system.get_subspace_guidance
         ]
     )
+
+def create_context_aware_theory_of_mind_agent(theory_of_mind: TheoryOfMind) -> Agent:
+    """Create an agent that uses context-aware theory of mind."""
+    
+    @function_tool
+    async def analyze_user_with_context(ctx: RunContextWrapper, user_id: str, include_context: bool = True) -> Dict[str, Any]:
+        """Analyze user mental state with full context integration"""
+        # Get context from the brain's context distribution system
+        brain = ctx.context.get("brain_instance")
+        if not brain or not hasattr(brain, "context_distribution"):
+            return {"error": "Context distribution not available"}
+        
+        context = brain.context_distribution.get_context_for_module("theory_of_mind")
+        if not context:
+            return {"error": "No active context for theory of mind"}
+        
+        # Get cross-module messages
+        if hasattr(theory_of_mind, "get_cross_module_messages"):
+            messages = await theory_of_mind.get_cross_module_messages()
+        else:
+            messages = {}
+        
+        # Perform analysis with context
+        result = {
+            "user_id": user_id,
+            "mental_state": await theory_of_mind.get_user_model(user_id),
+            "context_factors": {
+                "active_modules": list(context.active_modules),
+                "emotional_context": context.emotional_state,
+                "relationship_context": context.relationship_context,
+                "cross_module_insights": len(messages)
+            }
+        }
+        
+        return result
+    
+    @function_tool
+    async def get_interaction_recommendations(ctx: RunContextWrapper, user_id: str) -> Dict[str, Any]:
+        """Get recommendations for interacting with user based on mental state and context"""
+        brain = ctx.context.get("brain_instance")
+        if not brain:
+            return {"error": "Brain instance not available"}
+        
+        # Get user model
+        user_model = await theory_of_mind.get_user_model(user_id)
+        if not user_model:
+            return {"error": f"No mental model for user {user_id}"}
+        
+        # Get context if available
+        context = None
+        if hasattr(brain, "context_distribution"):
+            context = brain.context_distribution.get_context_for_module("theory_of_mind")
+        
+        recommendations = {
+            "emotional_approach": "empathetic" if user_model.get("valence", 0) < 0 else "enthusiastic",
+            "cognitive_level": "simple" if user_model.get("knowledge_level", 0.5) < 0.3 else "detailed",
+            "interaction_style": "gentle" if user_model.get("perceived_trust", 0.5) < 0.6 else "playful",
+            "suggested_topics": []
+        }
+        
+        # Add context-based recommendations
+        if context:
+            if context.goal_context:
+                recommendations["goal_alignment"] = "Focus on active goals"
+            if context.emotional_state.get("dominant_emotion") == "Joy":
+                recommendations["mood_match"] = "Mirror positive energy"
+        
+        return recommendations
+    
+    return Agent(
+        name="Context-Aware Theory of Mind Agent",
+        instructions="""You analyze and model user mental states using full context from all active modules.
+        
+        Your enhanced capabilities include:
+        1. Integrating emotional assessments from EmotionalCore
+        2. Using relationship history from RelationshipManager  
+        3. Incorporating memory patterns from MemoryCore
+        4. Considering active goals from GoalManager
+        5. Detecting dominance/submission dynamics with context
+        
+        Provide nuanced mental state assessments that consider the full context of the interaction.
+        """,
+        tools=[
+            theory_of_mind.get_user_model,
+            theory_of_mind.detect_submission_signals,
+            analyze_user_with_context,
+            get_interaction_recommendations,
+            theory_of_mind.get_emotional_markers,
+            theory_of_mind.get_linguistic_patterns
+        ]
+    )
