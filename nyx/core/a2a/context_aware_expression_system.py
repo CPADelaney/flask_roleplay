@@ -904,6 +904,144 @@ class ContextAwareExpressionSystem(ContextAwareModule):
         }
         
         return emotion_tone_map.get(emotion.lower(), "neutral")
+
+    def _extract_key_patterns(self, processing_results: Dict[str, Any]) -> List[str]:
+        """Extract key patterns from processing results"""
+        key_patterns = []
+        pattern_scores = {}  # Pattern name -> score for deduplication and ranking
+        
+        # 1. Extract from pattern detections (input processor results)
+        patterns = processing_results.get("pattern_detections", [])
+        for pattern in patterns:
+            pattern_name = pattern.get("pattern_name", "unknown")
+            confidence = pattern.get("confidence", 0.0)
+            
+            # Weight patterns by confidence and context enhancement
+            weight = confidence
+            if pattern.get("context_enhanced", False):
+                weight *= 1.2  # Boost context-enhanced patterns
+            
+            # Check which adjustments were applied
+            adjustments = pattern.get("adjustments_applied", {})
+            if adjustments.get("emotional", False):
+                weight *= 1.1
+            if adjustments.get("dominance", False):
+                weight *= 1.15
+            if adjustments.get("identity", False):
+                weight *= 1.1
+                
+            pattern_scores[pattern_name] = max(pattern_scores.get(pattern_name, 0), weight)
+        
+        # 2. Extract from behavior evaluations
+        evaluations = processing_results.get("behavior_evaluations", [])
+        
+        # If evaluations is a list of evaluation results
+        if isinstance(evaluations, list):
+            for eval_item in evaluations:
+                if isinstance(eval_item, dict):
+                    # Check for recommended behaviors with high confidence
+                    if eval_item.get("recommendation") == "approach" and eval_item.get("confidence", 0) > 0.6:
+                        behavior = eval_item.get("behavior", "")
+                        if behavior:
+                            # Convert behavior to pattern name
+                            behavior_pattern = f"{behavior}_tendency"
+                            pattern_scores[behavior_pattern] = max(
+                                pattern_scores.get(behavior_pattern, 0), 
+                                eval_item.get("confidence", 0.6)
+                            )
+        
+        # If evaluations is a dict with cached behavior data
+        elif isinstance(evaluations, dict):
+            for behavior_name, behavior_data in evaluations.items():
+                if isinstance(behavior_data, dict):
+                    baseline_freq = behavior_data.get("baseline_frequency", 0.0)
+                    recent_occurrences = len(behavior_data.get("recent_occurrences", []))
+                    
+                    # High baseline frequency indicates established pattern
+                    if baseline_freq > 0.7:
+                        pattern_scores[f"{behavior_name}_pattern"] = baseline_freq
+                    
+                    # Many recent occurrences indicate active pattern
+                    if recent_occurrences > 3:
+                        pattern_scores[f"{behavior_name}_active"] = min(1.0, recent_occurrences * 0.2)
+        
+        # 3. Extract from mode processing
+        mode_processing = processing_results.get("mode_processing", {})
+        if isinstance(mode_processing, dict):
+            dominant_mode = mode_processing.get("dominant_mode")
+            if dominant_mode:
+                pattern_scores[f"mode_{dominant_mode}"] = 0.8
+                
+            # Extract mode-specific adjustments as patterns
+            adjustments = mode_processing.get("adjustments", {})
+            for adjustment_name, value in adjustments.items():
+                if abs(value) > 0.3:  # Significant adjustments only
+                    if value > 0:
+                        pattern_scores[f"{adjustment_name}_increased"] = abs(value)
+                    else:
+                        pattern_scores[f"{adjustment_name}_decreased"] = abs(value)
+        
+        # 4. Extract from conditioning results
+        conditioning_results = processing_results.get("conditioning_applied", [])
+        if isinstance(conditioning_results, list):
+            for cond_result in conditioning_results:
+                if isinstance(cond_result, dict):
+                    behavior = cond_result.get("behavior", "")
+                    trigger = cond_result.get("pattern_trigger", "")
+                    intensity = cond_result.get("intensity", 0.5)
+                    
+                    if trigger and intensity > 0.5:
+                        # The trigger pattern is significant
+                        pattern_scores[trigger] = max(pattern_scores.get(trigger, 0), intensity)
+                    
+                    if behavior:
+                        # The conditioned behavior is a pattern
+                        pattern_scores[f"conditioned_{behavior}"] = max(
+                            pattern_scores.get(f"conditioned_{behavior}", 0), 
+                            intensity * 0.8
+                        )
+        
+        # 5. Extract emotional patterns if available
+        if "emotional_" in str(processing_results):
+            # Look for emotional patterns in various places
+            for key, value in processing_results.items():
+                if isinstance(value, dict) and "emotional" in key.lower():
+                    # Extract emotional state patterns
+                    if "primary_emotion" in value:
+                        emotion = value["primary_emotion"]
+                        if isinstance(emotion, str):
+                            pattern_scores[f"emotional_{emotion.lower()}"] = 0.7
+                        elif isinstance(emotion, dict) and "name" in emotion:
+                            pattern_scores[f"emotional_{emotion['name'].lower()}"] = emotion.get("intensity", 0.7)
+        
+        # 6. Sort patterns by score and extract top patterns
+        sorted_patterns = sorted(pattern_scores.items(), key=lambda x: x[1], reverse=True)
+        
+        # Take top patterns, but ensure diversity
+        pattern_types = set()
+        for pattern_name, score in sorted_patterns:
+            if len(key_patterns) >= 5:  # Limit to 5 key patterns
+                break
+                
+            # Extract pattern type (prefix before underscore)
+            pattern_type = pattern_name.split('_')[0] if '_' in pattern_name else pattern_name
+            
+            # Ensure we don't have too many patterns of the same type
+            if pattern_types.count(pattern_type) < 2:  # Max 2 patterns per type
+                key_patterns.append(pattern_name)
+                pattern_types.add(pattern_type)
+        
+        # 7. If we still don't have enough patterns, add some defaults based on context
+        if len(key_patterns) < 3:
+            # Add mode pattern if available
+            if dominant_mode and f"mode_{dominant_mode}" not in key_patterns:
+                key_patterns.append(f"mode_{dominant_mode}")
+            
+            # Add engagement pattern based on evaluations
+            if evaluations and "engagement_pattern" not in key_patterns:
+                key_patterns.append("engagement_pattern")
+        
+        return key_patterns
     
     # Delegate all other methods to the original system
     def __getattr__(self, name):
