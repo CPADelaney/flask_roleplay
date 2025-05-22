@@ -1148,29 +1148,205 @@ class ContextAwareExperienceConsolidation(ContextAwareModule):
         return clusters
     
     async def _identify_cross_user_patterns(self, experience_analysis: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """Identify patterns that appear across multiple users"""
+        """Identify patterns that appear across multiple users - PRODUCTION VERSION"""
         cross_user_opportunities = []
         
-        # Group experiences by scenario across users
-        scenario_dist = experience_analysis.get("scenario_distribution", {})
+        # Need actual per-user experience data
         user_dist = experience_analysis.get("user_distribution", {})
         
         if len(user_dist) < 2:
             return []  # Need at least 2 users
         
-        for scenario, total_count in scenario_dist.items():
-            if total_count >= self.original_system.min_group_size * 2:  # Higher threshold for cross-user
-                # Check if this scenario appears for multiple users
-                # This is simplified - in reality would need to query per-user data
-                cross_user_opportunities.append({
-                    "type": "cross_user_scenario",
-                    "scenario": scenario,
-                    "experience_count": total_count,
-                    "estimated_users": min(len(user_dist), total_count // 3),  # Rough estimate
-                    "priority": 0.6 + min(0.3, total_count / 50)  # Higher priority for more experiences
-                })
+        # Query experiences grouped by scenario and user
+        user_scenario_map = {}  # user_id -> scenario -> experiences
+        
+        try:
+            # Get sample experiences for each user to build the map
+            for user_id in user_dist.keys():
+                user_scenario_map[user_id] = {}
+                
+                # Retrieve user's experiences
+                user_experiences = await self.original_system.memory_core.retrieve_memories(
+                    query="*",
+                    memory_types=["experience", "observation", "episodic"],
+                    filters={"user_id": user_id},
+                    limit=100
+                )
+                
+                # Group by scenario
+                for exp in user_experiences:
+                    metadata = exp.get("metadata", {})
+                    scenario = metadata.get("scenario_type", "general")
+                    
+                    if scenario not in user_scenario_map[user_id]:
+                        user_scenario_map[user_id][scenario] = []
+                    
+                    user_scenario_map[user_id][scenario].append(exp)
+            
+            # Find scenarios that appear across multiple users
+            scenario_user_counts = {}
+            scenario_experience_ids = {}
+            
+            for scenario in set(s for user_scenarios in user_scenario_map.values() for s in user_scenarios):
+                users_with_scenario = []
+                experience_ids_for_scenario = []
+                
+                for user_id, user_scenarios in user_scenario_map.items():
+                    if scenario in user_scenarios and len(user_scenarios[scenario]) > 0:
+                        users_with_scenario.append(user_id)
+                        # Add experience IDs from this user for this scenario
+                        experience_ids_for_scenario.extend([
+                            exp.get("id") for exp in user_scenarios[scenario][:3]  # Up to 3 per user
+                            if exp.get("id")
+                        ])
+                
+                if len(users_with_scenario) >= 2:  # Cross-user threshold
+                    scenario_user_counts[scenario] = len(users_with_scenario)
+                    scenario_experience_ids[scenario] = experience_ids_for_scenario
+            
+            # Create opportunities for cross-user patterns
+            for scenario, user_count in scenario_user_counts.items():
+                experience_ids = scenario_experience_ids.get(scenario, [])
+                
+                if len(experience_ids) >= self.original_system.min_group_size:
+                    # Calculate similarity across user experiences for this scenario
+                    avg_similarity = await self._calculate_cross_user_similarity(
+                        experience_ids, user_scenario_map, scenario
+                    )
+                    
+                    if avg_similarity > 0.6:  # Similarity threshold
+                        # Calculate pattern strength
+                        total_experiences = sum(
+                            len(user_scenarios.get(scenario, []))
+                            for user_scenarios in user_scenario_map.values()
+                        )
+                        
+                        cross_user_opportunities.append({
+                            "type": "cross_user_scenario",
+                            "scenario": scenario,
+                            "experience_count": len(experience_ids),
+                            "user_count": user_count,
+                            "experience_ids": experience_ids,
+                            "average_similarity": avg_similarity,
+                            "total_experiences": total_experiences,
+                            "priority": self._calculate_cross_user_priority(
+                                user_count, len(experience_ids), avg_similarity
+                            )
+                        })
+            
+            # Look for emotional patterns across users
+            emotional_patterns = await self._identify_cross_user_emotional_patterns(
+                user_scenario_map
+            )
+            cross_user_opportunities.extend(emotional_patterns)
+            
+            # Look for temporal patterns across users
+            temporal_patterns = await self._identify_cross_user_temporal_patterns(
+                user_scenario_map
+            )
+            cross_user_opportunities.extend(temporal_patterns)
+            
+        except Exception as e:
+            logger.error(f"Error identifying cross-user patterns: {e}")
         
         return cross_user_opportunities
+
+    async def _calculate_cross_user_similarity(self, 
+                                             experience_ids: List[str],
+                                             user_scenario_map: Dict[str, Dict[str, List]],
+                                             scenario: str) -> float:
+        """Calculate average similarity between experiences from different users"""
+        if not self.original_system.experience_interface:
+            return 0.0
+        
+        similarities = []
+        users = list(user_scenario_map.keys())
+        
+        # Compare experiences between different users
+        for i in range(len(users)):
+            for j in range(i + 1, len(users)):
+                user1_exps = user_scenario_map[users[i]].get(scenario, [])
+                user2_exps = user_scenario_map[users[j]].get(scenario, [])
+                
+                # Compare up to 3 experiences from each user
+                for exp1 in user1_exps[:3]:
+                    for exp2 in user2_exps[:3]:
+                        if exp1.get("id") and exp2.get("id"):
+                            similarity = await self.original_system.experience_interface._calculate_similarity_score(
+                                None,  # ctx not needed for this implementation
+                                exp1["id"],
+                                exp2["id"]
+                            )
+                            similarities.append(similarity)
+        
+        return sum(similarities) / len(similarities) if similarities else 0.0
+
+    
+    def _calculate_cross_user_priority(self, user_count: int, experience_count: int, similarity: float) -> float:
+        """Calculate priority for cross-user consolidation"""
+        # Base priority
+        priority = 0.5
+        
+        # User diversity factor (more users = higher priority)
+        user_factor = min(0.3, (user_count - 1) * 0.1)
+        priority += user_factor
+        
+        # Experience count factor
+        exp_factor = min(0.2, experience_count / 50)
+        priority += exp_factor
+        
+        # Similarity factor
+        similarity_factor = (similarity - 0.6) * 0.5  # Scale from 0.6-1.0 to 0-0.2
+        priority += max(0, similarity_factor)
+        
+        return min(1.0, priority)
+
+    async def _identify_cross_user_emotional_patterns(self, 
+                                                    user_scenario_map: Dict[str, Dict[str, List]]) -> List[Dict[str, Any]]:
+        """Identify emotional patterns that appear across users"""
+        patterns = []
+        emotion_user_map = {}  # emotion -> user_id -> experiences
+        
+        # Build emotion map
+        for user_id, scenarios in user_scenario_map.items():
+            for scenario, experiences in scenarios.items():
+                for exp in experiences:
+                    metadata = exp.get("metadata", {})
+                    emotional_context = metadata.get("emotional_context", {})
+                    
+                    if emotional_context:
+                        primary_emotion = emotional_context.get("primary_emotion", "neutral")
+                        
+                        if primary_emotion not in emotion_user_map:
+                            emotion_user_map[primary_emotion] = {}
+                        
+                        if user_id not in emotion_user_map[primary_emotion]:
+                            emotion_user_map[primary_emotion][user_id] = []
+                        
+                        emotion_user_map[primary_emotion][user_id].append(exp)
+        
+        # Find emotions that appear across multiple users
+        for emotion, user_experiences in emotion_user_map.items():
+            if len(user_experiences) >= 2:  # Cross-user threshold
+                all_experience_ids = []
+                total_experiences = 0
+                
+                for user_id, exps in user_experiences.items():
+                    all_experience_ids.extend([e.get("id") for e in exps[:3] if e.get("id")])
+                    total_experiences += len(exps)
+                
+                if len(all_experience_ids) >= self.original_system.min_group_size:
+                    patterns.append({
+                        "type": "cross_user_emotional",
+                        "emotion": emotion,
+                        "experience_count": len(all_experience_ids),
+                        "user_count": len(user_experiences),
+                        "experience_ids": all_experience_ids,
+                        "total_experiences": total_experiences,
+                        "priority": 0.6 + min(0.3, len(user_experiences) * 0.1)
+                    })
+        
+        return patterns
     
     def _calculate_opportunity_priority(self, scenario: str, count: int) -> float:
         """Calculate priority for a consolidation opportunity"""
@@ -1187,6 +1363,56 @@ class ContextAwareExperienceConsolidation(ContextAwareModule):
         recency_factor = 0.1  # Default
         
         return base_priority + count_factor + scenario_factor + recency_factor
+
+    async def _identify_cross_user_temporal_patterns(self,
+                                                   user_scenario_map: Dict[str, Dict[str, List]]) -> List[Dict[str, Any]]:
+        """Identify temporal patterns across users"""
+        patterns = []
+        
+        # Group experiences by time periods across users
+        period_user_map = {}  # period -> user_id -> experiences
+        
+        for user_id, scenarios in user_scenario_map.items():
+            for scenario, experiences in scenarios.items():
+                for exp in experiences:
+                    timestamp = exp.get("timestamp")
+                    if timestamp:
+                        try:
+                            exp_date = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+                            
+                            # Group by week
+                            week_key = exp_date.strftime("%Y-W%U")
+                            
+                            if week_key not in period_user_map:
+                                period_user_map[week_key] = {}
+                            
+                            if user_id not in period_user_map[week_key]:
+                                period_user_map[week_key][user_id] = []
+                            
+                            period_user_map[week_key][user_id].append(exp)
+                        except:
+                            continue
+        
+        # Find periods with experiences from multiple users
+        for period, user_experiences in period_user_map.items():
+            if len(user_experiences) >= 2:  # Cross-user threshold
+                all_experience_ids = []
+                
+                for user_id, exps in user_experiences.items():
+                    all_experience_ids.extend([e.get("id") for e in exps[:2] if e.get("id")])
+                
+                if len(all_experience_ids) >= self.original_system.min_group_size:
+                    patterns.append({
+                        "type": "cross_user_temporal",
+                        "period": period,
+                        "experience_count": len(all_experience_ids),
+                        "user_count": len(user_experiences),
+                        "experience_ids": all_experience_ids,
+                        "priority": 0.5 + min(0.2, len(user_experiences) * 0.05)
+                    })
+        
+        return patterns
+
     
     async def _mark_group_ready_for_consolidation(self, group_id: str):
         """Mark a group as ready for consolidation"""
@@ -1207,27 +1433,123 @@ class ContextAwareExperienceConsolidation(ContextAwareModule):
             )
     
     async def _check_pattern_consolidation_trigger(self, pattern_key: str, pattern: Dict[str, Any]):
-        """Check if a pattern should trigger consolidation"""
+        """Check if a pattern should trigger consolidation - PRODUCTION VERSION"""
         # Strong pattern criteria
         if (pattern["occurrences"] >= self.original_system.min_group_size and
             pattern["average_significance"] > 6 and
             len(pattern["users"]) > 1):
             
-            # Create consolidation group from pattern
-            group_id = f"pattern_{pattern_key}_{datetime.now().strftime('%Y%m%d%H%M%S')}"
+            # Find actual experience IDs matching this pattern
+            experience_ids = await self._find_experiences_matching_pattern(pattern_key, pattern)
             
-            # Would need to find actual experience IDs matching this pattern
-            # This is a simplified version
-            self.pending_consolidations[group_id] = {
-                "type": "pattern_based",
-                "pattern": pattern_key,
-                "priority": 0.7,
-                "created_at": datetime.now(),
-                "auto_triggered": True,
-                "pattern_strength": pattern["occurrences"] / 10
-            }
+            if len(experience_ids) >= self.original_system.min_group_size:
+                # Create consolidation group from pattern
+                group_id = f"pattern_{pattern_key}_{datetime.now().strftime('%Y%m%d%H%M%S')}"
+                
+                self.pending_consolidations[group_id] = {
+                    "type": "pattern_based",
+                    "pattern": pattern_key,
+                    "experience_ids": experience_ids,
+                    "priority": 0.7,
+                    "created_at": datetime.now(),
+                    "auto_triggered": True,
+                    "pattern_strength": pattern["occurrences"] / 10,
+                    "pattern_data": pattern
+                }
+                
+                logger.info(f"Pattern {pattern_key} triggered consolidation group {group_id} with {len(experience_ids)} experiences")
+
+    async def _find_experiences_matching_pattern(self, pattern_key: str, pattern: Dict[str, Any]) -> List[str]:
+        """Find actual experience IDs that match a pattern"""
+        experience_ids = []
+        
+        # Parse pattern key (format: scenario_emotion)
+        parts = pattern_key.split("_")
+        if len(parts) >= 2:
+            scenario_type = parts[0]
+            emotion = "_".join(parts[1:])  # Handle multi-word emotions
+        else:
+            scenario_type = pattern_key
+            emotion = None
+        
+        # Build query for pattern
+        query_parts = [scenario_type]
+        if emotion and emotion != "neutral":
+            query_parts.append(emotion)
+        
+        query = " ".join(query_parts)
+        
+        # Search for experiences matching the pattern
+        try:
+            # Get experiences from all users who contributed to this pattern
+            for user_id in pattern["users"]:
+                user_experiences = await self.original_system.memory_core.retrieve_memories(
+                    query=query,
+                    memory_types=["experience", "observation", "episodic"],
+                    filters={
+                        "user_id": user_id,
+                        "scenario_type": scenario_type
+                    },
+                    limit=20
+                )
+                
+                # Filter for emotional match if specified
+                for exp in user_experiences:
+                    exp_id = exp.get("id")
+                    if not exp_id:
+                        continue
+                    
+                    # Check emotional match
+                    if emotion and emotion != "neutral":
+                        metadata = exp.get("metadata", {})
+                        emotional_context = metadata.get("emotional_context", {})
+                        primary_emotion = emotional_context.get("primary_emotion", "neutral")
+                        
+                        if primary_emotion.lower() == emotion.lower():
+                            experience_ids.append(exp_id)
+                    else:
+                        experience_ids.append(exp_id)
+                    
+                    # Limit per user to maintain diversity
+                    if len([eid for eid in experience_ids if eid in user_experiences]) >= 5:
+                        break
             
-            logger.info(f"Pattern {pattern_key} triggered consolidation group {group_id}")
+            # Additional filtering based on pattern characteristics
+            if len(experience_ids) > self.original_system.max_group_size:
+                # Prioritize by significance and recency
+                scored_experiences = []
+                
+                for exp_id in experience_ids:
+                    try:
+                        exp = await self.original_system.memory_core.get_memory_by_id(exp_id)
+                        if exp:
+                            significance = exp.get("significance", 5)
+                            timestamp = exp.get("timestamp", "")
+                            
+                            # Calculate recency score
+                            recency_score = 0.5
+                            if timestamp:
+                                try:
+                                    exp_time = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+                                    days_ago = (datetime.now() - exp_time).days
+                                    recency_score = max(0, 1.0 - (days_ago / 365))  # Decay over a year
+                                except:
+                                    pass
+                            
+                            # Combined score
+                            score = (significance / 10) * 0.6 + recency_score * 0.4
+                            scored_experiences.append((exp_id, score))
+                    except:
+                        continue
+                
+                # Sort by score and take top experiences
+                scored_experiences.sort(key=lambda x: x[1], reverse=True)
+                experience_ids = [exp_id for exp_id, _ in scored_experiences[:self.original_system.max_group_size]]
+        
+        except Exception as e:
+            logger.error(f"Error finding experiences for pattern {pattern_key}: {e}")
+        
+        return experience_ids
     
     async def _execute_triggered_consolidation(self, target: str, trigger_data: Dict[str, Any]):
         """Execute consolidation based on trigger"""
