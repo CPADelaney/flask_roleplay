@@ -594,9 +594,6 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             )
             logger.debug("AgenticActionGenerator dependent systems initialized.")
 
-            
-
-
             # --- Step 8: Remaining Managers, Agents, and Final Integrations ---
             logger.debug(f"NyxBrain Init Step 8: Final Managers, Agents, Integrations for {self.user_id}-{self.conversation_id}")
             self.mode_manager = InteractionModeManager(context_system=self.context_system, emotional_core=self.emotional_core, reward_system=self.reward_system, goal_manager=self.goal_manager)
@@ -635,6 +632,9 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             await self.integrate_procedural_memory_with_actions()
             if hasattr(self, "agentic_action_generator") and hasattr(self, "_register_creative_actions") and callable(self._register_creative_actions):
                  await self._register_creative_actions()
+
+            self.processing_manager = ProcessingManager(self)
+            await self.processing_manager.initialize()
 
             await self.initialize_context_system()
             
@@ -3031,13 +3031,17 @@ System Prompt End
             # Use coordinated processing
             core_result = await self._process_input_coordinated(user_input, context)
         else:
-            # Use appropriate non-coordinated processing
-            if mode == "serial" or (mode == "auto" and not self.processing_manager):
-                core_result = await self._process_input_serial(user_input, context)
-            elif self.processing_manager:
-                core_result = await self.processing_manager.process_input(user_input, context)
-            else:
-                core_result = await self._process_input_serial(user_input, context)
+            # ALWAYS use ProcessingManager for non-coordinated processing
+            if not self.processing_manager:
+                # Initialize it if needed
+                self.processing_manager = ProcessingManager(self)
+                await self.processing_manager.initialize()
+            
+            # Let ProcessingManager handle ALL mode selection and routing
+            core_result = await self.processing_manager.process_input(
+                user_input, 
+                {**context, "processing_mode": mode}
+            )
         
         # Merge results
         processing_result.update(core_result)
@@ -3685,97 +3689,6 @@ System Prompt End
             if not memories:
                 return claim_text
         return None
-    
-        
-    async def _process_input_serial(self, user_input: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
-        """
-        A simple fallback input processor.
-        MODIFIED to respect the active_modules set in the context.
-        """
-        start_time = datetime.now()
-        context = context or {}
-        # *** Use active_modules FROM CONTEXT ***
-        active_modules = context.get("active_modules", self.default_active_modules)
-
-        result = {"user_input": user_input}
-
-        # --- Conditional Emotional Analysis ---
-        emotional_state = {}
-        if "emotional_core" in active_modules and hasattr(self, "emotional_core") and self.emotional_core:
-            # ... (Existing try/except block for emotional analysis) ...
-            if hasattr(self.emotional_core, 'analyze_text_sentiment') and hasattr(self.emotional_core, 'update_from_stimuli'):
-                 try:
-                     logger.debug("Running serial emotional analysis...")
-                     emotional_stimuli = self.emotional_core.analyze_text_sentiment(user_input)
-                     emotional_state = self.emotional_core.update_from_stimuli(emotional_stimuli)
-                     result["emotional_state"] = emotional_state
-                 except Exception as e:
-                      logger.error(f"Error in serial emotional analysis: {e}")
-                      result["emotional_state"] = {"error": str(e)}
-            else:
-                 logger.debug("EmotionalCore methods missing for serial processing.")
-        else:
-             logger.debug("EmotionalCore inactive for serial processing.")
-             result["emotional_state"] = None # Indicate inactive
-
-
-        # --- Conditional Memory Retrieval ---
-        memories = []
-        if "memory_core" in active_modules and hasattr(self, "memory_orchestrator") and self.memory_orchestrator:
-            # ... (Existing try/except block for memory retrieval) ...
-             try:
-                 logger.debug("Running serial memory retrieval...")
-                 memories = await self.memory_orchestrator.retrieve_memories(
-                     query=user_input,
-                     memory_types=["observation", "reflection", "abstraction", "experience"],
-                     limit=5
-                 )
-                 result["memories"] = memories
-                 result["memory_count"] = len(memories)
-             except Exception as e:
-                 logger.error(f"Error in serial memory retrieval: {e}")
-                 result["memories"] = []
-                 result["memory_count"] = 0
-        else:
-            logger.debug("MemoryCore/Orchestrator inactive for serial processing.")
-            result["memories"] = []
-            result["memory_count"] = 0
-
-
-        # --- Conditional Interaction Memory Storage ---
-        memory_id = None
-        if "memory_core" in active_modules and hasattr(self, "memory_core") and self.memory_core:
-             # ... (Existing try/except block for storing memory) ...
-              try:
-                  logger.debug("Storing interaction in memory...")
-                  memory_id = await self.memory_core.add_memory(
-                      memory_text=f"User said: {user_input}",
-                      memory_type="observation",
-                      significance=5,
-                      tags=["interaction", "user_input"],
-                      metadata={
-                          "timestamp": datetime.now().isoformat(),
-                          "user_id": str(getattr(self, "user_id", "unknown")),
-                          "active_modules_at_input": list(active_modules) # Log active modules
-                      }
-                  )
-                  result["memory_id"] = memory_id
-              except Exception as e:
-                   logger.error(f"Error storing interaction memory: {e}")
-                   result["memory_id"] = None
-        else:
-             logger.debug("MemoryCore inactive, interaction not stored as memory.")
-             result["memory_id"] = None
-
-        # Update interaction timestamps regardless of module activation
-        self.last_interaction = datetime.now()
-        self.interaction_count = getattr(self, "interaction_count", 0) + 1
-        end_time = datetime.now()
-        response_time = (end_time - start_time).total_seconds()
-        result["response_time_serial"] = response_time
-
-        return result
-
 
     async def run_maintenance(self) -> Dict[str, Any]:
         """
