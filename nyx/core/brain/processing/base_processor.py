@@ -9,14 +9,19 @@ from agents import trace
 logger = logging.getLogger(__name__)
 
 class BaseProcessor:
-    """Base processor that defines the common interface and shared functionality"""
-    
     def __init__(self, brain):
         self.brain = brain
+        self._initialized = False
     
     async def initialize(self):
-        """Initialize the processor - implemented by subclasses"""
+        """Initialize processor after brain is fully initialized"""
+        self._initialized = True
         logger.info(f"{self.__class__.__name__} initialized")
+    
+    async def _ensure_initialized(self):
+        """Ensure processor is initialized before use"""
+        if not self._initialized:
+            await self.initialize()
     
     async def process_input(self, user_input: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
         """Process user input - implemented by subclasses"""
