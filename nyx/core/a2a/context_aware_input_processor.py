@@ -17,6 +17,12 @@ class ContextAwareInputProcessor(ContextAwareModule):
     def __init__(self, original_input_processor):
         super().__init__("input_processor")
         self.original_processor = original_input_processor
+        
+        # Add configuration support
+        from nyx.core.input_processing_config import InputProcessingConfig
+        self.config = InputProcessingConfig()
+        super().__init__("input_processor")
+        self.original_processor = original_input_processor
         self.context_subscriptions = [
             "mode_distribution_update", "emotional_state_update", "relationship_state_change",
             "conditioning_trigger", "user_behavior_pattern", "dominance_context_active",
@@ -146,6 +152,73 @@ class ContextAwareInputProcessor(ContextAwareModule):
             "mode_processing": mode_processing,
             "context_integrated": True
         }
+    
+    # ADD THIS: Wrapper method for compatibility with standard interface
+    async def process_input_standard(self, text: str, user_id: str = "default", context: Dict[str, Any] = None) -> Dict[str, Any]:
+        """
+        Process input text through conditioning system and return processing results.
+        This method provides compatibility with the standard InputProcessor interface.
+        """
+        try:
+            # First, process through the original processor to get base results
+            base_results = await self.original_processor.process_input(text, user_id, context)
+            
+            # If we have an active shared context, enhance the results
+            if hasattr(self, 'current_shared_context') and self.current_shared_context:
+                # Create a temporary context for enhancement
+                temp_context = SharedContext(
+                    user_input=text,
+                    user_id=user_id,
+                    initial_context=context or {}
+                )
+                
+                # Get enhanced results using our context-aware processing
+                enhanced_results = await self.process_input(temp_context)
+                
+                # Merge base results with enhanced results
+                final_results = base_results.copy()
+                final_results.update({
+                    "context_enhanced": True,
+                    "pattern_analysis": enhanced_results.get("pattern_analysis", {}),
+                    "behavior_evaluation": enhanced_results.get("behavior_evaluation", {}),
+                    "conditioning_results": enhanced_results.get("conditioning_results", []),
+                    "mode_processing": enhanced_results.get("mode_processing", {})
+                })
+                
+                # Send update about processing completion
+                await self.send_context_update(
+                    update_type="input_processing_complete",
+                    data=final_results,
+                    priority=ContextPriority.MEDIUM
+                )
+                
+                return final_results
+            else:
+                # No active context, just use base results
+                return base_results
+                
+        except Exception as e:
+            logger.error(f"Error in process_input_standard: {e}", exc_info=True)
+            
+            # Try to fall back to original processor
+            try:
+                return await self.original_processor.process_input(text, user_id, context)
+            except Exception as fallback_error:
+                logger.error(f"Fallback also failed: {fallback_error}")
+                
+                # Return minimal error result
+                return {
+                    "input_text": text,
+                    "user_id": user_id,
+                    "error": str(e),
+                    "detected_patterns": [],
+                    "behavior_evaluations": [],
+                    "recommended_behaviors": [],
+                    "avoided_behaviors": [],
+                    "reinforcement_results": [],
+                    "processing_failed": True
+                }
+
     
     async def process_analysis(self, context: SharedContext) -> Dict[str, Any]:
         """Analyze input processing patterns and effectiveness"""
@@ -279,36 +352,66 @@ class ContextAwareInputProcessor(ContextAwareModule):
         """Adjust pattern detection sensitivity based on emotional state"""
         emotion_intensity = 0.0
         dominant_emotion = emotional_data.get("dominant_emotion")
+        try
+            if isinstance(dominant_emotion, tuple) and len(dominant_emotion) >= 2:
+                emotion_name, emotion_intensity = dominant_emotion[0], dominant_emotion[1]
+            elif isinstance(dominant_emotion, dict):
+                emotion_name = dominant_emotion.get("name", "")
+                emotion_intensity = dominant_emotion.get("intensity", 0.0)
+            else:
+                emotion_name = ""
+            
+            # High emotional intensity increases pattern sensitivity
+            sensitivity_boost = emotion_intensity * 0.3
+            
+            # Specific emotions affect specific patterns
+            pattern_adjustments = {}
+            
+            if emotion_name == "Anxiety":
+                pattern_adjustments["defiance"] = 0.2  # More sensitive to defiance
+                pattern_adjustments["disrespect"] = 0.3  # More sensitive to disrespect
+            elif emotion_name == "Joy":
+                pattern_adjustments["flattery"] = 0.2  # More receptive to flattery
+                pattern_adjustments["submission_language"] = 0.1  # Slightly more sensitive
+            elif emotion_name == "Frustration":
+                pattern_adjustments["defiance"] = 0.4  # Much more sensitive to defiance
+            
+            # Cache adjustments
+            self.pattern_detection_cache["sensitivity_adjustments"] = {
+                "base_boost": sensitivity_boost,
+                "pattern_specific": pattern_adjustments,
+                "emotional_context": emotion_name
+            }
+        except Exception as e:
+            logger.error(f"Error adjusting pattern sensitivity: {e}")
+            # Notify other modules of the error
+            await self.send_context_update(
+                update_type="processing_error",
+                data={"error": str(e), "component": "pattern_sensitivity"},
+                priority=ContextPriority.HIGH
+            )
+            # Don't swallow the error for critical failures
+            if "AttributeError" in str(e) or "TypeError" in str(e):
+                raise
+
+    def _get_context_data(self, context: SharedContext, module: str, key: str, default: Any = None) -> Any:
+        """Efficiently get data from shared context"""
+        # Check module-specific state first
+        for update in context.context_updates:
+            if update.source_module == module and key in update.data:
+                return update.data[key]
         
-        if isinstance(dominant_emotion, tuple) and len(dominant_emotion) >= 2:
-            emotion_name, emotion_intensity = dominant_emotion[0], dominant_emotion[1]
-        elif isinstance(dominant_emotion, dict):
-            emotion_name = dominant_emotion.get("name", "")
-            emotion_intensity = dominant_emotion.get("intensity", 0.0)
-        else:
-            emotion_name = ""
+        # Check general context attributes
+        if hasattr(context, key):
+            return getattr(context, key)
         
-        # High emotional intensity increases pattern sensitivity
-        sensitivity_boost = emotion_intensity * 0.3
+        # Check context dictionaries
+        for ctx_dict in [context.emotional_state, context.mode_context, 
+                         context.relationship_context, context.goal_context]:
+            if ctx_dict and key in ctx_dict:
+                return ctx_dict[key]
         
-        # Specific emotions affect specific patterns
-        pattern_adjustments = {}
-        
-        if emotion_name == "Anxiety":
-            pattern_adjustments["defiance"] = 0.2  # More sensitive to defiance
-            pattern_adjustments["disrespect"] = 0.3  # More sensitive to disrespect
-        elif emotion_name == "Joy":
-            pattern_adjustments["flattery"] = 0.2  # More receptive to flattery
-            pattern_adjustments["submission_language"] = 0.1  # Slightly more sensitive
-        elif emotion_name == "Frustration":
-            pattern_adjustments["defiance"] = 0.4  # Much more sensitive to defiance
-        
-        # Cache adjustments
-        self.pattern_detection_cache["sensitivity_adjustments"] = {
-            "base_boost": sensitivity_boost,
-            "pattern_specific": pattern_adjustments,
-            "emotional_context": emotion_name
-        }
+        return default
     
     async def _adjust_conditioning_thresholds(self, relationship_data: Dict[str, Any]):
         """Adjust conditioning thresholds based on relationship state"""
@@ -555,8 +658,10 @@ class ContextAwareInputProcessor(ContextAwareModule):
         # Start with base detection
         base_patterns = await self._detect_initial_patterns(user_input)
         
-        # Apply sensitivity adjustments
-        sensitivity = self.pattern_detection_cache.get("sensitivity_adjustments", {})
+        # Get sensitivity adjustments from context efficiently
+        sensitivity = self._get_context_data(context, "input_processor", "sensitivity_adjustments", {})
+        if not sensitivity:
+            sensitivity = self.pattern_detection_cache.get("sensitivity_adjustments", {})
         
         enhanced_patterns = []
         for pattern in base_patterns:
@@ -631,6 +736,18 @@ class ContextAwareInputProcessor(ContextAwareModule):
         
         # Get goal-aligned priorities
         goal_priorities = self.behavior_evaluation_cache.get("goal_aligned_priorities", {})
+        
+        # Get emotional influence
+        emotional_influence = {}
+        if context.emotional_state:
+            emotion_name = context.emotional_state.get("dominant_emotion", "")
+            emotion_intensity = context.emotional_state.get("intensity", 0.5)
+            emotional_influence = {
+                "emotion": emotion_name,
+                "intensity": emotion_intensity,
+                "influence_factor": emotion_intensity * 0.3
+            }
+    
         
         # Evaluate each potential behavior
         behavior_evaluations = []
@@ -1581,4 +1698,18 @@ class ContextAwareInputProcessor(ContextAwareModule):
     # Delegate all other methods to the original processor
     def __getattr__(self, name):
         """Delegate any missing methods to the original processor"""
+        # Special handling for process_input to support both interfaces
+        if name == "process_input":
+            # Check if caller expects SharedContext or standard parameters
+            import inspect
+            frame = inspect.currentframe()
+            if frame and frame.f_back:
+                # Try to detect which signature is expected
+                # This is a bit hacky but helps with compatibility
+                args_info = inspect.getargvalues(frame.f_back)
+                if 'context' in args_info.locals and isinstance(args_info.locals.get('context'), SharedContext):
+                    return self.process_input
+                else:
+                    return self.process_input_standard
+        
         return getattr(self.original_processor, name)
