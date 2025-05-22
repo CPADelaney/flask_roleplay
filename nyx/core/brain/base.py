@@ -368,9 +368,44 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
 
             # --- Step 3: Core Systems - Tier 1 ---
             logger.debug(f"NyxBrain Init Step 3: Core Systems - Tier 1 for {self.user_id}-{self.conversation_id}")
-            self.hormone_system = HormoneSystem()
-            self.emotional_core = EmotionalCore()
-            self.emotional_core.set_hormone_system(self.hormone_system)
+            if self.config.emotional_core.enabled and self.config.hormone_system.enabled:
+                from nyx.core.emotions.hormone_system import HormoneSystem
+                from nyx.core.emotions import EmotionalCore
+                from nyx.core.a2a.context_aware_emotional_core import ContextAwareEmotionalCore
+                from nyx.core.a2a.context_aware_hormone_system import ContextAwareHormoneSystem
+                
+                # Create original systems first
+                original_hormone_system = HormoneSystem()
+                original_emotional_core = EmotionalCore()
+                
+                # Set up the reference between original systems
+                original_emotional_core.set_hormone_system(original_hormone_system)
+                
+                # Create context-aware wrappers
+                self.hormone_system = ContextAwareHormoneSystem(original_hormone_system)
+                self.emotional_core = ContextAwareEmotionalCore(original_emotional_core)
+                
+                # Optional: Set wrapper references if needed for cross-communication
+                # This allows the wrappers to communicate directly if necessary
+                self.emotional_core._hormone_system_wrapper = self.hormone_system
+                self.hormone_system._emotional_core_wrapper = self.emotional_core
+                
+            elif self.config.emotional_core.enabled:
+                # Just emotional core without hormone system
+                from nyx.core.emotions import EmotionalCore
+                from nyx.core.a2a.context_aware_emotional_core import ContextAwareEmotionalCore
+                
+                original_emotional_core = EmotionalCore()
+                self.emotional_core = ContextAwareEmotionalCore(original_emotional_core)
+                
+            elif self.config.hormone_system.enabled:
+                # Just hormone system without emotional core (unlikely but possible)
+                from nyx.core.emotions.hormone_system import HormoneSystem
+                from nyx.core.a2a.context_aware_hormone_system import ContextAwareHormoneSystem
+                
+                original_hormone_system = HormoneSystem()
+                self.hormone_system = ContextAwareHormoneSystem(original_hormone_system)
+
             self.memory_core = MemoryCoreAgents(self.user_id, self.conversation_id)
             await self.memory_core.initialize()
             self.memory_orchestrator = MemoryOrchestrator(self.user_id, self.conversation_id)
