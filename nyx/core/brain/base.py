@@ -395,7 +395,13 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
 
             # --- Step 4: Core Systems - Tier 2 (Reward, DSS, Conditioning) ---
             self.goal_manager = GoalManager(brain_reference=self)
-            self.needs_system = NeedsSystem(goal_manager=self.goal_manager)            
+            
+            self.needs_system = NeedsSystem(goal_manager=self.goal_manager)  
+            if self.needs_system:
+                from nyx.core.a2a.context_aware_needs import ContextAwareNeedsSystem
+                self.needs_system = ContextAwareNeedsSystem(self.needs_system)
+                logger.debug("Enhanced NeedsSystem with context distribution")
+    
             logger.debug(f"NyxBrain Init Step 4: Core Systems - Tier 2 (Interdependent) for {self.user_id}-{self.conversation_id}")
             self.mood_manager = MoodManager(
                 emotional_core=self.emotional_core, hormone_system=self.hormone_system,
