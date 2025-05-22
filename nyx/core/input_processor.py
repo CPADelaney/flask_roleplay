@@ -715,7 +715,7 @@ class BlendedInputProcessor:
         Returns:
             Processing results including triggered responses
         """
-        with trace(workflow_name="process_conditioned_input"):
+        with trace(workflow_name="process_input"):
             # Prepare the prompt for pattern analysis
             pattern_prompt = f"""
             Analyze the following input text for patterns indicating submission, defiance, 
