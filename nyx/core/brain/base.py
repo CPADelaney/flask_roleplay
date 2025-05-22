@@ -597,10 +597,17 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             
             # Initialize input processor with the (possibly wrapped) conditioning system
             self.conditioned_input_processor = BlendedInputProcessor(
-                conditioning_system=self.conditioning_system,  # Will work with wrapped version
+                conditioning_system=self.conditioning_system,
                 emotional_core=self.emotional_core, 
-                somatosensory_system=self.digital_somatosensory_system
+                somatosensory_system=self.digital_somatosensory_system,
+                mode_manager=self.mode_manager 
             )
+            
+            # NEW: Wrap with context-aware version if A2A enabled
+            if self.use_a2a_integration:
+                from nyx.core.a2a.context_aware_input_processor import ContextAwareInputProcessor
+                self.conditioned_input_processor = ContextAwareInputProcessor(self.conditioned_input_processor)
+                logger.debug("Enhanced InputProcessor with A2A context distribution")
             
             # Initialize baseline personality
             personality_profile_obj = await self.conditioning_config.get_personality_profile()
