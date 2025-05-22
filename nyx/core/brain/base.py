@@ -456,7 +456,13 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
 
             # --- Step 6: Specialized Systems (FemDom, Creative, Novelty, etc.) ---
             logger.debug(f"NyxBrain Init Step 6: Specialized Systems for {self.user_id}-{self.conversation_id}")
+            
             self.theory_of_mind = TheoryOfMind(relationship_manager=self.relationship_manager, multimodal_integrator=self.multimodal_integrator, memory_core=self.memory_core)
+            if self.theory_of_mind:
+                from nyx.core.brain.context_aware_theory_of_mind import ContextAwareTheoryOfMind
+                self.theory_of_mind = ContextAwareTheoryOfMind(self.theory_of_mind)
+                logger.debug("Enhanced TheoryOfMind with context distribution")
+                
             self.protocol_enforcement = ProtocolEnforcement(reward_system=self.reward_system, memory_core=self.memory_core, relationship_manager=self.relationship_manager)
             self.body_service_system = BodyServiceSystem(reward_system=self.reward_system, memory_core=self.memory_core, relationship_manager=self.relationship_manager)
             self.psychological_dominance = PsychologicalDominance(theory_of_mind=self.theory_of_mind, reward_system=self.reward_system, relationship_manager=self.relationship_manager, memory_core=self.memory_core)
