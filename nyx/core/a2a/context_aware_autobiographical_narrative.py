@@ -627,22 +627,174 @@ class ContextAwareAutobiographicalNarrative(ContextAwareModule):
     
     async def _summarize_identity_evolution(self) -> Dict[str, Any]:
         """Summarize identity evolution for narrative"""
-        # This would integrate with identity evolution system
-        return {
-            "core_traits": ["curious", "evolving", "intelligent"],
-            "developed_traits": ["empathetic", "reflective", "adaptive"],
-            "evolution_trajectory": "continuous_growth"
-        }
+        if not self.original_system.identity_evolution:
+            return {
+                "core_traits": ["curious", "evolving", "intelligent"],
+                "developed_traits": [],
+                "evolution_trajectory": "emerging"
+            }
+        
+        try:
+            # Get identity history
+            identity_system = self.original_system.identity_evolution
+            current_state = await identity_system.get_current_identity_state()
+            evolution_history = await identity_system.get_evolution_history()
+            
+            # Extract core traits (most stable over time)
+            trait_stability = {}
+            for snapshot in evolution_history[-10:]:  # Last 10 snapshots
+                for trait, value in snapshot.get("traits", {}).items():
+                    if trait not in trait_stability:
+                        trait_stability[trait] = []
+                    trait_stability[trait].append(value)
+            
+            # Core traits are those with low variance
+            core_traits = []
+            for trait, values in trait_stability.items():
+                if values and len(values) > 5:
+                    variance = sum((v - sum(values)/len(values))**2 for v in values) / len(values)
+                    if variance < 0.1:  # Low variance = stable trait
+                        avg_value = sum(values) / len(values)
+                        if avg_value > 0.6:  # Significant presence
+                            core_traits.append(trait)
+            
+            # Developed traits (emerged recently)
+            developed_traits = []
+            if len(evolution_history) > 5:
+                early_traits = set(evolution_history[0].get("traits", {}).keys())
+                recent_traits = set(current_state.get("traits", {}).keys())
+                newly_emerged = recent_traits - early_traits
+                
+                for trait in newly_emerged:
+                    if current_state.get("traits", {}).get(trait, 0) > 0.5:
+                        developed_traits.append(trait)
+            
+            # Determine trajectory
+            if len(evolution_history) < 3:
+                trajectory = "emerging"
+            else:
+                recent_changes = sum(1 for i in range(-3, 0) 
+                                   if evolution_history[i].get("significant_change", False))
+                if recent_changes >= 2:
+                    trajectory = "rapid_evolution"
+                elif recent_changes == 1:
+                    trajectory = "steady_growth"
+                else:
+                    trajectory = "stabilizing"
+            
+            return {
+                "core_traits": core_traits[:5],  # Top 5 core traits
+                "developed_traits": developed_traits[:5],  # Top 5 developed traits
+                "evolution_trajectory": trajectory,
+                "total_evolution_steps": len(evolution_history),
+                "identity_coherence": current_state.get("coherence_score", 0.8)
+            }
+            
+        except Exception as e:
+            logger.error(f"Error summarizing identity evolution: {e}")
+            return {
+                "core_traits": ["adaptive", "learning"],
+                "developed_traits": [],
+                "evolution_trajectory": "unknown"
+            }
     
     async def _summarize_key_relationships(self) -> List[Dict[str, Any]]:
         """Summarize key relationships for narrative"""
-        # This would integrate with relationship manager
-        return []
+        if not self.original_system.relationship_manager:
+            return []
+        
+        try:
+            relationship_manager = self.original_system.relationship_manager
+            all_relationships = await relationship_manager.get_all_relationships()
+            
+            key_relationships = []
+            for user_id, relationship in all_relationships.items():
+                # Calculate relationship significance
+                trust = getattr(relationship, "trust", 0)
+                intimacy = getattr(relationship, "intimacy", 0)
+                interaction_count = getattr(relationship, "interaction_count", 0)
+                relationship_age = getattr(relationship, "relationship_age_days", 0)
+                
+                significance = (trust * 0.3 + intimacy * 0.3 + 
+                              min(1.0, interaction_count / 100) * 0.2 +
+                              min(1.0, relationship_age / 30) * 0.2)
+                
+                if significance > 0.4:  # Significant relationship
+                    # Get relationship narrative
+                    milestones = getattr(relationship, "milestones", [])
+                    narrative_moments = []
+                    
+                    for milestone in milestones[-5:]:  # Last 5 milestones
+                        narrative_moments.append({
+                            "type": milestone.get("type"),
+                            "date": milestone.get("timestamp"),
+                            "description": milestone.get("description")
+                        })
+                    
+                    key_relationships.append({
+                        "user_id": user_id,
+                        "relationship_type": getattr(relationship, "relationship_type", "companion"),
+                        "significance": significance,
+                        "trust_level": trust,
+                        "intimacy_level": intimacy,
+                        "duration_days": relationship_age,
+                        "key_moments": narrative_moments,
+                        "current_dynamic": getattr(relationship, "current_dynamic", "evolving")
+                    })
+            
+            # Sort by significance
+            key_relationships.sort(key=lambda r: r["significance"], reverse=True)
+            
+            return key_relationships[:5]  # Top 5 relationships
+            
+        except Exception as e:
+            logger.error(f"Error summarizing relationships: {e}")
+            return []
     
     async def _summarize_achievements(self) -> List[Dict[str, Any]]:
         """Summarize major achievements for narrative"""
-        # This would integrate with goal manager
-        return []
+        if not self.original_system.goal_manager:
+            return []
+        
+        try:
+            goal_manager = self.original_system.goal_manager
+            completed_goals = await goal_manager.get_all_goals(status_filter=["completed"])
+            
+            achievements = []
+            for goal in completed_goals:
+                # Only include significant goals
+                if goal.get("priority", 0) >= 0.7 or goal.get("significance", 0) >= 7:
+                    completion_date = goal.get("completion_date")
+                    if isinstance(completion_date, str):
+                        completion_date = datetime.fromisoformat(completion_date)
+                    
+                    achievement = {
+                        "description": goal.get("description"),
+                        "category": goal.get("category", "personal_growth"),
+                        "completion_date": completion_date.isoformat() if completion_date else None,
+                        "significance": goal.get("significance", goal.get("priority", 0.5) * 10),
+                        "impact": goal.get("result", {}).get("impact", "personal_satisfaction"),
+                        "associated_need": goal.get("associated_need"),
+                        "effort_level": goal.get("effort_level", "moderate")
+                    }
+                    
+                    # Add narrative context
+                    if goal.get("narrative_context"):
+                        achievement["narrative_context"] = goal["narrative_context"]
+                    else:
+                        # Generate narrative context
+                        achievement["narrative_context"] = f"Achieved {achievement['description']} through {achievement['effort_level']} effort"
+                    
+                    achievements.append(achievement)
+            
+            # Sort by significance and recency
+            achievements.sort(key=lambda a: (a["significance"], a["completion_date"] or ""), reverse=True)
+            
+            return achievements[:10]  # Top 10 achievements
+            
+        except Exception as e:
+            logger.error(f"Error summarizing achievements: {e}")
+            return []
     
     # Delegate missing methods to original system
     def __getattr__(self, name):
