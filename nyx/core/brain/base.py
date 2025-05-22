@@ -13,6 +13,8 @@ from enum import Enum, auto
 
 from nyx.core.integration.integration_manager import create_integration_manager
 
+from nyx.core.brain.integration_layer import EnhancedNyxBrainMixin
+
 from agents import (
     Agent, Runner, trace, function_tool, handoff, RunContextWrapper,
     ModelSettings
