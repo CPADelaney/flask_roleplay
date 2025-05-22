@@ -6926,11 +6926,12 @@ System Prompt End
             # Add ALL your internal modules here
         }
 
-        if hasattr(self, 'autobiographical_narrative') and self.autobiographical_narrative:
-            self.module_registry['autobiographical_narrative'] = self.autobiographical_narrative
+# These two are implemented here incorrectly
+#        if hasattr(self, 'autobiographical_narrative') and self.autobiographical_narrative:
+#            self.module_registry['autobiographical_narrative'] = self.autobiographical_narrative
             
-        if hasattr(self, 'distributed_processing') and self.distributed_processing:
-            self.module_registry['distributed_processing'] = self.distributed_processing
+#        if hasattr(self, 'distributed_processing') and self.distributed_processing:
+#            self.module_registry['distributed_processing'] = self.distributed_processing
 
         for name, definition in module_defs.items():
              if hasattr(self, name) and getattr(self, name):
