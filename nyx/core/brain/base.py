@@ -395,6 +395,10 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
 
             # --- Step 4: Core Systems - Tier 2 (Reward, DSS, Conditioning) ---
             self.goal_manager = GoalManager(brain_reference=self)
+            if self.goal_manager:
+                from nyx.core.a2a.context_aware_goal_manager import ContextAwareGoalManager
+                self.goal_manager = ContextAwareGoalManager(self.goal_manager)
+                logger.debug("Enhanced GoalManager with context distribution")
             
             self.needs_system = NeedsSystem(goal_manager=self.goal_manager)  
             if self.needs_system:
