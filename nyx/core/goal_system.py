@@ -364,7 +364,154 @@ class GoalManager:
         """Set the reference to the main NyxBrain after initialization."""
         self.brain = brain
         logger.info("NyxBrain reference set for GoalManager.")
+
+    # Add these methods to your existing GoalManager class in goal_system.py
     
+    async def update_goal_priority(self, goal_id: str, new_priority: float, reason: str = "context_adjustment") -> Dict[str, Any]:
+        """
+        Update the priority of a specific goal
+        
+        Args:
+            goal_id: Goal ID
+            new_priority: New priority value (0.0-1.0)
+            reason: Reason for the priority change
+            
+        Returns:
+            Update result
+        """
+        if not (0.0 <= new_priority <= 1.0):
+            return {"success": False, "error": "Priority must be between 0.0 and 1.0"}
+        
+        success = await self._update_goal_with_writer_lock(
+            goal_id,
+            lambda goal: (
+                setattr(goal, "priority", new_priority),
+                goal.execution_history.append({
+                    "timestamp": datetime.datetime.now().isoformat(),
+                    "type": "priority_update",
+                    "old_priority": goal.priority,
+                    "new_priority": new_priority,
+                    "reason": reason
+                })
+            )
+        )
+        
+        if success:
+            logger.info(f"Updated priority for goal '{goal_id}' to {new_priority:.2f}. Reason: {reason}")
+            await self.mark_goal_dirty(goal_id)
+            
+            return {
+                "success": True,
+                "goal_id": goal_id,
+                "new_priority": new_priority,
+                "reason": reason
+            }
+        else:
+            return {"success": False, "error": f"Goal {goal_id} not found"}
+    
+    async def get_goals_for_need(self, need_name: str, status_filter: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+        """
+        Get all goals associated with a specific need
+        
+        Args:
+            need_name: Name of the need
+            status_filter: Optional status filter
+            
+        Returns:
+            List of goals for the need
+        """
+        all_goals = []
+        
+        async with self._reader_lock:
+            self._reader_count += 1
+            if self._reader_count == 1:
+                await self._writer_lock.acquire()
+        
+        try:
+            all_goals = list(self.goals.values())
+        finally:
+            async with self._reader_lock:
+                self._reader_count -= 1
+                if self._reader_count == 0:
+                    self._writer_lock.release()
+        
+        filtered_goals = []
+        for goal in all_goals:
+            if goal.associated_need == need_name:
+                if status_filter is None or goal.status in status_filter:
+                    goal_summary = goal.model_dump(exclude={'execution_history', 'plan'})
+                    goal_summary['plan_step_count'] = len(goal.plan)
+                    filtered_goals.append(goal_summary)
+        
+        return filtered_goals
+    
+    async def register_context_callbacks(self, context_system):
+        """
+        Register callbacks with the context system for goal events
+        
+        Args:
+            context_system: The context distribution system
+        """
+        # Register for goal completion events
+        async def on_goal_completed(goal_data: Dict[str, Any]):
+            goal_id = goal_data.get("goal_id")
+            associated_need = goal_data.get("associated_need")
+            
+            if associated_need and hasattr(context_system, 'add_context_update'):
+                from nyx.core.brain.context_distribution import ContextUpdate, ContextScope, ContextPriority
+                
+                update = ContextUpdate(
+                    source_module="goal_manager",
+                    update_type="goal_completion",
+                    data={
+                        "goal_context": {
+                            "goal_id": goal_id,
+                            "associated_need": associated_need,
+                            "completion_quality": 0.8  # Default quality score
+                        }
+                    },
+                    scope=ContextScope.GLOBAL,
+                    priority=ContextPriority.HIGH
+                )
+                
+                await context_system.add_context_update(update)
+        
+        # Register for goal status changes
+        async def on_goal_status_change(goal_data: Dict[str, Any]):
+            if hasattr(context_system, 'add_context_update'):
+                from nyx.core.brain.context_distribution import ContextUpdate, ContextScope, ContextPriority
+                
+                update = ContextUpdate(
+                    source_module="goal_manager", 
+                    update_type="goal_status_change",
+                    data=goal_data,
+                    scope=ContextScope.GLOBAL,
+                    priority=ContextPriority.NORMAL
+                )
+                
+                await context_system.add_context_update(update)
+        
+        # Store callbacks for later use
+        self._context_callbacks = {
+            "goal_completed": on_goal_completed,
+            "goal_status_change": on_goal_status_change
+        }
+    
+    async def trigger_context_callback(self, event_type: str, data: Dict[str, Any]):
+        """
+        Trigger a registered context callback
+        
+        Args:
+            event_type: Type of event
+            data: Event data
+        """
+        if hasattr(self, '_context_callbacks') and event_type in self._context_callbacks:
+            try:
+                await self._context_callbacks[event_type](data)
+            except Exception as e:
+                logger.error(f"Error in context callback for {event_type}: {e}")
+    
+
     #==========================================================================
     # Persistence and Durability
     #==========================================================================
@@ -3810,29 +3957,53 @@ class GoalManager:
                 resolved_params[key] = value
         return resolved_params
 
-    async def update_goal_status(self, goal_id: str, status: str, result: Optional[Any] = None, error: Optional[str] = None) -> Dict[str, Any]:
+    async def update_goal_status(self, 
+                                goal_id: str, 
+                                status: str, 
+                                result: Optional[Any] = None, 
+                                error: Optional[str] = None,
+                                enable_hierarchy: bool = True,
+                                enable_context_callbacks: bool = True,
+                                enable_completion_rewards: bool = True,
+                                trigger_notifications: bool = True) -> Dict[str, Any]:
         """
-        Updates the status of a goal and notifies relevant systems
+        Unified method to update goal status with optional advanced features
         
         Args:
             goal_id: Goal ID
             status: New status
             result: Optional result data
             error: Optional error message
+            enable_hierarchy: Whether to handle parent/child relationships
+            enable_context_callbacks: Whether to trigger A2A context callbacks
+            enable_completion_rewards: Whether to process completion rewards
+            trigger_notifications: Whether to notify other systems
             
         Returns:
-            Status update result
+            Status update result with detailed information
         """
+        # Validate status
+        valid_statuses = ["pending", "active", "completed", "failed", "abandoned"]
+        if status not in valid_statuses:
+            return {"success": False, "error": f"Invalid status: {status}. Must be one of {valid_statuses}"}
+        
         # First get the goal with reader lock to check if it exists and get old status
         goal = await self._get_goal_with_reader_lock(goal_id)
         if not goal:
             logger.warning(f"Attempted to update status for unknown goal: {goal_id}")
             return {"success": False, "error": "Goal not found"}
-
+    
         old_status = goal.status
         if old_status == status: 
-            return {"success": True, "old_status": old_status, "new_status": status, "unchanged": True}  # No change
-
+            return {
+                "success": True, 
+                "goal_id": goal_id,
+                "old_status": old_status, 
+                "new_status": status, 
+                "unchanged": True,
+                "features_used": []
+            }
+    
         # Update the goal with writer lock
         await self._update_goal_with_writer_lock(
             goal_id,
@@ -3843,6 +4014,13 @@ class GoalManager:
             )
         )
         
+        # Track which features were used
+        features_used = []
+        hierarchy_results = {}
+        reward_results = {}
+        callback_results = {}
+        notifications = {}
+        
         # Update active goals set if needed
         if status in ["completed", "failed", "abandoned"]:
             async with self._active_goals_lock:
@@ -3851,135 +4029,268 @@ class GoalManager:
             # Update statistics
             if status == "completed":
                 self.goal_statistics["completed"] += 1
+                
+                # === COMPLETION REWARDS FEATURE ===
+                if enable_completion_rewards:
+                    try:
+                        reward_results = await self._process_goal_completion_reward(goal_id, result)
+                        features_used.append("completion_rewards")
+                        logger.debug(f"Processed completion reward for goal '{goal_id}'")
+                    except Exception as e:
+                        logger.error(f"Error processing completion reward for goal '{goal_id}': {e}")
+                        reward_results = {"error": str(e)}
+                
+                # === HIERARCHY HANDLING FEATURE ===
+                if enable_hierarchy and goal.relationships:
+                    try:
+                        hierarchy_results = await self._handle_goal_hierarchy_completion(goal_id, goal, result)
+                        features_used.append("hierarchy_handling")
+                        logger.debug(f"Processed hierarchy relationships for goal '{goal_id}'")
+                    except Exception as e:
+                        logger.error(f"Error handling hierarchy for goal '{goal_id}': {e}")
+                        hierarchy_results = {"error": str(e)}
+                        
             elif status == "failed":
                 self.goal_statistics["failed"] += 1
+                
+                # Handle hierarchy for failed goals if enabled
+                if enable_hierarchy and goal.relationships:
+                    try:
+                        hierarchy_results = await self._handle_goal_hierarchy_failure(goal_id, goal, error)
+                        features_used.append("hierarchy_failure_handling")
+                    except Exception as e:
+                        logger.error(f"Error handling hierarchy failure for goal '{goal_id}': {e}")
+                        hierarchy_results = {"error": str(e)}
+                        
             elif status == "abandoned":
                 self.goal_statistics["abandoned"] += 1
-
+    
         logger.info(f"Goal '{goal_id}' status changed from {old_status} to {status}.")
-
-        # Notify systems 
-        try:
-            notifications = await self._notify_systems(
-                RunContextWrapper(context=RunContext(goal_id=goal_id)), 
-                goal_id=goal_id, 
-                status=status, 
-                result=result, 
-                error=error
-            )
-        except Exception as e:
-            logger.error(f"Error in notifying systems about goal status change: {e}")
-            notifications = {"error": str(e)}
-
+    
+        # === CONTEXT CALLBACKS FEATURE ===
+        if enable_context_callbacks:
+            try:
+                callback_data = {
+                    "goal_id": goal_id,
+                    "old_status": old_status,
+                    "new_status": status,
+                    "associated_need": goal.associated_need,
+                    "result": result,
+                    "error": error,
+                    "hierarchy_results": hierarchy_results,
+                    "reward_results": reward_results
+                }
+                
+                # Trigger specific callbacks based on status
+                if status == "completed":
+                    await self.trigger_context_callback("goal_completed", callback_data)
+                elif status == "failed":
+                    await self.trigger_context_callback("goal_failed", callback_data)
+                elif status == "abandoned":
+                    await self.trigger_context_callback("goal_abandoned", callback_data)
+                
+                # Always trigger general status change callback
+                await self.trigger_context_callback("goal_status_change", callback_data)
+                
+                callback_results = {"triggered": True, "callback_data": callback_data}
+                features_used.append("context_callbacks")
+                logger.debug(f"Triggered context callbacks for goal '{goal_id}'")
+                
+            except Exception as e:
+                logger.error(f"Error in context callbacks for goal '{goal_id}': {e}")
+                callback_results = {"error": str(e)}
+    
+        # === SYSTEM NOTIFICATIONS FEATURE ===
+        if trigger_notifications:
+            try:
+                notifications = await self._notify_systems(
+                    RunContextWrapper(context=RunContext(goal_id=goal_id)), 
+                    goal_id=goal_id, 
+                    status=status, 
+                    result=result, 
+                    error=error
+                )
+                features_used.append("system_notifications")
+                logger.debug(f"Sent system notifications for goal '{goal_id}'")
+            except Exception as e:
+                logger.error(f"Error in notifying systems about goal status change: {e}")
+                notifications = {"error": str(e)}
+    
+        # Return comprehensive result
         return {
             "success": True,
             "goal_id": goal_id,
             "old_status": old_status,
             "new_status": status,
-            "notifications": notifications
+            "features_used": features_used,
+            "hierarchy_results": hierarchy_results,
+            "reward_results": reward_results,
+            "callback_results": callback_results,
+            "notifications": notifications,
+            "associated_need": goal.associated_need,
+            "completion_time": goal.completion_time.isoformat() if goal.completion_time else None
         }
-
-    async def update_goal_status_with_hierarchy(self, goal_id: str, status: str, result: Optional[Any] = None, error: Optional[str] = None) -> Dict[str, Any]:
-        """
-        Updates goal status with hierarchy considerations - handles parent/child relationships
+    
+    # === HELPER METHODS FOR MODULAR FEATURES ===
+    
+    async def _handle_goal_hierarchy_completion(self, goal_id: str, goal: Goal, result: Optional[Any] = None) -> Dict[str, Any]:
+        """Handle parent/child relationships when a goal is completed"""
+        hierarchy_results = {
+            "parent_updates": [],
+            "child_updates": [],
+            "cascading_completions": []
+        }
         
-        Args:
-            goal_id: Goal ID
-            status: New status
-            result: Optional result data
-            error: Optional error message
+        # Handle parent goal updates
+        if goal.relationships.parent_goal_id:
+            parent_id = goal.relationships.parent_goal_id
+            parent_goal = await self._get_goal_with_reader_lock(parent_id)
             
-        Returns:
-            Status update result
-        """
-        # First get the goal with reader lock
-        goal = await self._get_goal_with_reader_lock(goal_id)
-        if not goal:
-            logger.warning(f"Attempted to update status for unknown goal: {goal_id}")
-            return {"success": False, "error": "Goal not found"}
+            if parent_goal and parent_goal.relationships and parent_goal.relationships.child_goal_ids:
+                total_children = len(parent_goal.relationships.child_goal_ids)
+                
+                if total_children > 0:
+                    # Count completed children
+                    completed_children = 0
+                    for child_id in parent_goal.relationships.child_goal_ids:
+                        child_goal = await self._get_goal_with_reader_lock(child_id)
+                        if child_goal and child_goal.status == "completed":
+                            completed_children += 1
+                    
+                    # Update parent goal progress
+                    new_progress = completed_children / total_children
+                    await self._update_goal_with_writer_lock(
+                        parent_id,
+                        lambda g: setattr(g, "progress", new_progress)
+                    )
+                    
+                    hierarchy_results["parent_updates"].append({
+                        "parent_id": parent_id,
+                        "new_progress": new_progress,
+                        "completed_children": completed_children,
+                        "total_children": total_children
+                    })
+                    
+                    # If all children completed, mark parent as completed
+                    if completed_children == total_children:
+                        parent_completion = await self.update_goal_status(
+                            parent_id, 
+                            "completed", 
+                            result="All subgoals completed",
+                            enable_hierarchy=True,  # Allow cascading
+                            enable_context_callbacks=True,
+                            enable_completion_rewards=True,
+                            trigger_notifications=True
+                        )
+                        hierarchy_results["cascading_completions"].append({
+                            "goal_id": parent_id,
+                            "completion_result": parent_completion
+                        })
+        
+        return hierarchy_results
     
-        old_status = goal.status
-        if old_status == status: 
-            return {"success": True, "unchanged": True}  # No change
+    async def _handle_goal_hierarchy_failure(self, goal_id: str, goal: Goal, error: Optional[str] = None) -> Dict[str, Any]:
+        """Handle parent/child relationships when a goal fails"""
+        hierarchy_results = {
+            "parent_notifications": [],
+            "failure_propagation": []
+        }
+        
+        # Notify parent of child failure
+        if goal.relationships.parent_goal_id:
+            parent_id = goal.relationships.parent_goal_id
+            parent_goal = await self._get_goal_with_reader_lock(parent_id)
+            
+            if parent_goal:
+                # Update parent with failure information
+                await self._update_goal_with_writer_lock(
+                    parent_id,
+                    lambda g: g.execution_history.append({
+                        "timestamp": datetime.datetime.now().isoformat(),
+                        "type": "child_goal_failed",
+                        "child_goal_id": goal_id,
+                        "failure_reason": error or "Unknown error"
+                    })
+                )
+                
+                hierarchy_results["parent_notifications"].append({
+                    "parent_id": parent_id,
+                    "failed_child": goal_id,
+                    "error": error
+                })
+                
+                # Check if parent should also fail due to critical child failure
+                if goal.relationships.relationship_type == "critical_dependency":
+                    parent_failure = await self.update_goal_status(
+                        parent_id,
+                        "failed",
+                        error=f"Critical child goal failed: {goal_id}",
+                        enable_hierarchy=True,
+                        enable_context_callbacks=True,
+                        enable_completion_rewards=False,
+                        trigger_notifications=True
+                    )
+                    hierarchy_results["failure_propagation"].append({
+                        "goal_id": parent_id,
+                        "failure_result": parent_failure
+                    })
+        
+        return hierarchy_results
     
-        # Update the goal's status with writer lock
-        await self._update_goal_with_writer_lock(
-            goal_id,
-            lambda g: (
-                setattr(g, "status", status),
-                setattr(g, "last_error", error),
-                setattr(g, "completion_time", datetime.datetime.now()) if status in ["completed", "failed", "abandoned"] else None
-            )
+    # === CONVENIENCE METHODS FOR BACKWARD COMPATIBILITY ===
+    
+    async def update_goal_status_basic(self, goal_id: str, status: str, result: Optional[Any] = None, error: Optional[str] = None) -> Dict[str, Any]:
+        """Basic goal status update without advanced features"""
+        return await self.update_goal_status(
+            goal_id=goal_id,
+            status=status,
+            result=result,
+            error=error,
+            enable_hierarchy=False,
+            enable_context_callbacks=False,
+            enable_completion_rewards=False,
+            trigger_notifications=True
         )
     
-        # Update active goals set if needed
-        if status in ["completed", "failed", "abandoned"]:
-            async with self._active_goals_lock:
-                self.active_goals.discard(goal_id)
-            
-            # Update statistics
-            if status == "completed":
-                self.goal_statistics["completed"] += 1
-                # Process completion reward
-                await self._process_goal_completion_reward(goal_id, result)
-                
-                # Handle parent/child relationships
-                if goal.relationships and goal.relationships.parent_goal_id:
-                    parent_id = goal.relationships.parent_goal_id
-                    parent_goal = await self._get_goal_with_reader_lock(parent_id)
-                    
-                    if parent_goal:
-                        # Update parent progress based on children completion
-                        if parent_goal.relationships and parent_goal.relationships.child_goal_ids:
-                            total_children = len(parent_goal.relationships.child_goal_ids)
-                            
-                            if total_children > 0:
-                                # Count completed children
-                                completed_children = 0
-                                for child_id in parent_goal.relationships.child_goal_ids:
-                                    child_goal = await self._get_goal_with_reader_lock(child_id)
-                                    if child_goal and child_goal.status == "completed":
-                                        completed_children += 1
-                                
-                                # Update parent goal progress
-                                new_progress = completed_children / total_children
-                                await self._update_goal_with_writer_lock(
-                                    parent_id,
-                                    lambda g: setattr(g, "progress", new_progress)
-                                )
-                                
-                                # If all children completed, mark parent as completed
-                                if completed_children == total_children:
-                                    await self.update_goal_status(parent_id, "completed", result="All subgoals completed")
-                
-            elif status == "failed":
-                self.goal_statistics["failed"] += 1
-            elif status == "abandoned":
-                self.goal_statistics["abandoned"] += 1
+    async def update_goal_status_enhanced(self, goal_id: str, status: str, result: Optional[Any] = None, error: Optional[str] = None) -> Dict[str, Any]:
+        """Enhanced goal status update with context callbacks only"""
+        return await self.update_goal_status(
+            goal_id=goal_id,
+            status=status,
+            result=result,
+            error=error,
+            enable_hierarchy=False,
+            enable_context_callbacks=True,
+            enable_completion_rewards=False,
+            trigger_notifications=True
+        )
     
-        logger.info(f"Goal '{goal_id}' status changed from {old_status} to {status}.")
+    async def update_goal_status_with_hierarchy(self, goal_id: str, status: str, result: Optional[Any] = None, error: Optional[str] = None) -> Dict[str, Any]:
+        """Goal status update with hierarchy handling only"""
+        return await self.update_goal_status(
+            goal_id=goal_id,
+            status=status,
+            result=result,
+            error=error,
+            enable_hierarchy=True,
+            enable_context_callbacks=False,
+            enable_completion_rewards=True,
+            trigger_notifications=True
+        )
     
-        # Notify systems
-        try:
-            notifications = await self._notify_systems(
-                RunContextWrapper(context=RunContext(goal_id=goal_id)), 
-                goal_id=goal_id, 
-                status=status, 
-                result=result, 
-                error=error
-            )
-        except Exception as e:
-            logger.error(f"Error in notifying systems about goal status change: {e}")
-            notifications = {"error": str(e)}
+    async def update_goal_status_full_featured(self, goal_id: str, status: str, result: Optional[Any] = None, error: Optional[str] = None) -> Dict[str, Any]:
+        """Goal status update with all features enabled"""
+        return await self.update_goal_status(
+            goal_id=goal_id,
+            status=status,
+            result=result,
+            error=error,
+            enable_hierarchy=True,
+            enable_context_callbacks=True,
+            enable_completion_rewards=True,
+            trigger_notifications=True
+        )
         
-        return {
-            "success": True, 
-            "goal_id": goal_id, 
-            "old_status": old_status, 
-            "new_status": status,
-            "notifications": notifications
-        }
-    
     async def abandon_goal(self, goal_id: str, reason: str) -> Dict[str, Any]:
         """
         Abandons an active or pending goal
