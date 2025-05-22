@@ -323,19 +323,86 @@ class ContextAwareDistributedProcessing(ContextAwareModule):
     async def _execute_module_task(self, module_name: str, task_data: Dict[str, Any]) -> Dict[str, Any]:
         """Execute a task for a module"""
         try:
-            # Get module reference
-            if hasattr(self, '_context_system') and hasattr(self._context_system, 'nyx_brain'):
-                module = getattr(self._context_system.nyx_brain, module_name, None)
-                
-                if module and hasattr(module, 'execute_task'):
-                    result = await module.execute_task(task_data)
-                    return {"success": True, "result": result}
+            # Get the context system reference
+            if not hasattr(self, '_context_system') or not self._context_system:
+                return {"success": False, "error": "No context system available"}
             
-            return {"success": False, "error": f"Module {module_name} not found or cannot execute tasks"}
-        
+            # Get NyxBrain reference through context system
+            nyx_brain = getattr(self._context_system, 'nyx_brain', None)
+            if not nyx_brain:
+                return {"success": False, "error": "No NyxBrain reference available"}
+            
+            # Get module reference
+            module = getattr(nyx_brain, module_name, None)
+            if not module:
+                return {"success": False, "error": f"Module {module_name} not found"}
+            
+            # Determine execution method based on module capabilities
+            execution_result = None
+            
+            # Try context-aware execution first
+            if isinstance(module, ContextAwareModule):
+                # Module is context-aware, use context-based execution
+                context = task_data.get("context")
+                if context and isinstance(context, SharedContext):
+                    # Execute through context-aware interface
+                    if task_data.get("stage") == "input":
+                        execution_result = await module.process_input(context)
+                    elif task_data.get("stage") == "analysis":
+                        execution_result = await module.process_analysis(context)
+                    elif task_data.get("stage") == "synthesis":
+                        execution_result = await module.process_synthesis(context)
+                    else:
+                        # General execution
+                        if hasattr(module, 'execute_task'):
+                            execution_result = await module.execute_task(task_data)
+            
+            # Try standard execution methods
+            if execution_result is None:
+                task_type = task_data.get("task_type", "process")
+                
+                if task_type == "process" and hasattr(module, 'process_input'):
+                    execution_result = await module.process_input(
+                        task_data.get("input", ""),
+                        task_data.get("context", {})
+                    )
+                elif task_type == "analyze" and hasattr(module, 'analyze'):
+                    execution_result = await module.analyze(task_data.get("data", {}))
+                elif task_type == "execute" and hasattr(module, 'execute'):
+                    execution_result = await module.execute(task_data.get("command", {}))
+                elif hasattr(module, 'execute_task'):
+                    execution_result = await module.execute_task(task_data)
+                else:
+                    return {
+                        "success": False, 
+                        "error": f"Module {module_name} has no compatible execution method for task type: {task_type}"
+                    }
+            
+            # Process result
+            if execution_result is not None:
+                return {
+                    "success": True,
+                    "result": execution_result,
+                    "module": module_name,
+                    "task_type": task_data.get("task_type", "unknown"),
+                    "execution_time": datetime.now().isoformat()
+                }
+            else:
+                return {
+                    "success": False,
+                    "error": "Execution returned None",
+                    "module": module_name
+                }
+            
         except Exception as e:
             logger.error(f"Error executing task for {module_name}: {e}")
-            return {"success": False, "error": str(e)}
+            return {
+                "success": False,
+                "error": str(e),
+                "module": module_name,
+                "traceback": True
+            }
+
     
     async def _adjust_task_allocation(self, resource_data: Dict[str, Any]):
         """Adjust task allocation based on resource availability"""
@@ -374,34 +441,126 @@ class ContextAwareDistributedProcessing(ContextAwareModule):
     
     async def _rebalance_task_distribution(self):
         """Rebalance task distribution across available subsystems"""
-        # Get current distribution
-        distribution = {}
-        for task in self.original_manager.task_registry.values():
-            if not task.completed:
-                subsystem = task.subsystem_name
-                distribution[subsystem] = distribution.get(subsystem, 0) + 1
-        
-        # Check if rebalancing needed
-        if not distribution:
-            return
-        
-        avg_load = sum(distribution.values()) / len(distribution)
-        max_load = max(distribution.values())
-        
-        if max_load > avg_load * 1.5:
-            # Rebalancing needed
-            logger.info(f"Rebalancing task distribution: max_load={max_load}, avg={avg_load:.1f}")
+        try:
+            # Get current distribution
+            distribution = defaultdict(list)
+            pending_tasks = []
             
-            # In a real implementation, would redistribute tasks
-            # For now, just notify
-            await self.send_context_update(
-                update_type="distribution_rebalanced",
-                data={
-                    "distribution": distribution,
-                    "max_load": max_load,
-                    "average_load": avg_load
-                }
-            )
+            for task_id, task in self.original_manager.task_registry.items():
+                if not task.completed:
+                    if task.started:
+                        distribution[task.subsystem_name].append(task_id)
+                    else:
+                        pending_tasks.append((task_id, task))
+            
+            if not distribution and not pending_tasks:
+                return
+            
+            # Calculate ideal distribution
+            total_active = sum(len(tasks) for tasks in distribution.values())
+            total_pending = len(pending_tasks)
+            total_tasks = total_active + total_pending
+            
+            if total_tasks == 0:
+                return
+            
+            # Get available subsystems
+            available_subsystems = set()
+            if hasattr(self, '_context_system') and self._context_system:
+                nyx_brain = getattr(self._context_system, 'nyx_brain', None)
+                if nyx_brain:
+                    # Get all active modules that can process tasks
+                    for module_name in getattr(nyx_brain, 'active_modules', []):
+                        if hasattr(nyx_brain, module_name):
+                            available_subsystems.add(module_name)
+            
+            if not available_subsystems:
+                logger.warning("No available subsystems for task redistribution")
+                return
+            
+            ideal_load = total_tasks / len(available_subsystems)
+            
+            # Identify overloaded and underloaded subsystems
+            overloaded = []
+            underloaded = []
+            
+            for subsystem in available_subsystems:
+                current_load = len(distribution.get(subsystem, []))
+                if current_load > ideal_load * 1.5:
+                    overloaded.append((subsystem, current_load))
+                elif current_load < ideal_load * 0.5:
+                    underloaded.append((subsystem, current_load))
+            
+            # Redistribute tasks
+            redistributed = 0
+            
+            # First, handle pending tasks
+            for task_id, task in pending_tasks:
+                if underloaded:
+                    # Assign to most underloaded subsystem
+                    target_subsystem = min(underloaded, key=lambda x: x[1])[0]
+                    
+                    # Update task assignment
+                    task.subsystem_name = target_subsystem
+                    redistributed += 1
+                    
+                    # Update load tracking
+                    for i, (subsys, load) in enumerate(underloaded):
+                        if subsys == target_subsystem:
+                            underloaded[i] = (subsys, load + 1)
+                            if load + 1 >= ideal_load * 0.5:
+                                underloaded.pop(i)
+                            break
+            
+            # Then, move tasks from overloaded to underloaded
+            for overloaded_subsys, load in overloaded:
+                if not underloaded:
+                    break
+                
+                tasks_to_move = int(load - ideal_load * 1.2)  # Keep some buffer
+                moved = 0
+                
+                for task_id in distribution[overloaded_subsys][:tasks_to_move]:
+                    if task_id in self.original_manager.active_tasks:
+                        # Skip actively running tasks
+                        continue
+                    
+                    if underloaded:
+                        target_subsystem = min(underloaded, key=lambda x: x[1])[0]
+                        
+                        # Update task
+                        if task_id in self.original_manager.task_registry:
+                            self.original_manager.task_registry[task_id].subsystem_name = target_subsystem
+                            moved += 1
+                            redistributed += 1
+                            
+                            # Update load tracking
+                            for i, (subsys, load) in enumerate(underloaded):
+                                if subsys == target_subsystem:
+                                    underloaded[i] = (subsys, load + 1)
+                                    if load + 1 >= ideal_load * 0.5:
+                                        underloaded.pop(i)
+                                    break
+                
+                logger.info(f"Moved {moved} tasks from {overloaded_subsys} to other subsystems")
+            
+            if redistributed > 0:
+                logger.info(f"Rebalanced task distribution: redistributed {redistributed} tasks")
+                
+                # Notify about rebalancing
+                await self.send_context_update(
+                    update_type="distribution_rebalanced",
+                    data={
+                        "redistributed_count": redistributed,
+                        "current_distribution": {
+                            subsys: len(tasks) for subsys, tasks in distribution.items()
+                        },
+                        "ideal_load": ideal_load
+                    }
+                )
+            
+        except Exception as e:
+            logger.error(f"Error rebalancing task distribution: {e}")
     
     async def _update_task_priority(self, task_id: str, new_priority: int):
         """Update task priority"""
