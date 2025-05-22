@@ -155,6 +155,142 @@ class ContextAwareDynamicAdaptation(ContextAwareModule):
             "monitoring": monitoring_result,
             "triggers": adaptation_triggers
         }
+
+    async def _calculate_context_volatility(self) -> float:
+        """Calculate the volatility of the context over time - PRODUCTION VERSION"""
+        if len(self.context.context_history) < 3:
+            return 0.0  # Not enough history to calculate volatility
+        
+        # Calculate comprehensive volatility metrics
+        volatility_components = {
+            "structural_volatility": 0.0,
+            "content_volatility": 0.0,
+            "module_volatility": 0.0,
+            "emotional_volatility": 0.0,
+            "temporal_volatility": 0.0
+        }
+        
+        # Analyze structural changes
+        structural_changes = []
+        for i in range(1, len(self.context.context_history)):
+            curr = self.context.context_history[i]
+            prev = self.context.context_history[i-1]
+            
+            # Compare structure
+            curr_keys = set(curr.keys())
+            prev_keys = set(prev.keys())
+            
+            added_keys = curr_keys - prev_keys
+            removed_keys = prev_keys - curr_keys
+            
+            structural_change = (len(added_keys) + len(removed_keys)) / max(1, len(curr_keys.union(prev_keys)))
+            structural_changes.append(structural_change)
+        
+        if structural_changes:
+            volatility_components["structural_volatility"] = np.std(structural_changes) * 2
+        
+        # Analyze content volatility
+        content_differences = []
+        for i in range(1, len(self.context.context_history)):
+            diff = await self._calculate_context_difference(
+                RunContextWrapper(context=self.context), 
+                self.context.context_history[i], 
+                self.context.context_history[i-1]
+            )
+            content_differences.append(diff)
+        
+        if content_differences:
+            # Calculate variance of differences
+            mean_diff = sum(content_differences) / len(content_differences)
+            variance = sum((diff - mean_diff) ** 2 for diff in content_differences) / len(content_differences)
+            volatility_components["content_volatility"] = min(1.0, math.sqrt(variance) * 3.0)
+        
+        # Analyze module participation volatility
+        module_sets = []
+        for ctx in self.context.context_history:
+            if "active_modules" in ctx:
+                module_sets.append(set(ctx.get("active_modules", [])))
+        
+        if len(module_sets) >= 2:
+            module_changes = []
+            for i in range(1, len(module_sets)):
+                intersection = module_sets[i].intersection(module_sets[i-1])
+                union = module_sets[i].union(module_sets[i-1])
+                if union:
+                    stability = len(intersection) / len(union)
+                    module_changes.append(1.0 - stability)
+            
+            if module_changes:
+                volatility_components["module_volatility"] = sum(module_changes) / len(module_changes)
+        
+        # Analyze emotional volatility
+        emotional_states = []
+        for ctx in self.context.context_history:
+            if "emotional_state" in ctx and ctx["emotional_state"]:
+                emotional_states.append(ctx["emotional_state"])
+        
+        if len(emotional_states) >= 2:
+            emotional_distances = []
+            for i in range(1, len(emotional_states)):
+                curr_emotions = emotional_states[i]
+                prev_emotions = emotional_states[i-1]
+                
+                # Calculate emotional distance
+                all_emotions = set(curr_emotions.keys()).union(set(prev_emotions.keys()))
+                if all_emotions:
+                    distance = sum(
+                        abs(curr_emotions.get(e, 0) - prev_emotions.get(e, 0))
+                        for e in all_emotions
+                    ) / len(all_emotions)
+                    emotional_distances.append(distance)
+            
+            if emotional_distances:
+                volatility_components["emotional_volatility"] = sum(emotional_distances) / len(emotional_distances)
+        
+        # Analyze temporal volatility (rate of change)
+        if len(self.context.context_history) >= 2:
+            timestamps = []
+            for ctx in self.context.context_history:
+                if "timestamp" in ctx:
+                    try:
+                        timestamps.append(datetime.fromisoformat(ctx["timestamp"]))
+                    except:
+                        pass
+            
+            if len(timestamps) >= 2:
+                time_gaps = []
+                for i in range(1, len(timestamps)):
+                    gap = (timestamps[i] - timestamps[i-1]).total_seconds()
+                    time_gaps.append(gap)
+                
+                if time_gaps:
+                    # High variance in time gaps = high temporal volatility
+                    mean_gap = sum(time_gaps) / len(time_gaps)
+                    if mean_gap > 0:
+                        gap_variance = sum((gap - mean_gap) ** 2 for gap in time_gaps) / len(time_gaps)
+                        normalized_variance = math.sqrt(gap_variance) / mean_gap
+                        volatility_components["temporal_volatility"] = min(1.0, normalized_variance)
+        
+        # Combine volatility components with weights
+        weights = {
+            "structural_volatility": 0.15,
+            "content_volatility": 0.35,
+            "module_volatility": 0.20,
+            "emotional_volatility": 0.20,
+            "temporal_volatility": 0.10
+        }
+        
+        total_volatility = sum(
+            volatility_components[component] * weight
+            for component, weight in weights.items()
+        )
+        
+        # Apply smoothing based on history length
+        history_factor = min(1.0, len(self.context.context_history) / 10)
+        smoothed_volatility = total_volatility * (0.7 + 0.3 * history_factor)
+        
+        return min(1.0, smoothed_volatility)
+
     
     async def process_analysis(self, context: SharedContext) -> Dict[str, Any]:
         """Analyze adaptation needs in current context"""
@@ -466,22 +602,206 @@ class ContextAwareDynamicAdaptation(ContextAwareModule):
             logger.error(f"Error in urgent adaptation: {e}")
     
     async def _adapt_from_prediction_error(self, error_data: Dict[str, Any]):
-        """Adapt based on prediction error"""
-        try:
-            # Use original system's prediction error adaptation
-            result = await self.original_system.adapt_from_prediction_error(error_data)
-            
-            # Send update about prediction-based adaptation
-            await self.send_context_update(
-                update_type="prediction_adaptation_completed",
-                data={
-                    "error_data": error_data,
-                    "adaptation_result": result
+        """Adapt based on prediction error - PRODUCTION VERSION"""
+        prediction_error = error_data.get("prediction_error", 0.0)
+        error_details = error_data.get("error_details", {})
+        prediction_id = error_data.get("prediction_id")
+        prediction_type = error_details.get("type", "general")
+        
+        # Detailed error analysis
+        error_analysis = {
+            "error_magnitude": prediction_error,
+            "error_category": self._categorize_prediction_error(prediction_error),
+            "error_pattern": await self._analyze_error_pattern(prediction_id, error_details),
+            "adaptive_response": {}
+        }
+        
+        # Categorize error type
+        if prediction_error > 0.8:
+            error_category = "catastrophic"
+        elif prediction_error > 0.6:
+            error_category = "significant"
+        elif prediction_error > 0.4:
+            error_category = "moderate"
+        else:
+            error_category = "minor"
+        
+        error_analysis["error_category"] = error_category
+        
+        # Analyze error patterns
+        if not hasattr(self, 'prediction_error_history'):
+            self.prediction_error_history = []
+        
+        self.prediction_error_history.append({
+            "timestamp": datetime.now().isoformat(),
+            "prediction_id": prediction_id,
+            "error": prediction_error,
+            "type": prediction_type,
+            "details": error_details,
+            "current_strategy": self.original_system.context.current_strategy_id
+        })
+        
+        # Keep history limited
+        if len(self.prediction_error_history) > 50:
+            self.prediction_error_history = self.prediction_error_history[-50:]
+        
+        # Identify error patterns
+        error_pattern = await self._identify_prediction_error_patterns()
+        
+        # Determine adaptive response based on error analysis
+        if error_category == "catastrophic":
+            # Immediate major adaptation
+            adaptive_response = {
+                "action": "major_strategy_shift",
+                "urgency": "immediate",
+                "parameters": {
+                    "increase_exploration": 0.3,
+                    "increase_adaptation_rate": 0.2,
+                    "reduce_confidence_threshold": 0.2
                 }
-            )
+            }
+        elif error_category == "significant" and error_pattern.get("recurring", False):
+            # Recurring significant errors need strategy adjustment
+            adaptive_response = {
+                "action": "strategy_adjustment",
+                "urgency": "high",
+                "parameters": {
+                    "increase_exploration": 0.15,
+                    "adjust_risk_tolerance": 0.1,
+                    "modify_prediction_horizon": -0.2
+                }
+            }
+        elif error_category == "moderate":
+            # Parameter tuning
+            adaptive_response = {
+                "action": "parameter_tuning",
+                "urgency": "normal",
+                "parameters": {
+                    "fine_tune_exploration": 0.05,
+                    "adjust_learning_rate": 0.05
+                }
+            }
+        else:
+            # Minor adjustment or monitoring
+            adaptive_response = {
+                "action": "monitor",
+                "urgency": "low",
+                "parameters": {}
+            }
+        
+        error_analysis["adaptive_response"] = adaptive_response
+        
+        # Execute adaptation based on response
+        if adaptive_response["action"] != "monitor":
+            try:
+                # Prepare adaptation context
+                adaptation_context = {
+                    "trigger": "prediction_error",
+                    "error_analysis": error_analysis,
+                    "current_performance": await self._gather_performance_metrics(self.current_context),
+                    "timestamp": datetime.now().isoformat()
+                }
+                
+                # Run adaptation with error-specific parameters
+                result = await self.original_system.adaptation_cycle(
+                    adaptation_context,
+                    {"prediction_error": prediction_error}
+                )
+                
+                # Track adaptation result
+                if hasattr(result, "selected_strategy") and result["selected_strategy"]:
+                    error_analysis["adaptation_result"] = {
+                        "new_strategy": result["selected_strategy"]["id"],
+                        "confidence": result.get("strategy_confidence", 0.5)
+                    }
+                
+                # Send detailed update
+                await self.send_context_update(
+                    update_type="prediction_error_adaptation_complete",
+                    data={
+                        "error_data": error_data,
+                        "error_analysis": error_analysis,
+                        "adaptation_result": result
+                    },
+                    priority=ContextPriority.HIGH if error_category in ["catastrophic", "significant"] else ContextPriority.NORMAL
+                )
+                
+            except Exception as e:
+                logger.error(f"Error in prediction error adaptation: {e}")
+                # Fallback to monitoring
+                error_analysis["adaptation_result"] = {"error": str(e), "fallback": "monitoring"}
+        
+        # Store analysis for future reference
+        self.last_prediction_error_analysis = error_analysis
+
+    def _categorize_prediction_error(self, error: float) -> str:
+        """Categorize prediction error magnitude"""
+        if error > 0.8:
+            return "catastrophic"
+        elif error > 0.6:
+            return "significant"
+        elif error > 0.4:
+            return "moderate"
+        elif error > 0.2:
+            return "minor"
+        else:
+            return "negligible"
+
+    async def _analyze_error_pattern(self, prediction_id: str, error_details: Dict[str, Any]) -> Dict[str, Any]:
+        """Analyze patterns in prediction errors"""
+        pattern_analysis = {
+            "recurring": False,
+            "pattern_type": "isolated",
+            "frequency": 0,
+            "common_factors": []
+        }
+        
+        if not hasattr(self, 'prediction_error_history'):
+            return pattern_analysis
+        
+        # Find similar errors
+        error_type = error_details.get("type", "general")
+        similar_errors = [
+            e for e in self.prediction_error_history
+            if e.get("type") == error_type and e.get("error", 0) > 0.4
+        ]
+        
+        if len(similar_errors) >= 3:
+            pattern_analysis["recurring"] = True
+            pattern_analysis["frequency"] = len(similar_errors)
             
-        except Exception as e:
-            logger.error(f"Error adapting from prediction: {e}")
+            # Identify common factors
+            common_strategies = {}
+            common_contexts = {}
+            
+            for error in similar_errors:
+                strategy = error.get("current_strategy")
+                if strategy:
+                    common_strategies[strategy] = common_strategies.get(strategy, 0) + 1
+                
+                # Extract context features
+                details = error.get("details", {})
+                for key, value in details.items():
+                    if key not in ["timestamp", "id"]:
+                        context_key = f"{key}:{value}"
+                        common_contexts[context_key] = common_contexts.get(context_key, 0) + 1
+            
+            # Find most common factors
+            if common_strategies:
+                most_common_strategy = max(common_strategies.items(), key=lambda x: x[1])
+                if most_common_strategy[1] >= len(similar_errors) * 0.6:
+                    pattern_analysis["common_factors"].append(f"strategy:{most_common_strategy[0]}")
+                    pattern_analysis["pattern_type"] = "strategy_related"
+            
+            if common_contexts:
+                for context, count in common_contexts.items():
+                    if count >= len(similar_errors) * 0.5:
+                        pattern_analysis["common_factors"].append(context)
+                
+                if len(pattern_analysis["common_factors"]) > 2:
+                    pattern_analysis["pattern_type"] = "context_related"
+        
+        return pattern_analysis
     
     async def _incorporate_goal_progress(self, goal_data: Dict[str, Any]):
         """Incorporate goal progress into adaptation decisions"""
@@ -576,6 +896,120 @@ class ContextAwareDynamicAdaptation(ContextAwareModule):
         if recent_coherence and sum(recent_coherence) / len(recent_coherence) < 0.4:
             # Low coherence - may need to slow evolution
             self.current_adaptation_context["identity_adaptation_needed"] = True
+
+    async def _identify_prediction_error_patterns(self) -> Dict[str, Any]:
+        """Identify comprehensive patterns in prediction errors"""
+        if not hasattr(self, 'prediction_error_history') or len(self.prediction_error_history) < 5:
+            return {"patterns_found": False}
+        
+        patterns = {
+            "patterns_found": True,
+            "error_trends": {},
+            "strategy_performance": {},
+            "error_clustering": [],
+            "recommendations": []
+        }
+        
+        # Analyze error trends over time
+        recent_errors = self.prediction_error_history[-10:]
+        error_values = [e["error"] for e in recent_errors]
+        
+        # Calculate trend
+        if len(error_values) >= 5:
+            first_half = error_values[:len(error_values)//2]
+            second_half = error_values[len(error_values)//2:]
+            
+            first_avg = sum(first_half) / len(first_half)
+            second_avg = sum(second_half) / len(second_half)
+            
+            if second_avg > first_avg * 1.2:
+                patterns["error_trends"]["direction"] = "worsening"
+                patterns["recommendations"].append("Prediction accuracy declining - increase exploration")
+            elif second_avg < first_avg * 0.8:
+                patterns["error_trends"]["direction"] = "improving"
+            else:
+                patterns["error_trends"]["direction"] = "stable"
+        
+        # Analyze by strategy
+        for error_entry in self.prediction_error_history:
+            strategy = error_entry.get("current_strategy", "unknown")
+            if strategy not in patterns["strategy_performance"]:
+                patterns["strategy_performance"][strategy] = {
+                    "errors": [],
+                    "avg_error": 0.0,
+                    "error_count": 0
+                }
+            
+            patterns["strategy_performance"][strategy]["errors"].append(error_entry["error"])
+            patterns["strategy_performance"][strategy]["error_count"] += 1
+        
+        # Calculate averages and identify problematic strategies
+        problematic_strategies = []
+        for strategy, perf in patterns["strategy_performance"].items():
+            if perf["errors"]:
+                perf["avg_error"] = sum(perf["errors"]) / len(perf["errors"])
+                
+                if perf["avg_error"] > 0.6 and perf["error_count"] >= 3:
+                    problematic_strategies.append(strategy)
+        
+        if problematic_strategies:
+            patterns["recommendations"].append(
+                f"Avoid strategies: {', '.join(problematic_strategies)} due to high prediction errors"
+            )
+        
+        # Identify error clusters
+        # Group errors by time proximity and magnitude
+        error_clusters = []
+        cluster_threshold = 300  # 5 minutes in seconds
+        
+        sorted_errors = sorted(self.prediction_error_history, key=lambda x: x["timestamp"])
+        current_cluster = []
+        
+        for i, error in enumerate(sorted_errors):
+            if not current_cluster:
+                current_cluster.append(error)
+            else:
+                # Check time proximity
+                last_time = datetime.fromisoformat(current_cluster[-1]["timestamp"])
+                curr_time = datetime.fromisoformat(error["timestamp"])
+                
+                if (curr_time - last_time).total_seconds() <= cluster_threshold:
+                    current_cluster.append(error)
+                else:
+                    # Save cluster if significant
+                    if len(current_cluster) >= 2:
+                        cluster_avg_error = sum(e["error"] for e in current_cluster) / len(current_cluster)
+                        if cluster_avg_error > 0.5:
+                            error_clusters.append({
+                                "size": len(current_cluster),
+                                "avg_error": cluster_avg_error,
+                                "time_span": (
+                                    datetime.fromisoformat(current_cluster[-1]["timestamp"]) -
+                                    datetime.fromisoformat(current_cluster[0]["timestamp"])
+                                ).total_seconds(),
+                                "errors": current_cluster
+                            })
+                    
+                    current_cluster = [error]
+        
+        # Don't forget the last cluster
+        if len(current_cluster) >= 2:
+            cluster_avg_error = sum(e["error"] for e in current_cluster) / len(current_cluster)
+            if cluster_avg_error > 0.5:
+                error_clusters.append({
+                    "size": len(current_cluster),
+                    "avg_error": cluster_avg_error,
+                    "errors": current_cluster
+                })
+        
+        patterns["error_clustering"] = error_clusters
+        
+        if error_clusters:
+            patterns["recommendations"].append(
+                f"Detected {len(error_clusters)} error clusters - system may be unstable during certain conditions"
+            )
+        
+        return patterns
     
     async def _address_system_bottleneck(self, bottleneck_data: Dict[str, Any]):
         """Address identified system bottlenecks"""
