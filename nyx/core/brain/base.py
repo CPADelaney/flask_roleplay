@@ -350,6 +350,10 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             from nyx.core.a2a.context_aware_attentional_controller import ContextAwareAttentionalController
             from nyx.core.a2a.context_aware_body_image import ContextAwareBodyImage
             from nyx.core.a2a.context_aware_creative_memory_integration import ContextAwareCreativeMemoryIntegration
+            from nyx.core.a2a.context_aware_autobiographical_narrative import ContextAwareAutobiographicalNarrative
+            from nyx.core.a2a.context_aware_cross_user_experience import ContextAwareCrossUserExperience
+            from nyx.core.a2a.context_aware_distributed_processing import ContextAwareDistributedProcessing
+            from nyx.core.a2a.context_aware_dominance import ContextAwareDominanceSystem
     
             from dev_log.storage import get_dev_log_storage
             self.dev_log_storage = get_dev_log_storage()
@@ -467,7 +471,18 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             
             self.experience_interface = ExperienceInterface(self.memory_core, self.emotional_core)
             self.experience_consolidation = ExperienceConsolidationSystem(memory_core=self.memory_core, experience_interface=self.experience_interface)
-            self.cross_user_manager = CrossUserExperienceManager(memory_core=self.memory_core, experience_interface=self.experience_interface)
+            
+            original_cross_user_manager = CrossUserExperienceManager(
+                memory_core=self.memory_core, 
+                experience_interface=self.experience_interface
+            )
+            
+            if self.use_a2a_integration:
+                self.cross_user_manager = ContextAwareCrossUserExperience(original_cross_user_manager)
+                logger.debug("Enhanced CrossUserExperienceManager with A2A context distribution")
+            else:
+                self.cross_user_manager = original_cross_user_manager
+            
             self.temporal_perception = TemporalPerceptionSystem(self.user_id, self.conversation_id)
             await self.temporal_perception.initialize(brain_context=self, first_interaction_timestamp=None)
             self.procedural_memory_manager = ProceduralMemoryManager()
@@ -603,7 +618,12 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             self.sadistic_response_system = SadisticResponseSystem(theory_of_mind=self.theory_of_mind, protocol_enforcement=self.protocol_enforcement, reward_system=self.reward_system, relationship_manager=self.relationship_manager, memory_core=self.memory_core)
             self.femdom_coordinator = FemdomCoordinator(self)
             await self.femdom_coordinator.initialize()
+            
             self.dominance_system = self.femdom_coordinator # Assign after init
+            if self.use_a2a_integration and self.dominance_system:
+                self.dominance_system = ContextAwareDominanceSystem(self.dominance_system)
+                logger.debug("Enhanced DominanceSystem with A2A context distribution")
+            
             femdom_components_for_manager = {
                 "protocol_enforcement": self.protocol_enforcement,
                 "body_service": self.body_service_system,
@@ -665,6 +685,25 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
                 logger.info(f"Creative system initialized. Content store base: {getattr(self.content_store, 'base_directory', 'N/A')}")
             else:
                 logger.warning("Creative system or its sub-components (storage/content_system) not fully available after integration.")
+
+            try:
+                from nyx.core.autobiographical_narrative import AutobiographicalNarrative
+                
+                original_autobiographical_narrative = AutobiographicalNarrative(
+                    memory_orchestrator=self.memory_orchestrator,
+                    identity_evolution=self.identity_evolution,
+                    relationship_manager=self.relationship_manager
+                )
+                
+                if self.use_a2a_integration:
+                    self.autobiographical_narrative = ContextAwareAutobiographicalNarrative(original_autobiographical_narrative)
+                    logger.debug("Enhanced AutobiographicalNarrative with A2A context distribution")
+                else:
+                    self.autobiographical_narrative = original_autobiographical_narrative
+                    
+            except ImportError:
+                logger.warning("AutobiographicalNarrative module not found")
+                self.autobiographical_narrative = None
     
             # --- Step 7: Agentic Action Generator and systems depending on it ---
             logger.debug(f"NyxBrain Init Step 7: Agentic Action Generator & Dependent Systems for {self.user_id}-{self.conversation_id}")
@@ -696,7 +735,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
                 capability_assessor=self.capability_assessor, system_context=self.system_context,
                 procedural_memory_manager=self.procedural_memory_manager,
                 prediction_engine=getattr(self, 'prediction_engine', None), # Add other optional systems if AAG uses them
-                autobiographical_narrative=getattr(self, 'autobiographical_narrative', None),
+                autobiographical_narrative=self.autobiographical_narrative,
                 body_image=getattr(self, 'body_image', None),
                 conditioning_system=self.conditioning_system,
                 issue_tracker=getattr(self, 'issue_tracker', None),
@@ -706,6 +745,21 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
     
             if self.agentic_action_generator and hasattr(self.agentic_action_generator, 'initialize_actions'):
                  await self.agentic_action_generator.initialize_actions()
+
+            try:
+                from nyx.core.distributed_processing import DistributedProcessingManager
+                
+                original_distributed_processing = DistributedProcessingManager(max_parallel_tasks=10)
+                
+                if self.use_a2a_integration:
+                    self.distributed_processing = ContextAwareDistributedProcessing(original_distributed_processing)
+                    logger.debug("Enhanced DistributedProcessingManager with A2A context distribution")
+                else:
+                    self.distributed_processing = original_distributed_processing
+                    
+            except ImportError:
+                logger.warning("DistributedProcessingManager module not found")
+                self.distributed_processing = None
     
             self.passive_observation_system = PassiveObservationSystem(
                 action_generator=self.agentic_action_generator, emotional_core=self.emotional_core,
