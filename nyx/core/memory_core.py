@@ -2466,7 +2466,8 @@ class MemoryCoreAgents:
                 create_reflection_from_memories,
                 create_abstraction_from_memories,
                 create_semantic_memory
-            ]
+            ],
+            model = "gpt-4.1-nano"
         )
     
     def _create_maintenance_agent(self):
@@ -2484,7 +2485,8 @@ class MemoryCoreAgents:
                 unarchive_memory,
                 get_memory_stats,
                 detect_schema_from_memories
-            ]
+            ],
+            model = "gpt-4.1-nano"
         )
     
     def _create_experience_agent(self):
@@ -2497,7 +2499,8 @@ class MemoryCoreAgents:
             tools=[
                 retrieve_relevant_experiences,
                 generate_conversational_recall
-            ]
+            ],
+            model = "gpt-4.1-nano"
         )
     
     def _create_narrative_agent(self):
@@ -2509,7 +2512,8 @@ class MemoryCoreAgents:
             Focus on creating engaging, meaningful stories that connect memories.""",
             tools=[
                 construct_narrative_from_memories
-            ]
+            ],
+            model = "gpt-4.1-nano"
         )
     
     async def load_recent_memories(self, memories_data):
