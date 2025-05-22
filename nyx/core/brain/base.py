@@ -2964,18 +2964,6 @@ System Prompt End
                            mode: str = "auto") -> Dict[str, Any]:
         """
         Unified input processing method that handles all processing variations.
-        
-        Args:
-            user_input: User's input text
-            context: Additional context
-            use_thinking: Enable explicit thinking phase (None=auto-detect)
-            use_conditioning: Enable conditioning system (None=auto-detect)
-            use_coordination: Enable context distribution coordination (None=auto-detect)
-            thinking_level: Depth of thinking (1-3) if thinking is enabled
-            mode: Processing mode ("auto", "serial", "parallel", "coordinated", "simple")
-            
-        Returns:
-            Processing results with all requested features applied
         """
         if not self.initialized:
             await self.initialize()
@@ -3030,25 +3018,39 @@ System Prompt End
         if use_coordination:
             # Use coordinated processing
             core_result = await self._process_input_coordinated(user_input, context)
+            processing_result["processing_mode"] = "coordinated"
         else:
             # ALWAYS use ProcessingManager for non-coordinated processing
             if not self.processing_manager:
-                # Initialize it if needed
+                # Initialize ProcessingManager if not already done
+                from nyx.core.brain.processing.manager import ProcessingManager
                 self.processing_manager = ProcessingManager(self)
                 await self.processing_manager.initialize()
             
-            # Let ProcessingManager handle ALL mode selection and routing
+            # Pass mode and all context to ProcessingManager
+            processor_context = {
+                **context,
+                "processing_mode": mode,
+                "active_modules": list(processing_result.get("active_modules_for_input", [])),
+                "internal_thoughts": processing_result.get("internal_thoughts", []),
+                "thinking_applied": processing_result.get("thinking_applied", False),
+                "conditioning_applied": processing_result.get("conditioning_applied", False)
+            }
+            
+            # Let ProcessingManager handle mode selection and routing
             core_result = await self.processing_manager.process_input(
                 user_input, 
-                {**context, "processing_mode": mode}
+                processor_context
             )
+            
+            # Store which processor was actually used
+            processing_result["processing_mode"] = core_result.get("processing_mode", "unknown")
         
         # Merge results
         processing_result.update(core_result)
         
         # Phase 5: Post-processing
         processing_result["response_time"] = (datetime.now() - start_time).total_seconds()
-        processing_result["processing_mode"] = mode
         processing_result["features_used"] = {
             "thinking": use_thinking,
             "conditioning": use_conditioning,
@@ -3127,10 +3129,48 @@ System Prompt End
             )
             context.update(memory_context)
         
-        # Generate response based on mode
+        # Generate response based on processing mode
+        response_data = None
+        
+        # Check if we used a processor for input
+        processing_mode_used = input_result.get("processing_mode")
+        
         if use_coordination and hasattr(self, "context_distribution") and self.context_distribution:
+            # Use coordinated response generation
             response_data = await self._generate_response_coordinated(user_input, context, input_result)
+        
+        elif processing_mode_used and self.processing_manager:
+            # Use the same processor that handled the input
+            try:
+                response_data = await self.processing_manager.generate_response(
+                    user_input,
+                    input_result,
+                    context
+                )
+                
+                # Extract the core response data from processor result
+                if "message" in response_data:
+                    response_data = {
+                        "main_message": response_data["message"],
+                        "epistemic_status": response_data.get("epistemic_status", epistemic_status),
+                        "action": response_data.get("action_taken"),
+                        "emotional_expression": response_data.get("emotional_expression"),
+                        "processor_metadata": {
+                            "mode": processing_mode_used,
+                            "response_type": response_data.get("response_type", "standard"),
+                            "evaluation": response_data.get("evaluation"),
+                            "parallel_processing": response_data.get("parallel_processing", False),
+                            "distributed_processing": response_data.get("distributed_processing", False),
+                            "reflexive_processing": response_data.get("reflexive_processing", False)
+                        }
+                    }
+            except Exception as e:
+                logger.error(f"Error using ProcessingManager for response: {e}")
+                # Fallback to standard generation
+                response_data = await self._generate_response_standard(user_input, context, input_result, active_modules)
+        
         else:
+            # Fallback to standard response generation
             response_data = await self._generate_response_standard(user_input, context, input_result, active_modules)
         
         # Apply post-processing
@@ -3143,6 +3183,10 @@ System Prompt End
             start_time,
             use_hierarchical_memory
         )
+        
+        # Add processor metadata if available
+        if "processor_metadata" in response_data:
+            final_response["processor_metadata"] = response_data["processor_metadata"]
         
         return final_response
     
