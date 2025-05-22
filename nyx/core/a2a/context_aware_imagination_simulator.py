@@ -746,6 +746,112 @@ class ContextAwareImaginationSimulator(ContextAwareModule):
             synthesis_results.append(result)
         
         return synthesis_results
+
+    async def _calculate_processing_confidence(self, processing_results: Dict[str, Any]) -> float:
+        """Calculate overall confidence in processing results"""
+        confidence_factors = []
+        
+        # Pattern detection confidence
+        patterns = processing_results.get("pattern_detections", [])
+        if patterns:
+            # Calculate average pattern confidence
+            pattern_confidences = []
+            for pattern in patterns:
+                if isinstance(pattern, dict) and "confidence" in pattern:
+                    pattern_confidences.append(pattern["confidence"])
+            
+            if pattern_confidences:
+                avg_pattern_confidence = sum(pattern_confidences) / len(pattern_confidences)
+                confidence_factors.append(avg_pattern_confidence)
+            else:
+                confidence_factors.append(0.5)  # Default if no confidence values
+        
+        # Behavior evaluation confidence
+        evaluations = processing_results.get("behavior_evaluations", [])
+        if evaluations:
+            # Extract confidence from evaluations
+            eval_confidences = []
+            
+            for eval_data in evaluations:
+                if isinstance(eval_data, dict):
+                    # Check if it's a behavior evaluation result
+                    if "confidence" in eval_data:
+                        eval_confidences.append(eval_data["confidence"])
+                    # Check if it's cached behavior data with baseline
+                    elif "baseline_frequency" in eval_data:
+                        # Use baseline frequency as a proxy for confidence
+                        # Higher baseline = more confident in behavior patterns
+                        baseline = eval_data.get("baseline_frequency", 0.5)
+                        confidence = 0.5 + (baseline * 0.3)  # Map to 0.5-0.8 range
+                        eval_confidences.append(confidence)
+            
+            if eval_confidences:
+                avg_eval_confidence = sum(eval_confidences) / len(eval_confidences)
+                confidence_factors.append(avg_eval_confidence)
+            else:
+                confidence_factors.append(0.7)  # Default confidence for evaluations
+        
+        # Mode processing stability
+        mode_processing = processing_results.get("mode_processing", {})
+        if mode_processing:
+            # Check if mode processing is recent and stable
+            if isinstance(mode_processing, dict):
+                # If we have distribution info
+                if "distribution" in mode_processing:
+                    distribution = mode_processing["distribution"]
+                    # Check distribution entropy (lower = more confident)
+                    if distribution:
+                        values = list(distribution.values())
+                        max_value = max(values) if values else 0
+                        # High dominance of one mode = high confidence
+                        if max_value > 0.7:
+                            confidence_factors.append(0.9)
+                        elif max_value > 0.5:
+                            confidence_factors.append(0.7)
+                        else:
+                            confidence_factors.append(0.5)
+                
+                # Check if we have dominant mode consistency
+                if "dominant_mode" in mode_processing:
+                    # Having a clear dominant mode increases confidence
+                    confidence_factors.append(0.8)
+        
+        # Check mode blending history for stability
+        if hasattr(self, 'mode_blending_history') and self.mode_blending_history:
+            recent_history = self.mode_blending_history[-3:]
+            if len(recent_history) >= 2:
+                # Check consistency of dominant modes
+                dominant_modes = []
+                for h in recent_history:
+                    if isinstance(h, dict) and "dominant_mode" in h:
+                        dominant_modes.append(h["dominant_mode"])
+                
+                if dominant_modes:
+                    # All same dominant mode = high confidence
+                    if len(set(dominant_modes)) == 1:
+                        confidence_factors.append(0.9)
+                    # Some variation = medium confidence
+                    elif len(set(dominant_modes)) == 2:
+                        confidence_factors.append(0.7)
+                    # High variation = lower confidence
+                    else:
+                        confidence_factors.append(0.5)
+        
+        # Conditioning results confidence
+        conditioning_applied = processing_results.get("conditioning_applied", [])
+        if conditioning_applied:
+            # Having successful conditioning applications increases confidence
+            confidence_factors.append(0.75)
+        
+        # Calculate overall confidence
+        if confidence_factors:
+            # Weighted average with slight bias toward lower values (conservative estimate)
+            overall_confidence = sum(confidence_factors) / len(confidence_factors)
+            # Apply slight reduction for conservative estimate
+            overall_confidence *= 0.95
+            return overall_confidence
+        
+        return 0.5  # Default confidence if no factors
     
     async def _synthesize_simulation_insights(self, simulations: List[Dict[str, Any]], 
                                             context: SharedContext, 
@@ -1238,15 +1344,98 @@ class ContextAwareImaginationSimulator(ContextAwareModule):
     
     async def _get_current_brain_state(self) -> Dict[str, Any]:
         """Get current brain state from context"""
-        # This would integrate with the actual brain state
-        # For now, return a default state
-        return {
+        brain_state = {
             "emotional_valence": 0.0,
             "emotional_arousal": 0.5,
             "goal_activation": 0.5,
             "relationship_depth": 0.5,
-            "uncertainty_level": 0.3
+            "uncertainty_level": 0.3,
+            "exploration_drive": 0.5,
+            "identity_coherence": 0.8,
+            "cognitive_load": 0.3
         }
+        
+        # Extract from current context if available
+        if hasattr(self, 'current_context') and self.current_context:
+            context = self.current_context
+            
+            # Get emotional state
+            if context.emotional_state:
+                brain_state["emotional_valence"] = context.emotional_state.get("valence", 0.0)
+                brain_state["emotional_arousal"] = context.emotional_state.get("arousal", 0.5)
+                
+                # Extract from primary emotion if available
+                primary_emotion = context.emotional_state.get("primary_emotion", {})
+                if isinstance(primary_emotion, dict):
+                    emotion_intensity = primary_emotion.get("intensity", 0.5)
+                    brain_state["emotional_arousal"] = emotion_intensity
+            
+            # Get goal activation
+            if context.goal_context:
+                active_goals = context.goal_context.get("active_goals", [])
+                if active_goals:
+                    # Average priority of active goals
+                    avg_priority = sum(g.get("priority", 0.5) for g in active_goals) / len(active_goals)
+                    brain_state["goal_activation"] = avg_priority
+                    
+                    # Increase cognitive load based on number of active goals
+                    brain_state["cognitive_load"] = min(1.0, 0.3 + len(active_goals) * 0.1)
+            
+            # Get relationship depth
+            if context.relationship_context:
+                brain_state["relationship_depth"] = context.relationship_context.get("depth", 0.5)
+                
+                # Trust affects uncertainty
+                trust = context.relationship_context.get("trust", 0.5)
+                brain_state["uncertainty_level"] = 0.5 - (trust * 0.3)  # Higher trust = lower uncertainty
+            
+            # Get session context values
+            if context.session_context:
+                brain_state["uncertainty_level"] = context.session_context.get("uncertainty", brain_state["uncertainty_level"])
+                brain_state["exploration_drive"] = context.session_context.get("curiosity", 0.5)
+                
+                # Check for specific task context
+                if context.session_context.get("task_type") == "problem_solving":
+                    brain_state["cognitive_load"] = min(1.0, brain_state["cognitive_load"] + 0.2)
+                    brain_state["goal_activation"] = min(1.0, brain_state["goal_activation"] + 0.2)
+        
+        # Get from original system if available
+        elif hasattr(self, 'original_system'):
+            # Try to get emotional state from emotional core
+            if hasattr(self.original_system, 'emotional_core') and self.original_system.emotional_core:
+                try:
+                    emotional_state = self.original_system.emotional_core.get_emotional_state()
+                    brain_state["emotional_valence"] = self.original_system.emotional_core.get_emotional_valence()
+                    brain_state["emotional_arousal"] = self.original_system.emotional_core.get_emotional_arousal()
+                except:
+                    pass
+            
+            # Try to get goal state from goal manager
+            if hasattr(self.original_system, 'goal_manager') and self.original_system.goal_manager:
+                try:
+                    active_goals = await self.original_system.goal_manager.get_all_goals(status_filter=["active"])
+                    if active_goals:
+                        avg_priority = sum(g.get("priority", 0.5) for g in active_goals) / len(active_goals)
+                        brain_state["goal_activation"] = avg_priority
+                except:
+                    pass
+            
+            # Try to get relationship state
+            if hasattr(self.original_system, 'relationship_manager') and self.original_system.relationship_manager:
+                try:
+                    relationship_state = await self.original_system.relationship_manager.get_relationship_state()
+                    brain_state["relationship_depth"] = relationship_state.get("depth", 0.5)
+                except:
+                    pass
+        
+        # Ensure all values are in valid range [0, 1] except valence [-1, 1]
+        for key, value in brain_state.items():
+            if key == "emotional_valence":
+                brain_state[key] = max(-1.0, min(1.0, value))
+            else:
+                brain_state[key] = max(0.0, min(1.0, value))
+        
+        return brain_state
     
     def _extract_key_steps(self, result: Dict[str, Any]) -> List[str]:
         """Extract key steps from simulation result"""
@@ -1427,18 +1616,65 @@ class ContextAwareImaginationSimulator(ContextAwareModule):
     
     def _extract_planning_objective(self, user_input: str) -> str:
         """Extract planning objective from user input"""
-        # Simple extraction - in practice would use NLP
-        objective_phrases = ["how can i", "i want to", "help me", "need to"]
-        
+        # Convert to lowercase for pattern matching
         input_lower = user_input.lower()
-        for phrase in objective_phrases:
-            if phrase in input_lower:
-                # Extract text after the phrase
-                idx = input_lower.index(phrase)
-                objective = user_input[idx + len(phrase):].strip()
+        
+        # Define objective extraction patterns
+        objective_patterns = [
+            # Direct planning phrases
+            (r"how can i\s+(.+?)(?:\?|$)", 1),
+            (r"i want to\s+(.+?)(?:\.|$)", 1),
+            (r"help me\s+(.+?)(?:\.|$)", 1),
+            (r"i need to\s+(.+?)(?:\.|$)", 1),
+            (r"plan to\s+(.+?)(?:\.|$)", 1),
+            (r"trying to\s+(.+?)(?:\.|$)", 1),
+            (r"goal is to\s+(.+?)(?:\.|$)", 1),
+            # Question-based objectives
+            (r"what's the best way to\s+(.+?)(?:\?|$)", 1),
+            (r"how do i\s+(.+?)(?:\?|$)", 1),
+            (r"can you help me\s+(.+?)(?:\?|$)", 1),
+            # Indirect planning indicators
+            (r"thinking about\s+(.+?)(?:\.|$)", 1),
+            (r"considering\s+(.+?)(?:\.|$)", 1),
+            (r"wondering how to\s+(.+?)(?:\.|$)", 1),
+        ]
+        
+        # Try to extract objective using patterns
+        import re
+        for pattern, group_idx in objective_patterns:
+            match = re.search(pattern, input_lower)
+            if match:
+                objective = match.group(group_idx).strip()
+                # Clean up the objective
+                objective = objective.rstrip('.,!?')
+                # Capitalize first letter
+                objective = objective[0].upper() + objective[1:] if objective else objective
                 return objective
         
-        return user_input  # Fallback to full input
+        # If no pattern matches, try to extract key action verbs
+        action_verbs = ['achieve', 'accomplish', 'complete', 'finish', 'solve', 
+                        'improve', 'learn', 'build', 'create', 'develop', 'reach']
+        
+        words = input_lower.split()
+        for i, word in enumerate(words):
+            if word in action_verbs and i < len(words) - 1:
+                # Extract phrase starting from action verb
+                objective_words = words[i:]
+                objective = ' '.join(objective_words)
+                objective = objective.rstrip('.,!?')
+                return objective[0].upper() + objective[1:] if objective else objective
+        
+        # Final fallback: if input is short enough, use the whole thing
+        if len(user_input) < 100:
+            return user_input.strip()
+        
+        # Otherwise, extract first sentence/clause
+        first_sentence = user_input.split('.')[0].strip()
+        if len(first_sentence) < 100:
+            return first_sentence
+        
+        # Last resort: first 80 characters
+        return user_input[:80].strip() + "..."
     
     def _identify_constraints(self, context: SharedContext, messages: Dict) -> List[str]:
         """Identify constraints for planning"""
