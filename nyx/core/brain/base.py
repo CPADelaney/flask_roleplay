@@ -267,7 +267,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             from nyx.core.brain.module_optimizer import ModuleOptimizer
             from nyx.core.brain.system_health_checker import SystemHealthChecker
             from nyx.core.emotions.emotional_core import EmotionalCore
-            from nyx.core.memory_core import MemoryCoreAgents
+            from nyx.core.memory_core import MemoryCoreAgents, BrainMemoryCore
             from nyx.core.reflection_engine import ReflectionEngine
             from nyx.core.experience_interface import ExperienceInterface
             from nyx.core.dynamic_adaptation_system import DynamicAdaptationSystem
@@ -334,7 +334,6 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             from nyx.core.procedural_memory.manager import ProceduralMemoryManager
             from nyx.core.procedural_memory.agent import ProceduralMemoryAgents, AgentEnhancedMemoryManager
     
-            from nyx.core.memory_core import BrainMemoryCore  # or from .memory_core import BrainMemoryCore
             from nyx.core.brain.checkpointing_agent import CheckpointingPlannerAgent        
     
             from nyx.creative.agentic_system import AgenticCreativitySystem, integrate_with_existing_system
@@ -348,6 +347,9 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             # Import A2A context-aware wrappers
             from nyx.core.a2a.context_aware_conditioning import ContextAwareConditioningSystem
             from nyx.core.a2a.context_aware_context_system import ContextAwareContextSystem
+            from nyx.core.a2a.context_aware_attentional_controller import ContextAwareAttentionalController
+            from nyx.core.a2a.context_aware_body_image import ContextAwareBodyImage
+            from nyx.core.a2a.context_aware_creative_memory_integration import ContextAwareCreativeMemoryIntegration
     
             from dev_log.storage import get_dev_log_storage
             self.dev_log_storage = get_dev_log_storage()
@@ -412,14 +414,42 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
                 original_hormone_system = HormoneSystem()
                 self.hormone_system = ContextAwareHormoneSystem(original_hormone_system)
     
-            self.memory_core = MemoryCoreAgents(self.user_id, self.conversation_id)
-            await self.memory_core.initialize()
+            original_memory_core = MemoryCoreAgents(self.user_id, self.conversation_id)
+            await original_memory_core.initialize()
+            
+            if self.use_a2a_integration:
+                from nyx.core.a2a.context_aware_memory_core import ContextAwareMemoryCore
+                self.memory_core = ContextAwareMemoryCore(original_memory_core)
+                logger.debug("Enhanced MemoryCore with A2A context distribution")
+            else:
+                self.memory_core = original_memory_core
+            
             self.memory_orchestrator = MemoryOrchestrator(self.user_id, self.conversation_id)
             await self.memory_orchestrator.initialize()
+            
             self.identity_evolution = IdentityEvolutionSystem(hormone_system=self.hormone_system)
             self.knowledge_core = KnowledgeCoreAgents()
             await self.knowledge_core.initialize()
-            self.attentional_controller = AttentionalController(emotional_core=self.emotional_core)
+
+            if self.config.attentional_controller.enabled:
+                from nyx.core.attentional_controller import AttentionalController
+                from nyx.core.a2a.context_aware_attentional_controller import ContextAwareAttentionalController
+                
+                # Create original system
+                original_attentional_controller = AttentionalController(emotional_core=self.emotional_core)
+                
+                # Wrap with context-aware version if A2A enabled
+                if self.use_a2a_integration:
+                    self.attentional_controller = ContextAwareAttentionalController(original_attentional_controller)
+                    logger.debug("Enhanced AttentionalController with A2A context distribution")
+                else:
+                    self.attentional_controller = original_attentional_controller
+
+            if self.use_a2a_integration:
+                self.context_system = ContextAwareContextSystem(base_attention_system)
+            else:
+                self.context_system = base_attention_system
+            
             self.reasoning_core = integrated_reasoning_agent
             self.reasoning_triage_agent = reasoning_triage_agent
             self.internal_feedback = InternalFeedbackSystem()
@@ -455,6 +485,21 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
                 from nyx.core.a2a.context_aware_needs import ContextAwareNeedsSystem
                 self.needs_system = ContextAwareNeedsSystem(self.needs_system)
                 logger.debug("Enhanced NeedsSystem with context distribution")
+
+            # In the appropriate step where body image would be initialized:
+            if hasattr(self.config, 'body_image') and self.config.body_image.enabled:
+                from nyx.core.body_image import BodyImage
+                from nyx.core.a2a.context_aware_body_image import ContextAwareBodyImage
+                
+                # Create original system
+                original_body_image = BodyImage()
+                
+                # Wrap with context-aware version if A2A enabled
+                if self.use_a2a_integration:
+                    self.body_image = ContextAwareBodyImage(original_body_image)
+                    logger.debug("Enhanced BodyImage with A2A context distribution")
+                else:
+                    self.body_image = original_body_image
     
             logger.debug(f"NyxBrain Init Step 4: Core Systems - Tier 2 (Interdependent) for {self.user_id}-{self.conversation_id}")
             self.mood_manager = MoodManager(
@@ -583,10 +628,25 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
     
             self.novelty_engine = NoveltyEngine(imagination_simulator=self.imagination_simulator, memory_core=self.memory_core)
             await self.novelty_engine.initialize()
+            
             self.recognition_memory = RecognitionMemorySystem(memory_core=self.memory_core, context_awareness=self.context_system)
             await self.recognition_memory.initialize()
-            self.creative_memory = CreativeMemoryIntegration(novelty_engine=self.novelty_engine, recognition_memory=self.recognition_memory, memory_core=self.memory_core)
-            await self.creative_memory.initialize()
+            
+            # Create original creative memory integration
+            original_creative_memory = CreativeMemoryIntegration(
+                novelty_engine=self.novelty_engine, 
+                recognition_memory=self.recognition_memory, 
+                memory_core=self.memory_core
+            )
+            await original_creative_memory.initialize()
+            
+            # Wrap with context-aware version if A2A enabled
+            if self.use_a2a_integration:
+                from nyx.core.a2a.context_aware_creative_memory_integration import ContextAwareCreativeMemoryIntegration
+                self.creative_memory = ContextAwareCreativeMemoryIntegration(original_creative_memory)
+                logger.debug("Enhanced CreativeMemoryIntegration with A2A context distribution")
+            else:
+                self.creative_memory = original_creative_memory
     
             self.creative_system = await integrate_with_existing_system(self)
             if hasattr(self.creative_system, 'storage') and self.creative_system.storage and \
@@ -665,11 +725,21 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             )
             await self.proactive_communication_engine.start()
     
-            self.reflection_engine = ReflectionEngine(
-                memory_core_ref=self.memory_core, emotional_core=self.emotional_core,
+            from nyx.core.reflection_engine import ReflectionEngine
+            original_reflection_engine = ReflectionEngine(
+                memory_core_ref=self.memory_core, 
+                emotional_core=self.emotional_core,
                 passive_observation_system=self.passive_observation_system,
                 proactive_communication_engine=self.proactive_communication_engine
             )
+            
+            if self.use_a2a_integration:
+                from nyx.core.a2a.context_aware_reflection_engine import ContextAwareReflectionEngine
+                self.reflection_engine = ContextAwareReflectionEngine(original_reflection_engine)
+                logger.debug("Enhanced ReflectionEngine with A2A context distribution")
+            else:
+                self.reflection_engine = original_reflection_engine
+            
             self.agentic_action_generator.reflection_engine = self.reflection_engine
             self.agentic_action_generator.passive_observation_system = self.passive_observation_system
             self.agentic_action_generator.proactive_communication_engine = self.proactive_communication_engine
@@ -6294,6 +6364,7 @@ System Prompt End
         # Removed redundant logging line here
 
         # --- 3. Activate Modules by Goal ---
+        
         if "goal_manager" in active_modules and self.goal_manager: # Check if goal manager itself is active
             try:
                 # Add goal_manager if not already active for the lookup itself
