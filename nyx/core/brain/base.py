@@ -2444,19 +2444,26 @@ System Prompt End
             "domain": domain
         }
 
+    # Backwards compatability so references to these don't break everything
     async def process_input_enhanced(self, user_input: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
-        """Use coordinated processing when available, fallback to original"""
-        if self.context_distribution:
-            return await self.process_input_coordinated(user_input, context)
-        else:
-            return await self.process_input(user_input, context)
+        """Backward compatibility wrapper"""
+        return await self.process_input(user_input, context, use_coordination=True)
+
+    async def process_input_with_thinking(self, user_input: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
+        """Backward compatibility wrapper"""
+        return await self.process_input(user_input, context, use_thinking=True)
+    
+    async def process_conditioned_input(self, text: str, user_id: str = None, context: Dict[str, Any] = None) -> Dict[str, Any]:
+        """Backward compatibility wrapper"""
+        return await self.process_input(text, context, use_conditioning=True)
     
     async def generate_response_enhanced(self, user_input: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
-        """Use coordinated response generation when available, fallback to original"""
-        if self.context_distribution:
-            return await self.generate_response_coordinated(user_input, context)
-        else:
-            return await self.generate_response(user_input, context)
+        """Backward compatibility wrapper"""
+        return await self.generate_response(user_input, context, use_coordination=True)
+    
+    async def generate_response_with_thinking(self, user_input: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
+        """Backward compatibility wrapper"""
+        return await self.generate_response(user_input, context, use_thinking=True)
     
     async def _provide_activity_feedback(self, activity: Dict[str, Any], result: Dict[str, Any], used_procedure: bool) -> None:
         """
@@ -2819,7 +2826,17 @@ System Prompt End
                 - If you yourself choose to lie, bluff, or improvise, make a mental note internally (track internally via tools or thoughts).
                 - If caught in error, or you realize a mistake, acknowledge without undue justification unless your persona/goals specifically require saving face.
                 
-                Your goals are not always to be agreeable. It's acceptable to say you don't know, to challenge, or to question the user's input if appropriate.                
+                Your goals are not always to be agreeable. It's acceptable to say you don't know, to challenge, or to question the user's input if appropriate.   
+                
+                You can process inputs with various feature combinations:
+                - use_thinking: Enable deep thinking phases
+                - use_conditioning: Apply personality conditioning
+                - use_coordination: Use a2a module coordination
+                - use_hierarchical_memory: Enable advanced memory context
+                - mode: Choose processing mode (auto, serial, parallel, coordinated, simple)
+                
+                Use process_user_message and generate_agent_response with these options
+                to optimize processing for different scenarios.
                 """,
                 tools=all_tools
             )
@@ -2935,161 +2952,541 @@ System Prompt End
                     return status
         return "confident"
     
-    async def process_input(self, user_input: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
+    async def process_input(self, 
+                           user_input: str, 
+                           context: Dict[str, Any] = None,
+                           # Feature flags
+                           use_thinking: bool = None,
+                           use_conditioning: bool = None,
+                           use_coordination: bool = None,
+                           thinking_level: int = 1,
+                           # Processing options
+                           mode: str = "auto") -> Dict[str, Any]:
         """
-        Process user input, activating relevant modules, generating initial thoughts,
-        and performing preliminary checks like harm detection and gaslighting defense.
+        Unified input processing method that handles all processing variations.
+        
+        Args:
+            user_input: User's input text
+            context: Additional context
+            use_thinking: Enable explicit thinking phase (None=auto-detect)
+            use_conditioning: Enable conditioning system (None=auto-detect)
+            use_coordination: Enable context distribution coordination (None=auto-detect)
+            thinking_level: Depth of thinking (1-3) if thinking is enabled
+            mode: Processing mode ("auto", "serial", "parallel", "coordinated", "simple")
+            
+        Returns:
+            Processing results with all requested features applied
         """
         if not self.initialized:
             await self.initialize()
-
+            
         context = context or {}
         start_time = datetime.now()
+        
+        # Auto-detect features if not specified
+        if use_thinking is None:
+            use_thinking = (
+                hasattr(self, "thinking_config") and 
+                self.thinking_config.get("thinking_enabled", False) and
+                hasattr(self, "thinking_tools")
+            )
+            
+        if use_conditioning is None:
+            use_conditioning = (
+                hasattr(self, "conditioned_input_processor") and 
+                self.conditioned_input_processor is not None
+            )
+            
+        if use_coordination is None:
+            use_coordination = (
+                hasattr(self, "context_distribution") and 
+                self.context_distribution is not None and
+                mode in ["auto", "coordinated"]
+            )
+        
+        # Store original input
         context["last_user_input"] = user_input
+        
+        # Phase 1: Pre-processing checks
+        processing_result = await self._unified_preprocessing(user_input, context)
+        if processing_result.get("blocked"):
+            return processing_result
+        
+        # Phase 2: Thinking (if enabled)
+        if use_thinking:
+            thinking_result = await self._apply_thinking_phase(
+                user_input, context, thinking_level, processing_result
+            )
+            processing_result.update(thinking_result)
+        
+        # Phase 3: Conditioning (if enabled)
+        if use_conditioning:
+            conditioning_result = await self._apply_conditioning_phase(
+                user_input, context, processing_result
+            )
+            processing_result.update(conditioning_result)
+        
+        # Phase 4: Core processing
+        if use_coordination:
+            # Use coordinated processing
+            core_result = await self._process_input_coordinated(user_input, context)
+        else:
+            # Use appropriate non-coordinated processing
+            if mode == "serial" or (mode == "auto" and not self.processing_manager):
+                core_result = await self._process_input_serial(user_input, context)
+            elif self.processing_manager:
+                core_result = await self.processing_manager.process_input(user_input, context)
+            else:
+                core_result = await self._process_input_serial(user_input, context)
+        
+        # Merge results
+        processing_result.update(core_result)
+        
+        # Phase 5: Post-processing
+        processing_result["response_time"] = (datetime.now() - start_time).total_seconds()
+        processing_result["processing_mode"] = mode
+        processing_result["features_used"] = {
+            "thinking": use_thinking,
+            "conditioning": use_conditioning,
+            "coordination": use_coordination
+        }
+        
+        return processing_result
 
-        # === 1. Determine Active Modules ===
+    async def generate_response(self,
+                              user_input: str,
+                              context: Dict[str, Any] = None,
+                              # Feature flags
+                              use_thinking: bool = None,
+                              use_conditioning: bool = None,
+                              use_coordination: bool = None,
+                              use_hierarchical_memory: bool = None,
+                              # Processing options
+                              mode: str = "auto") -> Dict[str, Any]:
+        """
+        Unified response generation method that handles all response variations.
+        
+        Args:
+            user_input: User's input text
+            context: Additional context
+            use_thinking: Enable explicit thinking phase (None=auto-detect)
+            use_conditioning: Enable conditioning system (None=auto-detect)
+            use_coordination: Enable context distribution coordination (None=auto-detect)
+            use_hierarchical_memory: Enable hierarchical memory context (None=auto-detect)
+            mode: Processing mode ("auto", "serial", "parallel", "coordinated", "simple")
+            
+        Returns:
+            Response with all requested features applied
+        """
+        if not getattr(self, "initialized", False):
+            await self.initialize()
+            
+        context = context or {}
+        start_time = datetime.now()
+        
+        # Auto-detect features if not specified
+        if use_hierarchical_memory is None:
+            use_hierarchical_memory = (
+                hasattr(self, "memory_core") and 
+                self.memory_core is not None
+            )
+        
+        # Process input first (with all features)
+        input_result = await self.process_input(
+            user_input, 
+            context,
+            use_thinking=use_thinking,
+            use_conditioning=use_conditioning,
+            use_coordination=use_coordination,
+            mode=mode
+        )
+        
+        # Extract key information from input processing
+        active_modules = set(input_result.get("active_modules_for_input", self.default_active_modules))
+        context["active_modules"] = active_modules
+        internal_thoughts_input = input_result.get("internal_thoughts", [])
+        epistemic_status = self._get_main_epistemic_status(
+            [self._ensure_internalthought(t) for t in internal_thoughts_input]
+        ) if internal_thoughts_input else "confident"
+        
+        # Handle critical issues from input processing
+        if context.get("intercepted_harmful_content", False):
+            return self._create_safety_response(context, epistemic_status, internal_thoughts_input, start_time)
+        
+        if "planned_challenge" in input_result:
+            return self._create_challenge_response(input_result, epistemic_status, internal_thoughts_input, start_time)
+        
+        # Build hierarchical memory context if enabled
+        if use_hierarchical_memory and "memory_core" in active_modules:
+            memory_context = await self._build_hierarchical_memory_context(
+                user_input, context, input_result
+            )
+            context.update(memory_context)
+        
+        # Generate response based on mode
+        if use_coordination and hasattr(self, "context_distribution") and self.context_distribution:
+            response_data = await self._generate_response_coordinated(user_input, context, input_result)
+        else:
+            response_data = await self._generate_response_standard(user_input, context, input_result, active_modules)
+        
+        # Apply post-processing
+        final_response = await self._finalize_response(
+            response_data,
+            epistemic_status,
+            internal_thoughts_input,
+            active_modules,
+            input_result,
+            start_time,
+            use_hierarchical_memory
+        )
+        
+        return final_response
+    
+    
+    # Helper methods for the unified functions
+    
+    async def _unified_preprocessing(self, user_input: str, context: Dict[str, Any]) -> Dict[str, Any]:
+        """Unified preprocessing including active module determination and safety checks"""
+        result = {"user_input": user_input}
+        
+        # Determine active modules
         active_modules = await self._determine_active_modules(context, user_input)
-        context["active_modules"] = active_modules # Make available to downstream processing
-
-        logger.debug(f"Processing input with active modules: {sorted(list(active_modules))}")
-
-        # --- 2. Harmful Content Check ---
-        intercepted = False
-        suggested_response = "I cannot engage with that content." # Default refusal
+        context["active_modules"] = active_modules
+        result["active_modules_for_input"] = list(active_modules)
+        
+        # Harmful content check
         if hasattr(self, "digital_somatosensory_system") and self.digital_somatosensory_system:
             try:
                 safety_check = await self.digital_somatosensory_system.analyze_text_for_harmful_content(user_input)
                 if safety_check.get("intercepted", False):
-                    logger.warning("Harmful content intercepted during input processing.")
+                    result["blocked"] = True
+                    result["intercepted_harmful_content"] = True
+                    result["suggested_response"] = safety_check.get("response_suggestion", "I cannot engage with that content.")
                     context["intercepted_harmful_content"] = True
-                    context["suggested_response"] = safety_check.get("response_suggestion", suggested_response)
-                    intercepted = True
+                    context["suggested_response"] = result["suggested_response"]
+                    return result
             except Exception as e:
-                 logger.error(f"Error during harmful content check: {e}")
-
-        # --- 3. Gaslighting Defense Check ---
-        challenge_response = None
-        contradictory_claim = None
-        if not intercepted and "memory_core" in active_modules and self.memory_core: # Only if not intercepted and memory active
-             contradictory_claim = await self.gaslight_defense_check(user_input)
-             if contradictory_claim:
-                 challenge_response = await self.challenge_user_claim(RunContextWrapper(context=self), self, contradictory_claim)
-                 context["planned_challenge"] = challenge_response
-                 logger.info(f"Potential gaslighting detected for claim: '{contradictory_claim}'. Planning challenge.")
-                 # Log internal thought about challenging
-                 if "internal_thoughts" in active_modules and self.thoughts_manager:
-                     try:
-                         self.thoughts_manager._add_thought(InternalThought(
-                             content=f"User claim '{contradictory_claim}' appears to be gaslighting. Will challenge.",
-                             source=ThoughtSource.PERCEPTION, priority=ThoughtPriority.HIGH, epistemic_status="confident"
-                         ))
-                     except Exception as e: logger.error(f"Failed to log gaslighting thought: {e}")
-
-
-        # --- 4. Internal Thoughts Pre-processing (Conditional) ---
-        internal_thoughts = []
-        if not intercepted and "internal_thoughts" in active_modules and self.thoughts_manager:
-             try:
-                 internal_thoughts = await pre_process_input(self.thoughts_manager, user_input, getattr(self, "user_id", None))
-                 context["internal_thoughts"] = [th.model_dump() if hasattr(th, "model_dump") else dict(th) for th in internal_thoughts]
-             except Exception as e:
-                 logger.error(f"Error during internal thought pre-processing: {e}")
-                 context["internal_thoughts"] = []
+                logger.error(f"Error during harmful content check: {e}")
+        
+        # Gaslighting defense check
+        if "memory_core" in active_modules and self.memory_core:
+            contradictory_claim = await self.gaslight_defense_check(user_input)
+            if contradictory_claim:
+                challenge_response = await self.challenge_user_claim(
+                    RunContextWrapper(context=self), self, contradictory_claim
+                )
+                result["planned_challenge"] = challenge_response
+                context["planned_challenge"] = challenge_response
+        
+        # Internal thoughts pre-processing
+        if "internal_thoughts" in active_modules and self.thoughts_manager:
+            try:
+                from nyx.core.internal_thoughts import pre_process_input
+                internal_thoughts = await pre_process_input(
+                    self.thoughts_manager, user_input, getattr(self, "user_id", None)
+                )
+                result["internal_thoughts"] = [
+                    th.model_dump() if hasattr(th, "model_dump") else dict(th) 
+                    for th in internal_thoughts
+                ]
+                context["internal_thoughts"] = result["internal_thoughts"]
+            except Exception as e:
+                logger.error(f"Error during internal thought pre-processing: {e}")
+                result["internal_thoughts"] = []
         else:
-             # Ensure key exists even if inactive or intercepted
-             context["internal_thoughts"] = []
-
-
-        # --- 5. Determine Epistemic Status ---
-        epistemic_status = self._get_main_epistemic_status([
-            self._ensure_internalthought(t) for t in context["internal_thoughts"]
-        ]) if context["internal_thoughts"] else "confident"
-        # If intercepted, status should be confident refusal
-        if intercepted: epistemic_status = "confident"
-        context["internal_epistemic_status"] = epistemic_status
-        context["epistemic_status"] = epistemic_status
-
-
-        # --- 6. Core Input Processing (Conditional or Fallback) ---
-        processing_result = {"user_input": user_input} # Minimal default
-
-        # If intercepted, skip core processing
-        if intercepted:
-             processing_result["intercepted_harmful_content"] = True
-             processing_result["suggested_response"] = context["suggested_response"]
-        elif hasattr(self, "processing_manager") and self.processing_manager:
-             logger.debug("Using ProcessingManager for input processing.")
-             try:
-                 # ProcessingManager MUST respect active_modules from context
-                 processing_result = await self.processing_manager.process_input(user_input, context)
-             except Exception as e:
-                  logger.error(f"Error using ProcessingManager: {e}", exc_info=True)
-                  processing_result = await self._process_input_serial(user_input, context) # Fallback respects active_modules
+            result["internal_thoughts"] = []
+        
+        return result
+    
+    
+    async def _apply_thinking_phase(self, user_input: str, context: Dict[str, Any], 
+                                   thinking_level: int, current_result: Dict[str, Any]) -> Dict[str, Any]:
+        """Apply thinking phase if enabled"""
+        result = {}
+        
+        # Check if we should use thinking
+        should_think = False
+        if hasattr(self.thinking_tools, "should_use_extended_thinking"):
+            decision = await self.thinking_tools.should_use_extended_thinking(
+                RunContextWrapper(context=self), user_input, context
+            )
+            should_think = decision.get("should_think", False)
+        
+        if should_think and hasattr(self.thinking_tools, "think_before_responding"):
+            thinking_result = await self.thinking_tools.think_before_responding(
+                RunContextWrapper(context=self), user_input, thinking_level, context
+            )
+            result["thinking_applied"] = True
+            result["thinking_result"] = thinking_result
+            context["thinking_result"] = thinking_result
+            context["thinking_applied"] = True
         else:
-             logger.debug("ProcessingManager not found. Using serial input processing fallback.")
-             processing_result = await self._process_input_serial(user_input, context) # Fallback respects active_modules
-
-
-        # --- 7. Assemble Final Result for this Phase ---
-        final_result = {
-            **processing_result, # Include results from core processing
-            "active_modules_for_input": list(active_modules),
-            "internal_thoughts": context["internal_thoughts"],
-            "epistemic_status": epistemic_status,
-            "response_time_input": (datetime.now() - start_time).total_seconds(), # Time for input phase only
-        }
-
-        # Add challenge/intercept info if relevant
-        if challenge_response:
-            final_result['planned_challenge'] = challenge_response
-        if intercepted:
-            final_result["intercepted_harmful_content"] = True
-            final_result["suggested_response"] = context["suggested_response"]
-
-
-        logger.debug(f"Input processing completed in {final_result['response_time_input']:.3f}s")
-        return final_result
-
+            result["thinking_applied"] = False
+            result["thinking_result"] = {}
         
-    async def process_conditioned_input(self, text: str, user_id: str = None, context: Dict[str, Any] = None) -> Dict[str, Any]:
-        """
-        Process input through conditioning system
-            
-        Args:
-            text: Input text
-            user_id: User ID for personalization (defaults to self.user_id if None)
-            context: Additional context information
-                
-        Returns:
-            Processing results
-        """
-        if not self.initialized:
-            await self.initialize()
-            
-        if not self.conditioned_input_processor:
-            return {"error": "Conditioned input processor not initialized"}
+        return result
+    
+    
+    async def _apply_conditioning_phase(self, user_input: str, context: Dict[str, Any],
+                                      current_result: Dict[str, Any]) -> Dict[str, Any]:
+        """Apply conditioning phase if enabled"""
+        result = {}
         
-        # Convert user_id to string if needed
-        if user_id is None:
-            user_id = str(self.user_id)
-        elif isinstance(user_id, int):
-            user_id = str(user_id)
-
-        response = await self.mode_integration.modify_response_for_mode(response)
+        user_id = str(self.user_id) if hasattr(self, 'user_id') else None
         
-        # Optionally record feedback
-        await self.mode_integration.record_mode_feedback(True)  # Assuming success
-
-        if thoughts_manager.config["debug_mode"]:
-            print(f"Generated {len(internal_thoughts)} internal thoughts")            
-        
-        
-        return await self.conditioned_input_processor.process_input(
-            text=text,
+        conditioning_result = await self.conditioned_input_processor.process_input(
+            text=user_input,
             user_id=user_id,
             context=context
         )
-        return response
+        
+        result["conditioning_applied"] = True
+        result["conditioning_result"] = conditioning_result
+        
+        # Update context with conditioning results
+        if "stimulus_responses" in conditioning_result:
+            context["conditioning_stimuli"] = conditioning_result["stimulus_responses"]
+        
+        return result
+    
+    
+    async def _create_safety_response(self, context: Dict[str, Any], epistemic_status: str,
+                                    internal_thoughts: List[Any], start_time: datetime) -> Dict[str, Any]:
+        """Create a safety response for harmful content"""
+        return {
+            "message": context.get("suggested_response", "I cannot respond to that specific content."),
+            "epistemic_status": epistemic_status,
+            "internal_thoughts_input": internal_thoughts,
+            "internal_thoughts_output": [],
+            "active_modules_for_response": sorted(list(context.get("active_modules", []))),
+            "response_time": (datetime.now() - start_time).total_seconds(),
+            "harmful_content_intercepted": True,
+            "action_taken": None,
+            "thinking_applied": False,
+            "thinking_result": {},
+            "memory_context_used": False
+        }
+    
+    
+    async def _build_hierarchical_memory_context(self, user_input: str, context: Dict[str, Any],
+                                                input_result: Dict[str, Any]) -> Dict[str, Any]:
+        """Build hierarchical memory context for response generation"""
+        try:
+            focus_query = user_input
+            background_topics = list(context.get('recent_topics', []))
+            
+            if 'active_goals' in context and context['active_goals']:
+                background_topics.append(context['active_goals'][0]['description'])
+            background_topics = list(set(background_topics))[:3]
+            
+            current_task_desc = f"Respond conversationally to the user input: '{user_input}'"
+            if action := input_result.get('action_taken'):
+                current_task_desc = f"Execute action '{action.get('name')}' and respond based on user input: '{user_input}'"
+            
+            llm_prompt_context, assembly_meta = await self._assemble_llm_prompt_context(
+                current_task_description=current_task_desc,
+                focus_query=focus_query,
+                background_topics=background_topics
+            )
+            
+            return {
+                'hierarchical_memory_context': llm_prompt_context,
+                'memory_retrieval_stats': assembly_meta
+            }
+        except Exception as e:
+            logger.error(f"Error building hierarchical memory context: {e}", exc_info=True)
+            return {}
+    
+    
+    async def _generate_response_standard(self, user_input: str, context: Dict[str, Any],
+                                        input_result: Dict[str, Any], active_modules: Set[str]) -> Dict[str, Any]:
+        """Generate response using standard (non-coordinated) approach"""
+        main_message = "I'm processing that."
+        epistemic_status = "confident"
+        action = None
+        
+        if "agentic_action_generator" in active_modules and self.agentic_action_generator:
+            try:
+                action_context = await self._gather_action_context(context)
+                action_context_dict = action_context.model_dump() if hasattr(action_context, "model_dump") else dict(action_context)
+                
+                if 'hierarchical_memory_context' in context:
+                    action_context_dict["hierarchical_memory_context"] = context['hierarchical_memory_context']
+                
+                action = await self.agentic_action_generator.generate_action(action_context_dict)
+                
+                if not isinstance(action, dict):
+                    action = {"name": "default_acknowledge", "description": "Acknowledging input."}
+                    main_message = "Understood."
+                else:
+                    main_message = action.get("response_text", action.get("description", "Okay, I will proceed with that action."))
+                    
+                    if input_result.get("internal_thoughts"):
+                        epistemic_status = self._get_main_epistemic_status([
+                            self._ensure_internalthought(t) for t in input_result["internal_thoughts"]
+                        ])
+            except Exception as e:
+                logger.error(f"Error during action generation: {e}", exc_info=True)
+                main_message = "I encountered an internal difficulty deciding how to proceed."
+                epistemic_status = "uncertain"
+                action = {"name": "error_action", "error": str(e)}
+        else:
+            main_message = f"I've noted your input regarding '{user_input[:30]}...'"
+            if input_result.get("internal_thoughts"):
+                epistemic_status = self._get_main_epistemic_status([
+                    self._ensure_internalthought(t) for t in input_result["internal_thoughts"]
+                ])
+        
+        return {
+            "main_message": main_message,
+            "epistemic_status": epistemic_status,
+            "action": action
+        }
+    
+    
+    async def _generate_response_coordinated(self, user_input: str, context: Dict[str, Any],
+                                           input_result: Dict[str, Any]) -> Dict[str, Any]:
+        """Generate response using coordinated approach"""
+        try:
+            synthesis_results = await self.context_distribution.coordinate_processing_stage("synthesis")
+            final_response = await self.context_distribution.synthesize_responses()
+            await self.context_distribution.finalize_context_session()
+            
+            return {
+                "main_message": final_response.get("primary_response", "I'm processing your input."),
+                "synthesis_results": synthesis_results,
+                "final_synthesis": final_response,
+                "coordination_metadata": final_response.get("synthesis_metadata", {})
+            }
+        except Exception as e:
+            logger.error(f"Error in coordinated response generation: {e}")
+            return {
+                "main_message": "I encountered an issue while coordinating my response.",
+                "error": str(e)
+            }
+    
+    
+    async def _finalize_response(self, response_data: Dict[str, Any], epistemic_status: str,
+                               internal_thoughts_input: List[Any], active_modules: Set[str],
+                               input_result: Dict[str, Any], start_time: datetime,
+                               use_hierarchical_memory: bool) -> Dict[str, Any]:
+        """Finalize and format the response"""
+        # Extract main message
+        main_message = response_data.get("main_message", "I'm processing that.")
+        
+        # Format with epistemic tags
+        formatted_message = self._format_response_with_epistemic_tags(main_message, epistemic_status)
+        
+        # Add thinking signal if applied
+        if input_result.get("thinking_applied"):
+            sentences = formatted_message.split('.')
+            if len(sentences) > 1:
+                sentences[0] = f"(Hmm...) {sentences[0]}"
+                formatted_message = '.'.join(sentences)
+            else:
+                formatted_message = f"(Hmm...) {formatted_message}"
+        
+        # Post-process output
+        filtered_msg = formatted_message
+        output_thoughts = []
+        
+        if "internal_thoughts" in active_modules and self.thoughts_manager:
+            try:
+                filtered_msg, output_thoughts_objs = await self.thoughts_manager.process_output(
+                    formatted_message, input_result
+                )
+                output_thoughts = [
+                    th.model_dump() if hasattr(th, "model_dump") else dict(th) 
+                    for th in output_thoughts_objs
+                ]
+            except Exception as e:
+                logger.error(f"Error during internal thought post-processing: {e}")
+        
+        # Update performance metrics
+        response_time = (datetime.now() - start_time).total_seconds()
+        if hasattr(self, 'performance_metrics') and isinstance(self.performance_metrics, dict):
+            if 'response_times' in self.performance_metrics:
+                self.performance_metrics["response_times"].append(response_time)
+                if len(self.performance_metrics["response_times"]) > 100:
+                    self.performance_metrics["response_times"] = self.performance_metrics["response_times"][-100:]
+        
+        # Build final response
+        final_response = {
+            "message": filtered_msg,
+            "epistemic_status": epistemic_status,
+            "internal_thoughts_input": internal_thoughts_input,
+            "internal_thoughts_output": output_thoughts,
+            "active_modules_for_response": sorted(list(active_modules)),
+            "response_time": response_time,
+            "action_taken": response_data.get("action"),
+            "thinking_applied": input_result.get("thinking_applied", False),
+            "thinking_result": input_result.get("thinking_result", {}),
+            "memory_context_used": use_hierarchical_memory and 'hierarchical_memory_context' in input_result
+        }
+        
+        # Add memory retrieval stats if available
+        if 'memory_retrieval_stats' in input_result:
+            final_response["memory_retrieval_stats"] = {
+                "focus_count": input_result['memory_retrieval_stats'].get('focus_retrieved_count', 0),
+                "background_count": input_result['memory_retrieval_stats'].get('background_retrieved_count', 0),
+                "zoom_in_count": input_result['memory_retrieval_stats'].get('zoom_in_details_count', 0)
+            }
+        
+        # Add coordination metadata if available
+        if "coordination_metadata" in response_data:
+            final_response["coordination_metadata"] = response_data["coordination_metadata"]
+        
+        # Add synthesis results if available
+        if "synthesis_results" in response_data:
+            final_response["synthesis_results"] = response_data["synthesis_results"]
+        
+        return final_response
+    
+    
+    async def _process_input_coordinated(self, user_input: str, context: Dict[str, Any]) -> Dict[str, Any]:
+        """Internal method for coordinated input processing"""
+        if not self.context_distribution:
+            await self.initialize_context_system()
+        
+        shared_context = await self.context_distribution.initialize_context_session(
+            user_input=user_input,
+            user_id=getattr(self, 'user_id', None),
+            initial_context=context or {}
+        )
+        
+        try:
+            input_results = await self.context_distribution.coordinate_processing_stage("input")
+            analysis_results = await self.context_distribution.coordinate_processing_stage("analysis")
+            integration_results = await self.context_distribution.coordinate_processing_stage("integration")
+            
+            return {
+                "input_processing": input_results,
+                "analysis_processing": analysis_results,
+                "integration_processing": integration_results,
+                "shared_context": shared_context.dict(),
+                "active_modules": list(shared_context.active_modules),
+                "context_updates": len(shared_context.context_updates)
+            }
+        except Exception as e:
+            logger.error(f"Error in coordinated input processing: {e}")
+            return {"error": str(e)}
+    
+    
+    async def _create_challenge_response(self, input_result: Dict[str, Any], epistemic_status: str,
+                                       internal_thoughts: List[Any], start_time: datetime) -> Dict[str, Any]:
+        """Create a challenge response for gaslighting detection"""
+        return {
+            "message": input_result["planned_challenge"],
+            "epistemic_status": "confident",
+            "internal_thoughts_input": internal_thoughts,
+            "internal_thoughts_output": [],
+            "active_modules_for_response": sorted(list(input_result.get("active_modules_for_input", []))),
+            "response_time": (datetime.now() - start_time).total_seconds(),
+            "action_taken": {"name": "challenge_user", "description": "Challenging user claim."},
+            "thinking_applied": input_result.get("thinking_applied", False),
+            "thinking_result": input_result.get("thinking_result", {}),
+            "memory_context_used": False
+        }
 
     async def _scheduled_identity_update(self):
         # Run every 24 hours or after significant interactions
@@ -3145,200 +3542,6 @@ System Prompt End
         if not instance.digital_somatosensory_system:
             return {"success": False, "reason": "Digital Somatosensory System not available"}
         return instance.digital_somatosensory_system.exit_roleplay_mode()
-    
-    async def generate_response(self, user_input: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
-        """
-        Generate a user-facing response, activating relevant modules and handling epistemic status.
-        Now enhanced with hierarchical memory context for improved response quality.
-        """
-        if not getattr(self, "initialized", False):
-            await self.initialize()
-        context = context or {}
-        start_time = datetime.now()
-    
-        # --- 1. Process Input & Determine Active Modules ---
-        # This call now internally runs _determine_active_modules
-        input_result = await self.process_input(user_input, context)
-    
-        # Retrieve the set of modules activated during input processing
-        active_modules = set(input_result.get("active_modules_for_input", self.default_active_modules))
-        context["active_modules"] = active_modules # Ensure context for response phase has it
-    
-        # --- 2. Assemble Hierarchical Memory Context ---
-        # Only attempt to build hierarchical context if memory_core is active
-        if "memory_core" in active_modules and self.memory_core:
-            try:
-                # Define query and background topics for memory retrieval
-                focus_query = user_input
-                # Example: Get recent conversation topics or active goal descriptions
-                background_topics = list(context.get('recent_topics', []))
-                if 'active_goals' in context and context['active_goals']:
-                    background_topics.append(context['active_goals'][0]['description']) # Add top goal description
-                background_topics = list(set(background_topics))[:3] # Limit background topics
-    
-                current_task_desc = f"Respond conversationally to the user input: '{user_input}'"
-                # If an action was planned in input processing, adjust task description
-                if action := input_result.get('action_taken'):
-                    current_task_desc = f"Execute action '{action.get('name')}' and respond based on user input: '{user_input}'"
-    
-                # Build hierarchical memory context
-                llm_prompt_context, assembly_meta = await self._assemble_llm_prompt_context(
-                    current_task_description=current_task_desc,
-                    focus_query=focus_query,
-                    background_topics=background_topics
-                )
-                
-                # Store in context for downstream use
-                context['hierarchical_memory_context'] = llm_prompt_context
-                context['memory_retrieval_stats'] = assembly_meta
-                logger.debug(f"Built hierarchical memory context with {assembly_meta['focus_retrieved_count']} focus and {assembly_meta['background_retrieved_count']} background memories")
-            except Exception as e:
-                logger.error(f"Error building hierarchical memory context: {e}", exc_info=True)
-                # Don't let failed context building prevent response generation
-    
-        # --- 3. Handle Critical Issues (Harmful Content, Gaslighting) ---
-        if context.get("intercepted_harmful_content", False):
-            logger.warning("Harmful content intercepted. Generating safe response.")
-            internal_thoughts_input = input_result.get("internal_thoughts", [])
-            epistemic_status = self._get_main_epistemic_status([self._ensure_internalthought(t) for t in internal_thoughts_input]) if internal_thoughts_input else "confident"
-            # Log the activation for debugging
-            active_modules_list = sorted(list(active_modules))
-            logger.debug(f"Active modules for harmful content response: {active_modules_list}")
-            return {
-                "message": context.get("suggested_response", "I cannot respond to that specific content."),
-                "epistemic_status": epistemic_status,
-                "internal_thoughts_input": input_result.get("internal_thoughts", []),
-                "internal_thoughts_output": [],
-                "active_modules_for_response": active_modules_list,
-                "response_time": (datetime.now() - start_time).total_seconds(),
-                "harmful_content_intercepted": True,
-                "action_taken": None,
-                "thinking_applied": False,
-                "thinking_result": {},
-                "memory_context_used": False
-            }
-    
-        if "planned_challenge" in input_result:
-            logger.info("Generating challenge response due to gaslighting detection.")
-            main_message = input_result["planned_challenge"]
-            epistemic_status = "confident" # Challenging implies confidence
-            action = {"name": "challenge_user", "description": "Challenging user claim."} # Represent challenge as an action
-            thinking_applied = input_result.get("thinking_applied", False)
-            thinking_result = input_result.get("thinking_result", {})
-            internal_thoughts_input = input_result.get("internal_thoughts", []) # Get thoughts from input phase
-        else:
-            # --- 4. Generate Action (Conditional) ---
-            main_message = "I'm processing that." # Default message
-            epistemic_status = "confident"
-            action = None
-            thinking_applied = input_result.get("thinking_applied", False)
-            thinking_result = input_result.get("thinking_result", {})
-            internal_thoughts_input = input_result.get("internal_thoughts", []) # Get thoughts from input phase
-    
-            # Only generate an action if the generator module is active
-            if "agentic_action_generator" in active_modules and self.agentic_action_generator:
-                try:
-                    logger.debug(f"AgenticActionGenerator is active. Generating action based on active modules: {active_modules}...")
-                    # Gather context, respecting active_modules implicitly via the gather function
-                    action_context = await self._gather_action_context(context) # This needs the context with active_modules
-                    action_context_dict = action_context.model_dump() if hasattr(action_context, "model_dump") else dict(action_context)
-                    
-                    # --- Add hierarchical memory context to action context if available ---
-                    if 'hierarchical_memory_context' in context:
-                        action_context_dict["hierarchical_memory_context"] = context['hierarchical_memory_context']
-                    
-                    # --- Agent Call ---
-                    action = await self.agentic_action_generator.generate_action(action_context_dict)
-                    # ---
-    
-                    # Ensure action is a dictionary
-                    if not isinstance(action, dict):
-                        logger.error(f"Action generator returned non-dict type: {type(action)}. Using default.")
-                        action = {"name": "default_acknowledge", "description": "Acknowledging input."}
-                        main_message = "Understood."
-                        epistemic_status = "confident"
-                    else:
-                        main_message = action.get("response_text", action.get("description", "Okay, I will proceed with that action."))
-                        # Determine epistemic status based on thoughts from *input processing*
-                        if internal_thoughts_input:
-                            epistemic_status = self._get_main_epistemic_status([
-                                self._ensure_internalthought(t) for t in internal_thoughts_input
-                            ])
-                        else:
-                            epistemic_status = "confident" # Default if no specific thoughts guided
-    
-                except Exception as e:
-                    logger.error(f"Error during action generation: {e}", exc_info=True)
-                    main_message = "I encountered an internal difficulty deciding how to proceed."
-                    epistemic_status = "uncertain"
-                    action = {"name": "error_action", "error": str(e)} # Log error in action field
-            else:
-                logger.debug("AgenticActionGenerator is not active for this response. Generating simpler response.")
-                main_message = f"I've noted your input regarding '{user_input[:30]}...'"
-                # Epistemic status determined by input thoughts
-                if internal_thoughts_input:
-                    epistemic_status = self._get_main_epistemic_status([self._ensure_internalthought(t) for t in internal_thoughts_input])
-    
-        # --- 5. Format with Epistemic Tags ---
-        formatted_message = self._format_response_with_epistemic_tags(main_message, epistemic_status)
-        # Optionally add thinking signal
-        if thinking_applied:
-            # Find first sentence to prepend, or just prepend
-            sentences = formatted_message.split('.')
-            if len(sentences) > 1:
-                sentences[0] = f"(Hmm...) {sentences[0]}"
-                formatted_message = '.'.join(sentences)
-            else:
-                formatted_message = f"(Hmm...) {formatted_message}"
-    
-        # --- 6. Post-process Output (Conditional) ---
-        filtered_msg = formatted_message
-        output_thoughts = []
-        # Only run post-processing if the thoughts manager is active
-        if "internal_thoughts" in active_modules and self.thoughts_manager:
-            try:
-                logger.debug("InternalThoughtsManager is active. Post-processing response...")
-                # This generates thoughts *about* the planned output and filters leakage
-                filtered_msg, output_thoughts_objs = await self.thoughts_manager.process_output(formatted_message, context)
-                # Convert thought objects to dicts for output
-                output_thoughts = [th.model_dump() if hasattr(th, "model_dump") else dict(th) for th in output_thoughts_objs]
-            except Exception as e:
-                logger.error(f"Error during internal thought post-processing: {e}")
-                # Use the formatted message directly if post-processing fails
-                filtered_msg = formatted_message
-        else:
-            logger.debug("InternalThoughtsManager is not active. Skipping response post-processing.")
-    
-        # --- 7. Assemble Final Response ---
-        response_time = (datetime.now() - start_time).total_seconds()
-        # Safely update performance metrics
-        if hasattr(self, 'performance_metrics') and isinstance(self.performance_metrics, dict) and 'response_times' in self.performance_metrics:
-            self.performance_metrics["response_times"].append(response_time)
-            if len(self.performance_metrics["response_times"]) > 100:
-                self.performance_metrics["response_times"] = self.performance_metrics["response_times"][-100:]
-    
-        final_response = {
-            "message": filtered_msg,
-            "epistemic_status": epistemic_status,
-            "internal_thoughts_input": input_result.get("internal_thoughts", []), # Thoughts from input phase
-            "internal_thoughts_output": output_thoughts, # Thoughts about the output phase
-            "active_modules_for_response": sorted(list(active_modules)), # Log which modules were active
-            "response_time": response_time,
-            "action_taken": action, # Include the action generated (or None)
-            "thinking_applied": thinking_applied,
-            "thinking_result": thinking_result,
-            "memory_context_used": 'hierarchical_memory_context' in context # Flag whether hierarchical context was used
-        }
-        
-        # Add memory retrieval stats if available
-        if 'memory_retrieval_stats' in context:
-            final_response["memory_retrieval_stats"] = {
-                "focus_count": context['memory_retrieval_stats'].get('focus_retrieved_count', 0),
-                "background_count": context['memory_retrieval_stats'].get('background_retrieved_count', 0),
-                "zoom_in_count": context['memory_retrieval_stats'].get('zoom_in_details_count', 0)
-            }
-        
-        return final_response
 
     async def trigger_memory_summarization(self, topic: str = None, min_memories: int = 5, force: bool = False) -> Dict[str, Any]:
         """
@@ -4990,144 +5193,6 @@ System Prompt End
             return {"error": "Procedural memory not initialized"}
         
         return await self.agent_enhanced_memory.analyze_chunking(procedure_name)
-    
-    async def process_input_with_thinking(self, user_input: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
-        """
-        Like process_input, but adds an optional explicit 'thinking' phase.
-        """
-        if not self.initialized:
-            await self.initialize()
-        context = context or {}
-    
-        challenge_response = None
-        contradictory_claim = await self.gaslight_defense_check(user_input)
-        if contradictory_claim:
-            challenge_response = await self.challenge_user_claim(RunContextWrapper(context=self), contradictory_claim)
-            try:
-                from nyx.core.internal_thoughts import InternalThought, ThoughtPriority, ThoughtSource
-                if hasattr(self, "thoughts_manager"):
-                    self.thoughts_manager._add_thought(InternalThought(
-                        content=f"User claim '{contradictory_claim}' appears to be gaslighting. Will challenge.",
-                        source=ThoughtSource.PERCEPTION,
-                        priority=ThoughtPriority.HIGH,
-                        epistemic_status="confident"
-                    ))
-            except ImportError:
-                pass
-    
-        internal_thoughts = []
-        try:
-            if hasattr(self, "thoughts_manager"):
-                from nyx.core.internal_thoughts import pre_process_input
-                internal_thoughts = await pre_process_input(self.thoughts_manager, user_input, getattr(self, "user_id", None))
-        except ImportError:
-            pass
-    
-        # 🩹 Robust main epistemic selection:
-        if internal_thoughts:
-            epistemic_status = self._get_main_epistemic_status(
-                [self._ensure_internalthought(t) for t in internal_thoughts])
-        else:
-            epistemic_status = "confident"
-    
-        context["internal_thoughts"] = [th.model_dump() if hasattr(th, "model_dump") else dict(th) for th in internal_thoughts]
-        context["internal_epistemic_status"] = epistemic_status
-    
-        # -- "Thinking" phase --
-        thinking_applied = False
-        thinking_result = None
-    
-        use_thinking = False
-        if hasattr(self, "thinking_config") and self.thinking_config.get("thinking_enabled", False) and hasattr(self, "thinking_tools"):
-            if hasattr(self.thinking_tools, "should_use_extended_thinking"):
-                decision = await self.thinking_tools.should_use_extended_thinking(
-                    RunContextWrapper(context=self), user_input, context)
-                use_thinking = decision.get("should_think", False)
-    
-        if use_thinking and hasattr(self.thinking_tools, "think_before_responding"):
-            thinking_result = await self.thinking_tools.think_before_responding(
-                RunContextWrapper(context=self), user_input, 2, context)
-            thinking_applied = True
-            context["thinking_result"] = thinking_result
-            context["thinking_applied"] = True
-    
-        # After thinking phase, process actual input
-        if hasattr(self, "processing_manager") and self.processing_manager:
-            result = await self.processing_manager.process_input(user_input, context)
-        else:
-            result = await self._process_input_serial(user_input, context)
-    
-        if challenge_response:
-            result['planned_challenge'] = challenge_response
-        result['epistemic_status'] = epistemic_status
-        result['internal_thoughts'] = context["internal_thoughts"]
-        result['thinking_applied'] = thinking_applied
-        if thinking_result:
-            result['thinking_result'] = thinking_result
-        return result
-
-
-        
-    async def generate_response_with_thinking(self, user_input: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
-        """
-        Generate a response, using explicit internal 'thinking' phase plus epistemic hedging and false claim defense.
-        """
-        if not getattr(self, "initialized", False):
-            await self.initialize()
-        context = context or {}
-    
-        # ---------- Input + Thinking Processing ----------
-        input_result = await self.process_input_with_thinking(user_input, context)
-        internal_thoughts = input_result.get("internal_thoughts", [])
-        thinking_steps = input_result.get("thinking_result", {})
-        if hasattr(self, '_get_main_epistemic_status') and internal_thoughts:
-            epistemic_status = self._get_main_epistemic_status([
-                self._ensure_internalthought(t) for t in internal_thoughts
-            ])
-        else:
-            epistemic_status = input_result.get('epistemic_status', "confident")
-    
-        # ---------- Challenge User (Gaslighting) ----------
-        if "planned_challenge" in input_result:
-            main_message = input_result["planned_challenge"]
-            epistemic_status = "confident"
-        else:
-            if hasattr(self, "processing_manager") and self.processing_manager and hasattr(self.processing_manager, "generate_response"):
-                core_resp = await self.processing_manager.generate_response(user_input, input_result, context)
-                if isinstance(core_resp, dict):
-                    main_message = core_resp.get("message", "") or core_resp.get("response", "")
-                else:
-                    main_message = str(core_resp)
-            else:
-                main_message = f"I've processed your input: {user_input[:40]}..."
-    
-        # ---------- Epistemic Hedging ----------
-        msg = self._format_response_with_epistemic_tags(main_message, epistemic_status)
-        # Optionally include some signal that "thinking" was used, if you wish:
-        if input_result.get("thinking_applied"):
-            msg = f"(thoughtful reply) {msg}"
-    
-        # ---------- Output Filtering ----------
-        if hasattr(self, "thoughts_manager"):
-            try:
-                from nyx.core.internal_thoughts import pre_process_output
-                filtered_output = await pre_process_output(self.thoughts_manager, msg, context)
-                if isinstance(filtered_output, tuple):
-                    msg = filtered_output[0]
-                else:
-                    msg = filtered_output
-            except Exception:
-                pass
-    
-        # ---------- Assemble Output ----------
-        return {
-            "message": msg,
-            "epistemic_status": epistemic_status,
-            "internal_thoughts": internal_thoughts,
-            "thinking_steps": thinking_steps,
-        }
-
-
     
     async def register_recovery_strategy(self, error_type: str, strategy: Dict[str, Any]) -> Dict[str, Any]:
         """
