@@ -950,52 +950,189 @@ class ContextAwareDominanceSystem(ContextAwareModule):
             "level": 0.0,
             "established_associations": [],
             "response_consistency": 0.0,
-            "reinforcement_needed": []
+            "reinforcement_needed": [],
+            "conditioning_strength": {},
+            "recent_responses": []
         }
         
         if not self.original_system.conditioning_system:
             return progress
         
-        # Get dominance-related conditioning
-        dominance_associations = [
-            "dominance_task",
-            "dominance_punishment", 
-            "dominance_training",
-            "dominance_service"
-        ]
-        
-        # In a real implementation, would query conditioning system
-        # For now, use history-based estimation
-        user_history = [h for h in self.dominance_history if h["user_id"] == user_id]
-        
-        if user_history:
-            # Estimate conditioning level based on success rate
-            successful = sum(1 for h in user_history if h.get("successful", False))
-            total = len(user_history)
+        try:
+            conditioning_system = self.original_system.conditioning_system
             
-            progress["level"] = successful / total if total > 0 else 0.0
+            # Get user's conditioning data
+            user_conditioning = await conditioning_system.get_user_conditioning_state(user_id)
             
-            # Identify established patterns
-            purpose_counts = {}
-            for h in user_history:
-                purpose = h.get("purpose", "general")
-                purpose_counts[purpose] = purpose_counts.get(purpose, 0) + 1
+            if not user_conditioning:
+                # Initialize from history if no direct state
+                return await self._estimate_conditioning_from_history(user_id)
             
-            # Purposes with >3 interactions are "established"
-            progress["established_associations"] = [
-                f"dominance_{purpose}" for purpose, count in purpose_counts.items() 
-                if count > 3
+            # Extract established associations
+            associations = user_conditioning.get("associations", {})
+            dominance_associations = {
+                k: v for k, v in associations.items() 
+                if any(term in k for term in ["dominance", "submission", "control", "obedience"])
+            }
+            
+            # Calculate overall conditioning level
+            if dominance_associations:
+                total_strength = sum(assoc.get("strength", 0) for assoc in dominance_associations.values())
+                progress["level"] = min(1.0, total_strength / (len(dominance_associations) * 0.8))
+            
+            # Identify established associations (strength > 0.6)
+            for key, assoc in dominance_associations.items():
+                if assoc.get("strength", 0) > 0.6:
+                    progress["established_associations"].append({
+                        "association": key,
+                        "strength": assoc["strength"],
+                        "reinforcement_count": assoc.get("reinforcement_count", 0),
+                        "last_triggered": assoc.get("last_triggered")
+                    })
+            
+            # Store conditioning strengths
+            progress["conditioning_strength"] = {
+                k: v.get("strength", 0) for k, v in dominance_associations.items()
+            }
+            
+            # Get recent responses
+            recent_responses = user_conditioning.get("recent_responses", [])
+            dominance_responses = [
+                r for r in recent_responses[-20:]  # Last 20 responses
+                if any(term in r.get("trigger", "") for term in ["dominance", "submission", "control"])
             ]
             
-            # Response consistency (simplified)
-            if len(user_history) >= 5:
-                recent_success = sum(1 for h in user_history[-5:] if h.get("successful", False))
-                progress["response_consistency"] = recent_success / 5
+            # Calculate response consistency
+            if len(dominance_responses) >= 5:
+                successful_responses = sum(
+                    1 for r in dominance_responses[-10:] 
+                    if r.get("response_quality", 0) > 0.7
+                )
+                progress["response_consistency"] = successful_responses / min(10, len(dominance_responses))
+            
+            progress["recent_responses"] = dominance_responses[-5:]  # Last 5 for reference
             
             # Identify areas needing reinforcement
-            for purpose in ["task", "punishment", "training", "service"]:
-                if f"dominance_{purpose}" not in progress["established_associations"]:
-                    progress["reinforcement_needed"].append(purpose)
+            target_associations = [
+                "dominance_task", "dominance_punishment", "dominance_training",
+                "dominance_service", "submission_pleasure", "obedience_reward",
+                "control_acceptance", "dominance_anticipation"
+            ]
+            
+            for target in target_associations:
+                if target not in progress["established_associations"] or \
+                   progress["conditioning_strength"].get(target, 0) < 0.6:
+                    progress["reinforcement_needed"].append({
+                        "association": target,
+                        "current_strength": progress["conditioning_strength"].get(target, 0),
+                        "target_strength": 0.8,
+                        "priority": "high" if target in ["dominance_task", "submission_pleasure"] else "medium"
+                    })
+            
+            # Add decay analysis
+            progress["decay_risk"] = []
+            for assoc in progress["established_associations"]:
+                last_triggered = assoc.get("last_triggered")
+                if last_triggered:
+                    try:
+                        last_time = datetime.fromisoformat(last_triggered)
+                        days_since = (datetime.now() - last_time).days
+                        
+                        if days_since > 7:
+                            progress["decay_risk"].append({
+                                "association": assoc["association"],
+                                "days_since_trigger": days_since,
+                                "current_strength": assoc["strength"],
+                                "estimated_decay": min(0.3, days_since * 0.01)
+                            })
+                    except:
+                        pass
+            
+            return progress
+            
+        except Exception as e:
+            logger.error(f"Error analyzing conditioning progress: {e}")
+            # Fallback to history-based estimation
+            return await self._estimate_conditioning_from_history(user_id)
+
+    async def _estimate_conditioning_from_history(self, user_id: str) -> Dict[str, Any]:
+        """Estimate conditioning from interaction history when direct data unavailable"""
+        progress = {
+            "level": 0.0,
+            "established_associations": [],
+            "response_consistency": 0.0,
+            "reinforcement_needed": [],
+            "estimation_based": True
+        }
+        
+        # Use dominance history
+        user_history = [h for h in self.dominance_history if h["user_id"] == user_id]
+        
+        if not user_history:
+            return progress
+        
+        # Group by purpose/type
+        purpose_stats = defaultdict(lambda: {"count": 0, "successful": 0})
+        
+        for entry in user_history:
+            purpose = entry.get("purpose", "general")
+            purpose_stats[purpose]["count"] += 1
+            if entry.get("successful", False):
+                purpose_stats[purpose]["successful"] += 1
+        
+        # Calculate conditioning level from success rates
+        total_interactions = len(user_history)
+        successful_interactions = sum(1 for h in user_history if h.get("successful", False))
+        
+        if total_interactions > 0:
+            base_level = successful_interactions / total_interactions
+            
+            # Adjust based on recency
+            recent_history = user_history[-10:]
+            if recent_history:
+                recent_success = sum(1 for h in recent_history if h.get("successful", False))
+                recency_factor = recent_success / len(recent_history)
+                
+                # Weight recent performance more heavily
+                progress["level"] = base_level * 0.4 + recency_factor * 0.6
+            else:
+                progress["level"] = base_level
+        
+        # Identify established patterns
+        for purpose, stats in purpose_stats.items():
+            if stats["count"] >= 3:  # At least 3 interactions
+                success_rate = stats["successful"] / stats["count"]
+                
+                if success_rate > 0.6:
+                    progress["established_associations"].append({
+                        "association": f"dominance_{purpose}",
+                        "strength": min(0.9, success_rate),
+                        "interaction_count": stats["count"],
+                        "success_rate": success_rate
+                    })
+        
+        # Calculate consistency
+        if len(user_history) >= 5:
+            recent_success = sum(1 for h in user_history[-5:] if h.get("successful", False))
+            progress["response_consistency"] = recent_success / 5
+        
+        # Determine what needs reinforcement
+        all_purposes = ["task", "punishment", "training", "service", "control"]
+        for purpose in all_purposes:
+            if purpose not in purpose_stats or purpose_stats[purpose]["count"] < 3:
+                progress["reinforcement_needed"].append({
+                    "association": f"dominance_{purpose}",
+                    "current_strength": 0.0,
+                    "interaction_count": purpose_stats[purpose]["count"],
+                    "recommendation": "needs_establishment"
+                })
+            elif purpose_stats[purpose]["successful"] / purpose_stats[purpose]["count"] < 0.6:
+                progress["reinforcement_needed"].append({
+                    "association": f"dominance_{purpose}",
+                    "current_strength": purpose_stats[purpose]["successful"] / purpose_stats[purpose]["count"],
+                    "interaction_count": purpose_stats[purpose]["count"],
+                    "recommendation": "needs_improvement"
+                })
         
         return progress
     
