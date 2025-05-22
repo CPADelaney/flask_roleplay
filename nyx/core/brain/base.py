@@ -61,7 +61,7 @@ class TaskPurpose(Enum):
     VISUALIZATION = auto()
     OTHER = auto()
 
-class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
+class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin):
     """
     Central integration point for all Nyx systems.
     Uses composition to delegate to specialized components while managing their coordination.
@@ -633,6 +633,10 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
             await self.integrate_procedural_memory_with_actions()
             if hasattr(self, "agentic_action_generator") and hasattr(self, "_register_creative_actions") and callable(self._register_creative_actions):
                  await self._register_creative_actions()
+
+            await self.initialize_context_system()
+            
+            logger.info("NyxBrain initialization complete with context distribution")
 
             await self._build_internal_module_registry()
             self.default_active_modules = {
@@ -3006,8 +3010,6 @@ System Prompt End
 
         logger.debug(f"Input processing completed in {final_result['response_time_input']:.3f}s")
         return final_result
-
-
 
         
     async def process_conditioned_input(self, text: str, user_id: str = None, context: Dict[str, Any] = None) -> Dict[str, Any]:
