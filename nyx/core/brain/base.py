@@ -357,6 +357,11 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             from nyx.core.a2a.context_aware_dynamic_adaptation import ContextAwareDynamicAdaptation
             from nyx.core.a2a.context_aware_experience_consolidation import ContextAwareExperienceConsolidation
             from nyx.core.a2a.context_aware_experience_interface import ContextAwareExperienceInterface
+            from nyx.core.a2a.context_aware_interaction_goals import ContextAwareInteractionGoals
+            from nyx.core.a2a.context_aware_interaction_mode_manager import ContextAwareInteractionModeManager
+            from nyx.core.a2a.context_aware_internal_feedback_system import ContextAwareInternalFeedbackSystem
+            from nyx.core.a2a.context_aware_internal_thoughts import ContextAwareInternalThoughts
+            from nyx.core.a2a.context_aware_issue_tracking_system import ContextAwareIssueTrackingSystem
     
             from dev_log.storage import get_dev_log_storage
             self.dev_log_storage = get_dev_log_storage()
@@ -459,7 +464,11 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             
             self.reasoning_core = integrated_reasoning_agent
             self.reasoning_triage_agent = reasoning_triage_agent
-            self.internal_feedback = InternalFeedbackSystem()
+            
+            if self.use_a2a_integration:
+                from nyx.core.a2a.context_aware_internal_feedback_system import ContextAwareInternalFeedbackSystem
+                self.internal_feedback = ContextAwareInternalFeedbackSystem(self.internal_feedback)
+                logger.debug("Enhanced InternalFeedbackSystem with A2A context distribution")
             
             # Create original dynamic adaptation system
             original_dynamic_adaptation = DynamicAdaptationSystem()
@@ -648,6 +657,21 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
                 from nyx.core.a2a.context_aware_theory_of_mind import ContextAwareTheoryOfMind
                 self.theory_of_mind = ContextAwareTheoryOfMind(self.theory_of_mind)
                 logger.debug("Enhanced TheoryOfMind with context distribution")
+
+            if hasattr(self, 'goal_manager') and self.goal_manager:
+                # Check if there's an interaction goals component
+                if hasattr(self.goal_manager, 'interaction_goals') or hasattr(self, 'interaction_goals'):
+                    # Get the original interaction goals (might be part of goal_manager)
+                    original_interaction_goals = getattr(self.goal_manager, 'interaction_goals', None) or getattr(self, 'interaction_goals', None)
+                    
+                    if original_interaction_goals and self.use_a2a_integration:
+                        from nyx.core.a2a.context_aware_interaction_goals import ContextAwareInteractionGoals
+                        # Set it on the appropriate object
+                        if hasattr(self.goal_manager, 'interaction_goals'):
+                            self.goal_manager.interaction_goals = ContextAwareInteractionGoals(original_interaction_goals)
+                        else:
+                            self.interaction_goals = ContextAwareInteractionGoals(original_interaction_goals)
+                        logger.debug("Enhanced InteractionGoals with A2A context distribution")
                 
             self.protocol_enforcement = ProtocolEnforcement(reward_system=self.reward_system, memory_core=self.memory_core, relationship_manager=self.relationship_manager)
             self.body_service_system = BodyServiceSystem(reward_system=self.reward_system, memory_core=self.memory_core, relationship_manager=self.relationship_manager)
@@ -840,22 +864,56 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             if self.meta_core and hasattr(self.meta_core, 'context_data') and isinstance(self.meta_core.context_data, dict): # Ensure context_data is dict
                  self.meta_core.context_data['reflection'] = self.reflection_engine
     
-            self.thoughts_manager = InternalThoughtsManager(
-                passive_observation_system=self.passive_observation_system, reflection_engine=self.reflection_engine,
-                imagination_simulator=self.imagination_simulator, theory_of_mind=self.theory_of_mind,
+            original_thoughts_manager = InternalThoughtsManager(
+                passive_observation_system=self.passive_observation_system, 
+                reflection_engine=self.reflection_engine,
+                imagination_simulator=self.imagination_simulator, 
+                theory_of_mind=self.theory_of_mind,
                 relationship_reflection=self.relationship_manager,
                 proactive_communication=self.proactive_communication_engine,
-                emotional_core=self.emotional_core, memory_core=self.memory_core
+                emotional_core=self.emotional_core, 
+                memory_core=self.memory_core
             )
+            
+            if self.use_a2a_integration:
+                from nyx.core.a2a.context_aware_internal_thoughts import ContextAwareInternalThoughts
+                self.thoughts_manager = ContextAwareInternalThoughts(original_thoughts_manager)
+                logger.debug("Enhanced InternalThoughtsManager with A2A context distribution")
+            else:
+                self.thoughts_manager = original_thoughts_manager
             logger.debug("AgenticActionGenerator dependent systems initialized.")
     
             # --- Step 8: Remaining Managers, Agents, and Final Integrations ---
             logger.debug(f"NyxBrain Init Step 8: Final Managers, Agents, Integrations for {self.user_id}-{self.conversation_id}")
-            self.mode_manager = InteractionModeManager(context_system=self.context_system, emotional_core=self.emotional_core, reward_system=self.reward_system, goal_manager=self.goal_manager)
+            
+            original_mode_manager = InteractionModeManager(
+                context_system=self.context_system, 
+                emotional_core=self.emotional_core, 
+                reward_system=self.reward_system, 
+                goal_manager=self.goal_manager
+            )
+            
+            if self.use_a2a_integration:
+                from nyx.core.a2a.context_aware_interaction_mode_manager import ContextAwareInteractionModeManager
+                self.mode_manager = ContextAwareInteractionModeManager(original_mode_manager)
+                logger.debug("Enhanced InteractionModeManager with A2A context distribution")
+            else:
+                self.mode_manager = original_mode_manager
+            
             self.mode_integration = ModeIntegrationManager(nyx_brain=self)
             if self.agentic_action_generator: self.agentic_action_generator.mode_integration = self.mode_integration
     
-            self.issue_tracking_system = IssueTrackingSystem(db_path=f"issues_db_{self.user_id}_{self.conversation_id}.json")
+            original_issue_tracker = IssueTrackingSystem(
+                db_path=f"issues_db_{self.user_id}_{self.conversation_id}.json"
+            )
+            
+            if self.use_a2a_integration:
+                from nyx.core.a2a.context_aware_issue_tracking_system import ContextAwareIssueTrackingSystem
+                self.issue_tracking_system = ContextAwareIssueTrackingSystem(original_issue_tracker)
+                logger.debug("Enhanced IssueTrackingSystem with A2A context distribution")
+            else:
+                self.issue_tracking_system = original_issue_tracker
+            
             self.processing_manager = ProcessingManager(brain=self)
             await self.processing_manager.initialize()
             self.self_config_manager = SelfConfigManager(brain=self)
