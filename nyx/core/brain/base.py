@@ -2583,6 +2583,29 @@ System Prompt End
         )
     
         return {"success": True, "sensation_result": sensation_result, "internal_expression": expression}
+    
+    async def save_context_state(self) -> Dict[str, Any]:
+        """Save current context state for persistence"""
+        if self.context_distribution and self.context_distribution.current_context:
+            return {
+                "context_state": self.context_distribution.current_context.dict(),
+                "context_history": [ctx.dict() for ctx in self.context_distribution.context_history],
+                "module_subscriptions": self.context_distribution.module_subscriptions
+            }
+        return {}
+    
+    async def restore_context_state(self, saved_state: Dict[str, Any]):
+        """Restore context state from persistence"""
+        if not self.context_distribution:
+            await self.initialize_context_system()
+        
+        if "context_history" in saved_state:
+            self.context_distribution.context_history = [
+                SharedContext(**ctx_data) for ctx_data in saved_state["context_history"]
+            ]
+        
+        if "module_subscriptions" in saved_state:
+            self.context_distribution.module_subscriptions = saved_state["module_subscriptions"]
 
     @staticmethod
     @function_tool
