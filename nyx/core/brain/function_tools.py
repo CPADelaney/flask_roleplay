@@ -9,43 +9,76 @@ logger = logging.getLogger(__name__)
 # =============== Brain Function Tools ===============
 
 @function_tool
-async def process_user_message(ctx, user_input: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+async def process_user_message(ctx, 
+                              user_input: str, 
+                              context: Optional[Dict[str, Any]] = None,
+                              use_thinking: Optional[bool] = None,
+                              use_conditioning: Optional[bool] = None,
+                              use_coordination: Optional[bool] = None,
+                              mode: str = "auto") -> Dict[str, Any]:
     """
     Process a user message with all cognitive systems
     
     Args:
         user_input: User's message text
         context: Optional additional context
+        use_thinking: Enable explicit thinking phase (None=auto-detect)
+        use_conditioning: Enable conditioning system (None=auto-detect)
+        use_coordination: Enable context distribution coordination (None=auto-detect)
+        mode: Processing mode ("auto", "serial", "parallel", "coordinated", "simple")
     
     Returns:
         Processing results with emotional state, memories, etc.
     """
     brain = ctx.context
     
-    # Process through the full system
+    # Process through the full system with feature control
     result = await brain.process_input(
         user_input, 
         context,
-        mode="auto"  # Let it auto-detect features
+        use_thinking=use_thinking,
+        use_conditioning=use_conditioning,
+        use_coordination=use_coordination,
+        mode=mode
     )
     return result
 
 @function_tool
-async def generate_agent_response(ctx, user_input: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+async def generate_agent_response(ctx, 
+                                user_input: str, 
+                                context: Optional[Dict[str, Any]] = None,
+                                use_thinking: Optional[bool] = None,
+                                use_conditioning: Optional[bool] = None,
+                                use_coordination: Optional[bool] = None,
+                                use_hierarchical_memory: Optional[bool] = None,
+                                mode: str = "auto") -> Dict[str, Any]:
     """
     Generate a complete response to the user
     
     Args:
         user_input: User's message text
         context: Optional additional context
+        use_thinking: Enable explicit thinking phase (None=auto-detect)
+        use_conditioning: Enable conditioning system (None=auto-detect)
+        use_coordination: Enable context distribution coordination (None=auto-detect)
+        use_hierarchical_memory: Enable hierarchical memory context (None=auto-detect)
+        mode: Processing mode ("auto", "serial", "parallel", "coordinated", "simple")
     
     Returns:
         Complete response with message, emotional expression, etc.
     """
     brain = ctx.context
     
-    # Generate a full response
-    response = await brain.generate_response(user_input, context)
+    # Generate a full response with feature control
+    response = await brain.generate_response(
+        user_input, 
+        context,
+        use_thinking=use_thinking,
+        use_conditioning=use_conditioning,
+        use_coordination=use_coordination,
+        use_hierarchical_memory=use_hierarchical_memory,
+        mode=mode
+    )
     return response
 
 @function_tool
@@ -435,9 +468,12 @@ async def process_streaming_event(ctx, event_type: str, event_data: Dict[str, An
     return {"error": "Streaming event processing not available"}
 
 @function_tool
-async def run_thinking(ctx, user_input: str, thinking_level: int = 1, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+async def run_thinking(ctx, 
+                      user_input: str, 
+                      thinking_level: int = 1, 
+                      context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """
-    Run thinking process on input
+    Run thinking process on input using the unified processing system
     
     Args:
         user_input: User's input text
@@ -449,12 +485,242 @@ async def run_thinking(ctx, user_input: str, thinking_level: int = 1, context: O
     """
     brain = ctx.context
     
-    # Run thinking
-    if hasattr(brain.thinking_tools, "think_before_responding"):
-        result = await brain.thinking_tools.think_before_responding(brain, user_input, thinking_level, context)
-        return result
+    # Use unified processing with thinking explicitly enabled
+    result = await brain.process_input(
+        user_input,
+        context,
+        use_thinking=True,
+        thinking_level=thinking_level
+    )
     
-    return {"error": "Thinking tools not available"}
+    # Extract just the thinking results if available
+    if result.get("thinking_applied") and "thinking_result" in result:
+        return {
+            "thinking_applied": True,
+            "thinking_result": result["thinking_result"],
+            "thinking_level": thinking_level
+        }
+    
+    return {"error": "Thinking was not applied or thinking tools not available"}
+
+@function_tool
+async def process_with_coordination(ctx, 
+                                  user_input: str, 
+                                  context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """
+    Process input using the coordinated processing system (a2a)
+    
+    Args:
+        user_input: User's input text
+        context: Optional additional context
+    
+    Returns:
+        Coordinated processing results
+    """
+    brain = ctx.context
+    
+    # Force coordination mode
+    result = await brain.process_input(
+        user_input,
+        context,
+        use_coordination=True,
+        mode="coordinated"
+    )
+    return result
+
+
+@function_tool
+async def process_simple(ctx, 
+                       user_input: str, 
+                       context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """
+    Process input using minimal features for fast response
+    
+    Args:
+        user_input: User's input text
+        context: Optional additional context
+    
+    Returns:
+        Simple processing results
+    """
+    brain = ctx.context
+    
+    # Disable all optional features for speed
+    result = await brain.process_input(
+        user_input,
+        context,
+        use_thinking=False,
+        use_conditioning=False,
+        use_coordination=False,
+        mode="serial"
+    )
+    return result
+
+
+@function_tool
+async def process_with_all_features(ctx, 
+                                  user_input: str, 
+                                  context: Optional[Dict[str, Any]] = None,
+                                  thinking_level: int = 2) -> Dict[str, Any]:
+    """
+    Process input with all available cognitive features enabled
+    
+    Args:
+        user_input: User's input text
+        context: Optional additional context
+        thinking_level: Thinking depth level (1-3)
+    
+    Returns:
+        Full processing results with all features
+    """
+    brain = ctx.context
+    
+    # Enable all features
+    result = await brain.generate_response(
+        user_input,
+        context,
+        use_thinking=True,
+        use_conditioning=True,
+        use_coordination=True,
+        use_hierarchical_memory=True,
+        thinking_level=thinking_level,
+        mode="auto"
+    )
+    return result
+
+
+@function_tool
+async def get_processing_capabilities(ctx) -> Dict[str, Any]:
+    """
+    Get information about available processing capabilities
+    
+    Returns:
+        Available processing features and their status
+    """
+    brain = ctx.context
+    
+    capabilities = {
+        "thinking": {
+            "available": hasattr(brain, "thinking_config") and brain.thinking_config.get("thinking_enabled", False),
+            "config": getattr(brain, "thinking_config", {})
+        },
+        "conditioning": {
+            "available": hasattr(brain, "conditioned_input_processor") and brain.conditioned_input_processor is not None
+        },
+        "coordination": {
+            "available": hasattr(brain, "context_distribution") and brain.context_distribution is not None,
+            "status": brain.get_context_distribution_status() if hasattr(brain, "get_context_distribution_status") else {}
+        },
+        "hierarchical_memory": {
+            "available": hasattr(brain, "memory_core") and brain.memory_core is not None
+        },
+        "processing_modes": ["auto", "serial", "parallel", "coordinated", "simple"],
+        "current_processing_manager": hasattr(brain, "processing_manager") and brain.processing_manager is not None
+    }
+    
+    return capabilities
+
+
+@function_tool
+async def set_thinking_enabled(ctx, enabled: bool) -> Dict[str, Any]:
+    """
+    Enable or disable thinking for processing
+    
+    Args:
+        enabled: Whether to enable thinking
+        
+    Returns:
+        Configuration update result
+    """
+    brain = ctx.context
+    
+    if hasattr(brain, "thinking_config"):
+        brain.thinking_config["thinking_enabled"] = enabled
+        return {
+            "success": True,
+            "thinking_enabled": enabled,
+            "config": brain.thinking_config
+        }
+    
+    return {"error": "Thinking configuration not available"}
+
+
+@function_tool
+async def compare_processing_modes(ctx, 
+                                 user_input: str, 
+                                 modes: List[str] = None,
+                                 context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """
+    Compare different processing modes on the same input
+    
+    Args:
+        user_input: User's input text
+        modes: List of modes to compare (default: ["simple", "auto", "coordinated"])
+        context: Optional additional context
+        
+    Returns:
+        Comparison results with timing and features used
+    """
+    brain = ctx.context
+    
+    if modes is None:
+        modes = ["simple", "auto", "coordinated"]
+    
+    results = {}
+    
+    for mode in modes:
+        try:
+            start_time = asyncio.get_event_loop().time()
+            
+            # Configure based on mode
+            if mode == "simple":
+                result = await brain.process_input(
+                    user_input, context,
+                    use_thinking=False,
+                    use_conditioning=False,
+                    use_coordination=False,
+                    mode="serial"
+                )
+            elif mode == "coordinated":
+                result = await brain.process_input(
+                    user_input, context,
+                    use_coordination=True,
+                    mode="coordinated"
+                )
+            else:
+                result = await brain.process_input(
+                    user_input, context,
+                    mode=mode
+                )
+            
+            end_time = asyncio.get_event_loop().time()
+            
+            results[mode] = {
+                "success": True,
+                "processing_time": end_time - start_time,
+                "features_used": result.get("features_used", {}),
+                "active_modules": len(result.get("active_modules_for_input", [])),
+                "response_quality_indicators": {
+                    "has_memories": bool(result.get("memories", [])),
+                    "has_emotional_state": bool(result.get("emotional_state", {})),
+                    "has_thinking": result.get("thinking_applied", False),
+                    "has_conditioning": result.get("conditioning_applied", False)
+                }
+            }
+            
+        except Exception as e:
+            results[mode] = {
+                "success": False,
+                "error": str(e)
+            }
+    
+    return {
+        "comparison_results": results,
+        "fastest_mode": min(
+            [(mode, data["processing_time"]) for mode, data in results.items() if data.get("success", False)],
+            key=lambda x: x[1]
+        )[0] if any(data.get("success", False) for data in results.values()) else None
+    }
 
 @function_tool
 async def register_issue(ctx, 
