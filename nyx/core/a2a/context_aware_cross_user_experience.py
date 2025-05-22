@@ -247,18 +247,211 @@ class ContextAwareCrossUserExperience(ContextAwareModule):
     
     async def _find_potential_experience_matches(self, context: SharedContext) -> List[Dict[str, Any]]:
         """Find potential matching experiences from other users"""
-        # Extract key concepts from context
-        key_concepts = await self._extract_key_concepts(context)
-        
-        if not key_concepts:
+        if not self.original_manager.memory_core:
             return []
         
-        # Search for similar experiences (simplified)
-        potential_matches = []
+        try:
+            # Extract key concepts from context
+            key_concepts = await self._extract_key_concepts(context)
+            
+            if not key_concepts:
+                return []
+            
+            # Get user's preferences
+            user_prefs = await self._get_user_sharing_preferences(context.user_id)
+            min_compatibility = user_prefs.get("min_compatibility_threshold", 0.6)
+            
+            # Find compatible users
+            compatible_users = []
+            for user_id, prefs in self.original_manager.user_preference_profiles.items():
+                if user_id != context.user_id:
+                    compatibility = self._calculate_user_compatibility(
+                        user_prefs, prefs
+                    )
+                    if compatibility >= min_compatibility:
+                        compatible_users.append((user_id, compatibility))
+            
+            # Sort by compatibility
+            compatible_users.sort(key=lambda x: x[1], reverse=True)
+            
+            # Search for experiences from compatible users
+            potential_matches = []
+            for user_id, compatibility in compatible_users[:10]:  # Top 10 compatible users
+                # Check permissions
+                permission_key = f"{user_id}:{context.user_id}"
+                if permission_key not in self.original_manager.permission_matrix:
+                    # Calculate permission if not cached
+                    permission = await self.original_manager.calculate_sharing_permission(
+                        None, user_id, context.user_id
+                    )
+                    if permission.get("permission_level", 0) < 0.3:
+                        continue
+                
+                # Search user's experiences
+                search_query = " ".join(key_concepts[:3])  # Use top 3 concepts
+                try:
+                    experiences = await self.original_manager.memory_core.search_memories(
+                        user_id=user_id,
+                        query=search_query,
+                        memory_type="experience",
+                        limit=5
+                    )
+                    
+                    for exp in experiences:
+                        # Calculate match score
+                        match_score = self._calculate_experience_match_score(
+                            exp, key_concepts, context
+                        )
+                        
+                        if match_score > 0.5:
+                            potential_matches.append({
+                                "experience": exp,
+                                "source_user_id": user_id,
+                                "compatibility": compatibility,
+                                "match_score": match_score,
+                                "combined_score": (compatibility * 0.3 + match_score * 0.7)
+                            })
+                            
+                except Exception as e:
+                    logger.error(f"Error searching experiences for user {user_id}: {e}")
+                    continue
+            
+            # Sort by combined score
+            potential_matches.sort(key=lambda x: x["combined_score"], reverse=True)
+            
+            return potential_matches[:20]  # Return top 20 matches
+            
+        except Exception as e:
+            logger.error(f"Error finding potential experience matches: {e}")
+            return []
+
+    def _calculate_experience_match_score(self, experience: Dict[str, Any], 
+                                        key_concepts: List[str], 
+                                        context: SharedContext) -> float:
+        """Calculate how well an experience matches the current context"""
+        score = 0.0
         
-        # Would normally search across user experiences
-        # For now, return empty list
-        return potential_matches
+        # Check concept overlap
+        exp_text = experience.get("memory_text", "").lower()
+        exp_tags = [tag.lower() for tag in experience.get("tags", [])]
+        
+        concept_matches = 0
+        for concept in key_concepts:
+            if concept.lower() in exp_text or concept.lower() in exp_tags:
+                concept_matches += 1
+        
+        if key_concepts:
+            score += (concept_matches / len(key_concepts)) * 0.4
+        
+        # Check emotional alignment
+        if context.emotional_state and experience.get("emotional_context"):
+            exp_emotions = experience["emotional_context"]
+            emotion_alignment = 0.0
+            
+            for emotion, intensity in context.emotional_state.items():
+                if emotion in exp_emotions:
+                    # Similar emotions increase match
+                    diff = abs(intensity - exp_emotions[emotion])
+                    emotion_alignment += (1.0 - diff) * intensity
+            
+            if context.emotional_state:
+                score += (emotion_alignment / len(context.emotional_state)) * 0.3
+        
+        # Check temporal relevance (prefer recent experiences)
+        if experience.get("timestamp"):
+            try:
+                exp_time = datetime.fromisoformat(experience["timestamp"])
+                days_old = (datetime.now() - exp_time).days
+                
+                if days_old < 7:
+                    score += 0.2
+                elif days_old < 30:
+                    score += 0.1
+                elif days_old < 90:
+                    score += 0.05
+            except:
+                pass
+        
+        # Check significance
+        significance = experience.get("significance", 5) / 10.0
+        score += significance * 0.1
+        
+        return min(1.0, score)
+
+    def _calculate_user_compatibility(self, prefs1: Dict[str, Any], prefs2: Dict[str, Any]) -> float:
+        """Calculate compatibility between user preferences"""
+        compatibility_score = 0.0
+        weight_total = 0.0
+        
+        # Scenario preference compatibility (40% weight)
+        scenario_weight = 0.4
+        scenario_sim = 0.0
+        scenario_count = 0
+        
+        scenarios1 = prefs1.get("scenario_preferences", {})
+        scenarios2 = prefs2.get("scenario_preferences", {})
+        
+        for scenario in set(scenarios1.keys()) | set(scenarios2.keys()):
+            pref1 = scenarios1.get(scenario, 0.5)
+            pref2 = scenarios2.get(scenario, 0.5)
+            
+            # Calculate similarity (1 - normalized difference)
+            similarity = 1.0 - abs(pref1 - pref2)
+            scenario_sim += similarity
+            scenario_count += 1
+        
+        if scenario_count > 0:
+            compatibility_score += (scenario_sim / scenario_count) * scenario_weight
+            weight_total += scenario_weight
+        
+        # Emotional preference compatibility (30% weight)
+        emotion_weight = 0.3
+        emotion_sim = 0.0
+        emotion_count = 0
+        
+        emotions1 = prefs1.get("emotional_preferences", {})
+        emotions2 = prefs2.get("emotional_preferences", {})
+        
+        for emotion in set(emotions1.keys()) | set(emotions2.keys()):
+            pref1 = emotions1.get(emotion, 0.5)
+            pref2 = emotions2.get(emotion, 0.5)
+            
+            similarity = 1.0 - abs(pref1 - pref2)
+            emotion_sim += similarity
+            emotion_count += 1
+        
+        if emotion_count > 0:
+            compatibility_score += (emotion_sim / emotion_count) * emotion_weight
+            weight_total += emotion_weight
+        
+        # Privacy level compatibility (20% weight)
+        privacy_weight = 0.2
+        privacy1 = prefs1.get("privacy_level", 0.5)
+        privacy2 = prefs2.get("privacy_level", 0.5)
+        
+        privacy_diff = abs(privacy1 - privacy2)
+        if privacy_diff < 0.2:  # Very compatible
+            compatibility_score += privacy_weight
+        elif privacy_diff < 0.4:  # Somewhat compatible
+            compatibility_score += privacy_weight * 0.5
+        
+        weight_total += privacy_weight
+        
+        # Sharing preference alignment (10% weight)
+        sharing_weight = 0.1
+        sharing1 = prefs1.get("cross_user_sharing_preference", 0.3)
+        sharing2 = prefs2.get("cross_user_sharing_preference", 0.3)
+        
+        # Both should be willing to share
+        min_sharing = min(sharing1, sharing2)
+        compatibility_score += min_sharing * sharing_weight
+        weight_total += sharing_weight
+        
+        # Normalize by total weight
+        if weight_total > 0:
+            return compatibility_score / weight_total
+        
+        return 0.5  # Default compatibility
     
     async def _identify_shareable_memories(self, memories: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Identify which memories could be shared"""
