@@ -354,6 +354,9 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             from nyx.core.a2a.context_aware_cross_user_experience import ContextAwareCrossUserExperience
             from nyx.core.a2a.context_aware_distributed_processing import ContextAwareDistributedProcessing
             from nyx.core.a2a.context_aware_dominance import ContextAwareDominanceSystem
+            from nyx.core.a2a.context_aware_dynamic_adaptation import ContextAwareDynamicAdaptation
+            from nyx.core.a2a.context_aware_experience_consolidation import ContextAwareExperienceConsolidation
+            from nyx.core.a2a.context_aware_experience_interface import ContextAwareExperienceInterface
     
             from dev_log.storage import get_dev_log_storage
             self.dev_log_storage = get_dev_log_storage()
@@ -457,7 +460,16 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             self.reasoning_core = integrated_reasoning_agent
             self.reasoning_triage_agent = reasoning_triage_agent
             self.internal_feedback = InternalFeedbackSystem()
-            self.dynamic_adaptation = DynamicAdaptationSystem()
+            
+            # Create original dynamic adaptation system
+            original_dynamic_adaptation = DynamicAdaptationSystem()
+            
+            # Wrap with context-aware version if A2A enabled
+            if self.use_a2a_integration:
+                self.dynamic_adaptation = ContextAwareDynamicAdaptation(original_dynamic_adaptation)
+                logger.debug("Enhanced DynamicAdaptationSystem with A2A context distribution")
+            else:
+                self.dynamic_adaptation = original_dynamic_adaptation
             
             # Initialize base context system
             base_context_system = ContextAwarenessSystem(emotional_core=self.emotional_core)
@@ -469,8 +481,28 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             else:
                 self.context_system = base_context_system
             
-            self.experience_interface = ExperienceInterface(self.memory_core, self.emotional_core)
-            self.experience_consolidation = ExperienceConsolidationSystem(memory_core=self.memory_core, experience_interface=self.experience_interface)
+            # Create original experience interface
+            original_experience_interface = ExperienceInterface(self.memory_core, self.emotional_core)
+            
+            # Wrap with context-aware version if A2A enabled
+            if self.use_a2a_integration:
+                self.experience_interface = ContextAwareExperienceInterface(original_experience_interface)
+                logger.debug("Enhanced ExperienceInterface with A2A context distribution")
+            else:
+                self.experience_interface = original_experience_interface
+                
+            # Create original experience consolidation system
+            original_experience_consolidation = ExperienceConsolidationSystem(
+                memory_core=self.memory_core, 
+                experience_interface=self.experience_interface
+            )
+            
+            # Wrap with context-aware version if A2A enabled
+            if self.use_a2a_integration:
+                self.experience_consolidation = ContextAwareExperienceConsolidation(original_experience_consolidation)
+                logger.debug("Enhanced ExperienceConsolidationSystem with A2A context distribution")
+            else:
+                self.experience_consolidation = original_experience_consolidation
             
             original_cross_user_manager = CrossUserExperienceManager(
                 memory_core=self.memory_core, 
