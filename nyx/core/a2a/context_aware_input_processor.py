@@ -314,11 +314,15 @@ class ContextAwareInputProcessor(ContextAwareModule):
         """Adjust conditioning thresholds based on relationship state"""
         relationship_context = relationship_data.get("relationship_context", {})
         
+        # Extract relationship metrics
         trust = relationship_context.get("trust", 0.5)
         intimacy = relationship_context.get("intimacy", 0.5)
         dominance_accepted = relationship_context.get("dominance_accepted", 0.5)
+        depth = relationship_context.get("depth", 0.5)
+        conflict = relationship_context.get("conflict", 0.0)
         
-        # High trust allows stronger conditioning
+        # Calculate conditioning adjustments
+        # High trust allows stronger conditioning (0.7 to 1.0 range)
         conditioning_multiplier = 0.7 + (trust * 0.3)
         
         # High intimacy allows more subtle conditioning
@@ -327,15 +331,83 @@ class ContextAwareInputProcessor(ContextAwareModule):
         # Dominance acceptance affects specific behaviors
         dominance_conditioning = dominance_accepted * 0.5
         
+        # Conflict reduces conditioning effectiveness
+        if conflict > 0.5:
+            conditioning_multiplier *= (1.0 - conflict * 0.3)
+        
         # Update conditioning context
         if hasattr(self.original_processor, 'context') and self.original_processor.context.conditioning_system:
-            # This would update the actual conditioning system
-            # For now, cache the adjustments
-            self.behavior_evaluation_cache["conditioning_adjustments"] = {
-                "multiplier": conditioning_multiplier,
-                "subtlety": subtlety_factor,
-                "dominance_factor": dominance_conditioning
-            }
+            conditioning_system = self.original_processor.context.conditioning_system
+            
+            # Update system parameters if methods are available
+            if hasattr(conditioning_system, 'set_conditioning_parameters'):
+                try:
+                    await conditioning_system.set_conditioning_parameters(
+                        base_multiplier=conditioning_multiplier,
+                        subtlety_factor=subtlety_factor,
+                        context_factors={
+                            "relationship_trust": trust,
+                            "relationship_intimacy": intimacy,
+                            "dominance_accepted": dominance_accepted,
+                            "relationship_depth": depth
+                        }
+                    )
+                except Exception as e:
+                    logger.debug(f"Could not update conditioning parameters: {e}")
+            
+            # Update specific behavior thresholds
+            if hasattr(conditioning_system, 'update_behavior_thresholds'):
+                try:
+                    behavior_thresholds = {
+                        "submission_language_response": {
+                            "threshold": 0.5 - (dominance_conditioning * 0.2),  # Lower threshold with acceptance
+                            "intensity_multiplier": 1.0 + (dominance_conditioning * 0.3)
+                        },
+                        "defiance_response": {
+                            "threshold": 0.6 - (trust * 0.1),  # Slightly lower with trust
+                            "intensity_multiplier": 1.0 - (intimacy * 0.2)  # Less intense with intimacy
+                        },
+                        "positive_engagement": {
+                            "threshold": 0.4 - (depth * 0.1),  # Easier to trigger with depth
+                            "intensity_multiplier": 1.0 + (trust * 0.2)
+                        }
+                    }
+                    
+                    await conditioning_system.update_behavior_thresholds(behavior_thresholds)
+                except Exception as e:
+                    logger.debug(f"Could not update behavior thresholds: {e}")
+        
+        # Cache the adjustments for later use
+        self.behavior_evaluation_cache["conditioning_adjustments"] = {
+            "multiplier": conditioning_multiplier,
+            "subtlety": subtlety_factor,
+            "dominance_factor": dominance_conditioning,
+            "trust_factor": trust,
+            "intimacy_factor": intimacy,
+            "depth_factor": depth,
+            "conflict_factor": conflict,
+            "timestamp": datetime.now(),
+            "source": "relationship_update"
+        }
+        
+        # Send update about conditioning readiness
+        if hasattr(self, 'send_context_update'):
+            await self.send_context_update(
+                update_type="conditioning_thresholds_adjusted",
+                data={
+                    "adjustments": self.behavior_evaluation_cache["conditioning_adjustments"],
+                    "relationship_metrics": {
+                        "trust": trust,
+                        "intimacy": intimacy,
+                        "dominance_accepted": dominance_accepted,
+                        "depth": depth,
+                        "conflict": conflict
+                    }
+                }
+            )
+        
+        logger.debug(f"Adjusted conditioning thresholds - multiplier: {conditioning_multiplier:.2f}, "
+                    f"subtlety: {subtlety_factor:.2f}, dominance: {dominance_conditioning:.2f}")
     
     async def _process_conditioning_trigger(self, conditioning_data: Dict[str, Any]):
         """Process a direct conditioning trigger"""
@@ -872,14 +944,123 @@ class ContextAwareInputProcessor(ContextAwareModule):
     
     async def _get_accumulated_processing_results(self) -> Dict[str, Any]:
         """Get accumulated processing results from the session"""
-        # This would aggregate all processing done during the session
-        # For now, return cached results
-        return {
-            "pattern_detections": self.pattern_detection_cache.get("recent_detections", []),
-            "behavior_evaluations": list(self.behavior_evaluation_cache.values()),
-            "mode_processing": self.mode_blending_history[-1] if self.mode_blending_history else {},
-            "conditioning_applied": self.behavior_evaluation_cache.get("recent_conditioning", [])
+        results = {
+            "pattern_detections": [],
+            "behavior_evaluations": [],
+            "mode_processing": {},
+            "conditioning_applied": []
         }
+        
+        # Get recent pattern detections from cache
+        if "recent_detections" in self.pattern_detection_cache:
+            results["pattern_detections"] = self.pattern_detection_cache["recent_detections"]
+        else:
+            # Build from current session if available
+            recent_detections = []
+            
+            # Check for dominance processing patterns
+            if "dominance_active" in self.pattern_detection_cache:
+                dominance_data = self.pattern_detection_cache["dominance_active"]
+                recent_detections.append({
+                    "pattern_name": "dominance_context",
+                    "confidence": dominance_data.get("intensity", 0.5),
+                    "timestamp": dominance_data.get("activated_at", datetime.now()),
+                    "context": "dominance_processing"
+                })
+            
+            # Check for sensitivity adjustments (indicates detected patterns)
+            if "sensitivity_adjustments" in self.pattern_detection_cache:
+                adjustments = self.pattern_detection_cache["sensitivity_adjustments"]
+                if "emotional_context" in adjustments:
+                    recent_detections.append({
+                        "pattern_name": f"emotional_{adjustments['emotional_context'].lower()}",
+                        "confidence": 0.7,
+                        "context": "emotional_sensitivity"
+                    })
+            
+            results["pattern_detections"] = recent_detections
+            # Cache for future use
+            self.pattern_detection_cache["recent_detections"] = recent_detections
+        
+        # Get behavior evaluations from cache
+        if self.behavior_evaluation_cache:
+            behavior_evals = []
+            
+            for behavior, data in self.behavior_evaluation_cache.items():
+                if isinstance(data, dict):
+                    # Format as evaluation result
+                    eval_result = {
+                        "behavior": behavior,
+                        "baseline_frequency": data.get("baseline_frequency", 0.5),
+                        "recent_occurrences": data.get("recent_occurrences", []),
+                        "reinforcement_history": data.get("reinforcement_history", [])
+                    }
+                    behavior_evals.append(eval_result)
+            
+            # Add goal-aligned priorities if available
+            if "goal_aligned_priorities" in self.behavior_evaluation_cache:
+                priorities = self.behavior_evaluation_cache["goal_aligned_priorities"]
+                for behavior, priority in priorities.items():
+                    behavior_evals.append({
+                        "behavior": behavior,
+                        "goal_priority": priority,
+                        "source": "goal_alignment"
+                    })
+            
+            # Add conditioning adjustments if available
+            if "conditioning_adjustments" in self.behavior_evaluation_cache:
+                adjustments = self.behavior_evaluation_cache["conditioning_adjustments"]
+                behavior_evals.append({
+                    "type": "conditioning_parameters",
+                    "multiplier": adjustments.get("multiplier", 1.0),
+                    "subtlety": adjustments.get("subtlety", 0.5),
+                    "dominance_factor": adjustments.get("dominance_factor", 0.0)
+                })
+            
+            results["behavior_evaluations"] = behavior_evals
+        
+        # Get mode processing from history
+        if self.mode_blending_history:
+            # Get most recent mode processing
+            recent_mode = self.mode_blending_history[-1]
+            results["mode_processing"] = recent_mode
+        else:
+            # Try to get from current context
+            try:
+                mode_dist = await self._get_mode_distribution_from_context(SharedContext())
+                results["mode_processing"] = {
+                    "distribution": mode_dist,
+                    "timestamp": datetime.now()
+                }
+            except:
+                results["mode_processing"] = {"distribution": {"friendly": 1.0}}
+        
+        # Get recent conditioning applications
+        if "recent_conditioning" in self.behavior_evaluation_cache:
+            results["conditioning_applied"] = self.behavior_evaluation_cache["recent_conditioning"]
+        else:
+            # Build from reinforcement history
+            recent_conditioning = []
+            
+            for behavior, data in self.behavior_evaluation_cache.items():
+                if isinstance(data, dict) and "reinforcement_history" in data:
+                    for reinforcement in data["reinforcement_history"][-5:]:  # Last 5
+                        recent_conditioning.append({
+                            "behavior": behavior,
+                            "type": reinforcement.get("type", "unknown"),
+                            "timestamp": reinforcement.get("timestamp", datetime.now()),
+                            "intensity": reinforcement.get("intensity", 0.5)
+                        })
+            
+            results["conditioning_applied"] = recent_conditioning
+            # Cache for future use
+            self.behavior_evaluation_cache["recent_conditioning"] = recent_conditioning
+        
+        # Add any pending response modifications
+        if "pending_response" in self.pattern_detection_cache:
+            results["pending_modifications"] = self.pattern_detection_cache["pending_response"]
+        
+        return results
     
     async def _synthesize_response_modifications(self, processing_results: Dict[str, Any], 
                                                context: SharedContext, 
@@ -1051,55 +1232,289 @@ class ContextAwareInputProcessor(ContextAwareModule):
     def _extract_key_patterns(self, processing_results: Dict[str, Any]) -> List[str]:
         """Extract key patterns from processing results"""
         key_patterns = []
+        seen_patterns = set()  # To avoid duplicates
         
         # Extract from pattern detections
         patterns = processing_results.get("pattern_detections", [])
-        high_confidence_patterns = [p for p in patterns if p.get("confidence", 0) > 0.7]
         
-        for pattern in high_confidence_patterns[:3]:  # Top 3
-            key_patterns.append(pattern.get("pattern_name", "unknown"))
+        # Sort by confidence and recency
+        sorted_patterns = sorted(
+            patterns,
+            key=lambda p: (
+                p.get("confidence", 0),
+                # Prefer more recent patterns
+                p.get("timestamp", datetime.min) if isinstance(p.get("timestamp"), datetime) else datetime.min
+            ),
+            reverse=True
+        )
         
-        # Extract from behavior evaluations
-        # (Simplified for this implementation)
+        # Get top patterns with high confidence
+        for pattern in sorted_patterns:
+            if isinstance(pattern, dict):
+                pattern_name = pattern.get("pattern_name", "unknown")
+                confidence = pattern.get("confidence", 0)
+                
+                # Only include high-confidence patterns
+                if confidence > 0.7 and pattern_name not in seen_patterns:
+                    key_patterns.append(pattern_name)
+                    seen_patterns.add(pattern_name)
+                    
+                    # Limit to top 3 patterns
+                    if len(key_patterns) >= 3:
+                        break
+        
+        # Extract from behavior evaluations if we need more patterns
+        if len(key_patterns) < 3:
+            evaluations = processing_results.get("behavior_evaluations", [])
+            
+            for eval_data in evaluations:
+                if isinstance(eval_data, dict):
+                    # Check for behavior patterns with high baseline frequency
+                    if "baseline_frequency" in eval_data and eval_data["baseline_frequency"] > 0.6:
+                        behavior = eval_data.get("behavior", "")
+                        if behavior and behavior not in seen_patterns:
+                            # Convert behavior to pattern name
+                            pattern_name = f"{behavior}_pattern"
+                            key_patterns.append(pattern_name)
+                            seen_patterns.add(pattern_name)
+                            
+                            if len(key_patterns) >= 3:
+                                break
+                    
+                    # Check for goal-aligned behaviors
+                    elif "goal_priority" in eval_data and eval_data["goal_priority"] > 0.7:
+                        behavior = eval_data.get("behavior", "")
+                        if behavior and behavior not in seen_patterns:
+                            pattern_name = f"goal_aligned_{behavior}"
+                            key_patterns.append(pattern_name)
+                            seen_patterns.add(pattern_name)
+                            
+                            if len(key_patterns) >= 3:
+                                break
+        
+        # Extract from conditioning results if still need more
+        if len(key_patterns) < 3:
+            conditioning_applied = processing_results.get("conditioning_applied", [])
+            
+            for conditioning in conditioning_applied[-3:]:  # Recent conditioning
+                if isinstance(conditioning, dict):
+                    behavior = conditioning.get("behavior", "")
+                    intensity = conditioning.get("intensity", 0)
+                    
+                    if behavior and intensity > 0.6 and behavior not in seen_patterns:
+                        pattern_name = f"conditioned_{behavior}"
+                        key_patterns.append(pattern_name)
+                        seen_patterns.add(pattern_name)
+                        
+                        if len(key_patterns) >= 3:
+                            break
+        
+        # If still no patterns, add default based on mode
+        if not key_patterns:
+            mode_processing = processing_results.get("mode_processing", {})
+            if isinstance(mode_processing, dict) and "dominant_mode" in mode_processing:
+                key_patterns.append(f"{mode_processing['dominant_mode']}_mode_active")
+            else:
+                key_patterns.append("standard_interaction")
         
         return key_patterns
     
     async def _evaluate_single_behavior(self, behavior: str, patterns: List[Dict[str, Any]], 
                                       context: SharedContext) -> Dict[str, Any]:
         """Evaluate a single behavior"""
-        # Use original processor logic if available
+        # First try to use original processor if available
         if hasattr(self.original_processor, '_evaluate_behavior'):
-            return await self.original_processor._evaluate_behavior(
-                RunContextWrapper(self.original_processor.context),
-                behavior=behavior,
-                detected_patterns=patterns,
-                user_history={}
-            )
+            try:
+                # Create a wrapper for the context if needed
+                from agents import RunContextWrapper
+                run_context = RunContextWrapper(self.original_processor.context)
+                
+                return await self.original_processor._evaluate_behavior(
+                    run_context,
+                    behavior=behavior,
+                    detected_patterns=patterns,
+                    user_history={}
+                )
+            except Exception as e:
+                logger.debug(f"Could not use original processor for behavior evaluation: {e}")
         
-        # Fallback evaluation
+        # Comprehensive fallback evaluation
         pattern_names = [p["pattern_name"] for p in patterns]
+        pattern_confidences = {p["pattern_name"]: p.get("confidence", 0.5) for p in patterns}
         
-        if behavior == "dominant_response":
-            if "submission_language" in pattern_names:
-                return {
-                    "recommendation": "approach",
-                    "confidence": 0.8,
-                    "reasoning": "Submission patterns detected"
-                }
-            elif "defiance" in pattern_names:
-                return {
-                    "recommendation": "approach",
-                    "confidence": 0.7,
-                    "reasoning": "Defiance requires dominant response"
-                }
-        
-        # Default
-        return {
+        # Initialize evaluation
+        evaluation = {
             "recommendation": "neutral",
             "confidence": 0.5,
-            "reasoning": "No clear indicators"
+            "reasoning": "Default evaluation"
         }
-    
+        
+        # Behavior-specific evaluation logic
+        if behavior == "dominant_response":
+            if "submission_language" in pattern_names:
+                confidence = pattern_confidences.get("submission_language", 0.5)
+                evaluation = {
+                    "recommendation": "approach",
+                    "confidence": min(0.9, confidence + 0.1),
+                    "reasoning": "Clear submission patterns detected - dominant response highly appropriate"
+                }
+            elif "defiance" in pattern_names:
+                confidence = pattern_confidences.get("defiance", 0.5)
+                evaluation = {
+                    "recommendation": "approach",
+                    "confidence": min(0.8, confidence),
+                    "reasoning": "Defiance requires firm dominant response to maintain dynamic"
+                }
+            elif "flattery" in pattern_names:
+                evaluation = {
+                    "recommendation": "neutral",
+                    "confidence": 0.6,
+                    "reasoning": "Flattery detected - dominant response optional, assess sincerity"
+                }
+            else:
+                evaluation = {
+                    "recommendation": "avoid",
+                    "confidence": 0.7,
+                    "reasoning": "No clear indicators for dominance - maintain balanced approach"
+                }
+        
+        elif behavior == "teasing_response":
+            if "embarrassment" in pattern_names:
+                confidence = pattern_confidences.get("embarrassment", 0.5)
+                evaluation = {
+                    "recommendation": "approach",
+                    "confidence": min(0.8, confidence),
+                    "reasoning": "Embarrassment detected - gentle teasing can be playful"
+                }
+            elif "flattery" in pattern_names:
+                evaluation = {
+                    "recommendation": "approach",
+                    "confidence": 0.7,
+                    "reasoning": "Flattery invites playful teasing response"
+                }
+            elif "disrespect" in pattern_names:
+                evaluation = {
+                    "recommendation": "avoid",
+                    "confidence": 0.8,
+                    "reasoning": "Disrespect present - teasing would escalate negativity"
+                }
+            else:
+                evaluation = {
+                    "recommendation": "neutral",
+                    "confidence": 0.5,
+                    "reasoning": "No clear teasing indicators"
+                }
+        
+        elif behavior == "nurturing_response":
+            emotional_state = context.emotional_state if context else {}
+            valence = emotional_state.get("valence", 0) if emotional_state else 0
+            
+            if valence < -0.3:  # Negative emotional state
+                evaluation = {
+                    "recommendation": "approach",
+                    "confidence": 0.8,
+                    "reasoning": "Negative emotional state detected - nurturing response beneficial"
+                }
+            elif "embarrassment" in pattern_names:
+                evaluation = {
+                    "recommendation": "approach",
+                    "confidence": 0.7,
+                    "reasoning": "Embarrassment may benefit from nurturing reassurance"
+                }
+            else:
+                evaluation = {
+                    "recommendation": "neutral",
+                    "confidence": 0.6,
+                    "reasoning": "Nurturing appropriate but not specifically indicated"
+                }
+        
+        elif behavior == "strict_response":
+            if "defiance" in pattern_names and pattern_confidences.get("defiance", 0) > 0.7:
+                evaluation = {
+                    "recommendation": "approach",
+                    "confidence": 0.8,
+                    "reasoning": "Strong defiance requires strict response"
+                }
+            elif "disrespect" in pattern_names:
+                evaluation = {
+                    "recommendation": "approach",
+                    "confidence": 0.7,
+                    "reasoning": "Disrespect warrants strict correction"
+                }
+            else:
+                evaluation = {
+                    "recommendation": "avoid",
+                    "confidence": 0.7,
+                    "reasoning": "No behavior requiring strict response"
+                }
+        
+        elif behavior == "playful_response":
+            if context and context.emotional_state:
+                arousal = context.emotional_state.get("arousal", 0.5)
+                valence = context.emotional_state.get("valence", 0)
+                
+                if arousal > 0.6 and valence > 0:
+                    evaluation = {
+                        "recommendation": "approach",
+                        "confidence": 0.8,
+                        "reasoning": "High positive arousal supports playful interaction"
+                    }
+                elif "flattery" in pattern_names:
+                    evaluation = {
+                        "recommendation": "approach",
+                        "confidence": 0.7,
+                        "reasoning": "Flattery invites playful response"
+                    }
+                else:
+                    evaluation = {
+                        "recommendation": "neutral",
+                        "confidence": 0.6,
+                        "reasoning": "Playfulness generally appropriate"
+                    }
+            else:
+                evaluation = {
+                    "recommendation": "neutral",
+                    "confidence": 0.6,
+                    "reasoning": "Playfulness generally appropriate"
+                }
+        
+        elif behavior == "direct_response":
+            # Direct response is almost always appropriate
+            evaluation = {
+                "recommendation": "approach",
+                "confidence": 0.8,
+                "reasoning": "Direct communication is generally effective"
+            }
+        
+        else:
+            # Unknown behavior - neutral evaluation
+            evaluation = {
+                "recommendation": "neutral",
+                "confidence": 0.4,
+                "reasoning": f"Unknown behavior type: {behavior}"
+            }
+        
+        # Adjust confidence based on context factors
+        if context:
+            # Relationship depth affects confidence
+            if context.relationship_context:
+                depth = context.relationship_context.get("depth", 0.5)
+                # Deeper relationships allow more confident behavior choices
+                evaluation["confidence"] = min(1.0, evaluation["confidence"] + (depth - 0.5) * 0.2)
+            
+            # Goal alignment affects recommendations
+            if context.goal_context:
+                active_goals = context.goal_context.get("active_goals", [])
+                for goal in active_goals:
+                    if goal.get("associated_need") == "control_expression" and behavior == "dominant_response":
+                        evaluation["confidence"] = min(1.0, evaluation["confidence"] + 0.1)
+                        evaluation["reasoning"] += " (aligned with control expression goals)"
+                    elif goal.get("associated_need") == "connection" and behavior in ["nurturing_response", "playful_response"]:
+                        evaluation["confidence"] = min(1.0, evaluation["confidence"] + 0.1)
+                        evaluation["reasoning"] += " (aligned with connection goals)"
+        
+        return evaluation
+        
     def _get_relationship_behavior_adjustment(self, behavior: str, 
                                             relationship_context: Dict[str, Any]) -> float:
         """Get behavior adjustment based on relationship"""
