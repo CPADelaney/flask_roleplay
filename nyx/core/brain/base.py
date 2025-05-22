@@ -459,7 +459,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             
             self.theory_of_mind = TheoryOfMind(relationship_manager=self.relationship_manager, multimodal_integrator=self.multimodal_integrator, memory_core=self.memory_core)
             if self.theory_of_mind:
-                from nyx.core.brain.context_aware_theory_of_mind import ContextAwareTheoryOfMind
+                from nyx.core.a2a.context_aware_theory_of_mind import ContextAwareTheoryOfMind
                 self.theory_of_mind = ContextAwareTheoryOfMind(self.theory_of_mind)
                 logger.debug("Enhanced TheoryOfMind with context distribution")
                 
