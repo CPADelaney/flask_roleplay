@@ -253,10 +253,10 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
         if self._initializing_flag:
             logger.warning(f"NyxBrain {self.user_id}-{self.conversation_id} ALREADY INITIALIZING. Skipping re-entrant call.")
             return
-
+    
         self._initializing_flag = True
         logger.critical(f"NyxBrain.initialize() ENTERED for {self.user_id}-{self.conversation_id}. Current self.initialized: {self.initialized}")
-
+    
         
         logger.info(f"Initializing NyxBrain for user {self.user_id}, conversation {self.conversation_id}")
         
@@ -305,16 +305,16 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             from nyx.core.femdom.orgasm_control import OrgasmControlSystem
             from nyx.core.femdom.persona_manager import DominancePersonaManager
             from nyx.core.femdom.sadistic_responses import SadisticResponseSystem          
-
+    
             from nyx.core.issue_tracking_system import IssueTrackingSystem
             from nyx.core.passive_observation import PassiveObservationSystem
             from nyx.core.proactive_communication import ProactiveCommunicationEngine            
-
+    
             from nyx.core.spatial.spatial_mapper import SpatialMapper
             from nyx.core.spatial.spatial_memory import SpatialMemoryIntegration
             from nyx.core.spatial.map_visualization import MapVisualization
             from nyx.core.spatial.navigator_agent import SpatialNavigatorAgent
-
+    
             from nyx.core.brain.adaptation.self_config import SelfConfigManager, EnhancedConfigManager, UnifiedConfigManager
             
             # Sync system imports
@@ -330,7 +330,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             from nyx.core.interaction_mode_manager import InteractionModeManager
             from nyx.core.mode_integration import ModeIntegrationManager
             from nyx.core.integration.integration_manager import IntegrationManager
-
+    
             from nyx.core.procedural_memory.manager import ProceduralMemoryManager
             from nyx.core.procedural_memory.agent import ProceduralMemoryAgents, AgentEnhancedMemoryManager
     
@@ -345,6 +345,9 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             from nyx.core.conditioning_maintenance import ConditioningMaintenanceSystem
             from nyx.core.input_processor import BlendedInputProcessor  # Import input processor
             
+            # Import A2A context-aware wrappers
+            from nyx.core.a2a.context_aware_conditioning import ContextAwareConditioningSystem
+            from nyx.core.a2a.context_aware_context_system import ContextAwareContextSystem
     
             from dev_log.storage import get_dev_log_storage
             self.dev_log_storage = get_dev_log_storage()
@@ -358,14 +361,17 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             except ImportError:
                 try: from nyx.core.social.relationship_manager import RelationshipManager; has_relationship_manager = True
                 except ImportError: logger.warning("RelationshipManager module not found.")
-
+    
+            # A2A Integration control flag
+            self.use_a2a_integration = getattr(self, 'use_a2a_integration', True)  # Default to True
+    
             # --- Step 2: Support Systems & Configs ---
             logger.debug(f"NyxBrain Init Step 2: Support systems for {self.user_id}-{self.conversation_id}")
             self.module_optimizer = ModuleOptimizer(self)
             self.system_health_checker = SystemHealthChecker(self)
             self.checkpoint_planner = CheckpointingPlannerAgent()
             self.context_config = { "focus_limit": 4, "background_limit": 3, "zoom_in_limit": 2, "high_fidelity_threshold": 0.7, "med_fidelity_threshold": 0.5, "low_fidelity_threshold": 0.3, "max_context_tokens": 3500 }
-
+    
             # --- Step 3: Core Systems - Tier 1 ---
             logger.debug(f"NyxBrain Init Step 3: Core Systems - Tier 1 for {self.user_id}-{self.conversation_id}")
             if self.config.emotional_core.enabled and self.config.hormone_system.enabled:
@@ -405,7 +411,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
                 
                 original_hormone_system = HormoneSystem()
                 self.hormone_system = ContextAwareHormoneSystem(original_hormone_system)
-
+    
             self.memory_core = MemoryCoreAgents(self.user_id, self.conversation_id)
             await self.memory_core.initialize()
             self.memory_orchestrator = MemoryOrchestrator(self.user_id, self.conversation_id)
@@ -418,7 +424,17 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             self.reasoning_triage_agent = reasoning_triage_agent
             self.internal_feedback = InternalFeedbackSystem()
             self.dynamic_adaptation = DynamicAdaptationSystem()
-            self.context_system = ContextAwarenessSystem(emotional_core=self.emotional_core)
+            
+            # Initialize base context system
+            base_context_system = ContextAwarenessSystem(emotional_core=self.emotional_core)
+            
+            # Wrap with context-aware version if A2A enabled
+            if self.use_a2a_integration:
+                self.context_system = ContextAwareContextSystem(base_context_system)
+                logger.debug("Enhanced ContextAwarenessSystem with A2A context distribution")
+            else:
+                self.context_system = base_context_system
+            
             self.experience_interface = ExperienceInterface(self.memory_core, self.emotional_core)
             self.experience_consolidation = ExperienceConsolidationSystem(memory_core=self.memory_core, experience_interface=self.experience_interface)
             self.cross_user_manager = CrossUserExperienceManager(memory_core=self.memory_core, experience_interface=self.experience_interface)
@@ -426,8 +442,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             await self.temporal_perception.initialize(brain_context=self, first_interaction_timestamp=None)
             self.procedural_memory_manager = ProceduralMemoryManager()
             self.agent_enhanced_memory = AgentEnhancedMemoryManager(memory_manager=self.procedural_memory_manager)
-
-
+    
             # --- Step 4: Core Systems - Tier 2 (Reward, DSS, Conditioning) ---
             self.goal_manager = GoalManager(brain_reference=self)
             if self.goal_manager:
@@ -459,31 +474,58 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             await self.digital_somatosensory_system.initialize()
             self.reward_system.somatosensory_system = self.digital_somatosensory_system
             if self.identity_evolution: self.identity_evolution.somatosensory_system = self.digital_somatosensory_system
-
+    
+            # Initialize conditioning configuration
             self.conditioning_config = ConditioningConfiguration()
-            self.conditioning_system = ConditioningSystem(
-                reward_system=self.reward_system, emotional_core=self.emotional_core,
-                memory_core=self.memory_core, somatosensory_system=self.digital_somatosensory_system
+            
+            # Initialize base conditioning system
+            base_conditioning_system = ConditioningSystem(
+                reward_system=self.reward_system, 
+                emotional_core=self.emotional_core,
+                memory_core=self.memory_core, 
+                somatosensory_system=self.digital_somatosensory_system
             )
-            self.conditioning_maintenance = ConditioningMaintenanceSystem(conditioning_system=self.conditioning_system, reward_system=self.reward_system)
+            
+            # Store base system for reference if needed
+            self._base_conditioning_system = base_conditioning_system
+            
+            # Wrap with context-aware version if A2A enabled
+            if self.use_a2a_integration:
+                self.conditioning_system = ContextAwareConditioningSystem(base_conditioning_system)
+                logger.debug("Enhanced ConditioningSystem with A2A context distribution")
+            else:
+                self.conditioning_system = base_conditioning_system
+            
+            # Initialize dependent systems with the (possibly wrapped) conditioning system
+            self.conditioning_maintenance = ConditioningMaintenanceSystem(
+                conditioning_system=self.conditioning_system,  # Will work with wrapped version
+                reward_system=self.reward_system
+            )
             await self.conditioning_maintenance.start_maintenance_scheduler(run_immediately=False)
+            
+            # Initialize input processor with the (possibly wrapped) conditioning system
             self.conditioned_input_processor = BlendedInputProcessor(
-                conditioning_system=self.conditioning_system, emotional_core=self.emotional_core, somatosensory_system=self.digital_somatosensory_system
+                conditioning_system=self.conditioning_system,  # Will work with wrapped version
+                emotional_core=self.emotional_core, 
+                somatosensory_system=self.digital_somatosensory_system
             )
+            
+            # Initialize baseline personality
             personality_profile_obj = await self.conditioning_config.get_personality_profile()
             personality_profile_dict = personality_profile_obj.model_dump() if hasattr(personality_profile_obj, "model_dump") else personality_profile_obj
             await ConditioningSystem.initialize_baseline_personality(
-                conditioning_system=self.conditioning_system, personality_profile=personality_profile_dict
-                )
+                conditioning_system=self.conditioning_system, 
+                personality_profile=personality_profile_dict
+            )
             logger.debug("Baseline personality conditioning completed.")
-
+    
             if self.reward_system and self.needs_system:
                 if hasattr(self.reward_system, 'needs_system'): # Check if attribute exists
                     self.reward_system.needs_system = self.needs_system
                     logger.debug("Linked NeedsSystem reference to RewardSignalProcessor.")
                 else:
                     logger.warning("RewardSignalProcessor does not have a 'needs_system' attribute to link to.")
-
+    
             # --- Step 5: Higher-Level Cognitive & Interaction Systems (Part 1) ---
             logger.debug(f"NyxBrain Init Step 5: Higher-Level Systems (Part 1) for {self.user_id}-{self.conversation_id}")
             if has_relationship_manager and RelationshipManager:
@@ -498,7 +540,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             self.spatial_memory = SpatialMemoryIntegration(spatial_mapper=self.spatial_mapper, memory_core=self.memory_core)
             self.map_visualization = MapVisualization()
             self.navigator_agent = SpatialNavigatorAgent(spatial_mapper=self.spatial_mapper)
-
+    
             # --- Step 6: Specialized Systems (FemDom, Creative, Novelty, etc.) ---
             logger.debug(f"NyxBrain Init Step 6: Specialized Systems for {self.user_id}-{self.conversation_id}")
             
@@ -538,14 +580,14 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             # --- END CORRECTION ---
             await self.femdom_integration_manager.initialize()
             logger.debug("Femdom integration manager initialized")
-
+    
             self.novelty_engine = NoveltyEngine(imagination_simulator=self.imagination_simulator, memory_core=self.memory_core)
             await self.novelty_engine.initialize()
             self.recognition_memory = RecognitionMemorySystem(memory_core=self.memory_core, context_awareness=self.context_system)
             await self.recognition_memory.initialize()
             self.creative_memory = CreativeMemoryIntegration(novelty_engine=self.novelty_engine, recognition_memory=self.recognition_memory, memory_core=self.memory_core)
             await self.creative_memory.initialize()
-
+    
             self.creative_system = await integrate_with_existing_system(self)
             if hasattr(self.creative_system, 'storage') and self.creative_system.storage and \
                hasattr(self.creative_system.storage, 'db_path') and \
@@ -563,8 +605,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
                 logger.info(f"Creative system initialized. Content store base: {getattr(self.content_store, 'base_directory', 'N/A')}")
             else:
                 logger.warning("Creative system or its sub-components (storage/content_system) not fully available after integration.")
-
-
+    
             # --- Step 7: Agentic Action Generator and systems depending on it ---
             logger.debug(f"NyxBrain Init Step 7: Agentic Action Generator & Dependent Systems for {self.user_id}-{self.conversation_id}")
             self.meta_core = MetaCore()
@@ -578,7 +619,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
                 "theory_of_mind": self.theory_of_mind, "imagination": self.imagination_simulator
             }
             await self.meta_core.initialize(meta_core_deps)
-
+    
             self.agentic_action_generator = EnhancedAgenticActionGenerator(
                 emotional_core=self.emotional_core, hormone_system=self.hormone_system,
                 experience_interface=self.experience_interface, imagination_simulator=self.imagination_simulator,
@@ -602,10 +643,10 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
                 relationship_reflection=getattr(self, 'relationship_reflection', None)
             )
             logger.debug("AgenticActionGenerator instance created.")
-
+    
             if self.agentic_action_generator and hasattr(self.agentic_action_generator, 'initialize_actions'):
                  await self.agentic_action_generator.initialize_actions()
-
+    
             self.passive_observation_system = PassiveObservationSystem(
                 action_generator=self.agentic_action_generator, emotional_core=self.emotional_core,
                 memory_core=self.memory_core, relationship_manager=self.relationship_manager,
@@ -614,7 +655,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
                 identity_evolution=self.identity_evolution, attention_controller=self.attentional_controller
             )
             await self.passive_observation_system.start()
-
+    
             self.proactive_communication_engine = ProactiveCommunicationEngine(
                 action_generator=self.agentic_action_generator, emotional_core=self.emotional_core,
                 memory_core=self.memory_core, relationship_manager=self.relationship_manager,
@@ -623,7 +664,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
                 identity_evolution=self.identity_evolution
             )
             await self.proactive_communication_engine.start()
-
+    
             self.reflection_engine = ReflectionEngine(
                 memory_core_ref=self.memory_core, emotional_core=self.emotional_core,
                 passive_observation_system=self.passive_observation_system,
@@ -635,7 +676,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             if self.proactive_communication_engine: self.proactive_communication_engine.reflection_engine = self.reflection_engine
             if self.meta_core and hasattr(self.meta_core, 'context_data') and isinstance(self.meta_core.context_data, dict): # Ensure context_data is dict
                  self.meta_core.context_data['reflection'] = self.reflection_engine
-
+    
             self.thoughts_manager = InternalThoughtsManager(
                 passive_observation_system=self.passive_observation_system, reflection_engine=self.reflection_engine,
                 imagination_simulator=self.imagination_simulator, theory_of_mind=self.theory_of_mind,
@@ -644,30 +685,30 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
                 emotional_core=self.emotional_core, memory_core=self.memory_core
             )
             logger.debug("AgenticActionGenerator dependent systems initialized.")
-
+    
             # --- Step 8: Remaining Managers, Agents, and Final Integrations ---
             logger.debug(f"NyxBrain Init Step 8: Final Managers, Agents, Integrations for {self.user_id}-{self.conversation_id}")
             self.mode_manager = InteractionModeManager(context_system=self.context_system, emotional_core=self.emotional_core, reward_system=self.reward_system, goal_manager=self.goal_manager)
             self.mode_integration = ModeIntegrationManager(nyx_brain=self)
             if self.agentic_action_generator: self.agentic_action_generator.mode_integration = self.mode_integration
-
+    
             self.issue_tracking_system = IssueTrackingSystem(db_path=f"issues_db_{self.user_id}_{self.conversation_id}.json")
             self.processing_manager = ProcessingManager(brain=self)
             await self.processing_manager.initialize()
             self.self_config_manager = SelfConfigManager(brain=self)
-
+    
             if 'create_dominance_ideation_agent' in locals() and callable(create_dominance_ideation_agent):
                 self.general_dominance_ideation_agent = create_dominance_ideation_agent()
                 self.hard_dominance_ideation_agent = create_hard_dominance_ideation_agent()
-
+    
             try:
                 from nyx.core.reflexive_system import ReflexiveSystem
                 self.reflexive_system = ReflexiveSystem(agent_enhanced_memory=self.agent_enhanced_memory)
                 if hasattr(self.reflexive_system, "initialize"): await self.reflexive_system.initialize()
             except ImportError: logger.info("Reflexive system module not found.")
-
+    
             self.brain_agent = self._create_brain_agent()
-
+    
             self.integration_manager = create_integration_manager(self)
             await self.integration_manager.initialize()
             self.sync_daemon = NyxSyncDaemon()
@@ -678,33 +719,36 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
                 "think_before_responding": function_tool(generate_reasoned_response),
                 "generate_reasoned_response": function_tool(generate_reasoned_response)
             }
-
+    
             await self._register_processing_modules()
             await self.integrate_procedural_memory_with_actions()
             if hasattr(self, "agentic_action_generator") and hasattr(self, "_register_creative_actions") and callable(self._register_creative_actions):
                  await self._register_creative_actions()
-
+    
             self.processing_manager = ProcessingManager(self)
             await self.processing_manager.initialize()
-
-            await self.initialize_context_system()
-            
-            logger.info("NyxBrain initialization complete with context distribution")
-
+    
+            # Initialize the A2A context distribution system if enabled
+            if self.use_a2a_integration:
+                await self.initialize_context_system()
+                logger.critical("NyxBrain initialization complete with A2A context distribution")
+            else:
+                logger.critical("NyxBrain initialization complete (standard mode)")
+    
             await self._build_internal_module_registry()
             self.default_active_modules = {
                 "attentional_controller", "emotional_core", "mode_integration", "memory_core",
                 "internal_thoughts", "agentic_action_generator", "relationship_manager",
             }
             self.default_active_modules = {mod for mod in self.default_active_modules if hasattr(self, mod) and getattr(self, mod)}
-
+    
             if os.environ.get("ENABLE_AGENT", "true").lower() == "true": await self.initialize_agent_capabilities()
             if os.environ.get("ENABLE_STREAMING", "false").lower() == "true": await self.initialize_streaming()
-
+    
             # --- Step 9: Finalization ---
             self.initialized = True
             logger.critical(f"NyxBrain.initialize() COMPLETED SUCCESSFULLY for {self.user_id}-{self.conversation_id}. self.initialized set to True.")
-
+    
         except Exception as e:
             logger.critical(f"NyxBrain.initialize() FAILED for {self.user_id}-{self.conversation_id}: {e}", exc_info=True)
             self.initialized = False
