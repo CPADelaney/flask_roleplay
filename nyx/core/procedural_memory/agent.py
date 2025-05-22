@@ -228,6 +228,19 @@ class ProceduralMemoryAgents:
     
     def __init__(self, memory_manager):
         """Initialize with a reference to the procedural memory manager"""
+
+        import os
+        from agents import set_default_openai_key
+        
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            logger.error("OPENAI_API_KEY not found for procedural memory agents")
+            raise ValueError("OPENAI_API_KEY environment variable must be set")
+        
+        # Explicitly set the API key for this module
+        set_default_openai_key(api_key)
+        logger.info("OpenAI API key configured for procedural memory agents")
+        
         self.memory_manager = memory_manager
         self.agent_context = AgentContext(memory_manager)
         
