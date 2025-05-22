@@ -23,7 +23,11 @@ async def process_user_message(ctx, user_input: str, context: Optional[Dict[str,
     brain = ctx.context
     
     # Process through the full system
-    result = await brain.process_input(user_input, context)
+    result = await brain.process_input(
+        user_input, 
+        context,
+        mode="auto"  # Let it auto-detect features
+    )
     return result
 
 @function_tool
