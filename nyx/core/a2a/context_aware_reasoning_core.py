@@ -778,21 +778,90 @@ class ContextAwareReasoningCore(ContextAwareModule):
     # HELPER METHODS
     # ========================================================================================
     
+    # Replace simplified _extract_domain_keywords
     def _extract_domain_keywords(self, text: str) -> List[str]:
-        """Extract domain-related keywords from text"""
-        # Common domain indicators
-        domain_patterns = [
-            "climate", "health", "economics", "psychology", "technology",
-            "relationships", "emotions", "learning", "behavior", "society",
-            "environment", "politics", "art", "science", "philosophy"
-        ]
-        
+        """Extract domain-related keywords from text using multiple strategies"""
         keywords = []
-        for pattern in domain_patterns:
-            if pattern in text:
-                keywords.append(pattern)
+        text_lower = text.lower()
         
-        return keywords
+        # Expanded domain vocabulary with subcategories
+        domain_patterns = {
+            "climate": ["climate", "weather", "temperature", "warming", "carbon", "emissions", 
+                       "greenhouse", "environmental", "sustainability", "renewable"],
+            "health": ["health", "medical", "disease", "treatment", "symptoms", "diagnosis",
+                      "wellness", "medicine", "patient", "therapy", "clinical", "healthcare"],
+            "economics": ["economics", "economy", "market", "finance", "trade", "investment",
+                         "inflation", "gdp", "monetary", "fiscal", "business", "commerce"],
+            "psychology": ["psychology", "mental", "cognitive", "behavior", "emotional", 
+                          "personality", "consciousness", "perception", "motivation", "learning"],
+            "technology": ["technology", "software", "hardware", "ai", "algorithm", "data",
+                          "computing", "digital", "innovation", "automation", "cyber"],
+            "relationships": ["relationship", "social", "interpersonal", "communication",
+                             "family", "friendship", "conflict", "trust", "love", "attachment"],
+            "education": ["education", "learning", "teaching", "academic", "curriculum",
+                         "pedagogy", "student", "knowledge", "skill", "training"],
+            "politics": ["politics", "government", "policy", "democracy", "election",
+                        "legislation", "governance", "political", "civic", "administration"],
+            "biology": ["biology", "biological", "organism", "evolution", "genetics",
+                       "ecology", "cell", "species", "ecosystem", "life"],
+            "physics": ["physics", "quantum", "energy", "force", "motion", "particle",
+                       "wave", "field", "relativity", "mechanics", "thermodynamics"]
+        }
+        
+        # Multi-word domain indicators
+        compound_patterns = {
+            "machine_learning": ["machine learning", "deep learning", "neural network"],
+            "public_health": ["public health", "epidemiology", "population health"],
+            "behavioral_economics": ["behavioral economics", "decision making", "choice architecture"],
+            "climate_science": ["climate science", "global warming", "climate change"],
+            "social_psychology": ["social psychology", "group dynamics", "social influence"]
+        }
+        
+        # Check for domain matches
+        domains_found = set()
+        
+        # Single word patterns
+        for domain, patterns in domain_patterns.items():
+            domain_score = sum(1 for pattern in patterns if pattern in text_lower)
+            if domain_score >= 2:  # At least 2 keywords from domain
+                domains_found.add(domain)
+                keywords.append(domain)
+            elif domain_score == 1 and len(text_lower.split()) < 20:
+                # For short texts, even one keyword might be significant
+                domains_found.add(domain)
+                keywords.append(domain)
+        
+        # Compound patterns
+        for domain, patterns in compound_patterns.items():
+            if any(pattern in text_lower for pattern in patterns):
+                keywords.append(domain)
+        
+        # Extract domain-specific technical terms
+        technical_terms = self._extract_technical_terms(text_lower, domains_found)
+        keywords.extend(technical_terms)
+        
+        return list(set(keywords))  # Remove duplicates
+    
+    def _extract_technical_terms(self, text: str, domains: Set[str]) -> List[str]:
+        """Extract technical terms based on identified domains"""
+        technical_terms = []
+        
+        # Domain-specific technical vocabularies
+        domain_technical = {
+            "climate": ["mitigation", "adaptation", "anthropogenic", "albedo", "feedback loop"],
+            "health": ["pathogen", "etiology", "prognosis", "comorbidity", "epidemiological"],
+            "economics": ["elasticity", "equilibrium", "arbitrage", "liquidity", "volatility"],
+            "psychology": ["conditioning", "heuristic", "schema", "attribution", "metacognition"],
+            "technology": ["scalability", "latency", "throughput", "architecture", "optimization"]
+        }
+        
+        for domain in domains:
+            if domain in domain_technical:
+                for term in domain_technical[domain]:
+                    if term in text:
+                        technical_terms.append(term)
+        
+        return technical_terms
     
     def _infer_domain_from_context(self, context: SharedContext) -> str:
         """Infer domain from context"""
@@ -812,21 +881,111 @@ class ContextAwareReasoningCore(ContextAwareModule):
         return "general"
     
     def _is_node_relevant_to_context(self, node, context: SharedContext) -> bool:
-        """Check if a causal node is relevant to current context"""
+        """Comprehensive node relevance assessment"""
+        relevance_score = 0.0
+        
         node_name_lower = node.name.lower()
         input_lower = context.user_input.lower()
         
-        # Direct name match
-        if any(word in node_name_lower for word in input_lower.split()):
-            return True
+        # 1. Direct name matching (with stemming considerations)
+        input_words = set(input_lower.split())
+        node_words = set(node_name_lower.split())
         
-        # Domain match
-        if node.domain:
+        # Exact word matches
+        exact_matches = input_words.intersection(node_words)
+        relevance_score += len(exact_matches) * 0.3
+        
+        # Partial word matches (prefix/suffix)
+        for input_word in input_words:
+            for node_word in node_words:
+                if len(input_word) > 3 and len(node_word) > 3:
+                    if input_word.startswith(node_word[:3]) or node_word.startswith(input_word[:3]):
+                        relevance_score += 0.1
+        
+        # 2. Semantic similarity using word embeddings simulation
+        semantic_sim = self._calculate_semantic_similarity(node_name_lower, input_lower)
+        relevance_score += semantic_sim * 0.2
+        
+        # 3. Domain matching
+        if hasattr(node, 'domain') and node.domain:
             domain_keywords = self._extract_domain_keywords(input_lower)
             if any(kw in node.domain.lower() for kw in domain_keywords):
-                return True
+                relevance_score += 0.2
         
-        return False
+        # 4. Property matching
+        if hasattr(node, 'properties'):
+            for prop_name, prop_value in node.properties.items():
+                if isinstance(prop_value, str):
+                    if any(word in prop_value.lower() for word in input_words):
+                        relevance_score += 0.1
+        
+        # 5. Contextual factors
+        # Goal relevance
+        if context.goal_context:
+            goals = context.goal_context.get("active_goals", [])
+            for goal in goals:
+                goal_desc = goal.get("description", "").lower()
+                if any(word in node_name_lower for word in goal_desc.split()):
+                    relevance_score += 0.15
+        
+        # Emotional relevance
+        if context.emotional_state:
+            emotion = context.emotional_state.get("dominant_emotion")
+            if emotion and self._node_aligns_with_emotion(node, emotion[0]):
+                relevance_score += 0.1
+        
+        # 6. Graph structural relevance
+        if hasattr(node, 'centrality_score'):
+            # High centrality nodes are generally more relevant
+            relevance_score += node.centrality_score * 0.1
+        
+        # 7. Temporal relevance
+        if hasattr(node, 'timestamp'):
+            # Recent nodes might be more relevant
+            time_diff = (datetime.now() - node.timestamp).days
+            if time_diff < 7:
+                relevance_score += 0.1
+            elif time_diff < 30:
+                relevance_score += 0.05
+        
+        return relevance_score > 0.25  # Threshold for relevance
+    
+    def _calculate_semantic_similarity(self, text1: str, text2: str) -> float:
+        """Calculate semantic similarity between texts"""
+        # Simplified semantic similarity using concept overlap
+        # In production, would use word embeddings
+        
+        words1 = set(text1.split())
+        words2 = set(text2.split())
+        
+        # Remove stop words
+        stop_words = {"the", "is", "at", "which", "on", "a", "an", "and", "or", "but"}
+        words1 = words1 - stop_words
+        words2 = words2 - stop_words
+        
+        if not words1 or not words2:
+            return 0.0
+        
+        # Calculate Jaccard similarity
+        intersection = len(words1.intersection(words2))
+        union = len(words1.union(words2))
+        
+        return intersection / union if union > 0 else 0.0
+    
+    def _node_aligns_with_emotion(self, node, emotion: str) -> bool:
+        """Check if node aligns with emotional state"""
+        node_name_lower = node.name.lower()
+        
+        emotion_associations = {
+            "Curiosity": ["unknown", "mystery", "explore", "discover", "new", "novel", "interesting"],
+            "Anxiety": ["threat", "danger", "risk", "worry", "concern", "fear", "uncertain"],
+            "Joy": ["success", "achievement", "positive", "good", "happy", "benefit", "reward"],
+            "Frustration": ["problem", "obstacle", "difficult", "blocked", "challenge", "stuck"],
+            "Satisfaction": ["complete", "achieved", "solved", "finished", "successful", "done"]
+        }
+        
+        associations = emotion_associations.get(emotion, [])
+        return any(assoc in node_name_lower for assoc in associations)
     
     async def _extract_causal_insights(self, model_id: str, context: SharedContext) -> List[Dict[str, Any]]:
         """Extract causal insights from a model"""
@@ -1890,28 +2049,154 @@ class ContextAwareReasoningCore(ContextAwareModule):
             return "intermediate"  # Regular concept
     
     def _find_hierarchical_patterns(self, space) -> List[Dict[str, Any]]:
-        """Find hierarchical organization patterns in the concept space"""
+        """Comprehensive hierarchical pattern detection"""
         hierarchies = []
         
-        # Look for IS-A or PART-OF relations
-        hierarchical_relations = ["is_a", "type_of", "part_of", "subset_of", "instance_of"]
+        # Extended hierarchical relations
+        hierarchical_relations = [
+            "is_a", "type_of", "kind_of", "instance_of", "example_of",
+            "part_of", "component_of", "member_of", "subset_of", "belongs_to",
+            "inherits_from", "derives_from", "extends", "implements",
+            "generalizes", "specializes", "abstracts", "refines"
+        ]
         
-        # Build hierarchy trees
-        roots = []
-        for concept_id, concept in space.concepts.items():
-            # Check if this could be a root (no hierarchical parents)
-            has_parent = any(
-                r["target"] == concept_id and r.get("relation_type") in hierarchical_relations
-                for r in space.relations
-            )
+        # Build parent-child mappings
+        parent_children = defaultdict(list)
+        child_parents = defaultdict(list)
+        
+        for relation in space.relations:
+            if relation.get("relation_type") in hierarchical_relations:
+                parent = relation["source"]
+                child = relation["target"]
+                parent_children[parent].append(child)
+                child_parents[child].append(parent)
+        
+        # Find roots (nodes with no hierarchical parents)
+        all_nodes = set(space.concepts.keys())
+        potential_roots = all_nodes - set(child_parents.keys())
+        
+        # Build hierarchies from each root
+        for root_id in potential_roots:
+            hierarchy = self._build_hierarchy_tree(root_id, parent_children, space)
             
-            if not has_parent:
-                # Found potential root
-                hierarchy = self._trace_hierarchy(concept_id, space, hierarchical_relations)
-                if hierarchy["depth"] > 1:  # Only include actual hierarchies
-                    hierarchies.append(hierarchy)
+            if hierarchy["total_nodes"] > 2:  # Meaningful hierarchy
+                hierarchies.append(hierarchy)
+        
+        # Detect polyhierarchies (nodes with multiple parents)
+        polyhierarchical_nodes = [
+            node for node, parents in child_parents.items() 
+            if len(parents) > 1
+        ]
+        
+        # Analyze hierarchy characteristics
+        for hierarchy in hierarchies:
+            hierarchy["characteristics"] = self._analyze_hierarchy_characteristics(
+                hierarchy, polyhierarchical_nodes, space
+            )
         
         return hierarchies
+    
+    def _build_hierarchy_tree(self, root_id: str, parent_children: Dict, space) -> Dict[str, Any]:
+        """Build complete hierarchy tree from root"""
+        hierarchy = {
+            "root": root_id,
+            "root_name": space.concepts[root_id]["name"],
+            "levels": defaultdict(list),
+            "total_nodes": 1,
+            "max_depth": 0,
+            "avg_branching_factor": 0.0,
+            "tree_structure": {}
+        }
+        
+        # BFS to build levels
+        queue = [(root_id, 0)]
+        visited = {root_id}
+        node_levels = {root_id: 0}
+        
+        while queue:
+            current_id, level = queue.pop(0)
+            hierarchy["levels"][level].append(current_id)
+            hierarchy["max_depth"] = max(hierarchy["max_depth"], level)
+            
+            # Get children
+            children = parent_children.get(current_id, [])
+            hierarchy["tree_structure"][current_id] = children
+            
+            for child_id in children:
+                if child_id not in visited:
+                    visited.add(child_id)
+                    queue.append((child_id, level + 1))
+                    node_levels[child_id] = level + 1
+                    hierarchy["total_nodes"] += 1
+        
+        # Calculate average branching factor
+        total_branches = sum(len(children) for children in parent_children.values())
+        nodes_with_children = len([n for n in parent_children if parent_children[n]])
+        
+        if nodes_with_children > 0:
+            hierarchy["avg_branching_factor"] = total_branches / nodes_with_children
+        
+        return hierarchy
+    
+    def _analyze_hierarchy_characteristics(self, hierarchy: Dict, 
+                                         polyhierarchical_nodes: List, 
+                                         space) -> Dict[str, Any]:
+        """Analyze characteristics of a hierarchy"""
+        characteristics = {
+            "hierarchy_type": "unknown",
+            "balance": "unknown",
+            "specialization_pattern": "unknown",
+            "semantic_consistency": 0.0
+        }
+        
+        # Determine hierarchy type
+        if hierarchy["avg_branching_factor"] > 5:
+            characteristics["hierarchy_type"] = "flat"
+        elif hierarchy["max_depth"] > 5:
+            characteristics["hierarchy_type"] = "deep"
+        else:
+            characteristics["hierarchy_type"] = "balanced"
+        
+        # Analyze balance
+        level_sizes = [len(nodes) for nodes in hierarchy["levels"].values()]
+        if level_sizes:
+            size_variance = np.var(level_sizes)
+            if size_variance < 2:
+                characteristics["balance"] = "highly_balanced"
+            elif size_variance < 10:
+                characteristics["balance"] = "moderately_balanced"
+            else:
+                characteristics["balance"] = "unbalanced"
+        
+        # Analyze specialization pattern
+        if hierarchy["max_depth"] > 0:
+            deeper_levels_avg = np.mean([len(hierarchy["levels"][i]) 
+                                        for i in range(1, hierarchy["max_depth"] + 1)])
+            if deeper_levels_avg > len(hierarchy["levels"][0]):
+                characteristics["specialization_pattern"] = "expanding"
+            else:
+                characteristics["specialization_pattern"] = "converging"
+        
+        # Semantic consistency check
+        consistency_scores = []
+        for level_nodes in hierarchy["levels"].values():
+            if len(level_nodes) > 1:
+                # Check semantic similarity within level
+                similarities = []
+                for i in range(len(level_nodes)):
+                    for j in range(i + 1, len(level_nodes)):
+                        concept1 = space.concepts[level_nodes[i]]
+                        concept2 = space.concepts[level_nodes[j]]
+                        sim = self._calculate_concept_similarity_simple(concept1, concept2)
+                        similarities.append(sim)
+                
+                if similarities:
+                    consistency_scores.append(np.mean(similarities))
+        
+        if consistency_scores:
+            characteristics["semantic_consistency"] = np.mean(consistency_scores)
+        
+        return characteristics
     
     def _trace_hierarchy(self, root_id: str, space, relation_types: List[str]) -> Dict[str, Any]:
         """Trace a hierarchical structure from a root concept"""
@@ -1962,34 +2247,232 @@ class ContextAwareReasoningCore(ContextAwareModule):
         return hierarchy
     
     def _find_conceptual_clusters(self, space) -> List[Dict[str, Any]]:
-        """Find clusters of tightly connected concepts"""
+        """Advanced conceptual clustering with multiple strategies"""
         clusters = []
         
-        # Simple clustering: find groups with high internal connectivity
-        visited = set()
+        # Strategy 1: Dense subgraph detection
+        dense_clusters = self._find_dense_subgraphs(space)
         
-        for concept_id in space.concepts:
-            if concept_id in visited:
-                continue
-            
-            # Find connected component
-            cluster = self._find_connected_component(concept_id, space, visited)
-            
-            if len(cluster) >= 3:  # Minimum cluster size
-                # Calculate cluster metrics
-                density = self._calculate_cluster_density(cluster, space)
-                cohesion = self._calculate_cluster_cohesion(cluster, space)
-                
-                if density > 0.3:  # Minimum density threshold
-                    clusters.append({
-                        "centers": self._find_cluster_centers(cluster, space),
-                        "members": cluster,
-                        "size": len(cluster),
-                        "density": density,
-                        "cohesion": cohesion
-                    })
+        # Strategy 2: Semantic clustering
+        semantic_clusters = self._find_semantic_clusters(space)
+        
+        # Strategy 3: Property-based clustering
+        property_clusters = self._find_property_clusters(space)
+        
+        # Merge and reconcile clusters
+        all_clusters = self._merge_cluster_results(
+            dense_clusters, semantic_clusters, property_clusters, space
+        )
+        
+        # Analyze each cluster
+        for cluster in all_clusters:
+            cluster["analysis"] = self._analyze_cluster_properties(cluster, space)
+            cluster["quality_score"] = self._calculate_cluster_quality(cluster, space)
+        
+        # Filter high-quality clusters
+        clusters = [c for c in all_clusters if c["quality_score"] > 0.4]
         
         return clusters
+    
+    def _find_dense_subgraphs(self, space) -> List[Dict[str, Any]]:
+        """Find densely connected subgraphs"""
+        clusters = []
+        visited_globally = set()
+        
+        # For each unvisited node, try to grow a cluster
+        for start_node in space.concepts:
+            if start_node in visited_globally:
+                continue
+            
+            # Grow cluster using density threshold
+            cluster = self._grow_dense_cluster(start_node, space, visited_globally)
+            
+            if len(cluster["members"]) >= 3:
+                clusters.append(cluster)
+        
+        return clusters
+    
+    def _grow_dense_cluster(self, start_node: str, space, visited_globally: set) -> Dict[str, Any]:
+        """Grow a cluster based on connection density"""
+        cluster_members = {start_node}
+        boundary = {start_node}
+        density_threshold = 0.4
+        
+        while boundary:
+            new_boundary = set()
+            
+            for node in boundary:
+                # Get neighbors
+                neighbors = self._get_concept_neighbors(node, space)
+                
+                for neighbor in neighbors:
+                    if neighbor not in cluster_members:
+                        # Check if neighbor is densely connected to cluster
+                        connections_to_cluster = sum(
+                            1 for member in cluster_members 
+                            if self._concepts_connected(neighbor, member, space)
+                        )
+                        
+                        density = connections_to_cluster / len(cluster_members)
+                        
+                        if density >= density_threshold:
+                            cluster_members.add(neighbor)
+                            new_boundary.add(neighbor)
+            
+            boundary = new_boundary
+        
+        visited_globally.update(cluster_members)
+        
+        return {
+            "members": list(cluster_members),
+            "size": len(cluster_members),
+            "density": self._calculate_cluster_density(cluster_members, space),
+            "cohesion": self._calculate_cluster_cohesion(cluster_members, space),
+            "cluster_type": "dense_subgraph"
+        }
+    
+    def _find_semantic_clusters(self, space) -> List[Dict[str, Any]]:
+        """Find clusters based on semantic similarity"""
+        clusters = []
+        similarity_threshold = 0.6
+        min_cluster_size = 3
+        
+        # Build similarity matrix
+        concepts = list(space.concepts.keys())
+        n = len(concepts)
+        similarity_matrix = np.zeros((n, n))
+        
+        for i in range(n):
+            for j in range(i + 1, n):
+                concept1 = space.concepts[concepts[i]]
+                concept2 = space.concepts[concepts[j]]
+                sim = self._calculate_enhanced_concept_similarity(concept1, concept2, space)
+                similarity_matrix[i, j] = sim
+                similarity_matrix[j, i] = sim
+        
+        # Find clusters using similarity
+        clustered = set()
+        
+        for i in range(n):
+            if i in clustered:
+                continue
+            
+            # Start new cluster
+            cluster_indices = {i}
+            
+            # Add similar concepts
+            for j in range(n):
+                if j != i and similarity_matrix[i, j] >= similarity_threshold:
+                    # Check average similarity to cluster
+                    avg_sim = np.mean([similarity_matrix[j, k] for k in cluster_indices])
+                    if avg_sim >= similarity_threshold * 0.8:  # Slightly relaxed threshold
+                        cluster_indices.add(j)
+            
+            if len(cluster_indices) >= min_cluster_size:
+                clustered.update(cluster_indices)
+                cluster_concepts = [concepts[idx] for idx in cluster_indices]
+                
+                clusters.append({
+                    "members": cluster_concepts,
+                    "size": len(cluster_concepts),
+                    "avg_similarity": np.mean([
+                        similarity_matrix[i, j] 
+                        for i in cluster_indices 
+                        for j in cluster_indices 
+                        if i != j
+                    ]),
+                    "cluster_type": "semantic"
+                })
+        
+        return clusters
+    
+    def _find_property_clusters(self, space) -> List[Dict[str, Any]]:
+        """Find clusters based on shared properties"""
+        property_groups = defaultdict(list)
+        
+        # Group concepts by properties
+        for concept_id, concept in space.concepts.items():
+            properties = concept.get("properties", {})
+            
+            # Create property signature
+            for prop_name, prop_value in properties.items():
+                if isinstance(prop_value, str):
+                    property_key = f"{prop_name}:{prop_value}"
+                else:
+                    property_key = f"{prop_name}:has_value"
+                
+                property_groups[property_key].append(concept_id)
+        
+        # Find concepts that share multiple properties
+        concept_property_sets = defaultdict(set)
+        for prop_key, concepts in property_groups.items():
+            for concept in concepts:
+                concept_property_sets[concept].add(prop_key)
+        
+        # Cluster based on property overlap
+        clusters = []
+        clustered = set()
+        
+        for concept1, props1 in concept_property_sets.items():
+            if concept1 in clustered:
+                continue
+            
+            cluster = {concept1}
+            
+            for concept2, props2 in concept_property_sets.items():
+                if concept2 != concept1 and concept2 not in clustered:
+                    overlap = len(props1.intersection(props2))
+                    if overlap >= 3:  # Share at least 3 properties
+                        cluster.add(concept2)
+            
+            if len(cluster) >= 3:
+                clustered.update(cluster)
+                clusters.append({
+                    "members": list(cluster),
+                    "size": len(cluster),
+                    "shared_properties": len(props1),
+                    "cluster_type": "property_based"
+                })
+        
+        return clusters
+    
+    def _calculate_enhanced_concept_similarity(self, concept1: Dict, concept2: Dict, space) -> float:
+        """Enhanced concept similarity calculation"""
+        similarity = 0.0
+        
+        # Name similarity (with n-gram analysis)
+        name1 = concept1["name"].lower()
+        name2 = concept2["name"].lower()
+        
+        # Word overlap
+        words1 = set(name1.split())
+        words2 = set(name2.split())
+        if words1 and words2:
+            word_similarity = len(words1.intersection(words2)) / len(words1.union(words2))
+            similarity += word_similarity * 0.3
+        
+        # Character n-gram similarity
+        ngrams1 = set(name1[i:i+3] for i in range(len(name1)-2))
+        ngrams2 = set(name2[i:i+3] for i in range(len(name2)-2))
+        if ngrams1 and ngrams2:
+            ngram_similarity = len(ngrams1.intersection(ngrams2)) / len(ngrams1.union(ngrams2))
+            similarity += ngram_similarity * 0.2
+        
+        # Property similarity
+        props1 = set(concept1.get("properties", {}).keys())
+        props2 = set(concept2.get("properties", {}).keys())
+        if props1 and props2:
+            prop_similarity = len(props1.intersection(props2)) / len(props1.union(props2))
+            similarity += prop_similarity * 0.3
+        
+        # Relation similarity (concepts connected to similar things)
+        neighbors1 = set(self._get_concept_neighbors(concept1.get("id", ""), space))
+        neighbors2 = set(self._get_concept_neighbors(concept2.get("id", ""), space))
+        if neighbors1 and neighbors2:
+            neighbor_similarity = len(neighbors1.intersection(neighbors2)) / len(neighbors1.union(neighbors2))
+            similarity += neighbor_similarity * 0.2
+        
+        return min(1.0, similarity)
     
     def _find_connected_component(self, start_id: str, space, visited: set) -> List[str]:
         """Find all concepts connected to start_id"""
@@ -2111,44 +2594,280 @@ class ContextAwareReasoningCore(ContextAwareModule):
         return "mixed_concepts"
     
     def _find_bridge_concepts(self, space) -> List[Dict[str, Any]]:
-        """Find concepts that bridge different regions of the space"""
+        """Comprehensive bridge concept detection"""
         bridges = []
         
-        # First, identify regions (using clusters)
-        clusters = self._find_conceptual_clusters(space)
+        # First, identify distinct regions using community detection
+        communities = self._detect_communities(space)
         
-        if len(clusters) < 2:
+        if len(communities) < 2:
             return bridges
         
-        # Find concepts that connect different clusters
+        # Analyze each concept for bridge potential
         for concept_id, concept in space.concepts.items():
-            connected_clusters = set()
+            bridge_score = 0.0
+            connected_communities = set()
+            bridge_connections = defaultdict(list)
             
-            # Check which clusters this concept connects to
-            for relation in space.relations:
-                if relation["source"] == concept_id:
-                    # Find which cluster the target belongs to
-                    for i, cluster in enumerate(clusters):
-                        if relation["target"] in cluster["members"]:
-                            connected_clusters.add(i)
+            # Check connections to different communities
+            neighbors = self._get_concept_neighbors(concept_id, space)
+            
+            for neighbor in neighbors:
+                # Find which community the neighbor belongs to
+                for comm_id, community in enumerate(communities):
+                    if neighbor in community["members"]:
+                        connected_communities.add(comm_id)
+                        bridge_connections[comm_id].append(neighbor)
+            
+            # A good bridge connects multiple communities
+            if len(connected_communities) >= 2:
+                # Calculate bridge importance
+                importance = self._calculate_bridge_importance(
+                    concept_id, connected_communities, communities, space
+                )
                 
-                elif relation["target"] == concept_id:
-                    # Find which cluster the source belongs to
-                    for i, cluster in enumerate(clusters):
-                        if relation["source"] in cluster["members"]:
-                            connected_clusters.add(i)
-            
-            if len(connected_clusters) >= 2:
-                # This concept bridges multiple clusters
                 bridges.append({
                     "concept": concept["name"],
                     "concept_id": concept_id,
-                    "regions": [clusters[i]["centers"][0] for i in connected_clusters],
-                    "strength": len(connected_clusters) / len(clusters),
-                    "potential": self._assess_bridge_potential(concept_id, connected_clusters, clusters, space)
+                    "regions": [communities[i]["name"] for i in connected_communities],
+                    "connections_per_region": {
+                        communities[i]["name"]: len(connections) 
+                        for i, connections in bridge_connections.items()
+                    },
+                    "strength": len(connected_communities) / len(communities),
+                    "importance": importance,
+                    "potential": self._assess_bridge_potential(concept_id, connected_communities, communities, space),
+                    "bridge_type": self._classify_bridge_type(concept_id, bridge_connections, space)
                 })
         
+        # Sort by importance
+        bridges.sort(key=lambda b: b["importance"], reverse=True)
+        
         return bridges
+    
+    def _detect_communities(self, space) -> List[Dict[str, Any]]:
+        """Detect communities using Louvain-like algorithm"""
+        # Simplified community detection
+        communities = []
+        assigned = {}
+        community_id = 0
+        
+        # Start with random seeds
+        concepts = list(space.concepts.keys())
+        np.random.shuffle(concepts)
+        
+        for concept in concepts:
+            if concept in assigned:
+                continue
+            
+            # Start new community
+            community = {"members": {concept}, "name": f"Community_{community_id}"}
+            assigned[concept] = community_id
+            
+            # Grow community
+            changed = True
+            while changed:
+                changed = False
+                
+                # Check neighbors of community members
+                for member in list(community["members"]):
+                    neighbors = self._get_concept_neighbors(member, space)
+                    
+                    for neighbor in neighbors:
+                        if neighbor not in assigned:
+                            # Calculate modularity gain
+                            gain = self._calculate_modularity_gain(
+                                neighbor, community["members"], space
+                            )
+                            
+                            if gain > 0:
+                                community["members"].add(neighbor)
+                                assigned[neighbor] = community_id
+                                changed = True
+            
+            communities.append(community)
+            community_id += 1
+        
+        return communities
+    
+    def _calculate_bridge_importance(self, bridge_id: str, connected_communities: set,
+                                   communities: List[Dict], space) -> float:
+        """Calculate importance of a bridge concept"""
+        importance = 0.0
+        
+        # Betweenness-like measure
+        total_shortest_paths = 0
+        paths_through_bridge = 0
+        
+        # Sample pairs from different communities
+        for comm1_id in connected_communities:
+            for comm2_id in connected_communities:
+                if comm1_id >= comm2_id:
+                    continue
+                
+                # Sample nodes from each community
+                comm1_sample = list(communities[comm1_id]["members"])[:5]
+                comm2_sample = list(communities[comm2_id]["members"])[:5]
+                
+                for node1 in comm1_sample:
+                    for node2 in comm2_sample:
+                        paths = self._find_all_short_paths(node1, node2, space, max_length=5)
+                        total_shortest_paths += len(paths)
+                        
+                        # Count paths through bridge
+                        for path in paths:
+                            if bridge_id in path:
+                                paths_through_bridge += 1
+        
+        if total_shortest_paths > 0:
+            importance = paths_through_bridge / total_shortest_paths
+        
+        # Adjust by community sizes
+        total_size = sum(len(communities[i]["members"]) for i in connected_communities)
+        importance *= np.log(total_size + 1) / 10
+        
+        return min(1.0, importance)
+    
+    def _find_conceptual_gradients(self, space) -> List[Dict[str, Any]]:
+        """Enhanced conceptual gradient detection"""
+        gradients = []
+        analyzed_pairs = set()
+        
+        # Find concepts that could be endpoints
+        endpoint_candidates = self._identify_gradient_endpoints(space)
+        
+        for start_id, start_type in endpoint_candidates:
+            for end_id, end_type in endpoint_candidates:
+                if start_id == end_id or (start_id, end_id) in analyzed_pairs:
+                    continue
+                
+                analyzed_pairs.add((start_id, end_id))
+                analyzed_pairs.add((end_id, start_id))
+                
+                # Only look for gradients between different types
+                if start_type != end_type:
+                    # Find gradient path
+                    gradient_path = self._find_gradient_path(start_id, end_id, space)
+                    
+                    if gradient_path and len(gradient_path) >= 3:
+                        # Analyze gradient quality
+                        quality = self._analyze_gradient_quality(gradient_path, space)
+                        
+                        if quality["smoothness"] > 0.6:
+                            dimension = self._identify_gradient_dimension_advanced(
+                                gradient_path, space
+                            )
+                            
+                            gradients.append({
+                                "dimension": dimension,
+                                "start": space.concepts[start_id]["name"],
+                                "end": space.concepts[end_id]["name"],
+                                "path": [space.concepts[cid]["name"] for cid in gradient_path],
+                                "smoothness": quality["smoothness"],
+                                "monotonicity": quality["monotonicity"],
+                                "length": len(gradient_path),
+                                "gradient_type": self._classify_gradient_type(quality)
+                            })
+        
+        return gradients
+    
+    def _identify_gradient_endpoints(self, space) -> List[Tuple[str, str]]:
+        """Identify potential gradient endpoints"""
+        endpoints = []
+        
+        for concept_id, concept in space.concepts.items():
+            properties = concept.get("properties", {})
+            
+            # Look for extreme values
+            endpoint_type = None
+            
+            # Check for superlatives
+            name_lower = concept["name"].lower()
+            if any(word in name_lower for word in ["most", "least", "highest", "lowest", "maximum", "minimum"]):
+                endpoint_type = "superlative"
+            
+            # Check for polar properties
+            elif any(prop in properties for prop in ["polarity", "extreme", "boundary"]):
+                endpoint_type = "polar"
+            
+            # Check for scale endpoints
+            elif any(str(val) in ["0", "1", "100", "infinite", "none", "all"] 
+                    for val in properties.values()):
+                endpoint_type = "scale_endpoint"
+            
+            if endpoint_type:
+                endpoints.append((concept_id, endpoint_type))
+        
+        return endpoints
+    
+    def _find_gradient_path(self, start_id: str, end_id: str, space) -> List[str]:
+        """Find smooth gradient path between concepts"""
+        # A* search with gradient heuristic
+        from heapq import heappush, heappop
+        
+        # Get properties of endpoints for gradient guidance
+        start_props = space.concepts[start_id].get("properties", {})
+        end_props = space.concepts[end_id].get("properties", {})
+        
+        # Priority queue: (f_score, path)
+        queue = [(0, [start_id])]
+        visited = {start_id}
+        best_paths = {}
+        
+        while queue:
+            f_score, path = heappop(queue)
+            current = path[-1]
+            
+            if current == end_id:
+                return path
+            
+            neighbors = self._get_concept_neighbors(current, space)
+            
+            for neighbor in neighbors:
+                if neighbor not in visited:
+                    visited.add(neighbor)
+                    
+                    # Calculate gradient score
+                    g_score = len(path)  # Path length
+                    h_score = self._gradient_heuristic(neighbor, end_id, space)
+                    
+                    # Check if this maintains gradient property
+                    if len(path) >= 2:
+                        gradient_quality = self._check_local_gradient_quality(
+                            path[-2], path[-1], neighbor, space
+                        )
+                        if gradient_quality < 0.3:
+                            continue  # Skip if it breaks gradient
+                    
+                    new_path = path + [neighbor]
+                    f = g_score + h_score
+                    
+                    heappush(queue, (f, new_path))
+        
+        return []  # No path found
+    
+    def _gradient_heuristic(self, current: str, target: str, space) -> float:
+        """Heuristic for gradient path finding"""
+        current_concept = space.concepts[current]
+        target_concept = space.concepts[target]
+        
+        # Semantic distance
+        semantic_dist = 1.0 - self._calculate_enhanced_concept_similarity(
+            current_concept, target_concept, space
+        )
+        
+        # Property distance
+        current_props = set(current_concept.get("properties", {}).keys())
+        target_props = set(target_concept.get("properties", {}).keys())
+        
+        if current_props and target_props:
+            prop_overlap = len(current_props.intersection(target_props))
+            prop_union = len(current_props.union(target_props))
+            prop_dist = 1.0 - (prop_overlap / prop_union if prop_union > 0 else 0)
+        else:
+            prop_dist = 1.0
+        
+        return (semantic_dist + prop_dist) / 2
     
     def _assess_bridge_potential(self, concept_id: str, connected_clusters: set, 
                                 clusters: List[Dict], space) -> float:
