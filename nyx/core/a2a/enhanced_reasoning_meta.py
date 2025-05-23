@@ -2272,3 +2272,468 @@ class ReasoningTemplateSystem:
             return "low"
         else:
             return "medium"
+    
+    def _infer_param_value(self, param_name: str, context: Dict[str, Any]) -> Any:
+        """Infer parameter value from context when not explicitly provided"""
+        # Common parameter inference rules
+        param_defaults = {
+            "min_relevance": 0.5,
+            "threshold": 0.3,
+            "max_depth": 3,
+            "min_strength": 0.3,
+            "min_similarity": 0.4,
+            "abstraction_level": "medium",
+            "confidence_threshold": 0.6,
+            "max_iterations": 100
+        }
+        
+        # Check if parameter can be inferred from context
+        if param_name == "domain":
+            # Extract domain from user input
+            user_input = context.get("user_input", "").lower()
+            domains = ["health", "technology", "economics", "psychology", "environment", "education"]
+            for domain in domains:
+                if domain in user_input:
+                    return domain
+            return "general"
+        
+        elif param_name == "complexity":
+            # Infer complexity from input length and structure
+            user_input = context.get("user_input", "")
+            word_count = len(user_input.split())
+            if word_count > 50:
+                return "high"
+            elif word_count < 20:
+                return "low"
+            return "medium"
+        
+        elif param_name == "time_constraint":
+            # Check if context indicates urgency
+            constraints = context.get("constraints", [])
+            if "time_sensitive" in constraints:
+                return "urgent"
+            return "normal"
+        
+        elif param_name == "evidence_requirement":
+            # Based on criticality or confidence needs
+            if context.get("high_stakes", False):
+                return "high"
+            return "moderate"
+        
+        # Return default if available
+        return param_defaults.get(param_name, None)
+    
+    def _calculate_token_relevance(self, token: str, context: Dict[str, Any]) -> float:
+        """Calculate relevance of a token to the context"""
+        relevance = 0.0
+        token_lower = token.lower()
+        
+        # Length-based relevance (longer tokens often more specific)
+        if len(token) > 3:
+            relevance += 0.1
+        if len(token) > 6:
+            relevance += 0.1
+        
+        # Capitalization suggests importance
+        if token[0].isupper():
+            relevance += 0.2
+        
+        # Check against domain keywords
+        domain_keywords = context.get("domain_keywords", [])
+        if token_lower in domain_keywords:
+            relevance += 0.3
+        
+        # Check frequency in context
+        user_input = context.get("user_input", "").lower()
+        frequency = user_input.count(token_lower)
+        if frequency > 1:
+            relevance += min(0.2, frequency * 0.05)
+        
+        # Check if it's a known technical term
+        technical_terms = {
+            "algorithm", "process", "system", "function", "variable",
+            "parameter", "model", "analysis", "hypothesis", "correlation",
+            "causation", "effect", "factor", "component", "element"
+        }
+        if token_lower in technical_terms:
+            relevance += 0.2
+        
+        # Check position in sentence (earlier often more important)
+        words = context.get("user_input", "").split()
+        if token in words[:5]:
+            relevance += 0.1
+        
+        # Goal alignment
+        if context.get("goal_context"):
+            goals = context["goal_context"].get("active_goals", [])
+            for goal in goals:
+                if token_lower in goal.get("description", "").lower():
+                    relevance += 0.2
+                    break
+        
+        return min(1.0, relevance)
+    
+    def _infer_variable_type(self, token: str, context: Dict[str, Any]) -> str:
+        """Infer the type of a variable from token and context"""
+        token_lower = token.lower()
+        
+        # Check for common type patterns
+        type_patterns = {
+            "quantity": ["amount", "number", "count", "quantity", "volume", "size", "length"],
+            "rate": ["rate", "speed", "velocity", "frequency", "per"],
+            "state": ["state", "status", "condition", "mode", "phase"],
+            "process": ["process", "procedure", "method", "algorithm", "workflow"],
+            "entity": ["person", "user", "system", "object", "item", "thing"],
+            "property": ["color", "shape", "texture", "quality", "attribute"],
+            "temporal": ["time", "date", "duration", "period", "when", "timeline"],
+            "spatial": ["location", "position", "place", "where", "coordinate"],
+            "boolean": ["is", "has", "can", "should", "exists"],
+            "categorical": ["type", "category", "class", "group", "kind"]
+        }
+        
+        # Check token against patterns
+        for var_type, patterns in type_patterns.items():
+            if any(pattern in token_lower for pattern in patterns):
+                return var_type
+        
+        # Check suffix patterns
+        if token.endswith("ing"):
+            return "process"
+        elif token.endswith("ion") or token.endswith("ment"):
+            return "state"
+        elif token.endswith("er") or token.endswith("or"):
+            return "entity"
+        elif token.endswith("ity") or token.endswith("ness"):
+            return "property"
+        
+        # Check context clues
+        user_input = context.get("user_input", "")
+        token_position = user_input.lower().find(token_lower)
+        
+        if token_position > 0:
+            # Look at surrounding words
+            before_text = user_input[:token_position].split()
+            if before_text:
+                last_word = before_text[-1].lower()
+                if last_word in ["the", "a", "an"]:
+                    return "entity"
+                elif last_word in ["more", "less", "increase", "decrease"]:
+                    return "quantity"
+                elif last_word in ["is", "was", "becomes"]:
+                    return "state"
+        
+        # Default to generic variable
+        return "variable"
+    
+    async def _calculate_variable_correlation(self, var1: Dict[str, Any], var2: Dict[str, Any], 
+                                            context: Dict[str, Any]) -> float:
+        """Calculate correlation between two variables"""
+        correlation = 0.0
+        
+        # Semantic similarity between variable names
+        name_similarity = self._calculate_name_similarity(var1["name"], var2["name"])
+        correlation += name_similarity * 0.3
+        
+        # Co-occurrence in context
+        user_input = context.get("user_input", "").lower()
+        var1_positions = [i for i, word in enumerate(user_input.split()) 
+                         if var1["name"].lower() in word]
+        var2_positions = [i for i, word in enumerate(user_input.split()) 
+                         if var2["name"].lower() in word]
+        
+        if var1_positions and var2_positions:
+            # Check proximity
+            min_distance = min(abs(p1 - p2) for p1 in var1_positions for p2 in var2_positions)
+            if min_distance <= 3:  # Within 3 words
+                correlation += 0.4
+            elif min_distance <= 7:  # Within 7 words
+                correlation += 0.2
+        
+        # Type compatibility
+        type_compatibility = self._check_type_compatibility(var1.get("type"), var2.get("type"))
+        correlation += type_compatibility * 0.2
+        
+        # Check for known relationships
+        if self._has_known_relationship(var1["name"], var2["name"], context):
+            correlation += 0.3
+        
+        # Domain-specific correlations
+        if var1.get("source") == "concept_space" and var2.get("source") == "concept_space":
+            if var1.get("space_id") == var2.get("space_id"):
+                correlation += 0.1  # Same conceptual space
+        
+        # Normalize to [-1, 1] range
+        correlation = min(1.0, correlation)
+        
+        # Check for negative correlation indicators
+        negative_indicators = ["opposite", "inverse", "contrary", "versus", "but", "however"]
+        text_between = self._get_text_between_variables(var1["name"], var2["name"], user_input)
+        if any(indicator in text_between.lower() for indicator in negative_indicators):
+            correlation *= -1
+        
+        return correlation
+    
+    def _calculate_correlation_significance(self, correlation: float, context: Dict[str, Any]) -> float:
+        """Calculate statistical significance of correlation"""
+        # Simplified significance calculation
+        significance = 0.0
+        
+        # Stronger correlations are more significant
+        significance += abs(correlation) * 0.5
+        
+        # Context support increases significance
+        user_input = context.get("user_input", "")
+        if "strong" in user_input.lower() or "significant" in user_input.lower():
+            significance += 0.2
+        
+        # Multiple mentions increase significance
+        mention_count = context.get("mention_count", 1)
+        if mention_count > 1:
+            significance += min(0.3, mention_count * 0.1)
+        
+        # Domain expertise affects significance threshold
+        domain = context.get("domain", "general")
+        if domain in ["health", "science", "engineering"]:
+            # Higher standards for technical domains
+            significance *= 0.8
+        
+        return min(1.0, significance)
+    
+    async def _check_temporal_criterion(self, var1_name: str, var2_name: str, 
+                                      context: Dict[str, Any]) -> float:
+        """Check if temporal precedence exists between variables"""
+        score = 0.0
+        user_input = context.get("user_input", "").lower()
+        
+        # Temporal keywords
+        temporal_patterns = [
+            (["before", "prior to", "precedes"], ["after", "following", "follows"], 1.0),
+            (["leads to", "causes", "triggers"], ["results from", "caused by", "triggered by"], 0.9),
+            (["first", "initially", "begins"], ["then", "subsequently", "ends"], 0.8),
+            (["earlier", "previous", "past"], ["later", "next", "future"], 0.7)
+        ]
+        
+        var1_lower = var1_name.lower()
+        var2_lower = var2_name.lower()
+        
+        # Check for explicit temporal relationships
+        for before_words, after_words, weight in temporal_patterns:
+            # Check var1 -> var2 temporal order
+            for before in before_words:
+                for after in after_words:
+                    if f"{var1_lower} {before}" in user_input and f"{after} {var2_lower}" in user_input:
+                        score = max(score, weight)
+                    if f"{var1_lower} {before} {var2_lower}" in user_input:
+                        score = max(score, weight)
+            
+            # Check var2 -> var1 temporal order (negative score)
+            for before in before_words:
+                for after in after_words:
+                    if f"{var2_lower} {before}" in user_input and f"{after} {var1_lower}" in user_input:
+                        score = min(score, -weight)
+                    if f"{var2_lower} {before} {var1_lower}" in user_input:
+                        score = min(score, -weight)
+        
+        # Check positional order as weak evidence
+        if score == 0:
+            var1_pos = user_input.find(var1_lower)
+            var2_pos = user_input.find(var2_lower)
+            if var1_pos >= 0 and var2_pos >= 0 and var1_pos < var2_pos:
+                score = 0.3  # Weak temporal evidence
+        
+        # Check for simultaneity (reduces temporal score)
+        simultaneity_words = ["simultaneously", "at the same time", "together", "concurrent"]
+        if any(word in user_input for word in simultaneity_words):
+            score *= 0.5
+        
+        return max(0, score)  # Return only positive scores
+    
+    async def _check_mechanism_criterion(self, var1_name: str, var2_name: str, 
+                                       context: Dict[str, Any]) -> float:
+        """Check if a plausible mechanism exists between variables"""
+        score = 0.0
+        user_input = context.get("user_input", "").lower()
+        
+        # Mechanism keywords
+        mechanism_patterns = {
+            "direct": ["directly", "immediately", "straight"],
+            "process": ["through", "via", "by means of", "using"],
+            "transformation": ["converts", "transforms", "changes", "becomes"],
+            "influence": ["influences", "affects", "impacts", "modifies"],
+            "transfer": ["transfers", "transmits", "passes", "communicates"],
+            "activation": ["activates", "triggers", "initiates", "starts"],
+            "regulation": ["regulates", "controls", "modulates", "adjusts"]
+        }
+        
+        var1_lower = var1_name.lower()
+        var2_lower = var2_name.lower()
+        
+        # Check for explicit mechanisms
+        for mechanism_type, keywords in mechanism_patterns.items():
+            for keyword in keywords:
+                # Check if mechanism keyword appears between variables
+                pattern1 = f"{var1_lower} {keyword} {var2_lower}"
+                pattern2 = f"{var1_lower} {keyword}"
+                pattern3 = f"{keyword} {var2_lower}"
+                
+                if pattern1 in user_input:
+                    score = max(score, 0.9)
+                elif pattern2 in user_input and pattern3 in user_input:
+                    score = max(score, 0.7)
+                elif keyword in user_input:
+                    # Mechanism word present but not directly connected
+                    score = max(score, 0.3)
+        
+        # Check for domain-specific mechanisms
+        domain = context.get("domain", "general")
+        domain_mechanisms = {
+            "physics": ["force", "energy", "momentum", "field"],
+            "chemistry": ["reaction", "bond", "catalyst", "oxidation"],
+            "biology": ["enzyme", "receptor", "pathway", "signal"],
+            "psychology": ["perception", "cognition", "emotion", "learning"],
+            "economics": ["supply", "demand", "incentive", "market"]
+        }
+        
+        if domain in domain_mechanisms:
+            for mechanism in domain_mechanisms[domain]:
+                if mechanism in user_input:
+                    score = max(score, 0.5)
+        
+        # Check variable types for compatible mechanisms
+        var1_type = context.get("variable_types", {}).get(var1_name, "unknown")
+        var2_type = context.get("variable_types", {}).get(var2_name, "unknown")
+        
+        compatible_types = [
+            ("process", "state"),
+            ("entity", "property"),
+            ("quantity", "quantity"),
+            ("rate", "state")
+        ]
+        
+        if (var1_type, var2_type) in compatible_types:
+            score = max(score, 0.4)
+        
+        return score
+    
+    def _calculate_causal_confidence(self, criteria_scores: Dict[str, float]) -> float:
+        """Calculate overall confidence in causal relationship"""
+        if not criteria_scores:
+            return 0.0
+        
+        # Weighted average of criteria
+        weights = {
+            "temporal": 0.3,
+            "mechanism": 0.4,
+            "correlation": 0.3
+        }
+        
+        weighted_sum = 0.0
+        total_weight = 0.0
+        
+        for criterion, score in criteria_scores.items():
+            weight = weights.get(criterion, 0.25)
+            weighted_sum += score * weight
+            total_weight += weight
+        
+        base_confidence = weighted_sum / total_weight if total_weight > 0 else 0.0
+        
+        # Adjust confidence based on number of criteria met
+        criteria_met = sum(1 for score in criteria_scores.values() if score > 0.5)
+        
+        if criteria_met >= 3:
+            confidence_multiplier = 1.2
+        elif criteria_met == 2:
+            confidence_multiplier = 1.0
+        elif criteria_met == 1:
+            confidence_multiplier = 0.7
+        else:
+            confidence_multiplier = 0.4
+        
+        final_confidence = base_confidence * confidence_multiplier
+        
+        # Cap at reasonable bounds
+        return max(0.1, min(0.95, final_confidence))
+    
+    # Helper methods for the above functions
+    
+    def _calculate_name_similarity(self, name1: str, name2: str) -> float:
+        """Calculate similarity between two names"""
+        name1_lower = name1.lower()
+        name2_lower = name2.lower()
+        
+        # Exact match
+        if name1_lower == name2_lower:
+            return 1.0
+        
+        # Substring match
+        if name1_lower in name2_lower or name2_lower in name1_lower:
+            return 0.7
+        
+        # Word overlap
+        words1 = set(name1_lower.split('_'))
+        words2 = set(name2_lower.split('_'))
+        
+        if words1 and words2:
+            overlap = len(words1.intersection(words2))
+            union = len(words1.union(words2))
+            return overlap / union if union > 0 else 0.0
+        
+        return 0.0
+    
+    def _check_type_compatibility(self, type1: str, type2: str) -> float:
+        """Check compatibility between variable types"""
+        if type1 == type2:
+            return 1.0
+        
+        # Compatible type pairs
+        compatibility_matrix = {
+            ("quantity", "rate"): 0.8,
+            ("state", "process"): 0.7,
+            ("entity", "property"): 0.8,
+            ("temporal", "state"): 0.6,
+            ("spatial", "entity"): 0.7,
+            ("boolean", "state"): 0.6
+        }
+        
+        # Check both directions
+        return compatibility_matrix.get((type1, type2), 
+               compatibility_matrix.get((type2, type1), 0.3))
+    
+    def _has_known_relationship(self, name1: str, name2: str, context: Dict[str, Any]) -> bool:
+        """Check if variables have a known relationship"""
+        # Common causal pairs
+        known_relationships = [
+            ("temperature", "pressure"),
+            ("supply", "demand"),
+            ("effort", "result"),
+            ("input", "output"),
+            ("cause", "effect"),
+            ("stimulus", "response"),
+            ("action", "reaction")
+        ]
+        
+        name1_lower = name1.lower()
+        name2_lower = name2.lower()
+        
+        for rel1, rel2 in known_relationships:
+            if (rel1 in name1_lower and rel2 in name2_lower) or \
+               (rel2 in name1_lower and rel1 in name2_lower):
+                return True
+        
+        return False
+    
+    def _get_text_between_variables(self, var1: str, var2: str, text: str) -> str:
+        """Get text between two variables"""
+        text_lower = text.lower()
+        var1_lower = var1.lower()
+        var2_lower = var2.lower()
+        
+        pos1 = text_lower.find(var1_lower)
+        pos2 = text_lower.find(var2_lower)
+        
+        if pos1 >= 0 and pos2 >= 0:
+            start = min(pos1, pos2) + len(var1 if pos1 < pos2 else var2)
+            end = max(pos1, pos2)
+            return text[start:end]
+        
+        return ""
