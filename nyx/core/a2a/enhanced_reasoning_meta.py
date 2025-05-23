@@ -1887,31 +1887,276 @@ class ReasoningTemplateSystem:
                                    step: Dict[str, Any], 
                                    context: Dict[str, Any],
                                    results: Dict[str, Any]) -> Dict[str, Any]:
-        """Execute a single template step"""
+        """Execute a template step with full functionality"""
         action = step["action"]
         params = step["params"].copy()
         
-        # Replace template variables with context values
+        # Replace template variables
         for key, value in params.items():
             if value == "TEMPLATE_VAR":
-                # Get value from context
-                params[key] = context.get(key, None)
+                params[key] = context.get(key, self._infer_param_value(key, context))
         
-        # Simulate step execution (in reality, would call actual functions)
         step_result = {
             "action": action,
-            "status": "completed",
-            "outputs": {}
+            "status": "pending",
+            "outputs": {},
+            "metadata": {}
         }
         
-        # Action-specific logic
-        if action == "identify_variables":
-            step_result["outputs"]["variables"] = ["var1", "var2", "var3"]
-        elif action == "test_correlations":
-            step_result["outputs"]["correlations"] = {"var1-var2": 0.7, "var2-var3": 0.4}
-        # ... other actions
+        try:
+            # Route to appropriate execution method
+            if action == "identify_variables":
+                step_result = await self._execute_identify_variables(params, context, results)
+                
+            elif action == "test_correlations":
+                step_result = await self._execute_test_correlations(params, context, results)
+                
+            elif action == "apply_causal_criteria":
+                step_result = await self._execute_apply_causal_criteria(params, context, results)
+                
+            elif action == "build_causal_graph":
+                step_result = await self._execute_build_causal_graph(params, context, results)
+                
+            elif action == "decompose_recursively":
+                step_result = await self._execute_decompose_recursively(params, context, results)
+                
+            elif action == "identify_dependencies":
+                step_result = await self._execute_identify_dependencies(params, context, results)
+                
+            elif action == "identify_source_pattern":
+                step_result = await self._execute_identify_source_pattern(params, context, results)
+                
+            elif action == "find_target_mapping":
+                step_result = await self._execute_find_target_mapping(params, context, results)
+                
+            elif action.startswith("custom_"):
+                step_result = await self._execute_custom_action(action, params, context, results)
+                
+            else:
+                step_result["status"] = "unsupported"
+                step_result["error"] = f"Unknown action: {action}"
+            
+            # Record performance metrics
+            step_result["metadata"]["execution_time"] = datetime.now().isoformat()
+            
+        except Exception as e:
+            step_result["status"] = "failed"
+            step_result["error"] = str(e)
+            logger.error(f"Template step execution failed: {e}")
         
         return step_result
+    
+    async def _execute_identify_variables(self, params: Dict, context: Dict, results: Dict) -> Dict[str, Any]:
+        """Execute variable identification step"""
+        min_relevance = params.get("min_relevance", 0.5)
+        
+        # Extract variables from context
+        user_input = context.get("user_input", "")
+        variables = []
+        
+        # Use NLP-like analysis
+        tokens = user_input.split()
+        
+        # Identify noun phrases as potential variables
+        for i, token in enumerate(tokens):
+            # Simple heuristics for variable detection
+            if token[0].isupper() or token.endswith("ing") or token.endswith("ion"):
+                relevance = self._calculate_token_relevance(token, context)
+                
+                if relevance >= min_relevance:
+                    variables.append({
+                        "name": token,
+                        "type": self._infer_variable_type(token, context),
+                        "relevance": relevance,
+                        "position": i
+                    })
+        
+        # Check against known concepts
+        if hasattr(self, 'original_core'):
+            for space in self.original_core.concept_spaces.values():
+                for concept_id, concept in space.concepts.items():
+                    concept_relevance = await self.relevance_calculator.calculate_relevance(
+                        concept["name"], user_input, "semantic"
+                    )
+                    
+                    if concept_relevance >= min_relevance:
+                        variables.append({
+                            "name": concept["name"],
+                            "type": "concept",
+                            "relevance": concept_relevance,
+                            "source": "concept_space",
+                            "space_id": space.id if hasattr(space, 'id') else "unknown"
+                        })
+        
+        return {
+            "action": "identify_variables",
+            "status": "completed",
+            "outputs": {
+                "variables": variables,
+                "variable_count": len(variables)
+            },
+            "metadata": {
+                "min_relevance_used": min_relevance,
+                "analysis_method": "hybrid"
+            }
+        }
+    
+    async def _execute_test_correlations(self, params: Dict, context: Dict, results: Dict) -> Dict[str, Any]:
+        """Execute correlation testing step"""
+        threshold = params.get("threshold", 0.3)
+        
+        # Get variables from previous step
+        variables = results.get("outputs", {}).get("variables", [])
+        
+        if len(variables) < 2:
+            return {
+                "action": "test_correlations",
+                "status": "skipped",
+                "outputs": {"correlations": {}},
+                "metadata": {"reason": "insufficient_variables"}
+            }
+        
+        correlations = {}
+        
+        # Test pairwise correlations
+        for i, var1 in enumerate(variables):
+            for j, var2 in enumerate(variables[i+1:], i+1):
+                # Calculate correlation based on co-occurrence and relationships
+                correlation = await self._calculate_variable_correlation(var1, var2, context)
+                
+                if abs(correlation) >= threshold:
+                    key = f"{var1['name']}-{var2['name']}"
+                    correlations[key] = {
+                        "value": correlation,
+                        "significance": self._calculate_correlation_significance(correlation, context),
+                        "type": "positive" if correlation > 0 else "negative"
+                    }
+        
+        return {
+            "action": "test_correlations",
+            "status": "completed",
+            "outputs": {
+                "correlations": correlations,
+                "significant_pairs": len(correlations),
+                "strongest_correlation": max(correlations.items(), 
+                                           key=lambda x: abs(x[1]["value"]))[0] if correlations else None
+            }
+        }
+    
+    async def _execute_apply_causal_criteria(self, params: Dict, context: Dict, results: Dict) -> Dict[str, Any]:
+        """Execute causal criteria application"""
+        criteria = params.get("criteria", ["temporal", "mechanism", "correlation"])
+        correlations = results.get("outputs", {}).get("correlations", {})
+        
+        causal_relations = []
+        
+        for pair_key, correlation_data in correlations.items():
+            var1_name, var2_name = pair_key.split("-")
+            
+            # Apply each criterion
+            criteria_scores = {}
+            
+            if "temporal" in criteria:
+                criteria_scores["temporal"] = await self._check_temporal_criterion(
+                    var1_name, var2_name, context
+                )
+            
+            if "mechanism" in criteria:
+                criteria_scores["mechanism"] = await self._check_mechanism_criterion(
+                    var1_name, var2_name, context
+                )
+            
+            if "correlation" in criteria:
+                criteria_scores["correlation"] = min(1.0, abs(correlation_data["value"]))
+            
+            # Calculate overall causal score
+            if criteria_scores:
+                causal_score = np.mean(list(criteria_scores.values()))
+                
+                if causal_score > 0.5:
+                    causal_relations.append({
+                        "cause": var1_name,
+                        "effect": var2_name,
+                        "strength": causal_score,
+                        "criteria_scores": criteria_scores,
+                        "confidence": self._calculate_causal_confidence(criteria_scores)
+                    })
+        
+        return {
+            "action": "apply_causal_criteria",
+            "status": "completed",
+            "outputs": {
+                "causal_relations": causal_relations,
+                "relations_found": len(causal_relations),
+                "criteria_used": criteria
+            }
+        }
+    
+    async def _execute_build_causal_graph(self, params: Dict, context: Dict, results: Dict) -> Dict[str, Any]:
+        """Execute causal graph building"""
+        prune_weak = params.get("prune_weak", True)
+        min_strength = params.get("min_strength", 0.3)
+        
+        causal_relations = results.get("outputs", {}).get("causal_relations", [])
+        
+        if not causal_relations:
+            return {
+                "action": "build_causal_graph",
+                "status": "completed",
+                "outputs": {"graph": None, "message": "No causal relations to build graph"},
+            }
+        
+        # Build graph structure
+        graph = {
+            "nodes": {},
+            "edges": [],
+            "metadata": {
+                "created": datetime.now().isoformat(),
+                "context": context.get("user_input", "")[:100]
+            }
+        }
+        
+        # Add nodes
+        all_variables = set()
+        for relation in causal_relations:
+            all_variables.add(relation["cause"])
+            all_variables.add(relation["effect"])
+        
+        for var in all_variables:
+            graph["nodes"][var] = {
+                "id": var,
+                "name": var,
+                "type": "inferred",
+                "properties": {}
+            }
+        
+        # Add edges
+        for relation in causal_relations:
+            if not prune_weak or relation["strength"] >= min_strength:
+                graph["edges"].append({
+                    "source": relation["cause"],
+                    "target": relation["effect"],
+                    "strength": relation["strength"],
+                    "confidence": relation["confidence"],
+                    "criteria_scores": relation["criteria_scores"]
+                })
+        
+        # Calculate graph metrics
+        graph["metadata"]["metrics"] = {
+            "node_count": len(graph["nodes"]),
+            "edge_count": len(graph["edges"]),
+            "density": len(graph["edges"]) / (len(graph["nodes"]) * (len(graph["nodes"]) - 1))
+                      if len(graph["nodes"]) > 1 else 0
+        }
+        
+        return {
+            "action": "build_causal_graph",
+            "status": "completed",
+            "outputs": {
+                "graph": graph,
+                "graph_id": f"causal_graph_{hash(str(graph))}"
+            }
+        }
     
     def _evaluate_template_success(self, 
                                  results: Dict[str, Any], 
