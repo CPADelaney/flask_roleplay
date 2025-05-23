@@ -118,6 +118,17 @@ langchain-core==0.3.60
 langchain-text-splitters==0.3.8
 langsmith==0.3.42
 
+# NLP and Language Processing
+spacy==3.7.2
+nltk==3.8.1
+
+# Graph Analysis and Community Detection
+networkx==3.2.1
+python-louvain==0.16  # For community detection algorithm
+
+# Optional but recommended for better NLP performance
+scipy==1.11.4  # Some scikit-learn functions need this
+
 # Vector Operations and ML
 numpy==2.1.0
 scikit-learn==1.6.1
