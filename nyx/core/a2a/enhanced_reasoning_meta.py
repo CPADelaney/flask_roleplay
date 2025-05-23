@@ -2737,3 +2737,1388 @@ class ReasoningTemplateSystem:
             return text[start:end]
         
         return ""
+
+    async def _execute_decompose_recursively(self, params: Dict, context: Dict, 
+                                           results: Dict) -> Dict[str, Any]:
+        """Execute recursive problem decomposition"""
+        max_depth = params.get("max_depth", 3)
+        decomposition_strategy = params.get("strategy", "functional")
+        
+        # Get main goal from previous step or context
+        main_goal = results.get("outputs", {}).get("main_goal")
+        if not main_goal:
+            main_goal = self._extract_main_goal(context)
+        
+        # Perform recursive decomposition
+        decomposition_tree = await self._recursive_decompose(
+            main_goal, 0, max_depth, decomposition_strategy, context
+        )
+        
+        # Flatten tree to get all subtasks
+        all_subtasks = self._flatten_decomposition_tree(decomposition_tree)
+        
+        # Identify leaf tasks (actionable items)
+        leaf_tasks = [task for task in all_subtasks if not task.get("subtasks")]
+        
+        return {
+            "action": "decompose_recursively",
+            "status": "completed",
+            "outputs": {
+                "decomposition_tree": decomposition_tree,
+                "total_subtasks": len(all_subtasks),
+                "leaf_tasks": len(leaf_tasks),
+                "max_depth_reached": self._get_tree_depth(decomposition_tree),
+                "subtask_list": all_subtasks
+            },
+            "metadata": {
+                "strategy_used": decomposition_strategy,
+                "max_depth_param": max_depth
+            }
+        }
+    
+    async def _recursive_decompose(self, goal: Dict[str, Any], current_depth: int, 
+                                 max_depth: int, strategy: str, context: Dict) -> Dict[str, Any]:
+        """Recursively decompose a goal into subtasks"""
+        if current_depth >= max_depth:
+            return goal
+        
+        # Determine if goal can be decomposed further
+        if self._is_atomic_task(goal):
+            return goal
+        
+        # Decompose based on strategy
+        if strategy == "functional":
+            subtasks = self._functional_decomposition(goal, context)
+        elif strategy == "temporal":
+            subtasks = self._temporal_decomposition(goal, context)
+        elif strategy == "hierarchical":
+            subtasks = self._hierarchical_decomposition(goal, context)
+        else:
+            subtasks = self._functional_decomposition(goal, context)  # default
+        
+        # Recursively decompose each subtask
+        decomposed_subtasks = []
+        for subtask in subtasks:
+            decomposed = await self._recursive_decompose(
+                subtask, current_depth + 1, max_depth, strategy, context
+            )
+            decomposed_subtasks.append(decomposed)
+        
+        goal["subtasks"] = decomposed_subtasks
+        goal["decomposition_level"] = current_depth
+        
+        return goal
+    
+    def _extract_main_goal(self, context: Dict) -> Dict[str, Any]:
+        """Extract main goal from context"""
+        user_input = context.get("user_input", "")
+        
+        # Simple extraction based on patterns
+        goal = {
+            "description": user_input,
+            "type": "main_goal",
+            "complexity": self._estimate_goal_complexity(user_input)
+        }
+        
+        # Extract action words
+        action_words = ["create", "build", "analyze", "solve", "find", "implement", 
+                       "design", "develop", "optimize", "improve"]
+        
+        for action in action_words:
+            if action in user_input.lower():
+                goal["action"] = action
+                break
+        
+        # Extract object/target
+        words = user_input.split()
+        if goal.get("action"):
+            action_index = next((i for i, w in enumerate(words) 
+                               if w.lower() == goal["action"]), -1)
+            if action_index >= 0 and action_index < len(words) - 1:
+                goal["target"] = " ".join(words[action_index + 1:])
+        
+        return goal
+    
+    def _is_atomic_task(self, task: Dict[str, Any]) -> bool:
+        """Check if task is atomic (cannot be decomposed further)"""
+        description = task.get("description", "").lower()
+        
+        # Atomic task indicators
+        atomic_indicators = [
+            "click", "press", "type", "enter", "select",
+            "read", "write", "save", "load", "open",
+            "measure", "count", "calculate"
+        ]
+        
+        # Check word count
+        word_count = len(description.split())
+        if word_count <= 3:
+            return True
+        
+        # Check for atomic indicators
+        for indicator in atomic_indicators:
+            if indicator in description:
+                return True
+        
+        # Check complexity
+        if task.get("complexity", 1.0) < 0.3:
+            return True
+        
+        return False
+    
+    def _functional_decomposition(self, goal: Dict[str, Any], context: Dict) -> List[Dict[str, Any]]:
+        """Decompose goal by function"""
+        subtasks = []
+        description = goal.get("description", "")
+        action = goal.get("action", "")
+        
+        # Common functional patterns
+        if action == "create" or action == "build":
+            subtasks = [
+                {"description": f"Design {goal.get('target', 'solution')}", 
+                 "type": "design", "phase": "planning"},
+                {"description": f"Gather resources for {goal.get('target', 'solution')}", 
+                 "type": "preparation", "phase": "setup"},
+                {"description": f"Implement {goal.get('target', 'solution')}", 
+                 "type": "implementation", "phase": "execution"},
+                {"description": f"Test {goal.get('target', 'solution')}", 
+                 "type": "validation", "phase": "verification"}
+            ]
+        
+        elif action == "analyze":
+            subtasks = [
+                {"description": f"Collect data about {goal.get('target', 'subject')}", 
+                 "type": "data_collection", "phase": "preparation"},
+                {"description": f"Process and clean data", 
+                 "type": "data_processing", "phase": "preparation"},
+                {"description": f"Perform analysis on {goal.get('target', 'subject')}", 
+                 "type": "analysis", "phase": "execution"},
+                {"description": f"Interpret results", 
+                 "type": "interpretation", "phase": "conclusion"}
+            ]
+        
+        elif action == "solve":
+            subtasks = [
+                {"description": f"Understand the problem: {goal.get('target', 'problem')}", 
+                 "type": "understanding", "phase": "analysis"},
+                {"description": f"Identify constraints and requirements", 
+                 "type": "requirements", "phase": "analysis"},
+                {"description": f"Generate potential solutions", 
+                 "type": "ideation", "phase": "design"},
+                {"description": f"Evaluate and select best solution", 
+                 "type": "evaluation", "phase": "decision"},
+                {"description": f"Implement selected solution", 
+                 "type": "implementation", "phase": "execution"}
+            ]
+        
+        else:
+            # Generic decomposition
+            subtasks = [
+                {"description": f"Define requirements for {description}", 
+                 "type": "requirements", "phase": "planning"},
+                {"description": f"Plan approach to {description}", 
+                 "type": "planning", "phase": "planning"},
+                {"description": f"Execute plan for {description}", 
+                 "type": "execution", "phase": "execution"},
+                {"description": f"Verify completion of {description}", 
+                 "type": "verification", "phase": "validation"}
+            ]
+        
+        # Add complexity estimates
+        for subtask in subtasks:
+            subtask["complexity"] = self._estimate_goal_complexity(subtask["description"]) * 0.7
+        
+        return subtasks
+    
+    def _temporal_decomposition(self, goal: Dict[str, Any], context: Dict) -> List[Dict[str, Any]]:
+        """Decompose goal by temporal sequence"""
+        description = goal.get("description", "")
+        
+        # Extract temporal phases
+        subtasks = []
+        
+        # Before phase
+        subtasks.append({
+            "description": f"Prepare prerequisites for {description}",
+            "type": "preparation",
+            "temporal_phase": "before",
+            "order": 1
+        })
+        
+        # During phase - main execution
+        subtasks.append({
+            "description": f"Execute main task: {description}",
+            "type": "execution",
+            "temporal_phase": "during",
+            "order": 2
+        })
+        
+        # After phase
+        subtasks.append({
+            "description": f"Complete follow-up for {description}",
+            "type": "completion",
+            "temporal_phase": "after",
+            "order": 3
+        })
+        
+        # Add complexity
+        total_complexity = goal.get("complexity", 1.0)
+        subtasks[0]["complexity"] = total_complexity * 0.2  # Prep is usually simpler
+        subtasks[1]["complexity"] = total_complexity * 0.6  # Main task takes most complexity
+        subtasks[2]["complexity"] = total_complexity * 0.2  # Follow-up is simpler
+        
+        return subtasks
+    
+    def _hierarchical_decomposition(self, goal: Dict[str, Any], context: Dict) -> List[Dict[str, Any]]:
+        """Decompose goal hierarchically"""
+        description = goal.get("description", "")
+        target = goal.get("target", "system")
+        
+        # Create hierarchical breakdown
+        subtasks = []
+        
+        # High-level components
+        components = self._identify_components(description, context)
+        
+        for i, component in enumerate(components):
+            subtask = {
+                "description": f"Handle {component} aspect of {target}",
+                "type": "component",
+                "hierarchy_level": "high",
+                "component_name": component,
+                "order": i + 1,
+                "complexity": goal.get("complexity", 1.0) / len(components)
+            }
+            subtasks.append(subtask)
+        
+        return subtasks
+    
+    def _identify_components(self, description: str, context: Dict) -> List[str]:
+        """Identify components in a goal description"""
+        components = []
+        
+        # Common component patterns
+        component_keywords = {
+            "system": ["interface", "backend", "database", "security"],
+            "analysis": ["data", "methods", "results", "conclusions"],
+            "project": ["planning", "resources", "execution", "monitoring"],
+            "problem": ["understanding", "constraints", "solutions", "validation"],
+            "design": ["requirements", "architecture", "implementation", "testing"]
+        }
+        
+        # Find matching pattern
+        description_lower = description.lower()
+        for key, component_list in component_keywords.items():
+            if key in description_lower:
+                return component_list
+        
+        # Default components
+        return ["input", "process", "output", "validation"]
+    
+    def _flatten_decomposition_tree(self, tree: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Flatten decomposition tree into list of all tasks"""
+        tasks = []
+        
+        # Add current node
+        task_copy = tree.copy()
+        if "subtasks" in task_copy:
+            del task_copy["subtasks"]  # Don't include subtasks in flattened version
+        tasks.append(task_copy)
+        
+        # Recursively add subtasks
+        if "subtasks" in tree:
+            for subtask in tree["subtasks"]:
+                tasks.extend(self._flatten_decomposition_tree(subtask))
+        
+        return tasks
+    
+    def _get_tree_depth(self, tree: Dict[str, Any]) -> int:
+        """Get maximum depth of decomposition tree"""
+        if "subtasks" not in tree or not tree["subtasks"]:
+            return 1
+        
+        max_child_depth = max(self._get_tree_depth(subtask) for subtask in tree["subtasks"])
+        return 1 + max_child_depth
+    
+    def _estimate_goal_complexity(self, description: str) -> float:
+        """Estimate complexity of a goal"""
+        complexity = 0.5  # Base complexity
+        
+        # Length factor
+        word_count = len(description.split())
+        complexity += min(0.3, word_count / 50)
+        
+        # Complexity keywords
+        complex_keywords = ["complex", "difficult", "challenging", "advanced", 
+                           "sophisticated", "intricate", "comprehensive"]
+        simple_keywords = ["simple", "basic", "easy", "straightforward", "elementary"]
+        
+        description_lower = description.lower()
+        
+        for keyword in complex_keywords:
+            if keyword in description_lower:
+                complexity += 0.2
+                break
+        
+        for keyword in simple_keywords:
+            if keyword in description_lower:
+                complexity -= 0.2
+                break
+        
+        # Technical terms increase complexity
+        technical_terms = ["algorithm", "architecture", "framework", "protocol", 
+                          "optimization", "integration", "synthesis"]
+        
+        technical_count = sum(1 for term in technical_terms if term in description_lower)
+        complexity += min(0.2, technical_count * 0.05)
+        
+        return max(0.1, min(1.0, complexity))
+    
+    async def _execute_identify_dependencies(self, params: Dict, context: Dict, 
+                                           results: Dict) -> Dict[str, Any]:
+        """Execute dependency identification between subtasks"""
+        subtask_list = results.get("outputs", {}).get("subtask_list", [])
+        
+        if not subtask_list:
+            return {
+                "action": "identify_dependencies",
+                "status": "skipped",
+                "outputs": {"dependencies": []},
+                "metadata": {"reason": "no_subtasks"}
+            }
+        
+        dependencies = []
+        dependency_graph = defaultdict(list)
+        
+        # Analyze each pair of tasks
+        for i, task1 in enumerate(subtask_list):
+            for j, task2 in enumerate(subtask_list):
+                if i >= j:  # Skip self and already checked pairs
+                    continue
+                
+                # Check if task2 depends on task1
+                dependency_type = self._check_dependency(task1, task2)
+                
+                if dependency_type:
+                    dependencies.append({
+                        "predecessor": i,
+                        "successor": j,
+                        "predecessor_desc": task1.get("description", ""),
+                        "successor_desc": task2.get("description", ""),
+                        "dependency_type": dependency_type,
+                        "strength": self._calculate_dependency_strength(task1, task2, dependency_type)
+                    })
+                    dependency_graph[j].append(i)
+        
+        # Detect cycles
+        has_cycles, cycle_info = self._detect_dependency_cycles(dependency_graph, len(subtask_list))
+        
+        # Calculate critical path
+        critical_path = self._find_critical_path(dependencies, subtask_list)
+        
+        return {
+            "action": "identify_dependencies",
+            "status": "completed",
+            "outputs": {
+                "dependencies": dependencies,
+                "dependency_count": len(dependencies),
+                "has_cycles": has_cycles,
+                "cycle_info": cycle_info,
+                "critical_path": critical_path,
+                "dependency_graph": dict(dependency_graph)
+            },
+            "metadata": {
+                "analysis_method": "multi_criteria"
+            }
+        }
+    
+    def _check_dependency(self, task1: Dict[str, Any], task2: Dict[str, Any]) -> Optional[str]:
+        """Check if task2 depends on task1"""
+        desc1 = task1.get("description", "").lower()
+        desc2 = task2.get("description", "").lower()
+        
+        # Temporal dependencies
+        if task1.get("temporal_phase") == "before" and task2.get("temporal_phase") in ["during", "after"]:
+            return "temporal"
+        if task1.get("temporal_phase") == "during" and task2.get("temporal_phase") == "after":
+            return "temporal"
+        
+        # Phase dependencies
+        phase_order = ["planning", "preparation", "setup", "execution", "validation", "conclusion"]
+        phase1 = task1.get("phase", "")
+        phase2 = task2.get("phase", "")
+        
+        if phase1 in phase_order and phase2 in phase_order:
+            if phase_order.index(phase1) < phase_order.index(phase2):
+                return "phase"
+        
+        # Data dependencies
+        output_keywords = ["create", "generate", "produce", "collect", "gather", "build"]
+        input_keywords = ["use", "analyze", "process", "evaluate", "test", "verify"]
+        
+        has_output1 = any(kw in desc1 for kw in output_keywords)
+        needs_input2 = any(kw in desc2 for kw in input_keywords)
+        
+        if has_output1 and needs_input2:
+            # Check if task2 mentions something task1 produces
+            task1_target = task1.get("target", "")
+            if task1_target and task1_target.lower() in desc2:
+                return "data"
+        
+        # Explicit order dependencies
+        if task1.get("order", 0) < task2.get("order", 0):
+            return "order"
+        
+        # Resource dependencies
+        if "gather" in desc1 and "implement" in desc2:
+            return "resource"
+        
+        # Prerequisite patterns
+        prerequisite_patterns = [
+            ("understand", "solve"),
+            ("design", "implement"),
+            ("plan", "execute"),
+            ("define", "create"),
+            ("identify", "address")
+        ]
+        
+        for prereq, dependent in prerequisite_patterns:
+            if prereq in desc1 and dependent in desc2:
+                return "prerequisite"
+        
+        return None
+    
+    def _calculate_dependency_strength(self, task1: Dict[str, Any], task2: Dict[str, Any], 
+                                     dep_type: str) -> float:
+        """Calculate strength of dependency"""
+        strength = 0.5  # Base strength
+        
+        # Type-based strength
+        type_strengths = {
+            "temporal": 0.9,      # Strong temporal ordering
+            "data": 0.8,          # Data flow dependency
+            "prerequisite": 0.7,  # Logical prerequisite
+            "phase": 0.6,         # Phase-based ordering
+            "resource": 0.5,      # Resource dependency
+            "order": 0.4          # Weak ordering hint
+        }
+        
+        strength = type_strengths.get(dep_type, 0.5)
+        
+        # Adjust based on task properties
+        if task1.get("complexity", 0) > 0.7:
+            strength += 0.1  # Complex tasks create stronger dependencies
+        
+        if task2.get("type") == "validation" and task1.get("type") == "execution":
+            strength += 0.1  # Validation strongly depends on execution
+        
+        return min(1.0, strength)
+    
+    def _detect_dependency_cycles(self, dep_graph: Dict[int, List[int]], 
+                                num_tasks: int) -> Tuple[bool, List[List[int]]]:
+        """Detect cycles in dependency graph using DFS"""
+        visited = set()
+        rec_stack = set()
+        cycles = []
+        
+        def dfs(node: int, path: List[int]) -> bool:
+            visited.add(node)
+            rec_stack.add(node)
+            path.append(node)
+            
+            for neighbor in dep_graph.get(node, []):
+                if neighbor not in visited:
+                    if dfs(neighbor, path.copy()):
+                        return True
+                elif neighbor in rec_stack:
+                    # Found cycle
+                    cycle_start = path.index(neighbor)
+                    cycles.append(path[cycle_start:] + [neighbor])
+                    return True
+            
+            path.pop()
+            rec_stack.remove(node)
+            return False
+        
+        for node in range(num_tasks):
+            if node not in visited:
+                dfs(node, [])
+        
+        return len(cycles) > 0, cycles
+    
+    def _find_critical_path(self, dependencies: List[Dict[str, Any]], 
+                           tasks: List[Dict[str, Any]]) -> List[int]:
+        """Find critical path through task dependencies"""
+        if not dependencies or not tasks:
+            return list(range(len(tasks)))
+        
+        # Build adjacency list
+        graph = defaultdict(list)
+        for dep in dependencies:
+            graph[dep["predecessor"]].append(dep["successor"])
+        
+        # Find longest path (critical path) using topological sort + DP
+        in_degree = defaultdict(int)
+        for dep in dependencies:
+            in_degree[dep["successor"]] += 1
+        
+        # Start with tasks that have no dependencies
+        queue = [i for i in range(len(tasks)) if in_degree[i] == 0]
+        
+        # Track longest path to each node
+        longest_path = {i: [i] for i in range(len(tasks))}
+        
+        while queue:
+            current = queue.pop(0)
+            
+            for next_task in graph[current]:
+                in_degree[next_task] -= 1
+                
+                # Update longest path if needed
+                if len(longest_path[current]) + 1 > len(longest_path.get(next_task, [])):
+                    longest_path[next_task] = longest_path[current] + [next_task]
+                
+                if in_degree[next_task] == 0:
+                    queue.append(next_task)
+        
+        # Find the longest overall path
+        critical_path = []
+        max_length = 0
+        
+        for path in longest_path.values():
+            if len(path) > max_length:
+                max_length = len(path)
+                critical_path = path
+        
+        return critical_path
+    
+    async def _execute_identify_source_pattern(self, params: Dict, context: Dict, 
+                                             results: Dict) -> Dict[str, Any]:
+        """Execute source pattern identification for analogical reasoning"""
+        abstraction_level = params.get("abstraction_level", "medium")
+        
+        # Extract source domain and pattern from context
+        user_input = context.get("user_input", "")
+        source_info = self._extract_source_domain(user_input)
+        
+        if not source_info:
+            return {
+                "action": "identify_source_pattern",
+                "status": "failed",
+                "outputs": {},
+                "metadata": {"reason": "no_source_identified"}
+            }
+        
+        # Abstract the pattern at specified level
+        pattern = self._abstract_pattern(source_info, abstraction_level)
+        
+        # Identify key structural elements
+        structural_elements = self._extract_structural_elements(pattern)
+        
+        # Identify key functional elements
+        functional_elements = self._extract_functional_elements(pattern)
+        
+        return {
+            "action": "identify_source_pattern",
+            "status": "completed",
+            "outputs": {
+                "source_domain": source_info["domain"],
+                "source_concept": source_info["concept"],
+                "abstracted_pattern": pattern,
+                "structural_elements": structural_elements,
+                "functional_elements": functional_elements,
+                "abstraction_level": abstraction_level
+            },
+            "metadata": {
+                "extraction_confidence": source_info.get("confidence", 0.5)
+            }
+        }
+    
+    def _extract_source_domain(self, user_input: str) -> Optional[Dict[str, Any]]:
+        """Extract source domain from user input"""
+        input_lower = user_input.lower()
+        
+        # Look for explicit domain indicators
+        domain_patterns = {
+            "physics": ["force", "energy", "momentum", "gravity", "motion"],
+            "biology": ["organism", "cell", "evolution", "ecosystem", "species"],
+            "computing": ["algorithm", "data", "process", "system", "network"],
+            "economics": ["market", "supply", "demand", "trade", "value"],
+            "psychology": ["mind", "behavior", "cognition", "emotion", "memory"],
+            "engineering": ["design", "build", "structure", "mechanism", "optimize"]
+        }
+        
+        detected_domains = []
+        
+        for domain, keywords in domain_patterns.items():
+            domain_score = sum(1 for kw in keywords if kw in input_lower)
+            if domain_score > 0:
+                detected_domains.append((domain, domain_score))
+        
+        if not detected_domains:
+            return None
+        
+        # Sort by score
+        detected_domains.sort(key=lambda x: x[1], reverse=True)
+        best_domain = detected_domains[0][0]
+        
+        # Extract specific concept
+        words = user_input.split()
+        concept = None
+        
+        # Look for "X is like Y" pattern
+        if "like" in words:
+            like_index = words.index("like")
+            if like_index > 0:
+                concept = " ".join(words[:like_index])
+        
+        # Look for comparison words
+        comparison_words = ["similar", "analogous", "resembles", "compared"]
+        for comp_word in comparison_words:
+            if comp_word in input_lower:
+                # Extract what comes before comparison word
+                comp_index = input_lower.index(comp_word)
+                concept = user_input[:comp_index].strip()
+                break
+        
+        if not concept:
+            # Take first noun phrase as concept
+            concept = " ".join(words[:3])
+        
+        return {
+            "domain": best_domain,
+            "concept": concept,
+            "confidence": detected_domains[0][1] / len(domain_patterns[best_domain])
+        }
+    
+    def _abstract_pattern(self, source_info: Dict[str, Any], level: str) -> Dict[str, Any]:
+        """Abstract pattern at specified level"""
+        pattern = {
+            "source": source_info["concept"],
+            "domain": source_info["domain"],
+            "abstraction_level": level,
+            "elements": [],
+            "relations": [],
+            "dynamics": []
+        }
+        
+        # Define abstraction based on level
+        if level == "low":
+            # Keep specific details
+            pattern["elements"] = self._extract_specific_elements(source_info)
+            pattern["relations"] = self._extract_specific_relations(source_info)
+            
+        elif level == "medium":
+            # Moderate abstraction
+            pattern["elements"] = self._extract_general_elements(source_info)
+            pattern["relations"] = self._extract_general_relations(source_info)
+            
+        elif level == "high":
+            # High abstraction - only structural patterns
+            pattern["elements"] = ["source", "target", "connector", "boundary"]
+            pattern["relations"] = ["flows_to", "transforms", "constrains", "enables"]
+            pattern["dynamics"] = ["transfer", "conversion", "regulation", "feedback"]
+        
+        return pattern
+    
+    def _extract_specific_elements(self, source_info: Dict[str, Any]) -> List[str]:
+        """Extract specific elements based on domain"""
+        domain = source_info["domain"]
+        concept = source_info["concept"]
+        
+        domain_elements = {
+            "physics": ["mass", "velocity", "force", "energy", "position"],
+            "biology": ["cell", "protein", "gene", "environment", "signal"],
+            "computing": ["input", "processor", "memory", "output", "control"],
+            "economics": ["agent", "resource", "price", "transaction", "utility"],
+            "psychology": ["stimulus", "perception", "processing", "response", "memory"],
+            "engineering": ["component", "interface", "constraint", "function", "performance"]
+        }
+        
+        return domain_elements.get(domain, ["element1", "element2", "element3"])
+    
+    def _extract_general_elements(self, source_info: Dict[str, Any]) -> List[str]:
+        """Extract general elements"""
+        return ["actor", "object", "process", "state", "constraint", "resource"]
+    
+    def _extract_specific_relations(self, source_info: Dict[str, Any]) -> List[str]:
+        """Extract specific relations based on domain"""
+        domain = source_info["domain"]
+        
+        domain_relations = {
+            "physics": ["applies_force", "transfers_energy", "causes_acceleration"],
+            "biology": ["metabolizes", "signals", "evolves", "adapts"],
+            "computing": ["processes", "stores", "transmits", "computes"],
+            "economics": ["trades", "values", "optimizes", "competes"],
+            "psychology": ["perceives", "interprets", "remembers", "responds"],
+            "engineering": ["connects", "supports", "controls", "optimizes"]
+        }
+        
+        return domain_relations.get(domain, ["relates_to", "affects", "produces"])
+    
+    def _extract_general_relations(self, source_info: Dict[str, Any]) -> List[str]:
+        """Extract general relations"""
+        return ["influences", "transforms", "connects", "regulates", "enables", "constrains"]
+    
+    def _extract_structural_elements(self, pattern: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Extract structural elements from pattern"""
+        structural_elements = []
+        
+        # Nodes (elements)
+        for i, element in enumerate(pattern["elements"]):
+            structural_elements.append({
+                "type": "node",
+                "name": element,
+                "position": i,
+                "connectivity": len([r for r in pattern["relations"] if element in r])
+            })
+        
+        # Edges (relations)
+        for relation in pattern["relations"]:
+            structural_elements.append({
+                "type": "edge",
+                "name": relation,
+                "directionality": "directed" if "_to" in relation else "undirected"
+            })
+        
+        # Patterns
+        if len(pattern["elements"]) > 3:
+            structural_elements.append({
+                "type": "pattern",
+                "name": "network",
+                "complexity": "high"
+            })
+        elif len(pattern["elements"]) == 2:
+            structural_elements.append({
+                "type": "pattern",
+                "name": "dyadic",
+                "complexity": "low"
+            })
+        
+        return structural_elements
+    
+    def _extract_functional_elements(self, pattern: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Extract functional elements from pattern"""
+        functional_elements = []
+        
+        # Processes
+        for dynamic in pattern.get("dynamics", []):
+            functional_elements.append({
+                "type": "process",
+                "name": dynamic,
+                "role": self._classify_process_role(dynamic)
+            })
+        
+        # Functions based on relations
+        for relation in pattern["relations"]:
+            if "transform" in relation:
+                functional_elements.append({
+                    "type": "function",
+                    "name": "transformation",
+                    "input_output": True
+                })
+            elif "regulate" in relation or "control" in relation:
+                functional_elements.append({
+                    "type": "function",
+                    "name": "regulation",
+                    "feedback": True
+                })
+            elif "enable" in relation:
+                functional_elements.append({
+                    "type": "function",
+                    "name": "facilitation",
+                    "catalyst": True
+                })
+        
+        return functional_elements
+    
+    def _classify_process_role(self, process: str) -> str:
+        """Classify the role of a process"""
+        process_lower = process.lower()
+        
+        if "transfer" in process_lower or "flow" in process_lower:
+            return "transport"
+        elif "convert" in process_lower or "transform" in process_lower:
+            return "transformation"
+        elif "regulate" in process_lower or "control" in process_lower:
+            return "control"
+        elif "feedback" in process_lower:
+            return "feedback"
+        else:
+            return "generic"
+    
+    async def _execute_find_target_mapping(self, params: Dict, context: Dict, 
+                                         results: Dict) -> Dict[str, Any]:
+        """Execute target mapping for analogical reasoning"""
+        min_similarity = params.get("min_similarity", 0.4)
+        
+        # Get source pattern from previous step
+        source_pattern = results.get("outputs", {}).get("abstracted_pattern")
+        if not source_pattern:
+            return {
+                "action": "find_target_mapping",
+                "status": "failed",
+                "outputs": {},
+                "metadata": {"reason": "no_source_pattern"}
+            }
+        
+        # Extract target domain from context
+        target_info = self._extract_target_domain(context.get("user_input", ""))
+        
+        if not target_info:
+            return {
+                "action": "find_target_mapping",
+                "status": "failed",
+                "outputs": {},
+                "metadata": {"reason": "no_target_identified"}
+            }
+        
+        # Find mappings between source and target
+        mappings = await self._find_analogical_mappings(
+            source_pattern, target_info, min_similarity
+        )
+        
+        # Evaluate mapping quality
+        mapping_quality = self._evaluate_mapping_quality(mappings)
+        
+        # Generate mapping rules
+        mapping_rules = self._generate_mapping_rules(mappings, source_pattern, target_info)
+        
+        return {
+            "action": "find_target_mapping",
+            "status": "completed",
+            "outputs": {
+                "target_domain": target_info["domain"],
+                "target_concept": target_info["concept"],
+                "mappings": mappings,
+                "mapping_quality": mapping_quality,
+                "mapping_rules": mapping_rules,
+                "best_mapping": mappings[0] if mappings else None
+            },
+            "metadata": {
+                "min_similarity_used": min_similarity,
+                "mappings_found": len(mappings)
+            }
+        }
+    
+    def _extract_target_domain(self, user_input: str) -> Optional[Dict[str, Any]]:
+        """Extract target domain from user input"""
+        input_lower = user_input.lower()
+        
+        # Look for "like X in Y" or "to Y" patterns
+        target_concept = None
+        target_domain = None
+        
+        if " to " in input_lower:
+            parts = input_lower.split(" to ")
+            if len(parts) >= 2:
+                target_part = parts[1].strip()
+                words = target_part.split()
+                if words:
+                    target_concept = " ".join(words[:3])
+        
+        elif " in " in input_lower:
+            parts = input_lower.split(" in ")
+            if len(parts) >= 2:
+                target_domain = parts[1].strip().split()[0]
+        
+        # If no explicit target, infer from second part of comparison
+        if not target_concept:
+            if "like" in input_lower:
+                parts = input_lower.split("like")
+                if len(parts) >= 2:
+                    target_concept = parts[1].strip()
+        
+        # Infer domain if not explicit
+        if not target_domain:
+            domain_keywords = {
+                "business": ["business", "company", "market", "organization"],
+                "technology": ["software", "system", "computer", "digital"],
+                "nature": ["nature", "environment", "ecosystem", "natural"],
+                "society": ["society", "social", "community", "people"],
+                "education": ["learning", "teaching", "education", "school"]
+            }
+            
+            for domain, keywords in domain_keywords.items():
+                if any(kw in input_lower for kw in keywords):
+                    target_domain = domain
+                    break
+        
+        if not target_concept and not target_domain:
+            return None
+        
+        return {
+            "domain": target_domain or "general",
+            "concept": target_concept or "target_system"
+        }
+    
+    async def _find_analogical_mappings(self, source_pattern: Dict[str, Any], 
+                                      target_info: Dict[str, Any], 
+                                      min_similarity: float) -> List[Dict[str, Any]]:
+        """Find mappings between source pattern and target domain"""
+        mappings = []
+        
+        # Get target elements based on domain
+        target_elements = self._get_target_domain_elements(target_info["domain"])
+        target_relations = self._get_target_domain_relations(target_info["domain"])
+        
+        # Map source elements to target elements
+        element_mappings = []
+        for source_elem in source_pattern["elements"]:
+            best_target = None
+            best_score = 0
+            
+            for target_elem in target_elements:
+                score = self._calculate_element_similarity(
+                    source_elem, target_elem, source_pattern["domain"], target_info["domain"]
+                )
+                
+                if score > best_score and score >= min_similarity:
+                    best_score = score
+                    best_target = target_elem
+            
+            if best_target:
+                element_mappings.append({
+                    "source": source_elem,
+                    "target": best_target,
+                    "similarity": best_score,
+                    "mapping_type": "element"
+                })
+        
+        # Map relations
+        relation_mappings = []
+        for source_rel in source_pattern["relations"]:
+            best_target = None
+            best_score = 0
+            
+            for target_rel in target_relations:
+                score = self._calculate_relation_similarity(source_rel, target_rel)
+                
+                if score > best_score and score >= min_similarity:
+                    best_score = score
+                    best_target = target_rel
+            
+            if best_target:
+                relation_mappings.append({
+                    "source": source_rel,
+                    "target": best_target,
+                    "similarity": best_score,
+                    "mapping_type": "relation"
+                })
+        
+        # Combine into complete mappings
+        if element_mappings and relation_mappings:
+            mapping = {
+                "element_mappings": element_mappings,
+                "relation_mappings": relation_mappings,
+                "overall_similarity": (
+                    sum(m["similarity"] for m in element_mappings) / len(element_mappings) * 0.5 +
+                    sum(m["similarity"] for m in relation_mappings) / len(relation_mappings) * 0.5
+                ),
+                "structural_consistency": self._check_structural_consistency(
+                    element_mappings, relation_mappings
+                )
+            }
+            mappings.append(mapping)
+        
+        # Sort by overall similarity
+        mappings.sort(key=lambda m: m["overall_similarity"], reverse=True)
+        
+        return mappings
+    
+    def _get_target_domain_elements(self, domain: str) -> List[str]:
+        """Get typical elements for target domain"""
+        domain_elements = {
+            "business": ["company", "product", "customer", "market", "resource", "process"],
+            "technology": ["user", "interface", "data", "algorithm", "system", "network"],
+            "nature": ["organism", "habitat", "resource", "predator", "prey", "environment"],
+            "society": ["individual", "group", "institution", "norm", "resource", "relationship"],
+            "education": ["student", "teacher", "curriculum", "assessment", "knowledge", "skill"],
+            "general": ["entity", "component", "resource", "process", "outcome", "constraint"]
+        }
+        
+        return domain_elements.get(domain, domain_elements["general"])
+    
+    def _get_target_domain_relations(self, domain: str) -> List[str]:
+        """Get typical relations for target domain"""
+        domain_relations = {
+            "business": ["sells_to", "competes_with", "supplies", "manages", "optimizes"],
+            "technology": ["processes", "connects_to", "stores", "transmits", "interfaces_with"],
+            "nature": ["feeds_on", "competes_for", "adapts_to", "reproduces", "migrates"],
+            "society": ["influences", "cooperates_with", "governs", "supports", "conflicts_with"],
+            "education": ["teaches", "learns", "assesses", "motivates", "develops"],
+            "general": ["affects", "enables", "constrains", "transforms", "regulates"]
+        }
+        
+        return domain_relations.get(domain, domain_relations["general"])
+    
+    def _calculate_element_similarity(self, source_elem: str, target_elem: str, 
+                                    source_domain: str, target_domain: str) -> float:
+        """Calculate similarity between source and target elements"""
+        # Direct similarity
+        if source_elem.lower() == target_elem.lower():
+            return 1.0
+        
+        # Substring similarity
+        if source_elem.lower() in target_elem.lower() or target_elem.lower() in source_elem.lower():
+            return 0.8
+        
+        # Role-based similarity
+        role_mappings = {
+            ("actor", "agent"): ["user", "customer", "organism", "individual", "student"],
+            ("object", "resource"): ["product", "data", "habitat", "knowledge"],
+            ("process", "transformation"): ["algorithm", "metabolism", "learning", "transaction"],
+            ("constraint", "boundary"): ["limit", "rule", "norm", "requirement"]
+        }
+        
+        source_role = None
+        target_role = None
+        
+        for roles, elements in role_mappings.items():
+            if source_elem in roles[0] or source_elem in elements:
+                source_role = roles[0]
+            if target_elem in roles[0] or target_elem in elements:
+                target_role = roles[0]
+        
+        if source_role and target_role and source_role == target_role:
+            return 0.7
+        
+        # Cross-domain mapping heuristics
+        cross_domain_mappings = {
+            ("force", "influence"): 0.6,
+            ("energy", "resource"): 0.7,
+            ("signal", "message"): 0.8,
+            ("cell", "component"): 0.6,
+            ("ecosystem", "market"): 0.7
+        }
+        
+        for (s, t), score in cross_domain_mappings.items():
+            if (source_elem == s and target_elem == t) or (source_elem == t and target_elem == s):
+                return score
+        
+        # Default low similarity
+        return 0.2
+    
+    def _calculate_relation_similarity(self, source_rel: str, target_rel: str) -> float:
+        """Calculate similarity between relations"""
+        # Direct match
+        if source_rel == target_rel:
+            return 1.0
+        
+        # Semantic similarity groups
+        similarity_groups = [
+            ["flows_to", "transfers", "transmits", "sends"],
+            ["transforms", "converts", "processes", "changes"],
+            ["enables", "facilitates", "allows", "supports"],
+            ["constrains", "limits", "restricts", "regulates"],
+            ["connects", "links", "interfaces", "relates"]
+        ]
+        
+        for group in similarity_groups:
+            if source_rel in group and target_rel in group:
+                return 0.8
+        
+        # Partial match
+        source_words = set(source_rel.split('_'))
+        target_words = set(target_rel.split('_'))
+        
+        if source_words.intersection(target_words):
+            return 0.5
+        
+        return 0.2
+    
+    def _check_structural_consistency(self, element_mappings: List[Dict], 
+                                    relation_mappings: List[Dict]) -> float:
+        """Check if mappings preserve structural relationships"""
+        # Simplified check - in reality would verify graph isomorphism
+        consistency = 1.0
+        
+        # Check if number of elements and relations are proportional
+        elem_ratio = len(element_mappings) / max(len(element_mappings), 1)
+        rel_ratio = len(relation_mappings) / max(len(relation_mappings), 1)
+        
+        consistency *= min(elem_ratio, rel_ratio)
+        
+        # Check if all mapped elements have corresponding relations
+        mapped_elements = set(m["target"] for m in element_mappings)
+        relation_elements = set()
+        
+        for rel_map in relation_mappings:
+            # Extract elements from relation names
+            rel_parts = rel_map["target"].split('_')
+            relation_elements.update(rel_parts)
+        
+        # Penalty for unmapped elements in relations
+        unmapped = relation_elements - mapped_elements
+        consistency *= (1.0 - len(unmapped) / max(len(relation_elements), 1))
+        
+        return consistency
+    
+    def _evaluate_mapping_quality(self, mappings: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Evaluate the quality of analogical mappings"""
+        if not mappings:
+            return {"overall_quality": 0.0, "issues": ["no_mappings_found"]}
+        
+        quality = {
+            "overall_quality": 0.0,
+            "completeness": 0.0,
+            "consistency": 0.0,
+            "systematicity": 0.0,
+            "issues": []
+        }
+        
+        best_mapping = mappings[0]
+        
+        # Completeness - how many source elements were mapped
+        total_elements = len(best_mapping.get("element_mappings", []))
+        total_relations = len(best_mapping.get("relation_mappings", []))
+        
+        if total_elements > 0:
+            quality["completeness"] = min(1.0, (total_elements + total_relations) / 10)
+        else:
+            quality["issues"].append("incomplete_mapping")
+        
+        # Consistency
+        quality["consistency"] = best_mapping.get("structural_consistency", 0.5)
+        if quality["consistency"] < 0.5:
+            quality["issues"].append("low_structural_consistency")
+        
+        # Systematicity - preference for deep relational structure
+        quality["systematicity"] = min(1.0, total_relations / max(total_elements, 1))
+        
+        # Overall quality
+        quality["overall_quality"] = (
+            quality["completeness"] * 0.3 +
+            quality["consistency"] * 0.4 +
+            quality["systematicity"] * 0.3
+        )
+        
+        return quality
+    
+    def _generate_mapping_rules(self, mappings: List[Dict[str, Any]], 
+                              source_pattern: Dict[str, Any], 
+                              target_info: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Generate rules for applying the analogy"""
+        rules = []
+        
+        if not mappings:
+            return rules
+        
+        best_mapping = mappings[0]
+        
+        # Element mapping rules
+        for elem_map in best_mapping.get("element_mappings", []):
+            rule = {
+                "type": "element_mapping",
+                "rule": f"'{elem_map['source']}' in {source_pattern['domain']} corresponds to '{elem_map['target']}' in {target_info['domain']}",
+                "confidence": elem_map["similarity"]
+            }
+            rules.append(rule)
+        
+        # Relation mapping rules
+        for rel_map in best_mapping.get("relation_mappings", []):
+            rule = {
+                "type": "relation_mapping",
+                "rule": f"The relationship '{rel_map['source']}' maps to '{rel_map['target']}'",
+                "confidence": rel_map["similarity"]
+            }
+            rules.append(rule)
+        
+        # Inference rules
+        if len(rules) > 3:
+            rules.append({
+                "type": "inference",
+                "rule": f"Properties that hold in {source_pattern['domain']} may have analogous properties in {target_info['domain']}",
+                "confidence": best_mapping["overall_similarity"]
+            })
+        
+        # Caution rules
+        if best_mapping["overall_similarity"] < 0.7:
+            rules.append({
+                "type": "caution",
+                "rule": "This analogy has moderate similarity - some aspects may not transfer directly",
+                "confidence": 1.0
+            })
+        
+        return rules
+    
+    async def _execute_custom_action(self, action: str, params: Dict, 
+                                   context: Dict, results: Dict) -> Dict[str, Any]:
+        """Execute custom template actions"""
+        # Remove 'custom_' prefix
+        custom_type = action[7:] if action.startswith("custom_") else action
+        
+        # Route to appropriate custom handler
+        custom_handlers = {
+            "domain_analysis": self._custom_domain_analysis,
+            "pattern_synthesis": self._custom_pattern_synthesis,
+            "constraint_checking": self._custom_constraint_checking,
+            "optimization": self._custom_optimization
+        }
+        
+        handler = custom_handlers.get(custom_type)
+        
+        if handler:
+            return await handler(params, context, results)
+        
+        # Default custom action
+        return {
+            "action": action,
+            "status": "completed",
+            "outputs": {
+                "message": f"Custom action {custom_type} executed",
+                "params_received": params
+            },
+            "metadata": {
+                "custom_type": custom_type
+            }
+        }
+    
+    async def _custom_domain_analysis(self, params: Dict, context: Dict, 
+                                    results: Dict) -> Dict[str, Any]:
+        """Custom domain analysis action"""
+        domain = params.get("domain", "general")
+        depth = params.get("depth", "shallow")
+        
+        analysis = {
+            "domain": domain,
+            "characteristics": self._analyze_domain_characteristics(domain),
+            "key_concepts": self._extract_domain_concepts(domain, context),
+            "typical_patterns": self._identify_domain_patterns(domain),
+            "constraints": self._identify_domain_constraints(domain)
+        }
+        
+        if depth == "deep":
+            analysis["relationships"] = self._analyze_domain_relationships(domain)
+            analysis["dynamics"] = self._analyze_domain_dynamics(domain)
+        
+        return {
+            "action": "custom_domain_analysis",
+            "status": "completed",
+            "outputs": analysis,
+            "metadata": {"depth": depth}
+        }
+    
+    def _analyze_domain_characteristics(self, domain: str) -> Dict[str, Any]:
+        """Analyze characteristics of a domain"""
+        characteristics = {
+            "physics": {
+                "deterministic": True,
+                "quantitative": True,
+                "conservation_laws": True,
+                "reversibility": "partial"
+            },
+            "biology": {
+                "deterministic": False,
+                "quantitative": "mixed",
+                "emergent": True,
+                "evolutionary": True
+            },
+            "economics": {
+                "deterministic": False,
+                "quantitative": True,
+                "equilibrium_seeking": True,
+                "agent_based": True
+            },
+            "psychology": {
+                "deterministic": False,
+                "quantitative": "mixed",
+                "subjective": True,
+                "contextual": True
+            }
+        }
+        
+        return characteristics.get(domain, {
+            "deterministic": "unknown",
+            "quantitative": "unknown",
+            "complexity": "medium"
+        })
+    
+    def _extract_domain_concepts(self, domain: str, context: Dict) -> List[str]:
+        """Extract key concepts for a domain"""
+        domain_concepts = {
+            "physics": ["force", "energy", "momentum", "field", "particle", "wave"],
+            "biology": ["organism", "evolution", "ecosystem", "gene", "adaptation", "selection"],
+            "economics": ["market", "price", "supply", "demand", "utility", "equilibrium"],
+            "psychology": ["cognition", "emotion", "behavior", "perception", "memory", "learning"],
+            "general": ["system", "process", "state", "change", "interaction", "pattern"]
+        }
+        
+        return domain_concepts.get(domain, domain_concepts["general"])
+    
+    def _identify_domain_patterns(self, domain: str) -> List[Dict[str, str]]:
+        """Identify typical patterns in a domain"""
+        domain_patterns = {
+            "physics": [
+                {"name": "conservation", "description": "Quantities remain constant in closed systems"},
+                {"name": "symmetry", "description": "Physical laws exhibit symmetries"},
+                {"name": "least_action", "description": "Nature follows paths of least action"}
+            ],
+            "biology": [
+                {"name": "evolution", "description": "Species change over time through selection"},
+                {"name": "homeostasis", "description": "Systems maintain stable internal conditions"},
+                {"name": "emergence", "description": "Complex behaviors arise from simple rules"}
+            ],
+            "economics": [
+                {"name": "supply_demand", "description": "Prices determined by supply and demand"},
+                {"name": "optimization", "description": "Agents maximize utility"},
+                {"name": "equilibrium", "description": "Markets tend toward equilibrium"}
+            ],
+            "general": [
+                {"name": "feedback", "description": "Outputs influence inputs"},
+                {"name": "hierarchy", "description": "Systems organized in levels"},
+                {"name": "adaptation", "description": "Systems adjust to environment"}
+            ]
+        }
+        
+        return domain_patterns.get(domain, domain_patterns["general"])
+    
+    def _identify_domain_constraints(self, domain: str) -> List[str]:
+        """Identify constraints typical to a domain"""
+        domain_constraints = {
+            "physics": ["conservation_laws", "speed_of_light", "thermodynamics", "causality"],
+            "biology": ["resource_limits", "physical_laws", "genetic_constraints", "environmental_limits"],
+            "economics": ["scarcity", "budget_constraints", "information_asymmetry", "transaction_costs"],
+            "psychology": ["cognitive_limits", "attention_capacity", "memory_constraints", "biases"],
+            "general": ["resource_limits", "time_constraints", "physical_laws", "logical_consistency"]
+        }
+        
+        return domain_constraints.get(domain, domain_constraints["general"])
+    
+    def _analyze_domain_relationships(self, domain: str) -> List[Dict[str, Any]]:
+        """Analyze typical relationships in domain"""
+        # Simplified - would be more sophisticated in production
+        return [
+            {"type": "causal", "frequency": "high", "strength": "variable"},
+            {"type": "correlational", "frequency": "medium", "strength": "weak"},
+            {"type": "hierarchical", "frequency": "medium", "strength": "strong"}
+        ]
+    
+    def _analyze_domain_dynamics(self, domain: str) -> Dict[str, Any]:
+        """Analyze dynamics typical to domain"""
+        domain_dynamics = {
+            "physics": {
+                "time_reversible": True,
+                "equilibrium_seeking": True,
+                "periodic": "common",
+                "chaotic": "possible"
+            },
+            "biology": {
+                "time_reversible": False,
+                "equilibrium_seeking": False,
+                "adaptive": True,
+                "evolutionary": True
+            },
+            "economics": {
+                "time_reversible": False,
+                "equilibrium_seeking": True,
+                "cyclical": True,
+                "growth_oriented": True
+            }
+        }
+        
+        return domain_dynamics.get(domain, {
+            "time_reversible": False,
+            "equilibrium_seeking": "unknown",
+            "complex": True
+        })
