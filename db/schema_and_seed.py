@@ -2,6 +2,8 @@
 
 import json
 import logging
+import re
+from typing import List
 # Import connection and pool management functions
 from db.connection import (
     get_db_connection_context,
@@ -26,6 +28,104 @@ from typing import Dict, Any
 
 # Configure logger for this module
 logger = logging.getLogger(__name__) # Define logger at module level
+
+def parse_system_prompt_to_memories(prompt: str, private_instructions: str = None) -> List[Dict[str, Any]]:
+    """
+    Parses the Nyx system prompt (and private instructions) into structured memory objects.
+    Returns a list of dicts suitable for DB insertion.
+    """
+    memories = []
+    section = None
+    lines = prompt.splitlines()
+    buffer = []
+    
+    def flush_buffer(buffer, section):
+        "Helper to emit current buffered lines as memories."
+        memories_list = []
+        if buffer:
+            content = "\n".join(buffer).strip()
+            if content:
+                memories_list.append({
+                    "memory_text": content,
+                    "memory_type": section or "core_identity",
+                    "tags": [section] if section else [],
+                })
+        return memories_list
+
+    for line in lines:
+        # Detect bold/markdown headings (e.g., **Main Character:** or ## Main Character)
+        heading_match = re.match(r"^(?:\*\*|#+)\s*(.+?)[\:\*]*\s*(?:\*\*|#+)?$", line.strip())
+        if heading_match and len(line.strip()) < 40:
+            # Flush old section
+            memories.extend(flush_buffer(buffer, section))
+            buffer = []
+            section = heading_match.group(1).lower().replace(" ", "_")
+        elif line.strip().startswith("• "):
+            # Bullet point = separate memory (but keep section context)
+            memories.extend(flush_buffer(buffer, section))
+            buffer = [line.strip()]
+            memories.extend(flush_buffer(buffer, section))
+            buffer = []
+        else:
+            buffer.append(line)
+    # Flush remainder
+    memories.extend(flush_buffer(buffer, section))
+
+    # Now, further split long memory_texts into smaller bites if desired
+    more_memories = []
+    for mem in memories:
+        if len(mem["memory_text"]) > 600 and "\n• " in mem["memory_text"]:
+            # Break up big blocks of bullets (for better recall granularity)
+            for point in mem["memory_text"].split("\n• "):
+                if point.strip():
+                    text = "• " + point.strip() if not point.strip().startswith("•") else point.strip()
+                    more_memories.append({**mem, "memory_text": text})
+        else:
+            more_memories.append(mem)
+    memories = more_memories
+
+    # --- Add PRIVATE_REFLECTION_INSTRUCTIONS as "private_rule" memories
+    if private_instructions:
+        # Split into individual rules by numbers or bullets
+        priv_sections = re.split(r"\n\s*\d+\.\s*", private_instructions.strip())
+        for section_text in priv_sections:
+            if section_text.strip():
+                # Take first line or phrase as the type, rest as content
+                first_line, *rest = section_text.strip().splitlines()
+                priv_type = first_line.split(":")[0].lower().replace(" ", "_")
+                memories.append({
+                    "memory_text": section_text.strip(),
+                    "memory_type": f"private_{priv_type}",
+                    "tags": ["private", priv_type]
+                })
+    return memories
+
+async def seed_nyx_memories_from_prompt(prompt: str, private: str = None):
+    """
+    Seeds Nyx's system prompt and private reflection instructions as core memories.
+    """
+    logger.info("Seeding Nyx system prompt and rules as core memories...")
+    chunks = parse_system_prompt_to_memories(prompt, private)
+    async with get_db_connection_context() as conn:
+        for i, mem in enumerate(chunks):
+            exists = await conn.fetchval(
+                """
+                SELECT id FROM unified_memories
+                WHERE entity_type = 'nyx' AND entity_id = 0 AND memory_text = $1
+                """,
+                mem["memory_text"]
+            )
+            if not exists:
+                await conn.execute(
+                    """
+                    INSERT INTO unified_memories
+                    (entity_type, entity_id, user_id, conversation_id, memory_text, memory_type, tags, significance)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                    """,
+                    "nyx", 0, 0, 0, mem["memory_text"], mem.get("memory_type", "core_identity"), mem.get("tags", []), 10-i
+                )
+    logger.info(f"Seeded {len(chunks)} memories for Nyx from system prompt and rules.")
+
 
 async def create_all_tables():
     """
@@ -1689,7 +1789,9 @@ async def main():
     try:
         # Run the full initialization
         await initialize_all_data()
+        await seed_nyx_memories_from_prompt(SYSTEM_PROMPT, PRIVATE_REFLECTION_INSTRUCTIONS)
         logger.info("Application initialization successful.") # Success message if all went well
+        
     except Exception as e:
          # initialize_all_data now re-raises, so main's try/except catches it
          logger.error(f"An error occurred during application initialization in main: {e}", exc_info=True)
