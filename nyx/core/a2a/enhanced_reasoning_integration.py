@@ -30,7 +30,9 @@ from .enhanced_reasoning_core import (
 )
 from .enhanced_reasoning_meta import (
     MetaReasoningModule, ReasoningStrategy, ExplanationGenerator,
-    UncertaintyManager, ReasoningTemplateSystem
+    UncertaintyManager, ReasoningTemplateSystem,
+    UncertaintyType, UncertaintyEstimate
+)
 )
 
 logger = logging.getLogger(__name__)
