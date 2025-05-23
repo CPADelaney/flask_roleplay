@@ -908,51 +908,95 @@ def create_quart_app():
 
     
     @app.route("/admin/nyx_direct", methods=["POST"])
-    async def admin_nyx_direct(): # Make async
-        """Direct access to NyxBrain for admin users only"""
+    async def admin_nyx_direct():
+        """
+        Direct access to NyxBrain for admin users only, with full feature control.
+        Accepts:
+            user_input: str (required)
+            context: dict (optional, will be merged with admin_mode=True)
+            use_thinking: bool (optional)
+            use_conditioning: bool (optional)
+            use_coordination: bool (optional)
+            thinking_level: int (optional)
+            mode: str (optional)
+            generate_response: bool (optional, default True)
+        """
         if "user_id" not in session:
             return jsonify({"error": "Not authenticated"}), 401
-
-        # Check if user is admin
+    
+        # Check admin
         admin_ids = app.config.get('ADMIN_USER_IDS', [])
         if session.get("user_id") not in admin_ids:
             logger.warning(f"Non-admin user {session.get('user_id')} attempted Nyx direct access.")
             return jsonify({"error": "Access denied"}), 403
-
-        data = request.get_json()
-        if not data or "user_input" not in data:
-             return jsonify({"error": "Missing user_input in request"}), 400
+    
+        data = await request.get_json(force=True, silent=True) or {}
         user_input = data.get("user_input")
-
-        # Get NyxBrain instance (should already be initialized)
+        if not user_input:
+            return jsonify({"error": "Missing user_input in request"}), 400
+    
+        # Feature toggles (accept null/None as "auto-detect")
+        def to_bool(val):
+            if isinstance(val, bool): return val
+            if isinstance(val, str): return val.lower() in ['true', '1', 'yes', 'on']
+            return None if val is None else bool(val)
+        
+        use_thinking = data.get("use_thinking")
+        use_conditioning = data.get("use_conditioning")
+        use_coordination = data.get("use_coordination")
+        thinking_level = data.get("thinking_level")
+        mode = data.get("mode")
+        context = data.get("context") or {}
+        context["admin_mode"] = True
+    
+        # Accept hierarchical memory (if supported)
+        use_hierarchical_memory = data.get("use_hierarchical_memory", None)
+    
+        # Whether to run generate_response as well
+        want_response = data.get("generate_response", True)
+    
         nyx_brain = getattr(app, 'nyx_brain', None)
         if not nyx_brain:
-             logger.error("NyxBrain not initialized on app context.")
-             return jsonify({"error": "Nyx system not available"}), 503
-
-        # Process directly with NyxBrain instead of agent SDK
-        # No need for asyncio.run here as the route handler is async
+            logger.error("NyxBrain not initialized on app context.")
+            return jsonify({"error": "Nyx system not available"}), 503
+    
         try:
-            logger.info(f"Admin user {session.get('user_id')} executing direct Nyx command: {user_input[:50]}...")
-            # Assuming process_input_with_thinking and generate_response_with_thinking are async
-            processing_result = await nyx_brain.process_input_with_thinking(
+            # Always run process_input with full toggle support
+            processing_result = await nyx_brain.process_input(
                 user_input=user_input,
-                context={"admin_mode": True}
+                context=context,
+                use_thinking=to_bool(use_thinking),
+                use_conditioning=to_bool(use_conditioning),
+                use_coordination=to_bool(use_coordination),
+                thinking_level=int(thinking_level) if thinking_level is not None else None,
+                mode=mode
             )
-            response_result = await nyx_brain.generate_response_with_thinking(
-                user_input=user_input,
-                context={"admin_mode": True}
-            )
-
+    
+            # Optionally, run generate_response if desired
+            if want_response:
+                response_result = await nyx_brain.generate_response(
+                    user_input=user_input,
+                    context=context,
+                    use_thinking=to_bool(use_thinking),
+                    use_conditioning=to_bool(use_conditioning),
+                    use_coordination=to_bool(use_coordination),
+                    use_hierarchical_memory=to_bool(use_hierarchical_memory),
+                    mode=mode
+                )
+            else:
+                response_result = None
+    
             result = {
-                "brain_processing": processing_result, # Ensure these are serializable
-                "brain_response": response_result, # Ensure these are serializable
+                "processing_result": processing_result,
+                "response_result": response_result,
                 "admin_mode": True
             }
             return jsonify(result)
+    
         except Exception as e:
             logger.error(f"Error during admin Nyx direct call: {e}", exc_info=True)
             return jsonify({"error": "Error processing direct Nyx command", "details": str(e)}), 500
+
 
 
     @app.route("/nyx_response", methods=["POST"])
