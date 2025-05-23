@@ -560,22 +560,43 @@ async function sendMessage() {
           headers: {'Content-Type': 'application/json'},
           body: JSON.stringify({sender: "user", content: userText, timestamp: Date.now()})
       });
-
+  
       appendMessage({sender: "user", content: userText, timestamp: Date.now()}, true);
-
-      // 2. Get Nyx's reply
-      console.log("Sending request to /nyx_response:", userText);
-      const replyRes = await fetch('/nyx_response', {
+  
+      // 2. Get Nyx's admin reply using the new full admin endpoint!
+      // Optional: Expose advanced toggles via UI, or keep it hardcoded for now.
+      const adminRequest = {
+        user_input: userText,
+        // context: { debug_trace: true }, // Optional: add custom admin context
+        // use_thinking: true,
+        // use_conditioning: false,
+        // use_coordination: true,
+        // thinking_level: 2,
+        // mode: "coordinated",
+        // generate_response: true,
+        // use_hierarchical_memory: true
+      };
+      const replyRes = await fetch('/admin/nyx_direct', {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({user_input: userText, conversation_id: 0})
+          body: JSON.stringify(adminRequest)
       });
-      console.log("Response status:", replyRes.status);
+  
       const replyData = await replyRes.json();
-      console.log("Response data:", replyData);
-      const aiReply = replyData.message || replyData.reply || "...";
+      console.log("Admin Nyx response data:", replyData);
+  
+      // Safely extract the final message (from response_result or processing_result)
+      let aiReply = "...";
+      if (replyData.response_result && replyData.response_result.main_message) {
+        aiReply = replyData.response_result.main_message;
+      } else if (replyData.processing_result && replyData.processing_result.message) {
+        aiReply = replyData.processing_result.message;
+      } else if (replyData.response_result && replyData.response_result.message) {
+        aiReply = replyData.response_result.message;
+      }
+  
       appendMessage({sender: "Nyx", content: aiReply, timestamp: Date.now()}, true);
-
+  
       // 3. Save Nyx's reply to the DB
       await fetch('/nyx_space/messages', {
           method: 'POST',
@@ -584,8 +605,8 @@ async function sendMessage() {
       });
       return;
     } catch (error) {
-      console.error("Error processing Nyx message:", error);
-      appendMessage({sender: "Nyx", content: "Sorry, an error occurred processing your message.", timestamp: Date.now()}, true);
+      console.error("Error processing Nyx admin message:", error);
+      appendMessage({sender: "Nyx", content: "Sorry, an error occurred processing your admin message.", timestamp: Date.now()}, true);
       return;
     }
   }
