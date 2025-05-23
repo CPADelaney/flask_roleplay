@@ -20,14 +20,131 @@ from nyx.core.brain.context_distribution import SharedContext, ContextUpdate, Co
 
 logger = logging.getLogger(__name__)
 
+try:
+    from sentence_transformers import SentenceTransformer
+    SENTENCE_TRANSFORMERS_AVAILABLE = True
+except ImportError:
+    SENTENCE_TRANSFORMERS_AVAILABLE = False
+    logging.warning("sentence-transformers not available - semantic similarity will use fallback methods")
+
+try:
+    import spacy
+    SPACY_AVAILABLE = True
+except ImportError:
+    SPACY_AVAILABLE = False
+    logging.warning("spaCy not available - syntactic analysis will be disabled")
+
+try:
+    import nltk
+    # Download required NLTK data
+    nltk.download('stopwords', quiet=True)
+    NLTK_AVAILABLE = True
+except ImportError:
+    NLTK_AVAILABLE = False
+    logging.warning("NLTK not available - using basic stopword list")
+
+# Complete __init__ method for ContextAwareReasoningCore
+
+from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
+import logging
+import asyncio
+
+# Import at the top of the file
+try:
+    from sentence_transformers import SentenceTransformer
+    SENTENCE_TRANSFORMERS_AVAILABLE = True
+except ImportError:
+    SENTENCE_TRANSFORMERS_AVAILABLE = False
+    logging.warning("sentence-transformers not available - semantic similarity will use fallback methods")
+
+try:
+    import spacy
+    SPACY_AVAILABLE = True
+except ImportError:
+    SPACY_AVAILABLE = False
+    logging.warning("spaCy not available - syntactic analysis will be disabled")
+
+try:
+    import nltk
+    # Download required NLTK data
+    nltk.download('stopwords', quiet=True)
+    NLTK_AVAILABLE = True
+except ImportError:
+    NLTK_AVAILABLE = False
+    logging.warning("NLTK not available - using basic stopword list")
+
 class ContextAwareReasoningCore(ContextAwareModule):
     """
     Context-aware wrapper for ReasoningCore with full A2A integration
     """
     
-    def __init__(self, original_reasoning_core):
+    def __init__(self, original_reasoning_core, lazy_load: bool = False, 
+                 max_workers: int = 4, model_cache_dir: str = None):
+        """
+        Initialize the context-aware reasoning core.
+        
+        Args:
+            original_reasoning_core: The original ReasoningCore instance
+            lazy_load: If True, defer loading heavy models until first use
+            max_workers: Maximum worker threads for async operations
+            model_cache_dir: Directory to cache downloaded models
+        """
         super().__init__("reasoning_core")
-
+        self.original_core = original_reasoning_core
+        
+        # ========================================================================
+        # A2A INTEGRATION SETUP
+        # ========================================================================
+        
+        self.context_subscriptions = [
+            "emotional_state_update", "memory_retrieval_complete", 
+            "goal_context_available", "knowledge_update",
+            "perception_input", "multimodal_integration",
+            "causal_discovery_request", "conceptual_blend_request",
+            "intervention_request", "counterfactual_query"
+        ]
+        
+        # ========================================================================
+        # ACTIVE REASONING STATE
+        # ========================================================================
+        
+        # Track active reasoning processes
+        self.active_models = set()
+        self.active_spaces = set()
+        self.active_interventions = set()
+        self.reasoning_context = {}
+        
+        # ========================================================================
+        # NLP AND SEMANTIC MODELS
+        # ========================================================================
+        
+        # Configuration
+        self.lazy_load = lazy_load
+        self.model_cache_dir = model_cache_dir
+        self._models_loaded = False
+        
+        # Initialize model placeholders
+        self.semantic_model = None
+        self.nlp = None
+        
+        # Load models immediately if not lazy loading
+        if not lazy_load:
+            self._initialize_nlp_models()
+        
+        # ========================================================================
+        # THREAD POOL FOR ASYNC OPERATIONS
+        # ========================================================================
+        
+        self.executor = ThreadPoolExecutor(
+            max_workers=max_workers,
+            thread_name_prefix="reasoning_worker"
+        )
+        
+        # ========================================================================
+        # MODULE DISCOVERY AND PERSISTENCE
+        # ========================================================================
+        
         # Module discovery registry
         self.discovered_modules = {}
         
@@ -38,6 +155,10 @@ class ContextAwareReasoningCore(ContextAwareModule):
         self._last_goal_context = {}
         self._last_memory_context = {}
         
+        # ========================================================================
+        # PERFORMANCE METRICS AND MONITORING
+        # ========================================================================
+        
         # Performance metrics
         self._contexts_processed = 0
         self._updates_received = 0
@@ -45,26 +166,187 @@ class ContextAwareReasoningCore(ContextAwareModule):
         self._avg_processing_time = 0.0
         self._processing_times = []  # For calculating average
         
+        # Detailed metrics tracking
+        self._processing_metrics = defaultdict(list)  # Track per-operation metrics
+        self._handler_success_count = defaultdict(int)  # Track handler success rates
+        self._model_inference_times = defaultdict(list)  # Track model inference times
+        self._cache_hit_rates = defaultdict(lambda: {"hits": 0, "misses": 0})
+        
+        # ========================================================================
+        # CACHING AND OPTIMIZATION
+        # ========================================================================
+        
+        # Semantic similarity cache (LRU-style)
+        self._similarity_cache = {}
+        self._max_cache_size = 10000
+        
+        # Community detection cache
+        self._community_cache = {}
+        self._community_cache_ttl = 300  # 5 minutes TTL
+        
+        # ========================================================================
+        # ERROR TRACKING
+        # ========================================================================
+        
+        self._error_counts = defaultdict(int)
+        self._last_errors = defaultdict(list)
+        self._max_error_history = 10
+        
+        # ========================================================================
+        # AUTO-SAVE AND BACKGROUND TASKS
+        # ========================================================================
+        
         # Auto-save flag
         self._auto_save_enabled = False
+        self._background_tasks = []
+        
+        # ========================================================================
+        # STARTUP TASKS
+        # ========================================================================
         
         # Schedule initial module discovery
-        asyncio.create_task(self.discover_modules())
+        discovery_task = asyncio.create_task(self.discover_modules())
+        self._background_tasks.append(discovery_task)
         
-        self.original_core = original_reasoning_core
-        self.context_subscriptions = [
-            "emotional_state_update", "memory_retrieval_complete", 
-            "goal_context_available", "knowledge_update",
-            "perception_input", "multimodal_integration",
-            "causal_discovery_request", "conceptual_blend_request",
-            "intervention_request", "counterfactual_query"
-        ]
+        # Log initialization
+        logger.info(f"ContextAwareReasoningCore initialized with {max_workers} workers")
+        logger.info(f"Lazy loading: {lazy_load}, Model cache: {model_cache_dir}")
+    
+    def _initialize_nlp_models(self):
+        """
+        Initialize NLP models with proper error handling and fallbacks.
+        This is called either during __init__ or on first use if lazy loading.
+        """
+        if self._models_loaded:
+            return
         
-        # Track active reasoning processes
-        self.active_models: Set[str] = set()
-        self.active_spaces: Set[str] = set()
-        self.active_interventions: Set[str] = set()
-        self.reasoning_context: Dict[str, Any] = {}
+        logger.info("Initializing NLP models...")
+        
+        # Initialize sentence transformer
+        if SENTENCE_TRANSFORMERS_AVAILABLE:
+            try:
+                # Use cache directory if specified
+                cache_folder = self.model_cache_dir if self.model_cache_dir else None
+                
+                # Try to load the model
+                self.semantic_model = SentenceTransformer(
+                    'all-MiniLM-L6-v2',
+                    cache_folder=cache_folder
+                )
+                
+                # Warm up the model with a test encoding
+                _ = self.semantic_model.encode(["test"], show_progress_bar=False)
+                
+                logger.info("Sentence transformer model loaded successfully")
+                
+            except Exception as e:
+                logger.error(f"Failed to load sentence transformer: {e}")
+                logger.warning("Semantic similarity will use fallback methods")
+                self.semantic_model = None
+        
+        # Initialize spaCy
+        if SPACY_AVAILABLE:
+            try:
+                # Try to load the English model
+                self.nlp = spacy.load('en_core_web_sm')
+                
+                # Disable unnecessary components for speed
+                disabled_components = ['ner', 'textcat']  # Keep tagger and parser
+                for component in disabled_components:
+                    if component in self.nlp.pipe_names:
+                        self.nlp.disable_pipe(component)
+                
+                # Set max length for processing
+                self.nlp.max_length = 1000000  # 1M characters
+                
+                # Warm up the model
+                _ = self.nlp("test")
+                
+                logger.info("spaCy model loaded successfully")
+                
+            except OSError:
+                logger.error("spaCy model 'en_core_web_sm' not found")
+                logger.info("Run: python -m spacy download en_core_web_sm")
+                self.nlp = None
+            except Exception as e:
+                logger.error(f"Failed to load spaCy: {e}")
+                self.nlp = None
+        
+        self._models_loaded = True
+    
+    def _ensure_models_loaded(self):
+        """Ensure models are loaded (for lazy loading)"""
+        if not self._models_loaded:
+            self._initialize_nlp_models()
+    
+    def __del__(self):
+        """Cleanup when object is destroyed"""
+        # Shutdown thread pool
+        if hasattr(self, 'executor'):
+            self.executor.shutdown(wait=False)
+        
+        # Cancel background tasks
+        if hasattr(self, '_background_tasks'):
+            for task in self._background_tasks:
+                if not task.done():
+                    task.cancel()
+    
+    # ========================================================================
+    # PERFORMANCE MONITORING METHODS
+    # ========================================================================
+    
+    def get_performance_stats(self) -> Dict[str, Any]:
+        """Get detailed performance statistics"""
+        stats = {
+            "contexts_processed": self._contexts_processed,
+            "updates_received": self._updates_received,
+            "updates_sent": self._updates_sent,
+            "avg_processing_time": self._avg_processing_time,
+            "handler_success_rates": {},
+            "model_performance": {},
+            "cache_performance": {},
+            "error_summary": {}
+        }
+        
+        # Calculate handler success rates
+        for handler, count in self._handler_success_count.items():
+            total_calls = count + self._error_counts.get(handler, 0)
+            if total_calls > 0:
+                stats["handler_success_rates"][handler] = count / total_calls
+        
+        # Model inference statistics
+        for model_name, times in self._model_inference_times.items():
+            if times:
+                stats["model_performance"][model_name] = {
+                    "avg_time": sum(times) / len(times),
+                    "min_time": min(times),
+                    "max_time": max(times),
+                    "calls": len(times)
+                }
+        
+        # Cache hit rates
+        for cache_name, cache_stats in self._cache_hit_rates.items():
+            total = cache_stats["hits"] + cache_stats["misses"]
+            if total > 0:
+                stats["cache_performance"][cache_name] = {
+                    "hit_rate": cache_stats["hits"] / total,
+                    "total_requests": total
+                }
+        
+        # Error summary
+        for error_type, count in self._error_counts.items():
+            stats["error_summary"][error_type] = {
+                "count": count,
+                "recent_errors": self._last_errors.get(error_type, [])[-3:]  # Last 3 errors
+            }
+        
+        return stats
+    
+    def clear_caches(self):
+        """Clear all caches to free memory"""
+        self._similarity_cache.clear()
+        self._community_cache.clear()
+        logger.info("Caches cleared")
 
     async def send_context_update(self, update_type: str, data: Dict[str, Any], 
                                   priority: ContextPriority = ContextPriority.MEDIUM,
