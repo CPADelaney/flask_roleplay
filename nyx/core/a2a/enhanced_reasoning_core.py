@@ -16,11 +16,20 @@ from functools import lru_cache, wraps
 import time
 import re
 import numpy as np
-from collections import defaultdict
 import math
-
+import nltk
+import spacy
+from collections import defaultdict, Counter
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+import networkx as nx
 
 logger = logging.getLogger(__name__)
+
+try:
+    nlp = spacy.load("en_core_web_sm")
+except:
+    nlp = None
 
 # ========================================================================================
 # ERROR HANDLING
@@ -265,12 +274,121 @@ class ReasoningState:
         return relevant
     
     def _extract_domain(self, context: Dict[str, Any]) -> str:
-        """Extract domain from context"""
-        # Simple implementation - could be enhanced
+        """Enhanced domain extraction using multiple signals"""
         user_input = context.get("user_input", "").lower()
-        for domain in ["health", "economics", "technology", "psychology", "environment"]:
-            if domain in user_input:
-                return domain
+        
+        # Expanded domain definitions with more keywords and patterns
+        domain_definitions = {
+            "health": {
+                "keywords": ["health", "medical", "disease", "treatment", "patient", "doctor", 
+                            "hospital", "symptom", "diagnosis", "medicine", "therapy", "wellness",
+                            "nutrition", "exercise", "mental health", "pandemic", "vaccine"],
+                "patterns": [r"(?:treat|cure|heal|diagnose)\s+\w+", r"\w+\s+(?:syndrome|disorder|disease)"],
+                "entities": ["DISEASE", "MEDICATION", "SYMPTOM", "MEDICAL_PROCEDURE"]
+            },
+            "technology": {
+                "keywords": ["technology", "software", "hardware", "computer", "algorithm", "data",
+                            "programming", "code", "system", "network", "AI", "machine learning",
+                            "database", "cloud", "cybersecurity", "API", "framework"],
+                "patterns": [r"(?:develop|build|code|program)\s+\w+", r"\w+\s+(?:algorithm|system|software)"],
+                "entities": ["TECHNOLOGY", "PROGRAMMING_LANGUAGE", "SOFTWARE", "HARDWARE"]
+            },
+            "economics": {
+                "keywords": ["economics", "economy", "market", "finance", "money", "trade", "investment",
+                            "stock", "bond", "GDP", "inflation", "recession", "supply", "demand",
+                            "price", "cost", "revenue", "profit", "budget"],
+                "patterns": [r"(?:buy|sell|trade|invest)\s+\w+", r"\w+\s+(?:market|economy|sector)"],
+                "entities": ["MONEY", "CURRENCY", "FINANCIAL_INSTRUMENT", "ECONOMIC_INDICATOR"]
+            },
+            "psychology": {
+                "keywords": ["psychology", "mind", "behavior", "emotion", "cognition", "personality",
+                            "mental", "consciousness", "memory", "learning", "motivation", "perception",
+                            "anxiety", "depression", "therapy", "counseling"],
+                "patterns": [r"(?:feel|think|believe|perceive)\s+\w+", r"\w+\s+(?:behavior|emotion|trait)"],
+                "entities": ["EMOTION", "COGNITIVE_PROCESS", "MENTAL_STATE", "PERSONALITY_TRAIT"]
+            },
+            "environment": {
+                "keywords": ["environment", "climate", "ecology", "nature", "pollution", "conservation",
+                            "sustainability", "renewable", "ecosystem", "biodiversity", "carbon",
+                            "greenhouse", "global warming", "recycling", "habitat"],
+                "patterns": [r"(?:protect|conserve|pollute)\s+\w+", r"\w+\s+(?:ecosystem|habitat|species)"],
+                "entities": ["NATURAL_RESOURCE", "POLLUTANT", "ECOSYSTEM", "ENVIRONMENTAL_ISSUE"]
+            },
+            "education": {
+                "keywords": ["education", "learning", "teaching", "school", "university", "student",
+                            "teacher", "curriculum", "course", "degree", "knowledge", "skill",
+                            "training", "academic", "research", "study"],
+                "patterns": [r"(?:learn|teach|study)\s+\w+", r"\w+\s+(?:course|class|subject)"],
+                "entities": ["EDUCATIONAL_INSTITUTION", "SUBJECT", "DEGREE", "SKILL"]
+            }
+        }
+        
+        # Score each domain
+        domain_scores = {}
+        
+        for domain, definition in domain_definitions.items():
+            score = 0.0
+            
+            # Keyword matching with weights
+            keywords = definition["keywords"]
+            for i, keyword in enumerate(keywords):
+                if keyword in user_input:
+                    # Earlier keywords in list are more definitive
+                    weight = 1.0 - (i / len(keywords)) * 0.5
+                    score += weight
+            
+            # Pattern matching
+            patterns = definition["patterns"]
+            for pattern in patterns:
+                matches = re.findall(pattern, user_input)
+                score += len(matches) * 0.5
+            
+            # Named entity recognition if spacy is available
+            if nlp and context.get("enable_nlp", True):
+                try:
+                    doc = nlp(user_input)
+                    for ent in doc.ents:
+                        if ent.label_ in definition.get("entities", []):
+                            score += 1.0
+                except:
+                    pass
+            
+            # Context clues from conversation history
+            history = context.get("conversation_history", [])
+            for past_message in history[-5:]:  # Look at last 5 messages
+                past_text = past_message.get("text", "").lower()
+                keyword_matches = sum(1 for kw in keywords[:5] if kw in past_text)
+                score += keyword_matches * 0.1
+            
+            domain_scores[domain] = score
+        
+        # Also check for cross-domain indicators
+        multi_domain_indicators = {
+            ("health", "technology"): ["health tech", "medical AI", "digital health", "telemedicine"],
+            ("economics", "technology"): ["fintech", "cryptocurrency", "algorithmic trading", "digital economy"],
+            ("environment", "technology"): ["cleantech", "renewable energy tech", "smart grid", "environmental monitoring"],
+            ("education", "technology"): ["edtech", "online learning", "educational software", "e-learning"]
+        }
+        
+        for (domain1, domain2), indicators in multi_domain_indicators.items():
+            if any(indicator in user_input for indicator in indicators):
+                domain_scores[domain1] = domain_scores.get(domain1, 0) + 0.3
+                domain_scores[domain2] = domain_scores.get(domain2, 0) + 0.3
+        
+        # Return highest scoring domain
+        if domain_scores:
+            best_domain = max(domain_scores.items(), key=lambda x: x[1])
+            if best_domain[1] > 0.5:  # Minimum confidence threshold
+                return best_domain[0]
+        
+        # Fallback: try to infer from intent
+        if any(word in user_input for word in ["diagnose", "treat", "cure", "symptom"]):
+            return "health"
+        elif any(word in user_input for word in ["code", "algorithm", "software", "data"]):
+            return "technology"
+        elif any(word in user_input for word in ["market", "price", "invest", "economic"]):
+            return "economics"
+        
         return "general"
 
 # ========================================================================================
@@ -488,63 +606,281 @@ class GoalDirectedReasoningEngine:
             return "general"
     
     async def _generate_causal_subgoals(self, 
-                                      goal: Dict[str, Any], 
-                                      available_models: List[str]) -> List[Dict[str, Any]]:
-        """Generate sub-goals based on causal model analysis"""
+                                                goal: Dict[str, Any], 
+                                                available_models: List[str]) -> List[Dict[str, Any]]:
+        """Generate sophisticated causal sub-goals based on causal model analysis"""
         sub_goals = []
+        goal_desc = goal.get("description", "").lower()
+        goal_id = goal.get("id", "goal")
         
-        # For each relevant model, identify intermediate nodes
-        goal_keywords = set(goal.get("description", "").lower().split())
+        # Parse goal to understand structure
+        goal_components = self._parse_goal_structure(goal_desc)
         
-        for model_id in available_models[:3]:  # Check top 3 models
-            # This would interact with actual causal model
-            # For now, generating plausible sub-goals
-            if "understand" in goal_keywords:
-                sub_goals.append({
-                    "parent_goal": goal.get("id"),
-                    "description": f"Identify key causal factors in {model_id}",
-                    "type": "causal_analysis",
-                    "model": model_id
-                })
-            elif "improve" in goal_keywords:
-                sub_goals.append({
-                    "parent_goal": goal.get("id"),
-                    "description": f"Find intervention points in {model_id}",
-                    "type": "intervention_analysis",
-                    "model": model_id
-                })
+        # For each available model, analyze causal pathways
+        for model_id in available_models[:3]:
+            # Get model details (in production, this would fetch actual model)
+            model_info = await self._get_causal_model_info(model_id)
+            
+            if not model_info:
+                continue
+            
+            # Identify relevant nodes in the causal model
+            relevant_nodes = self._find_relevant_causal_nodes(goal_components, model_info)
+            
+            # Find causal paths to goal
+            if goal_components.get("target_outcome"):
+                paths = self._find_causal_paths_to_outcome(
+                    goal_components["target_outcome"], 
+                    relevant_nodes, 
+                    model_info
+                )
+                
+                # Generate sub-goals for each path
+                for path in paths[:2]:  # Top 2 paths
+                    path_subgoals = self._generate_path_subgoals(path, goal, model_info)
+                    sub_goals.extend(path_subgoals)
+            
+            # Identify key intervention points
+            intervention_points = self._identify_intervention_points(relevant_nodes, model_info)
+            
+            for point in intervention_points[:3]:
+                sub_goal = {
+                    "parent_goal": goal_id,
+                    "description": f"Establish control over {point['node_name']} to influence {goal_components.get('target_outcome', 'outcome')}",
+                    "type": "intervention_preparation",
+                    "model": model_id,
+                    "causal_importance": point.get("importance", 0.5),
+                    "prerequisites": point.get("prerequisites", []),
+                    "expected_effect": point.get("expected_effect", "moderate")
+                }
+                sub_goals.append(sub_goal)
+            
+            # Generate measurement sub-goals
+            measurement_goals = self._generate_measurement_subgoals(goal_components, model_info)
+            sub_goals.extend(measurement_goals)
+        
+        # Deduplicate and prioritize sub-goals
+        sub_goals = self._deduplicate_and_prioritize_subgoals(sub_goals)
         
         return sub_goals
+
+    def _parse_goal_structure(self, goal_desc: str) -> Dict[str, Any]:
+        """Parse goal description to extract key components"""
+        components = {
+            "action": None,
+            "target": None,
+            "target_outcome": None,
+            "constraints": [],
+            "success_metrics": []
+        }
+        
+        # Action extraction patterns
+        action_patterns = {
+            "improve": ["improve", "enhance", "optimize", "increase", "boost"],
+            "reduce": ["reduce", "decrease", "minimize", "lower", "diminish"],
+            "maintain": ["maintain", "sustain", "preserve", "keep", "stabilize"],
+            "achieve": ["achieve", "reach", "attain", "accomplish", "realize"],
+            "understand": ["understand", "analyze", "investigate", "explore", "examine"]
+        }
+        
+        for action_type, keywords in action_patterns.items():
+            if any(kw in goal_desc for kw in keywords):
+                components["action"] = action_type
+                # Extract what follows the action verb
+                for kw in keywords:
+                    if kw in goal_desc:
+                        idx = goal_desc.index(kw) + len(kw)
+                        remaining = goal_desc[idx:].strip()
+                        # Extract target (next 1-3 words)
+                        words = remaining.split()
+                        if words:
+                            components["target"] = " ".join(words[:3])
+                        break
+                break
+        
+        # Extract outcome indicators
+        outcome_patterns = [
+            r"(?:to|in order to|so that)\s+(.+?)(?:\.|,|;|$)",
+            r"(?:resulting in|leading to|causing)\s+(.+?)(?:\.|,|;|$)",
+            r"(?:outcome|result|goal):\s*(.+?)(?:\.|,|;|$)"
+        ]
+        
+        for pattern in outcome_patterns:
+            match = re.search(pattern, goal_desc)
+            if match:
+                components["target_outcome"] = match.group(1).strip()
+                break
+        
+        # Extract constraints
+        constraint_keywords = ["without", "while", "maintaining", "preserving", "avoiding"]
+        for keyword in constraint_keywords:
+            if keyword in goal_desc:
+                idx = goal_desc.index(keyword)
+                constraint = goal_desc[idx:idx+50].split(".")[0]
+                components["constraints"].append(constraint)
+        
+        # Extract success metrics if mentioned
+        metric_patterns = [
+            r"(?:by|increase by|improve by)\s+(\d+%?)",
+            r"(?:reach|achieve|attain)\s+(\d+\s*\w+)",
+            r"(?:target|goal|threshold):\s*(.+?)(?:\.|,|;|$)"
+        ]
+        
+        for pattern in metric_patterns:
+            matches = re.findall(pattern, goal_desc)
+            components["success_metrics"].extend(matches)
+        
+        return components
+
+async def _get_causal_model_info(self, model_id: str) -> Dict[str, Any]:
+    """Get detailed information about a causal model"""
+    # In production, this would fetch from a model repository
+    # For now, return structured example data
+    
+    model_templates = {
+        "health_outcomes": {
+            "nodes": {
+                "lifestyle_factors": {"type": "input", "modifiable": True},
+                "dietary_habits": {"type": "input", "modifiable": True},
+                "exercise_level": {"type": "input", "modifiable": True},
+                "genetic_factors": {"type": "input", "modifiable": False},
+                "stress_level": {"type": "intermediate", "modifiable": True},
+                "metabolic_health": {"type": "intermediate", "modifiable": False},
+                "cardiovascular_health": {"type": "outcome", "modifiable": False},
+                "overall_wellness": {"type": "outcome", "modifiable": False}
+            },
+            "edges": [
+                {"from": "lifestyle_factors", "to": "stress_level", "strength": 0.7},
+                {"from": "dietary_habits", "to": "metabolic_health", "strength": 0.8},
+                {"from": "exercise_level", "to": "cardiovascular_health", "strength": 0.9},
+                {"from": "stress_level", "to": "cardiovascular_health", "strength": -0.6},
+                {"from": "metabolic_health", "to": "overall_wellness", "strength": 0.7},
+                {"from": "cardiovascular_health", "to": "overall_wellness", "strength": 0.8}
+            ]
+        },
+        "business_performance": {
+            "nodes": {
+                "market_conditions": {"type": "input", "modifiable": False},
+                "marketing_spend": {"type": "input", "modifiable": True},
+                "product_quality": {"type": "input", "modifiable": True},
+                "customer_satisfaction": {"type": "intermediate", "modifiable": False},
+                "brand_reputation": {"type": "intermediate", "modifiable": False},
+                "sales_volume": {"type": "outcome", "modifiable": False},
+                "revenue": {"type": "outcome", "modifiable": False},
+                "profitability": {"type": "outcome", "modifiable": False}
+            },
+            "edges": [
+                {"from": "product_quality", "to": "customer_satisfaction", "strength": 0.9},
+                {"from": "customer_satisfaction", "to": "brand_reputation", "strength": 0.8},
+                {"from": "marketing_spend", "to": "sales_volume", "strength": 0.6},
+                {"from": "brand_reputation", "to": "sales_volume", "strength": 0.7},
+                {"from": "sales_volume", "to": "revenue", "strength": 0.95},
+                {"from": "revenue", "to": "profitability", "strength": 0.7}
+            ]
+        }
+    }
+    
+    # Select appropriate template based on model_id
+    if "health" in model_id.lower():
+        return model_templates.get("health_outcomes", {})
+    elif "business" in model_id.lower() or "performance" in model_id.lower():
+        return model_templates.get("business_performance", {})
+    else:
+        # Generate a generic model structure
+        return self._generate_generic_causal_model(model_id)
+
+def _generate_generic_causal_model(self, model_id: str) -> Dict[str, Any]:
+    """Generate a generic causal model structure"""
+    return {
+        "nodes": {
+            f"{model_id}_input_1": {"type": "input", "modifiable": True},
+            f"{model_id}_input_2": {"type": "input", "modifiable": True},
+            f"{model_id}_intermediate_1": {"type": "intermediate", "modifiable": False},
+            f"{model_id}_outcome_1": {"type": "outcome", "modifiable": False}
+        },
+        "edges": [
+            {"from": f"{model_id}_input_1", "to": f"{model_id}_intermediate_1", "strength": 0.7},
+            {"from": f"{model_id}_input_2", "to": f"{model_id}_intermediate_1", "strength": 0.6},
+            {"from": f"{model_id}_intermediate_1", "to": f"{model_id}_outcome_1", "strength": 0.8}
+        ]
+    }
     
     def _select_models_for_goal(self, 
-                               goal: Dict[str, Any], 
-                               available_models: List[str],
-                               weight: float) -> List[str]:
-        """Select models most relevant to goal"""
-        # In production, this would analyze actual model content
-        # For now, using heuristics
-        goal_keywords = set(goal.get("description", "").lower().split())
+                                       goal: Dict[str, Any], 
+                                       available_models: List[str],
+                                       weight: float) -> List[str]:
+        """Enhanced model selection based on deep analysis"""
+        goal_desc = goal.get("description", "").lower()
+        goal_keywords = set(goal_desc.split())
+        
+        # Remove common words
+        stop_words = {"the", "a", "an", "to", "of", "in", "for", "and", "or", "but", "with"}
+        goal_keywords = goal_keywords - stop_words
+        
+        # Analyze goal type and requirements
+        goal_analysis = self._analyze_goal_requirements(goal)
         
         scored_models = []
+        
         for model in available_models:
-            score = weight
+            score = weight  # Base score from weight
             
-            # Boost score for keyword matches
+            # Model name analysis
             model_lower = model.lower()
-            for keyword in goal_keywords:
-                if keyword in model_lower:
-                    score += 0.2
+            model_tokens = set(model_lower.split("_"))
+            
+            # Direct keyword matching
+            keyword_overlap = len(goal_keywords.intersection(model_tokens))
+            score += keyword_overlap * 0.2
+            
+            # Semantic similarity using word stems
+            stem_matches = 0
+            for goal_word in goal_keywords:
+                goal_stem = self._get_word_stem(goal_word)
+                for model_word in model_tokens:
+                    model_stem = self._get_word_stem(model_word)
+                    if goal_stem == model_stem and len(goal_stem) > 3:
+                        stem_matches += 1
+            score += stem_matches * 0.15
+            
+            # Goal type compatibility
+            if goal_analysis["type"] == "understanding" and any(term in model_lower for term in ["analysis", "diagnostic", "explanatory"]):
+                score += 0.3
+            elif goal_analysis["type"] == "optimization" and any(term in model_lower for term in ["optimization", "improvement", "performance"]):
+                score += 0.3
+            elif goal_analysis["type"] == "prediction" and any(term in model_lower for term in ["prediction", "forecast", "projection"]):
+                score += 0.3
+            
+            # Domain compatibility
+            model_domain = self._infer_model_domain(model)
+            if model_domain == goal_analysis.get("domain"):
+                score += 0.25
+            
+            # Complexity matching
+            if goal_analysis.get("complexity") == "high" and any(term in model_lower for term in ["complex", "advanced", "multi"]):
+                score += 0.2
+            elif goal_analysis.get("complexity") == "low" and any(term in model_lower for term in ["simple", "basic", "elementary"]):
+                score += 0.2
+            
+            # Temporal alignment
+            if goal_analysis.get("temporal") and any(term in model_lower for term in ["temporal", "time", "dynamic", "evolution"]):
+                score += 0.2
             
             scored_models.append((model, score))
         
         # Sort by score and return top models
         scored_models.sort(key=lambda x: x[1], reverse=True)
-        return [model for model, _ in scored_models[:3]]
-    
-    def _select_spaces_for_goal(self,
-                               goal: Dict[str, Any],
-                               available_spaces: List[str],
-                               weight: float) -> List[str]:
+        
+        # Dynamic selection based on score distribution
+        if scored_models:
+            top_score = scored_models[0][1]
+            # Include models within 20% of top score
+            threshold = top_score * 0.8
+            selected = [model for model, score in scored_models if score >= threshold]
+            # But limit to top 5
+            return selected[:5]
+        
+        return []:
         """Select concept spaces most relevant to goal"""
         # Similar to model selection
         goal_keywords = set(goal.get("description", "").lower().split())
@@ -562,6 +898,69 @@ class GoalDirectedReasoningEngine:
         
         scored_spaces.sort(key=lambda x: x[1], reverse=True)
         return [space for space, _ in scored_spaces[:3]]
+
+    def _analyze_goal_requirements(self, goal: Dict[str, Any]) -> Dict[str, Any]:
+        """Analyze goal to understand its requirements"""
+        goal_desc = goal.get("description", "").lower()
+        
+        requirements = {
+            "type": "general",
+            "domain": None,
+            "complexity": "medium",
+            "temporal": False,
+            "requires_prediction": False,
+            "requires_optimization": False,
+            "requires_understanding": False
+        }
+        
+        # Determine goal type
+        if any(word in goal_desc for word in ["understand", "why", "how", "explain", "analyze"]):
+            requirements["type"] = "understanding"
+            requirements["requires_understanding"] = True
+        elif any(word in goal_desc for word in ["optimize", "improve", "maximize", "minimize", "enhance"]):
+            requirements["type"] = "optimization"
+            requirements["requires_optimization"] = True
+        elif any(word in goal_desc for word in ["predict", "forecast", "project", "estimate", "anticipate"]):
+            requirements["type"] = "prediction"
+            requirements["requires_prediction"] = True
+        
+        # Assess complexity
+        complexity_indicators = {
+            "high": ["complex", "sophisticated", "advanced", "multi-factor", "comprehensive"],
+            "low": ["simple", "basic", "straightforward", "elementary", "fundamental"]
+        }
+        
+        for level, indicators in complexity_indicators.items():
+            if any(ind in goal_desc for ind in indicators):
+                requirements["complexity"] = level
+                break
+        
+        # Check temporal requirements
+        temporal_indicators = ["over time", "temporal", "dynamic", "evolve", "trend", "historical"]
+        requirements["temporal"] = any(ind in goal_desc for ind in temporal_indicators)
+        
+        # Extract domain
+        requirements["domain"] = self._extract_domain({"user_input": goal_desc})
+        
+        return requirements
+
+    def _infer_model_domain(self, model_name: str) -> str:
+        """Infer domain from model name"""
+        model_lower = model_name.lower()
+        
+        domain_indicators = {
+            "health": ["health", "medical", "clinical", "patient", "disease", "treatment"],
+            "business": ["business", "market", "sales", "revenue", "customer", "performance"],
+            "technology": ["tech", "system", "software", "data", "algorithm", "network"],
+            "environment": ["environment", "climate", "ecology", "pollution", "sustainability"],
+            "social": ["social", "community", "population", "demographic", "behavioral"]
+        }
+        
+        for domain, indicators in domain_indicators.items():
+            if any(ind in model_lower for ind in indicators):
+                return domain
+        
+        return "general"
     
     def _define_success_criteria(self, goal: Dict[str, Any], goal_type: str) -> List[Dict[str, Any]]:
         """Define measurable success criteria for goal"""
@@ -2213,7 +2612,7 @@ class GoalDirectedReasoningEngine:
         sp1_output = self._extract_output_concept(sp1.get("description", ""))
         sp2_input = self._extract_input_concept(sp2.get("description", ""))
         
-        if sp1_output and sp2_input and self._concepts_match_enhanced(sp1_output, sp2_input):
+        if sp1_output and sp2_input and self._concepts_match(sp1_output, sp2_input):
             result["exists"] = True
             result["strength"] = 0.8
         
@@ -2253,7 +2652,7 @@ class GoalDirectedReasoningEngine:
         
         return None
     
-    def _concepts_match_enhanced(self, concept1: str, concept2: str) -> bool:
+    def _concepts_match(self, concept1: str, concept2: str) -> bool:
         """Enhanced concept matching with fuzzy logic"""
         if not concept1 or not concept2:
             return False
@@ -3965,26 +4364,106 @@ class MemoryInformedReasoningEngine:
                 pattern_list.append(pattern)
     
     def _patterns_similar(self, pattern1: Dict[str, Any], pattern2: Dict[str, Any]) -> bool:
-        """Check if two patterns are similar"""
+        """Enhanced pattern similarity checking with multiple criteria"""
         if pattern1.get("type") != pattern2.get("type"):
             return False
         
         if pattern1.get("domain") != pattern2.get("domain"):
             return False
         
-        # Type-specific similarity
-        if pattern1["type"] == "causal_pattern":
-            # Check if key factors overlap significantly
-            factors1 = set(pattern1.get("key_factors", []))
-            factors2 = set(pattern2.get("key_factors", []))
-            
-            if not factors1 or not factors2:
-                return False
-            
-            overlap = len(factors1.intersection(factors2))
-            return overlap / min(len(factors1), len(factors2)) > 0.7
+        pattern_type = pattern1["type"]
         
-        return False
+        # Type-specific similarity checking
+        if pattern_type == "causal_pattern":
+            return self._causal_patterns_similar(pattern1, pattern2)
+        elif pattern_type == "conceptual_pattern":
+            return self._conceptual_patterns_similar(pattern1, pattern2)
+        elif pattern_type == "intervention_pattern":
+            return self._intervention_patterns_similar(pattern1, pattern2)
+        elif pattern_type == "success_pattern":
+            return self._success_patterns_similar(pattern1, pattern2)
+        else:
+            # Generic pattern similarity
+            return self._generic_patterns_similar(pattern1, pattern2)
+
+    def _causal_patterns_similar(self, pattern1: Dict[str, Any], pattern2: Dict[str, Any]) -> bool:
+        """Check similarity between causal patterns"""
+        # Extract key components
+        factors1 = set(pattern1.get("key_factors", []))
+        factors2 = set(pattern2.get("key_factors", []))
+        
+        relations1 = pattern1.get("typical_relations", [])
+        relations2 = pattern2.get("typical_relations", [])
+        
+        # Factor overlap check
+        if factors1 and factors2:
+            factor_overlap = len(factors1.intersection(factors2)) / min(len(factors1), len(factors2))
+            if factor_overlap < 0.6:
+                return False
+        
+        # Relation similarity check
+        if relations1 and relations2:
+            relation_similarity = self._calculate_relation_set_similarity(relations1, relations2)
+            if relation_similarity < 0.5:
+                return False
+        
+        # Strength similarity
+        strength_diff = abs(pattern1.get("strength", 0.5) - pattern2.get("strength", 0.5))
+        if strength_diff > 0.3:
+            return False
+        
+        return True
+    
+    def _conceptual_patterns_similar(self, pattern1: Dict[str, Any], pattern2: Dict[str, Any]) -> bool:
+        """Check similarity between conceptual patterns"""
+        # Compare abstraction levels
+        if pattern1.get("abstraction_level") != pattern2.get("abstraction_level"):
+            return False
+        
+        # Compare concept clusters
+        clusters1 = pattern1.get("concept_clusters", [])
+        clusters2 = pattern2.get("concept_clusters", [])
+        
+        if clusters1 and clusters2:
+            cluster_similarity = self._calculate_cluster_similarity(clusters1, clusters2)
+            if cluster_similarity < 0.6:
+                return False
+        
+        # Compare creative potential
+        creative_diff = abs(pattern1.get("creative_potential", 0.5) - pattern2.get("creative_potential", 0.5))
+        if creative_diff > 0.4:
+            return False
+        
+        return True
+    
+    def _calculate_relation_set_similarity(self, relations1: List[Any], relations2: List[Any]) -> float:
+        """Calculate similarity between two sets of relations"""
+        if not relations1 or not relations2:
+            return 0.0
+        
+        # Convert relations to comparable format
+        rel_set1 = set()
+        rel_set2 = set()
+        
+        for rel in relations1:
+            if isinstance(rel, dict):
+                rel_key = f"{rel.get('source', '')}_{rel.get('relation_type', '')}_{rel.get('target', '')}"
+            else:
+                rel_key = str(rel)
+            rel_set1.add(rel_key)
+        
+        for rel in relations2:
+            if isinstance(rel, dict):
+                rel_key = f"{rel.get('source', '')}_{rel.get('relation_type', '')}_{rel.get('target', '')}"
+            else:
+                rel_key = str(rel)
+            rel_set2.add(rel_key)
+        
+        # Calculate Jaccard similarity
+        intersection = len(rel_set1.intersection(rel_set2))
+        union = len(rel_set1.union(rel_set2))
+        
+        return intersection / union if union > 0 else 0.0
     
     def build_reasoning_shortcuts(self) -> List[Dict[str, Any]]:
         """Build reasoning shortcuts from repeated patterns"""
@@ -5094,47 +5573,112 @@ class CreativeInterventionGenerator:
         return prefix[::-1]
     
     def _simulate_word_embedding_similarity(self, word1: str, word2: str) -> float:
-        """Simulate word embedding similarity using heuristics"""
-        # This is a simplified simulation - in production, use actual embeddings
+        """Enhanced word embedding similarity with semantic relationships"""
+        if not word1 or not word2:
+            return 0.0
         
-        # Exact match
-        if word1 == word2:
+        word1_lower = word1.lower().strip()
+        word2_lower = word2.lower().strip()
+        
+        if word1_lower == word2_lower:
             return 1.0
         
-        # Common synonyms and related terms
-        synonym_groups = [
-            {"increase", "boost", "raise", "enhance", "improve"},
-            {"decrease", "reduce", "lower", "diminish", "minimize"},
-            {"create", "make", "build", "construct", "develop"},
-            {"analyze", "examine", "study", "investigate", "assess"},
-            {"problem", "issue", "challenge", "difficulty", "obstacle"},
-            {"solution", "answer", "resolution", "fix", "remedy"},
-            {"good", "positive", "beneficial", "favorable", "advantageous"},
-            {"bad", "negative", "harmful", "detrimental", "adverse"}
-        ]
+        # Expanded semantic relationships
+        semantic_relationships = {
+            # Synonyms and near-synonyms
+            "synonyms": [
+                {"increase", "boost", "raise", "enhance", "improve", "augment", "amplify"},
+                {"decrease", "reduce", "lower", "diminish", "minimize", "lessen", "shrink"},
+                {"create", "make", "build", "construct", "develop", "generate", "produce"},
+                {"analyze", "examine", "study", "investigate", "assess", "evaluate", "inspect"},
+                {"problem", "issue", "challenge", "difficulty", "obstacle", "impediment", "hurdle"},
+                {"solution", "answer", "resolution", "fix", "remedy", "approach", "method"},
+                {"good", "positive", "beneficial", "favorable", "advantageous", "excellent", "great"},
+                {"bad", "negative", "harmful", "detrimental", "adverse", "poor", "terrible"},
+                {"fast", "quick", "rapid", "swift", "speedy", "prompt", "immediate"},
+                {"slow", "gradual", "leisurely", "delayed", "prolonged", "sluggish"},
+                {"big", "large", "huge", "massive", "enormous", "substantial", "significant"},
+                {"small", "little", "tiny", "minor", "slight", "minimal", "negligible"}
+            ],
+            # Antonyms
+            "antonyms": [
+                ("increase", "decrease"), ("up", "down"), ("left", "right"), ("in", "out"),
+                ("true", "false"), ("yes", "no"), ("positive", "negative"), ("start", "stop"),
+                ("hot", "cold"), ("fast", "slow"), ("high", "low"), ("new", "old"),
+                ("open", "closed"), ("begin", "end"), ("success", "failure"), ("win", "lose")
+            ],
+            # Hierarchical relationships
+            "hypernyms": {
+                "car": "vehicle", "dog": "animal", "rose": "flower", "python": "programming_language",
+                "table": "furniture", "apple": "fruit", "doctor": "professional", "novel": "book"
+            },
+            # Part-whole relationships
+            "meronyms": {
+                "wheel": "car", "page": "book", "branch": "tree", "room": "house",
+                "ingredient": "recipe", "chapter": "book", "employee": "company"
+            },
+            # Functional relationships
+            "functional": {
+                "hammer": "nail", "key": "lock", "pen": "paper", "teacher": "student",
+                "doctor": "patient", "buyer": "seller", "question": "answer"
+            }
+        }
         
-        for group in synonym_groups:
-            if word1 in group and word2 in group:
-                return 0.85
+        # Check synonyms
+        for syn_group in semantic_relationships["synonyms"]:
+            if word1_lower in syn_group and word2_lower in syn_group:
+                # Calculate similarity based on semantic distance within group
+                return 0.85 + 0.1 * (1.0 / (1 + abs(list(syn_group).index(word1_lower) - list(syn_group).index(word2_lower))))
         
-        # Check for common stems
-        stem1 = self._get_word_stem(word1)
-        stem2 = self._get_word_stem(word2)
-        if stem1 == stem2 and len(stem1) > 3:
-            return 0.7
+        # Check antonyms
+        for ant1, ant2 in semantic_relationships["antonyms"]:
+            if (word1_lower == ant1 and word2_lower == ant2) or (word1_lower == ant2 and word2_lower == ant1):
+                return 0.2  # Antonyms have low similarity but not zero
         
-        # Check for prefix/suffix relationships
-        if word1.startswith(word2) or word2.startswith(word1):
-            return 0.6
+        # Check hierarchical relationships
+        if word1_lower in semantic_relationships["hypernyms"]:
+            if semantic_relationships["hypernyms"][word1_lower] == word2_lower:
+                return 0.7  # Specific to general
         
-        # Character overlap
-        chars1 = set(word1)
-        chars2 = set(word2)
-        if chars1 and chars2:
-            overlap = len(chars1.intersection(chars2)) / len(chars1.union(chars2))
-            return overlap * 0.5
+        # Check part-whole relationships
+        if word1_lower in semantic_relationships["meronyms"]:
+            if semantic_relationships["meronyms"][word1_lower] == word2_lower:
+                return 0.6  # Part to whole
         
-        return 0.0
+        # Check functional relationships
+        if word1_lower in semantic_relationships["functional"]:
+            if semantic_relationships["functional"][word1_lower] == word2_lower:
+                return 0.65  # Functionally related
+        
+        # Morphological similarity
+        common_prefix = self._longest_common_prefix(word1_lower, word2_lower)
+        if len(common_prefix) >= 4:  # Significant prefix match
+            return 0.5 + 0.1 * (len(common_prefix) / max(len(word1_lower), len(word2_lower)))
+        
+        # Use character n-gram similarity as fallback
+        return self._calculate_ngram_similarity(word1_lower, word2_lower)
+    
+    def _calculate_ngram_similarity(self, word1: str, word2: str, n: int = 3) -> float:
+        """Calculate n-gram based similarity"""
+        if len(word1) < n or len(word2) < n:
+            # Fall back to smaller n-grams
+            n = min(len(word1), len(word2), 2)
+        
+        if n < 2:
+            # Too short for meaningful n-grams
+            return 0.1 if word1[0] == word2[0] else 0.0
+        
+        ngrams1 = set(word1[i:i+n] for i in range(len(word1)-n+1))
+        ngrams2 = set(word2[i:i+n] for i in range(len(word2)-n+1))
+        
+        if not ngrams1 or not ngrams2:
+            return 0.0
+        
+        intersection = len(ngrams1.intersection(ngrams2))
+        union = len(ngrams1.union(ngrams2))
+        
+        return intersection / union if union > 0 else 0.0
+
     
     def _calculate_string_similarity(self, s1: str, s2: str) -> float:
         """Calculate overall string similarity"""
@@ -6865,23 +7409,77 @@ class CreativeInterventionGenerator:
     # ========================================================================================
     
     def _extract_goal_from_input(self, user_input: str) -> str:
-        """Extract goal from user input"""
-        # Remove question words
-        question_words = ["how", "what", "why", "when", "where", "who", "can", "could", "would", "should"]
+        """Enhanced goal extraction with linguistic analysis"""
+        # Remove question indicators
+        question_words = ["how", "what", "why", "when", "where", "who", "which", 
+                         "can", "could", "would", "should", "is", "are", "do", "does"]
         
+        # Parse sentence structure
+        sentences = self._split_into_sentences(user_input)
+        
+        goal_candidates = []
+        
+        for sentence in sentences:
+            # Look for goal patterns
+            goal_patterns = [
+                # Infinitive patterns
+                r"(?:want|need|aim|plan|intend|hope|wish|try|seek|strive)\s+to\s+(.+?)(?:\.|,|;|$)",
+                # Purpose patterns
+                r"(?:in order to|so that|to)\s+(.+?)(?:\.|,|;|$)",
+                # Goal statement patterns
+                r"(?:goal|objective|target|purpose|mission)\s+(?:is|:|-)?\s*(.+?)(?:\.|,|;|$)",
+                # Imperative patterns (direct commands)
+                r"^(?:please\s+)?([A-Z][a-z]+(?:\s+\w+)*?)(?:\.|!|$)",
+                # Desire patterns
+                r"(?:I'd like to|I want to|We need to|Let's)\s+(.+?)(?:\.|,|;|$)"
+            ]
+            
+            for pattern in goal_patterns:
+                matches = re.findall(pattern, sentence, re.IGNORECASE)
+                if matches:
+                    for match in matches:
+                        # Clean up the match
+                        cleaned = match.strip()
+                        # Remove trailing punctuation
+                        cleaned = re.sub(r'[.!?,;]+$', '', cleaned)
+                        # Remove leading articles
+                        cleaned = re.sub(r'^(the|a|an)\s+', '', cleaned, flags=re.IGNORECASE)
+                        
+                        if len(cleaned) > 5:  # Minimum meaningful length
+                            goal_candidates.append({
+                                "text": cleaned,
+                                "confidence": 0.8 if pattern.startswith("(?:goal|objective)") else 0.6,
+                                "source_pattern": pattern[:20] + "..."
+                            })
+            
+            # If no explicit goal patterns, look for action verbs
+            if not goal_candidates:
+                action_verbs = ["improve", "increase", "decrease", "optimize", "create", "build",
+                               "analyze", "develop", "implement", "achieve", "enhance", "reduce"]
+                
+                words = sentence.lower().split()
+                for i, word in enumerate(words):
+                    if word in action_verbs and i < len(words) - 1:
+                        # Extract from action verb to end
+                        goal_text = " ".join(words[i:])
+                        goal_candidates.append({
+                            "text": goal_text,
+                            "confidence": 0.5,
+                            "source_pattern": "action_verb"
+                        })
+                        break
+        
+        # Select best goal candidate
+        if goal_candidates:
+            # Sort by confidence and length (prefer more specific goals)
+            goal_candidates.sort(key=lambda x: (x["confidence"], len(x["text"])), reverse=True)
+            return goal_candidates[0]["text"]
+        
+        # Fallback: clean up input and return
         words = user_input.lower().split()
         filtered_words = [w for w in words if w not in question_words]
-        
-        # Look for goal indicators
-        goal_indicators = ["to", "want", "need", "goal", "objective", "aim", "purpose"]
-        
-        for i, word in enumerate(filtered_words):
-            if word in goal_indicators and i < len(filtered_words) - 1:
-                # Return everything after the indicator
-                return " ".join(filtered_words[i+1:])
-        
-        # Default: return cleaned input
-        return " ".join(filtered_words)
+        return " ".join(filtered_words).strip()
+
     
     def _identify_source_domain(self, user_input: str) -> str:
         """Identify source domain from user input"""
@@ -6911,40 +7509,136 @@ class CreativeInterventionGenerator:
         return "general"
     
     def _extract_concrete_patterns(self, user_input: str, source_domain: str) -> List[Dict[str, Any]]:
-        """Extract concrete patterns from input"""
+        """Enhanced concrete pattern extraction using NLP techniques"""
         patterns = []
         
-        # Extract entities and their relationships
-        sentences = user_input.split('.')
+        # Preprocess text
+        sentences = self._split_into_sentences(user_input)
         
         for sentence in sentences:
             if len(sentence.strip()) < 10:
                 continue
             
-            # Simple entity extraction (would use NLP in production)
-            nouns = []
-            verbs = []
-            
-            words = sentence.split()
-            for i, word in enumerate(words):
-                word_lower = word.lower().strip('.,!?')
+            # Use spaCy for entity and dependency parsing if available
+            if nlp:
+                try:
+                    doc = nlp(sentence)
+                    
+                    # Extract entities
+                    entities = [(ent.text, ent.label_) for ent in doc.ents]
+                    
+                    # Extract subject-verb-object patterns
+                    svo_patterns = self._extract_svo_patterns(doc)
+                    
+                    # Extract noun phrases
+                    noun_phrases = [chunk.text for chunk in doc.noun_chunks]
+                    
+                    # Extract relationships from dependency parse
+                    relationships = self._extract_dependency_relationships(doc)
+                    
+                    if entities or svo_patterns:
+                        patterns.append({
+                            "description": sentence.strip(),
+                            "elements": entities,
+                            "noun_phrases": noun_phrases,
+                            "relationships": relationships,
+                            "svo_patterns": svo_patterns,
+                            "level": "concrete",
+                            "domain": source_domain,
+                            "confidence": 0.8 if entities else 0.6
+                        })
+                except:
+                    # Fallback to rule-based extraction
+                    patterns.append(self._extract_pattern_rule_based(sentence, source_domain))
+            else:
+                # Pure rule-based extraction
+                patterns.append(self._extract_pattern_rule_based(sentence, source_domain))
+        
+        return [p for p in patterns if p is not None]
+    
+    def _split_into_sentences(self, text: str) -> List[str]:
+        """Split text into sentences with improved handling"""
+        # Handle common abbreviations
+        text = re.sub(r'\b(Dr|Mr|Mrs|Ms|Prof|Sr|Jr)\.\s*', r'\1<DOT> ', text)
+        text = re.sub(r'\b(Inc|Ltd|Corp|Co)\.\s*', r'\1<DOT> ', text)
+        
+        # Split on sentence boundaries
+        sentences = re.split(r'(?<=[.!?])\s+(?=[A-Z])', text)
+        
+        # Restore dots
+        sentences = [s.replace('<DOT>', '.') for s in sentences]
+        
+        return sentences
+    
+    def _extract_svo_patterns(self, doc) -> List[Dict[str, str]]:
+        """Extract subject-verb-object patterns from spaCy doc"""
+        patterns = []
+        
+        for token in doc:
+            if token.pos_ == "VERB":
+                subject = None
+                obj = None
                 
-                # Simple heuristics for nouns and verbs
-                if i == 0 or words[i-1].lower() in ["the", "a", "an"]:
-                    nouns.append(word_lower)
-                elif word_lower.endswith("ing") or word_lower.endswith("ed"):
-                    verbs.append(word_lower)
-            
-            if nouns and verbs:
-                patterns.append({
-                    "description": sentence.strip(),
-                    "elements": nouns,
-                    "relationships": verbs,
-                    "level": "concrete",
-                    "domain": source_domain
-                })
+                # Find subject
+                for child in token.children:
+                    if child.dep_ in ["nsubj", "nsubjpass"]:
+                        subject = child.text
+                    elif child.dep_ in ["dobj", "pobj"]:
+                        obj = child.text
+                
+                if subject:
+                    patterns.append({
+                        "subject": subject,
+                        "verb": token.text,
+                        "object": obj or "?"
+                    })
         
         return patterns
+    
+    def _extract_dependency_relationships(self, doc) -> List[Dict[str, Any]]:
+        """Extract relationships from dependency parse"""
+        relationships = []
+        
+        for token in doc:
+            if token.dep_ != "ROOT" and token.head.text != token.text:
+                relationships.append({
+                    "from": token.head.text,
+                    "to": token.text,
+                    "relation": token.dep_,
+                    "from_pos": token.head.pos_,
+                    "to_pos": token.pos_
+                })
+        
+        return relationships
+    
+    def _extract_pattern_rule_based(self, sentence: str, source_domain: str) -> Optional[Dict[str, Any]]:
+        """Rule-based pattern extraction as fallback"""
+        # Simple POS tagging patterns
+        noun_pattern = r'\b[A-Z][a-z]+\b'
+        verb_pattern = r'\b(?:is|are|was|were|has|have|had|will|would|can|could|should|must|may|might|' \
+                       r'do|does|did|make|makes|made|take|takes|took|get|gets|got|' \
+                       r'give|gives|gave|find|finds|found|think|thinks|thought|' \
+                       r'tell|tells|told|become|becomes|became|leave|leaves|left|' \
+                       r'feel|feels|felt|bring|brings|brought|begin|begins|began|' \
+                       r'keep|keeps|kept|hold|holds|held|write|writes|wrote|' \
+                       r'provide|provides|provided|sit|sits|sat|stand|stands|stood|' \
+                       r'lose|loses|lost|pay|pays|paid|meet|meets|met|' \
+                       r'ing|ed|es|s)\b'
+        
+        nouns = re.findall(noun_pattern, sentence)
+        verbs = re.findall(verb_pattern, sentence, re.IGNORECASE)
+        
+        if nouns or verbs:
+            return {
+                "description": sentence.strip(),
+                "elements": nouns,
+                "relationships": verbs,
+                "level": "concrete",
+                "domain": source_domain,
+                "confidence": 0.5
+            }
+        
+        return None
     
     def _extract_abstract_patterns(self, user_input: str, source_domain: str) -> List[Dict[str, Any]]:
         """Extract abstract patterns from input"""
@@ -7706,48 +8400,456 @@ class CreativeInterventionGenerator:
         
         return complexity
     
-    def _analyze_opportunities(self, situation: Dict[str, Any], results: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """Analyze opportunities in a situation"""
+    def _analyze_opportunities(self, situation: Dict[str, Any], 
+                                      results: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Enhanced opportunity analysis with sophisticated pattern detection"""
         opportunities = []
         
-        # Generic opportunity patterns
+        # Analyze situation comprehensively
+        situation_analysis = self._analyze_situation_deeply(situation, results)
+        
+        # Detect opportunity patterns
         opportunity_patterns = [
             {
-                "trigger": "gap",
-                "description": "Gap between current and desired state",
-                "action": "Bridge the gap with targeted intervention"
+                "pattern": "unmet_need",
+                "indicators": ["gap", "missing", "lack", "need", "require", "demand"],
+                "opportunity_type": "solution_development",
+                "template": "Develop solution to address {need}"
             },
             {
-                "trigger": "inefficiency",
-                "description": "Inefficient process identified",
-                "action": "Optimize for better resource utilization"
+                "pattern": "inefficiency",
+                "indicators": ["slow", "expensive", "complex", "difficult", "inefficient", "waste"],
+                "opportunity_type": "optimization",
+                "template": "Optimize {process} to improve efficiency"
             },
             {
-                "trigger": "unmet_need",
-                "description": "Unmet need in the system",
-                "action": "Develop solution to address need"
+                "pattern": "emerging_trend",
+                "indicators": ["growing", "increasing", "trending", "emerging", "new", "novel"],
+                "opportunity_type": "early_adoption",
+                "template": "Capitalize on emerging trend in {area}"
             },
             {
-                "trigger": "emerging_trend",
-                "description": "Emerging trend detected",
-                "action": "Position to capitalize on trend"
+                "pattern": "underutilized_resource",
+                "indicators": ["unused", "available", "excess", "spare", "underutilized"],
+                "opportunity_type": "resource_optimization",
+                "template": "Better utilize {resource}"
+            },
+            {
+                "pattern": "synergy_potential",
+                "indicators": ["combine", "integrate", "merge", "synergy", "complement"],
+                "opportunity_type": "integration",
+                "template": "Create synergy by combining {elements}"
+            },
+            {
+                "pattern": "automation_potential",
+                "indicators": ["manual", "repetitive", "routine", "standardized", "predictable"],
+                "opportunity_type": "automation",
+                "template": "Automate {process} to save time and resources"
             }
         ]
         
-        # Check for opportunity triggers
-        situation_str = str(situation).lower()
+        # Check each pattern
+        situation_text = json.dumps(situation).lower()
         
-        for pattern in opportunity_patterns:
-            if pattern["trigger"] in situation_str or len(opportunities) < 2:
-                opportunities.append({
-                    "type": pattern["trigger"],
-                    "description": pattern["description"],
-                    "recommended_action": pattern["action"],
-                    "confidence": 0.7,
-                    "potential_impact": "moderate"
-                })
+        for pattern_def in opportunity_patterns:
+            # Calculate pattern match score
+            match_score = 0.0
+            matched_indicators = []
+            
+            for indicator in pattern_def["indicators"]:
+                if indicator in situation_text:
+                    match_score += 1.0 / len(pattern_def["indicators"])
+                    matched_indicators.append(indicator)
+            
+            if match_score > 0.3 or len(opportunities) < 3:  # Ensure minimum opportunities
+                # Extract specific details
+                opportunity_details = self._extract_opportunity_details(
+                    situation, pattern_def, matched_indicators, situation_analysis
+                )
+                
+                opportunity = {
+                    "type": pattern_def["opportunity_type"],
+                    "pattern": pattern_def["pattern"],
+                    "description": opportunity_details["description"],
+                    "specific_action": opportunity_details["action"],
+                    "confidence": min(1.0, match_score + 0.3),
+                    "potential_impact": opportunity_details["impact"],
+                    "implementation_difficulty": opportunity_details["difficulty"],
+                    "time_to_value": opportunity_details["time_to_value"],
+                    "resources_required": opportunity_details["resources"],
+                    "success_factors": opportunity_details["success_factors"],
+                    "risks": opportunity_details["risks"]
+                }
+                
+                opportunities.append(opportunity)
+        
+        # Analyze cross-cutting opportunities
+        if len(opportunities) > 1:
+            meta_opportunities = self._identify_meta_opportunities(opportunities, situation_analysis)
+            opportunities.extend(meta_opportunities)
+        
+        # Rank opportunities
+        opportunities = self._rank_opportunities(opportunities)
+        
+        return opportunities[:5]  # Top 5 opportunities
+    
+    def _analyze_situation_deeply(self, situation: Dict[str, Any], 
+                                results: Dict[str, Any]) -> Dict[str, Any]:
+        """Deep analysis of situation to support opportunity identification"""
+        analysis = {
+            "key_entities": [],
+            "relationships": [],
+            "constraints": [],
+            "resources": [],
+            "trends": [],
+            "pain_points": []
+        }
+        
+        # Extract from situation
+        if isinstance(situation, dict):
+            # Look for common keys
+            for key in ["entities", "actors", "components", "elements"]:
+                if key in situation:
+                    analysis["key_entities"].extend(situation[key])
+            
+            for key in ["constraints", "limitations", "barriers"]:
+                if key in situation:
+                    analysis["constraints"].extend(situation[key])
+            
+            for key in ["resources", "assets", "capabilities"]:
+                if key in situation:
+                    analysis["resources"].extend(situation[key])
+        
+        # Extract from results
+        if isinstance(results, dict):
+            # Look for patterns in results
+            if "causal_relations" in results:
+                analysis["relationships"].extend(results["causal_relations"])
+            
+            if "trends" in results or "patterns" in results:
+                analysis["trends"].extend(results.get("trends", []))
+                analysis["trends"].extend(results.get("patterns", []))
+        
+        # Identify pain points through keyword analysis
+        situation_text = str(situation).lower()
+        pain_indicators = ["problem", "issue", "challenge", "difficult", "struggle", 
+                          "pain", "friction", "bottleneck", "obstacle"]
+        
+        for indicator in pain_indicators:
+            if indicator in situation_text:
+                analysis["pain_points"].append(indicator)
+        
+        return analysis
+    
+    def _extract_opportunity_details(self, situation: Dict[str, Any], pattern_def: Dict[str, Any],
+                                   matched_indicators: List[str], 
+                                   situation_analysis: Dict[str, Any]) -> Dict[str, Any]:
+        """Extract specific details for an opportunity"""
+        details = {
+            "description": "",
+            "action": "",
+            "impact": "moderate",
+            "difficulty": "medium",
+            "time_to_value": "medium-term",
+            "resources": [],
+            "success_factors": [],
+            "risks": []
+        }
+        
+        # Generate specific description
+        template = pattern_def["template"]
+        
+        # Try to fill in template with actual values
+        if "{need}" in template and situation_analysis["pain_points"]:
+            details["description"] = template.format(need=situation_analysis["pain_points"][0])
+        elif "{process}" in template:
+            # Look for process-related terms
+            processes = self._extract_processes(situation)
+            if processes:
+                details["description"] = template.format(process=processes[0])
+        elif "{area}" in template and situation_analysis["key_entities"]:
+            details["description"] = template.format(area=situation_analysis["key_entities"][0])
+        elif "{resource}" in template and situation_analysis["resources"]:
+            details["description"] = template.format(resource=situation_analysis["resources"][0])
+        elif "{elements}" in template and len(situation_analysis["key_entities"]) >= 2:
+            elements = " and ".join(situation_analysis["key_entities"][:2])
+            details["description"] = template.format(elements=elements)
+        else:
+            details["description"] = f"Opportunity: {pattern_def['pattern'].replace('_', ' ')}"
+        
+        # Generate specific action
+        opportunity_type = pattern_def["opportunity_type"]
+        if opportunity_type == "solution_development":
+            details["action"] = "Design and implement targeted solution"
+            details["impact"] = "high"
+            details["difficulty"] = "high"
+            details["resources"] = ["development team", "domain expertise", "implementation budget"]
+        elif opportunity_type == "optimization":
+            details["action"] = "Analyze and streamline current process"
+            details["impact"] = "moderate"
+            details["difficulty"] = "medium"
+            details["resources"] = ["process analyst", "stakeholder time"]
+        elif opportunity_type == "automation":
+            details["action"] = "Implement automation technology"
+            details["impact"] = "high"
+            details["difficulty"] = "medium"
+            details["time_to_value"] = "short-term"
+            details["resources"] = ["automation tools", "technical expertise"]
+        
+        # Success factors based on type
+        if opportunity_type in ["solution_development", "integration"]:
+            details["success_factors"] = ["stakeholder buy-in", "clear requirements", "iterative development"]
+        elif opportunity_type == "optimization":
+            details["success_factors"] = ["baseline metrics", "process documentation", "continuous monitoring"]
+        
+        # Common risks
+        details["risks"] = ["resistance to change", "resource constraints", "implementation complexity"]
+        
+        return details
+    
+    def _extract_processes(self, situation: Any) -> List[str]:
+        """Extract process-related terms from situation"""
+        processes = []
+        
+        situation_text = str(situation).lower()
+        
+        # Common process indicators
+        process_patterns = [
+            r"(\w+ing)\s+process",
+            r"process\s+of\s+(\w+)",
+            r"(\w+)\s+workflow",
+            r"(\w+)\s+procedure",
+            r"(\w+)\s+method"
+        ]
+        
+        for pattern in process_patterns:
+            matches = re.findall(pattern, situation_text)
+            processes.extend(matches)
+        
+        # Also look for verb-based processes
+        verb_processes = ["planning", "executing", "monitoring", "analyzing", 
+                         "reporting", "coordinating", "managing"]
+        for process in verb_processes:
+            if process in situation_text:
+                processes.append(process)
+        
+        return list(set(processes))[:3]  # Unique, top 3
+    
+    def _identify_meta_opportunities(self, opportunities: List[Dict[str, Any]], 
+                                   situation_analysis: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Identify higher-level opportunities from combinations"""
+        meta_opportunities = []
+        
+        # Look for complementary opportunities
+        for i, opp1 in enumerate(opportunities):
+            for j, opp2 in enumerate(opportunities[i+1:], i+1):
+                if self._opportunities_complementary(opp1, opp2):
+                    meta_opp = {
+                        "type": "combined_opportunity",
+                        "pattern": "synergistic_combination",
+                        "description": f"Combine {opp1['type']} with {opp2['type']} for multiplied impact",
+                        "specific_action": f"Implement integrated approach addressing both opportunities",
+                        "confidence": (opp1["confidence"] + opp2["confidence"]) / 2 * 0.9,
+                        "potential_impact": "very_high",
+                        "implementation_difficulty": "high",
+                        "time_to_value": "long-term",
+                        "resources_required": list(set(opp1["resources_required"] + opp2["resources_required"])),
+                        "success_factors": ["coordination", "integrated planning", "sustained commitment"],
+                        "risks": ["complexity", "resource strain", "coordination challenges"],
+                        "component_opportunities": [opp1["type"], opp2["type"]]
+                    }
+                    meta_opportunities.append(meta_opp)
+        
+        return meta_opportunities
+    
+    def _opportunities_complementary(self, opp1: Dict[str, Any], opp2: Dict[str, Any]) -> bool:
+        """Check if two opportunities are complementary"""
+        # Complementary patterns
+        complementary_pairs = [
+            ("optimization", "automation"),
+            ("solution_development", "integration"),
+            ("resource_optimization", "optimization"),
+            ("early_adoption", "solution_development")
+        ]
+        
+        type1, type2 = opp1["type"], opp2["type"]
+        
+        return (type1, type2) in complementary_pairs or (type2, type1) in complementary_pairs
+    
+    def _rank_opportunities(self, opportunities: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Rank opportunities by multiple criteria"""
+        for opp in opportunities:
+            # Calculate composite score
+            impact_scores = {"low": 0.2, "moderate": 0.5, "high": 0.8, "very_high": 1.0}
+            difficulty_scores = {"low": 1.0, "medium": 0.6, "high": 0.3}  # Inverse for difficulty
+            time_scores = {"short-term": 1.0, "medium-term": 0.7, "long-term": 0.4}
+            
+            impact = impact_scores.get(opp["potential_impact"], 0.5)
+            difficulty = difficulty_scores.get(opp["implementation_difficulty"], 0.5)
+            time = time_scores.get(opp["time_to_value"], 0.5)
+            confidence = opp["confidence"]
+            
+            # Weighted score
+            opp["composite_score"] = (
+                impact * 0.35 +
+                difficulty * 0.25 +
+                time * 0.20 +
+                confidence * 0.20
+            )
+        
+        # Sort by composite score
+        opportunities.sort(key=lambda x: x["composite_score"], reverse=True)
         
         return opportunities
+    
+    # ========================================================================================
+    # ENHANCED SUBGOAL DEDUPLICATION AND PRIORITIZATION
+    # ========================================================================================
+    
+    def _deduplicate_and_prioritize_subgoals(self, sub_goals: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Deduplicate and prioritize sub-goals with sophisticated logic"""
+        if not sub_goals:
+            return []
+        
+        # Group similar sub-goals
+        subgoal_groups = defaultdict(list)
+        
+        for subgoal in sub_goals:
+            # Create a signature for grouping
+            signature = self._create_subgoal_signature(subgoal)
+            subgoal_groups[signature].append(subgoal)
+        
+        # Merge and prioritize within groups
+        deduplicated = []
+        
+        for signature, group in subgoal_groups.items():
+            if len(group) == 1:
+                deduplicated.append(group[0])
+            else:
+                # Merge similar sub-goals
+                merged = self._merge_similar_subgoals(group)
+                deduplicated.append(merged)
+        
+        # Calculate priority scores
+        for subgoal in deduplicated:
+            subgoal["priority_score"] = self._calculate_subgoal_priority_score(subgoal)
+        
+        # Sort by priority
+        deduplicated.sort(key=lambda x: x["priority_score"], reverse=True)
+        
+        # Add sequence numbers
+        for i, subgoal in enumerate(deduplicated):
+            subgoal["sequence_number"] = i + 1
+            subgoal["total_subgoals"] = len(deduplicated)
+        
+        return deduplicated
+    
+    def _create_subgoal_signature(self, subgoal: Dict[str, Any]) -> str:
+        """Create a signature for subgoal grouping"""
+        # Extract key components
+        components = []
+        
+        # Type
+        components.append(subgoal.get("type", "unknown"))
+        
+        # Target node or entity
+        if "node" in subgoal:
+            components.append(subgoal["node"])
+        elif "target" in subgoal:
+            components.append(str(subgoal["target"]))
+        
+        # Extract key words from description
+        description = subgoal.get("description", "").lower()
+        key_verbs = ["establish", "measure", "control", "adjust", "monitor", "achieve"]
+        
+        for verb in key_verbs:
+            if verb in description:
+                components.append(verb)
+                break
+        
+        return "_".join(components)
+    
+    def _merge_similar_subgoals(self, group: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Merge a group of similar sub-goals"""
+        # Start with the most detailed sub-goal
+        merged = max(group, key=lambda x: len(x.get("description", "")))
+        
+        # Combine unique elements from all sub-goals
+        all_prerequisites = []
+        all_models = []
+        importance_scores = []
+        
+        for subgoal in group:
+            # Collect prerequisites
+            if "prerequisites" in subgoal:
+                all_prerequisites.extend(subgoal["prerequisites"])
+            
+            # Collect models
+            if "model" in subgoal:
+                all_models.append(subgoal["model"])
+            
+            # Collect importance scores
+            if "causal_importance" in subgoal:
+                importance_scores.append(subgoal["causal_importance"])
+            elif "importance" in subgoal:
+                importance_scores.append(subgoal["importance"])
+        
+        # Update merged sub-goal
+        if all_prerequisites:
+            merged["prerequisites"] = list(set(all_prerequisites))
+        
+        if all_models:
+            merged["models"] = list(set(all_models))
+            merged["model_count"] = len(merged["models"])
+        
+        if importance_scores:
+            merged["average_importance"] = np.mean(importance_scores)
+            merged["max_importance"] = max(importance_scores)
+        
+        # Indicate this is a merged sub-goal
+        merged["is_merged"] = True
+        merged["merge_count"] = len(group)
+        
+        return merged
+    
+    def _calculate_subgoal_priority_score(self, subgoal: Dict[str, Any]) -> float:
+        """Calculate comprehensive priority score for a sub-goal"""
+        score = 0.5  # Base score
+        
+        # Type-based priority
+        type_priorities = {
+            "intervention_preparation": 0.8,
+            "measurement": 0.7,
+            "path_milestone": 0.6,
+            "causal_analysis": 0.5
+        }
+        score += type_priorities.get(subgoal.get("type", ""), 0) * 0.2
+        
+        # Importance-based priority
+        importance = subgoal.get("average_importance", subgoal.get("importance", 0.5))
+        score += importance * 0.3
+        
+        # Feasibility-based priority
+        feasibility = subgoal.get("feasibility", 0.5)
+        score += feasibility * 0.2
+        
+        # Position in causal path
+        if "sequence_position" in subgoal:
+            path_length = subgoal.get("path_length", 1)
+            position = subgoal["sequence_position"]
+            # Earlier positions get higher priority
+            position_score = 1.0 - (position / path_length)
+            score += position_score * 0.15
+        
+        # Modifiability bonus
+        if subgoal.get("modifiable", False):
+            score += 0.1
+        
+        # Model support (more models = higher confidence)
+        if subgoal.get("model_count", 0) > 1:
+            score += 0.05
+        
+        return min(1.0, score)
     
     def _calculate_opportunity_score(self, opportunities: List[Dict[str, Any]]) -> float:
         """Calculate overall opportunity score"""
@@ -8140,27 +9242,138 @@ class CreativeInterventionGenerator:
     # ========================================================================================
     
     def _assess_technical_feasibility(self, target: Any) -> float:
-        """Assess technical feasibility"""
-        # Simplified assessment
-        if isinstance(target, dict):
-            complexity = target.get("complexity", "medium")
-            if complexity == "low":
-                return 0.9
-            elif complexity == "high":
-                return 0.4
+        """Enhanced technical feasibility assessment"""
+        feasibility_score = 0.5  # Base score
         
-        return 0.6  # Default medium feasibility
+        if isinstance(target, dict):
+            # Assess based on multiple factors
+            factors = {
+                "complexity": 0.0,
+                "technology_readiness": 0.0,
+                "skill_availability": 0.0,
+                "integration_difficulty": 0.0,
+                "scalability": 0.0
+            }
+            
+            # Complexity assessment
+            complexity = target.get("complexity", "medium")
+            complexity_scores = {"low": 0.9, "medium": 0.6, "high": 0.3, "very_high": 0.1}
+            factors["complexity"] = complexity_scores.get(complexity, 0.5)
+            
+            # Technology readiness
+            tech_maturity = target.get("technology_maturity", "established")
+            maturity_scores = {
+                "experimental": 0.2,
+                "emerging": 0.4,
+                "developing": 0.6,
+                "established": 0.8,
+                "mature": 0.9
+            }
+            factors["technology_readiness"] = maturity_scores.get(tech_maturity, 0.5)
+            
+            # Required skills assessment
+            required_skills = target.get("required_skills", [])
+            if not required_skills:
+                factors["skill_availability"] = 0.8
+            else:
+                # Assess skill rarity
+                rare_skills = ["quantum_computing", "advanced_ml", "blockchain", "neuroscience"]
+                rare_count = sum(1 for skill in required_skills if skill in rare_skills)
+                factors["skill_availability"] = max(0.2, 1.0 - (rare_count * 0.2))
+            
+            # Integration difficulty
+            dependencies = target.get("dependencies", [])
+            factors["integration_difficulty"] = max(0.2, 1.0 - (len(dependencies) * 0.1))
+            
+            # Scalability assessment
+            scalability_indicators = target.get("scalability_indicators", {})
+            if scalability_indicators.get("linear_scaling", False):
+                factors["scalability"] = 0.8
+            elif scalability_indicators.get("sub_linear_scaling", False):
+                factors["scalability"] = 0.6
+            else:
+                factors["scalability"] = 0.4
+            
+            # Calculate weighted score
+            weights = {
+                "complexity": 0.25,
+                "technology_readiness": 0.25,
+                "skill_availability": 0.20,
+                "integration_difficulty": 0.15,
+                "scalability": 0.15
+            }
+            
+            feasibility_score = sum(factors[k] * weights[k] for k in factors)
+        
+        return feasibility_score
     
     def _assess_resource_feasibility(self, target: Any, context: Dict[str, Any]) -> float:
-        """Assess resource feasibility"""
+        """Enhanced resource feasibility assessment"""
+        resource_score = 0.5  # Base score
+        
         constraints = context.get("constraints", [])
+        resources = context.get("available_resources", {})
         
-        if "limited_resources" in constraints:
-            return 0.3
-        elif "abundant_resources" in constraints:
-            return 0.9
+        if isinstance(target, dict):
+            required_resources = target.get("required_resources", {})
+            
+            # Assess different resource types
+            resource_types = {
+                "budget": {"weight": 0.3, "score": 0.5},
+                "time": {"weight": 0.25, "score": 0.5},
+                "personnel": {"weight": 0.25, "score": 0.5},
+                "infrastructure": {"weight": 0.2, "score": 0.5}
+            }
+            
+            # Budget assessment
+            if "budget" in required_resources and "budget" in resources:
+                required_budget = required_resources["budget"]
+                available_budget = resources["budget"]
+                if available_budget >= required_budget:
+                    resource_types["budget"]["score"] = 0.9
+                else:
+                    resource_types["budget"]["score"] = available_budget / required_budget
+            
+            # Time assessment
+            if "time" in required_resources and "timeline" in context:
+                required_time = required_resources["time"]  # in days
+                available_time = context.get("timeline", {}).get("days", 90)
+                if available_time >= required_time:
+                    resource_types["time"]["score"] = 0.8
+                else:
+                    resource_types["time"]["score"] = available_time / required_time
+            
+            # Personnel assessment
+            if "personnel" in required_resources:
+                required_count = required_resources["personnel"].get("count", 1)
+                required_skills = set(required_resources["personnel"].get("skills", []))
+                
+                available_personnel = resources.get("personnel", {})
+                available_count = available_personnel.get("count", 0)
+                available_skills = set(available_personnel.get("skills", []))
+                
+                count_score = min(1.0, available_count / required_count) if required_count > 0 else 1.0
+                skill_score = len(available_skills.intersection(required_skills)) / len(required_skills) if required_skills else 1.0
+                
+                resource_types["personnel"]["score"] = (count_score + skill_score) / 2
+            
+            # Infrastructure assessment
+            if "infrastructure" in required_resources:
+                required_infra = set(required_resources["infrastructure"])
+                available_infra = set(resources.get("infrastructure", []))
+                
+                resource_types["infrastructure"]["score"] = len(available_infra.intersection(required_infra)) / len(required_infra) if required_infra else 1.0
+            
+            # Apply constraint penalties
+            if "limited_resources" in constraints:
+                for resource_type in resource_types:
+                    resource_types[resource_type]["score"] *= 0.7
+            
+            # Calculate weighted score
+            resource_score = sum(rt["score"] * rt["weight"] for rt in resource_types.values())
         
-        return 0.6  # Default medium feasibility
+        return resource_score
+
     
     def _assess_temporal_feasibility(self, target: Any, context: Dict[str, Any]) -> float:
         """Assess temporal feasibility"""
@@ -8336,3 +9549,626 @@ class CreativeInterventionGenerator:
         return max(self._calculate_dict_depth(v, current_depth + 1) 
                    for v in d.values() if isinstance(v, dict))
     
+    def _find_relevant_causal_nodes(self, goal_components: Dict[str, Any], 
+                                  model_info: Dict[str, Any]) -> List[str]:
+        """Find nodes in causal model relevant to goal"""
+        relevant_nodes = []
+        
+        if not model_info.get("nodes"):
+            return relevant_nodes
+        
+        target = goal_components.get("target", "").lower()
+        outcome = goal_components.get("target_outcome", "").lower()
+        action = goal_components.get("action", "")
+        
+        for node_id, node_info in model_info["nodes"].items():
+            node_name = node_id.lower()
+            relevance_score = 0.0
+            
+            # Check if node matches target
+            if target and (target in node_name or node_name in target):
+                relevance_score += 0.8
+            
+            # Check if node matches outcome
+            if outcome and (outcome in node_name or node_name in outcome):
+                relevance_score += 0.7
+            
+            # Check node type relevance
+            if action == "improve" and node_info.get("type") == "outcome":
+                relevance_score += 0.3
+            elif action == "understand" and node_info.get("type") == "intermediate":
+                relevance_score += 0.3
+            elif action == "control" and node_info.get("modifiable", False):
+                relevance_score += 0.4
+            
+            # Check semantic similarity
+            if target:
+                similarity = self._simulate_word_embedding_similarity(
+                    node_name.replace("_", " "),
+                    target
+                )
+                relevance_score += similarity * 0.5
+            
+            if relevance_score > 0.5:
+                relevant_nodes.append((node_id, relevance_score))
+        
+        # Sort by relevance and return node IDs
+        relevant_nodes.sort(key=lambda x: x[1], reverse=True)
+        return [node_id for node_id, _ in relevant_nodes]
+
+    def _find_causal_paths_to_outcome(self, outcome: str, relevant_nodes: List[str], 
+                                     model_info: Dict[str, Any]) -> List[List[str]]:
+        """Find causal paths leading to a specific outcome"""
+        if not model_info.get("edges"):
+            return []
+        
+        # Build directed graph
+        graph = nx.DiGraph()
+        
+        # Add edges from model
+        for edge in model_info["edges"]:
+            source = edge.get("from")
+            target = edge.get("to")
+            strength = edge.get("strength", 0.5)
+            
+            if source and target:
+                graph.add_edge(source, target, weight=strength)
+        
+        # Find outcome nodes
+        outcome_nodes = []
+        for node in graph.nodes():
+            if outcome.lower() in node.lower() or node.lower() in outcome.lower():
+                outcome_nodes.append(node)
+        
+        if not outcome_nodes:
+            # Look for nodes of type 'outcome'
+            for node_id, node_info in model_info.get("nodes", {}).items():
+                if node_info.get("type") == "outcome":
+                    outcome_nodes.append(node_id)
+        
+        paths = []
+        
+        # Find paths from relevant nodes to outcome nodes
+        for start_node in relevant_nodes:
+            for end_node in outcome_nodes:
+                if start_node in graph and end_node in graph:
+                    try:
+                        # Find all simple paths
+                        all_paths = list(nx.all_simple_paths(graph, start_node, end_node, cutoff=5))
+                        
+                        # Score and filter paths
+                        scored_paths = []
+                        for path in all_paths:
+                            score = self._score_causal_path(path, graph, model_info)
+                            scored_paths.append((score, path))
+                        
+                        # Sort by score and add top paths
+                        scored_paths.sort(key=lambda x: x[0], reverse=True)
+                        paths.extend([path for _, path in scored_paths[:2]])  # Top 2 paths per pair
+                        
+                    except nx.NetworkXNoPath:
+                        continue
+        
+        # Deduplicate paths
+        unique_paths = []
+        seen = set()
+        for path in paths:
+            path_tuple = tuple(path)
+            if path_tuple not in seen:
+                seen.add(path_tuple)
+                unique_paths.append(path)
+        
+        return unique_paths[:5]  # Return top 5 unique paths
+    
+    def _score_causal_path(self, path: List[str], graph: nx.DiGraph, 
+                          model_info: Dict[str, Any]) -> float:
+        """Score a causal path based on multiple criteria"""
+        if len(path) < 2:
+            return 0.0
+        
+        score = 1.0
+        
+        # Path length penalty (shorter is better)
+        score *= (1.0 / (1 + len(path) - 2))
+        
+        # Edge strength product
+        edge_strengths = []
+        for i in range(len(path) - 1):
+            edge_data = graph.get_edge_data(path[i], path[i+1])
+            if edge_data:
+                edge_strengths.append(abs(edge_data.get("weight", 0.5)))
+        
+        if edge_strengths:
+            # Use geometric mean to avoid zero products
+            score *= np.exp(np.mean(np.log(edge_strengths + 1e-10)))
+        
+        # Node importance
+        node_importance = 0.0
+        for node in path[1:-1]:  # Intermediate nodes
+            node_info = model_info.get("nodes", {}).get(node, {})
+            if node_info.get("type") == "intermediate":
+                node_importance += 0.2
+            if node_info.get("modifiable", False):
+                node_importance += 0.3
+        
+        score *= (1 + node_importance)
+        
+        return score
+    
+    def _generate_path_subgoals(self, path: List[str], goal: Dict[str, Any], 
+                              model_info: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Generate sub-goals for each node in a causal path"""
+        subgoals = []
+        
+        for i, node in enumerate(path):
+            node_info = model_info.get("nodes", {}).get(node, {})
+            
+            # Skip if not modifiable and not a measurement point
+            if not node_info.get("modifiable", False) and node_info.get("type") != "intermediate":
+                continue
+            
+            subgoal = {
+                "parent_goal": goal.get("id"),
+                "description": self._generate_node_subgoal_description(node, node_info, i, len(path)),
+                "type": "path_milestone",
+                "node": node,
+                "sequence_position": i,
+                "path_length": len(path),
+                "node_type": node_info.get("type", "unknown"),
+                "modifiable": node_info.get("modifiable", False),
+                "priority": self._calculate_path_node_priority(i, len(path), node_info)
+            }
+            
+            # Add dependencies
+            if i > 0:
+                subgoal["depends_on"] = [f"Control over {path[i-1]}"]
+            
+            subgoals.append(subgoal)
+        
+        return subgoals
+    
+    def _generate_node_subgoal_description(self, node: str, node_info: Dict[str, Any], 
+                                          position: int, path_length: int) -> str:
+        """Generate description for a node-based subgoal"""
+        node_name = node.replace("_", " ").title()
+        node_type = node_info.get("type", "factor")
+        
+        if position == 0:
+            if node_info.get("modifiable", False):
+                return f"Establish initial control over {node_name}"
+            else:
+                return f"Measure baseline level of {node_name}"
+        elif position == path_length - 1:
+            return f"Achieve target level of {node_name}"
+        else:
+            if node_info.get("modifiable", False):
+                return f"Adjust {node_name} to influence downstream effects"
+            else:
+                return f"Monitor changes in {node_name} as intermediate indicator"
+    
+    # ========================================================================================
+    # ENHANCED INTERVENTION POINT IDENTIFICATION
+    # ========================================================================================
+    
+    def _identify_intervention_points(self, relevant_nodes: List[str], 
+                                    model_info: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Identify key intervention points in the causal model"""
+        intervention_points = []
+        
+        # Build graph for analysis
+        graph = nx.DiGraph()
+        for edge in model_info.get("edges", []):
+            graph.add_edge(edge["from"], edge["to"], weight=edge.get("strength", 0.5))
+        
+        for node in relevant_nodes:
+            if node not in graph:
+                continue
+            
+            node_info = model_info.get("nodes", {}).get(node, {})
+            
+            # Skip non-modifiable nodes
+            if not node_info.get("modifiable", False):
+                continue
+            
+            # Calculate intervention value
+            intervention_value = self._calculate_intervention_value(node, graph, model_info)
+            
+            # Identify downstream effects
+            downstream_effects = self._analyze_downstream_effects(node, graph, model_info)
+            
+            # Calculate feasibility
+            feasibility = self._calculate_intervention_feasibility(node, node_info, model_info)
+            
+            intervention_point = {
+                "node_id": node,
+                "node_name": node.replace("_", " ").title(),
+                "importance": intervention_value,
+                "feasibility": feasibility,
+                "downstream_effects": downstream_effects,
+                "prerequisites": self._identify_prerequisites(node, graph, model_info),
+                "expected_effort": self._estimate_intervention_effort(node_info),
+                "risk_level": self._assess_intervention_risk(node, downstream_effects)
+            }
+            
+            intervention_points.append(intervention_point)
+        
+        # Sort by combined score (importance * feasibility)
+        intervention_points.sort(
+            key=lambda x: x["importance"] * x["feasibility"], 
+            reverse=True
+        )
+        
+        return intervention_points
+    
+    def _calculate_intervention_value(self, node: str, graph: nx.DiGraph, 
+                                    model_info: Dict[str, Any]) -> float:
+        """Calculate the value of intervening at a specific node"""
+        value = 0.0
+        
+        # Centrality measures
+        try:
+            # Betweenness centrality (how often node appears on shortest paths)
+            betweenness = nx.betweenness_centrality(graph).get(node, 0)
+            value += betweenness * 0.3
+            
+            # Out-degree centrality (how many nodes it influences)
+            out_degree = graph.out_degree(node)
+            max_out_degree = max(graph.out_degree(n) for n in graph.nodes()) if graph.nodes() else 1
+            value += (out_degree / max_out_degree) * 0.3 if max_out_degree > 0 else 0
+            
+            # PageRank (importance based on incoming links)
+            pagerank = nx.pagerank(graph).get(node, 0)
+            value += pagerank * 0.2
+        except:
+            # Fallback to simple metrics
+            value = 0.5
+        
+        # Boost value for nodes that affect outcomes
+        outcome_nodes = [n for n, info in model_info.get("nodes", {}).items() 
+                         if info.get("type") == "outcome"]
+        
+        for outcome in outcome_nodes:
+            if nx.has_path(graph, node, outcome):
+                path_length = nx.shortest_path_length(graph, node, outcome)
+                value += 0.2 / (1 + path_length)
+        
+        return min(1.0, value)
+    
+    def _analyze_downstream_effects(self, node: str, graph: nx.DiGraph, 
+                                   model_info: Dict[str, Any]) -> Dict[str, Any]:
+        """Analyze the downstream effects of intervening at a node"""
+        effects = {
+            "direct_effects": [],
+            "indirect_effects": [],
+            "total_affected_nodes": 0,
+            "outcome_impacts": []
+        }
+        
+        # Direct effects (immediate successors)
+        for successor in graph.successors(node):
+            edge_data = graph.get_edge_data(node, successor)
+            effects["direct_effects"].append({
+                "node": successor,
+                "strength": edge_data.get("weight", 0.5) if edge_data else 0.5
+            })
+        
+        # Indirect effects (2-3 hops)
+        visited = {node}
+        current_level = {node}
+        
+        for level in range(1, 4):  # Up to 3 hops
+            next_level = set()
+            for current_node in current_level:
+                for successor in graph.successors(current_node):
+                    if successor not in visited:
+                        visited.add(successor)
+                        next_level.add(successor)
+                        
+                        if level > 1:  # Indirect effect
+                            # Calculate propagated strength
+                            try:
+                                paths = list(nx.all_simple_paths(graph, node, successor, cutoff=level))
+                                if paths:
+                                    # Average strength across paths
+                                    path_strengths = []
+                                    for path in paths:
+                                        strength = 1.0
+                                        for i in range(len(path) - 1):
+                                            edge_data = graph.get_edge_data(path[i], path[i+1])
+                                            strength *= abs(edge_data.get("weight", 0.5)) if edge_data else 0.5
+                                        path_strengths.append(strength)
+                                    
+                                    avg_strength = np.mean(path_strengths)
+                                    effects["indirect_effects"].append({
+                                        "node": successor,
+                                        "strength": avg_strength,
+                                        "distance": level
+                                    })
+                            except:
+                                pass
+            
+            current_level = next_level
+        
+        effects["total_affected_nodes"] = len(visited) - 1
+        
+        # Outcome impacts
+        outcome_nodes = [n for n, info in model_info.get("nodes", {}).items() 
+                         if info.get("type") == "outcome"]
+        
+        for outcome in outcome_nodes:
+            if outcome in visited:
+                impact_level = "high" if outcome in [e["node"] for e in effects["direct_effects"]] else "moderate"
+                effects["outcome_impacts"].append({
+                    "outcome": outcome,
+                    "impact_level": impact_level
+                })
+        
+        return effects
+    
+    # ========================================================================================
+    # ENHANCED MEASUREMENT AND MONITORING
+    # ========================================================================================
+    
+    def _generate_measurement_subgoals(self, goal_components: Dict[str, Any], 
+                                     model_info: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Generate measurement and monitoring sub-goals"""
+        measurement_goals = []
+        
+        # Identify what needs to be measured
+        measurement_targets = []
+        
+        # Target outcome measurement
+        if goal_components.get("target_outcome"):
+            measurement_targets.append({
+                "type": "outcome",
+                "name": goal_components["target_outcome"],
+                "frequency": "continuous",
+                "priority": "high"
+            })
+        
+        # Success metric measurements
+        for metric in goal_components.get("success_metrics", []):
+            measurement_targets.append({
+                "type": "metric",
+                "name": metric,
+                "frequency": "periodic",
+                "priority": "high"
+            })
+        
+        # Key intermediate variables
+        for node_id, node_info in model_info.get("nodes", {}).items():
+            if node_info.get("type") == "intermediate":
+                # Check if it's on a relevant path
+                relevance = self._assess_node_measurement_relevance(node_id, goal_components, model_info)
+                if relevance > 0.5:
+                    measurement_targets.append({
+                        "type": "intermediate",
+                        "name": node_id.replace("_", " "),
+                        "frequency": "periodic",
+                        "priority": "medium" if relevance > 0.7 else "low"
+                    })
+        
+        # Generate sub-goals for each measurement target
+        for target in measurement_targets:
+            subgoal = {
+                "parent_goal": goal_components.get("goal_id", "main"),
+                "description": f"Establish measurement system for {target['name']}",
+                "type": "measurement",
+                "measurement_details": {
+                    "target": target["name"],
+                    "target_type": target["type"],
+                    "frequency": target["frequency"],
+                    "method": self._suggest_measurement_method(target),
+                    "baseline_required": True,
+                    "tracking_duration": "throughout_intervention"
+                },
+                "priority": target["priority"]
+            }
+            
+            measurement_goals.append(subgoal)
+        
+        # Add a data integration sub-goal
+        if len(measurement_targets) > 2:
+            measurement_goals.append({
+                "parent_goal": goal_components.get("goal_id", "main"),
+                "description": "Integrate measurement data for comprehensive analysis",
+                "type": "measurement_integration",
+                "priority": "medium"
+            })
+        
+        return measurement_goals
+    
+    def _assess_node_measurement_relevance(self, node_id: str, goal_components: Dict[str, Any], 
+                                         model_info: Dict[str, Any]) -> float:
+        """Assess how relevant a node is for measurement"""
+        relevance = 0.0
+        
+        # Check if node name matches goal components
+        node_name_lower = node_id.lower()
+        
+        if goal_components.get("target"):
+            if goal_components["target"].lower() in node_name_lower:
+                relevance += 0.5
+        
+        if goal_components.get("target_outcome"):
+            if any(word in node_name_lower for word in goal_components["target_outcome"].lower().split()):
+                relevance += 0.3
+        
+        # Check if node is on critical paths
+        # This is simplified - in production would do actual path analysis
+        node_info = model_info.get("nodes", {}).get(node_id, {})
+        if node_info.get("type") == "intermediate":
+            relevance += 0.2
+        
+        return min(1.0, relevance)
+    
+    def _suggest_measurement_method(self, target: Dict[str, Any]) -> str:
+        """Suggest appropriate measurement method for a target"""
+        target_type = target.get("type", "generic")
+        target_name = target.get("name", "").lower()
+        
+        # Type-based suggestions
+        if target_type == "outcome":
+            if "satisfaction" in target_name:
+                return "Survey with validated satisfaction scale"
+            elif "performance" in target_name:
+                return "Key performance indicators (KPIs) tracking"
+            elif "health" in target_name:
+                return "Clinical measurements and health assessments"
+            else:
+                return "Outcome-specific quantitative metrics"
+        
+        elif target_type == "metric":
+            # Parse metric type
+            if "%" in str(target_name) or "percent" in target_name:
+                return "Percentage calculation from relevant data"
+            elif any(word in target_name for word in ["count", "number", "quantity"]):
+                return "Direct counting or enumeration"
+            elif any(word in target_name for word in ["time", "duration", "speed"]):
+                return "Time-based measurement"
+            else:
+                return "Direct metric measurement"
+        
+        elif target_type == "intermediate":
+            return "Periodic sampling or continuous monitoring"
+        
+        else:
+            return "Appropriate measurement method based on variable type"
+    
+    # ========================================================================================
+    # ENHANCED CALCULATION METHODS
+    # ========================================================================================
+    
+    def _calculate_intervention_feasibility(self, node: str, node_info: Dict[str, Any], 
+                                          model_info: Dict[str, Any]) -> float:
+        """Calculate comprehensive feasibility of intervening at a node"""
+        feasibility = 0.5  # Base feasibility
+        
+        # Factor 1: Modifiability
+        if node_info.get("modifiable", False):
+            feasibility += 0.3
+        else:
+            feasibility -= 0.3
+        
+        # Factor 2: Accessibility (simplified - would check actual constraints)
+        if node_info.get("type") == "input":
+            feasibility += 0.2  # Inputs are usually more accessible
+        elif node_info.get("type") == "intermediate":
+            feasibility += 0.0  # Neutral
+        else:
+            feasibility -= 0.1  # Outcomes are harder to directly modify
+        
+        # Factor 3: Number of incoming influences (fewer is easier)
+        edges = model_info.get("edges", [])
+        incoming_edges = [e for e in edges if e.get("to") == node]
+        if len(incoming_edges) == 0:
+            feasibility += 0.2  # No competing influences
+        elif len(incoming_edges) <= 2:
+            feasibility += 0.1
+        else:
+            feasibility -= 0.1 * min(3, len(incoming_edges) - 2)
+        
+        # Factor 4: Historical success (simplified)
+        if "control" in node.lower() or "input" in node.lower():
+            feasibility += 0.1
+        
+        # Factor 5: Resource requirements (estimated)
+        if any(term in node.lower() for term in ["complex", "system", "infrastructure"]):
+            feasibility -= 0.2
+        elif any(term in node.lower() for term in ["simple", "basic", "behavior"]):
+            feasibility += 0.1
+        
+        return max(0.1, min(1.0, feasibility))
+    
+    def _identify_prerequisites(self, node: str, graph: nx.DiGraph, 
+                              model_info: Dict[str, Any]) -> List[str]:
+        """Identify prerequisites for intervening at a node"""
+        prerequisites = []
+        
+        # Check for required upstream controls
+        for predecessor in graph.predecessors(node):
+            pred_info = model_info.get("nodes", {}).get(predecessor, {})
+            if pred_info.get("modifiable", False):
+                edge_data = graph.get_edge_data(predecessor, node)
+                if edge_data and abs(edge_data.get("weight", 0)) > 0.5:
+                    prerequisites.append(f"Control over {predecessor.replace('_', ' ')}")
+        
+        # Check for measurement requirements
+        if model_info.get("nodes", {}).get(node, {}).get("type") == "intermediate":
+            prerequisites.append(f"Ability to measure {node.replace('_', ' ')}")
+        
+        # Check for resource requirements
+        node_lower = node.lower()
+        if "technology" in node_lower or "system" in node_lower:
+            prerequisites.append("Technical infrastructure")
+        elif "behavior" in node_lower or "habit" in node_lower:
+            prerequisites.append("Behavior change capability")
+        elif "policy" in node_lower or "regulation" in node_lower:
+            prerequisites.append("Policy influence or authority")
+        
+        return prerequisites[:3]  # Limit to top 3 prerequisites
+    
+    def _estimate_intervention_effort(self, node_info: Dict[str, Any]) -> str:
+        """Estimate effort required for intervention"""
+        effort_score = 0.5  # Base effort
+        
+        # Adjust based on node properties
+        if not node_info.get("modifiable", True):
+            effort_score += 0.3
+        
+        if node_info.get("type") == "outcome":
+            effort_score += 0.2
+        elif node_info.get("type") == "input":
+            effort_score -= 0.1
+        
+        # Complexity indicators (would be more sophisticated in production)
+        if node_info.get("complexity", "medium") == "high":
+            effort_score += 0.2
+        elif node_info.get("complexity", "medium") == "low":
+            effort_score -= 0.2
+        
+        # Convert to categorical
+        if effort_score < 0.3:
+            return "low"
+        elif effort_score < 0.7:
+            return "medium"
+        else:
+            return "high"
+    
+    def _assess_intervention_risk(self, node: str, downstream_effects: Dict[str, Any]) -> str:
+        """Assess risk level of intervention"""
+        risk_score = 0.3  # Base risk
+        
+        # Factor 1: Number of affected nodes
+        affected_count = downstream_effects.get("total_affected_nodes", 0)
+        if affected_count > 10:
+            risk_score += 0.3
+        elif affected_count > 5:
+            risk_score += 0.2
+        elif affected_count > 2:
+            risk_score += 0.1
+        
+        # Factor 2: Outcome impacts
+        outcome_impacts = downstream_effects.get("outcome_impacts", [])
+        if len(outcome_impacts) > 2:
+            risk_score += 0.2
+        elif len(outcome_impacts) > 0:
+            risk_score += 0.1
+        
+        # Factor 3: Strength of effects
+        strong_effects = [e for e in downstream_effects.get("direct_effects", []) 
+                          if abs(e.get("strength", 0)) > 0.7]
+        if len(strong_effects) > 2:
+            risk_score += 0.2
+        
+        # Factor 4: Node criticality (simplified)
+        if any(term in node.lower() for term in ["critical", "essential", "core", "fundamental"]):
+            risk_score += 0.2
+        
+        # Convert to categorical
+        if risk_score < 0.4:
+            return "low"
+        elif risk_score < 0.7:
+            return "medium"
+        else:
+            return "high"
