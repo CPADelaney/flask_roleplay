@@ -14,6 +14,11 @@ from enum import Enum
 import json
 from functools import lru_cache, wraps
 import time
+import re
+import numpy as np
+from collections import defaultdict
+import math
+
 
 logger = logging.getLogger(__name__)
 
@@ -4744,3 +4749,3590 @@ class CreativeInterventionGenerator:
             "feasibility": 0.8,
             "expected_impact": "moderate"
         }
+
+    # ========================================================================================
+    # GOAL DECOMPOSITION HELPER METHODS
+    # ========================================================================================
+    
+    def _adapt_goal_to_timeframe(self, goal_desc: str, phase_name: str) -> str:
+        """Adapt goal description to specific timeframe"""
+        timeframe_adaptations = {
+            "Immediate": {
+                "prefixes": ["Quickly", "Immediately", "Right away"],
+                "focus": "actionable first steps",
+                "scope": "narrow"
+            },
+            "Short-term": {
+                "prefixes": ["Soon", "In the near term", "Shortly"],
+                "focus": "foundational progress",
+                "scope": "focused"
+            },
+            "Medium-term": {
+                "prefixes": ["Progressively", "Over time", "Steadily"],
+                "focus": "substantial advancement",
+                "scope": "expanded"
+            },
+            "Long-term": {
+                "prefixes": ["Eventually", "Ultimately", "In the long run"],
+                "focus": "complete realization",
+                "scope": "comprehensive"
+            }
+        }
+        
+        adaptation = timeframe_adaptations.get(phase_name, timeframe_adaptations["Short-term"])
+        prefix = adaptation["prefixes"][hash(goal_desc) % len(adaptation["prefixes"])]
+        
+        # Simplify goal for immediate timeframe
+        if phase_name == "Immediate":
+            # Extract core action from goal
+            action_words = ["improve", "create", "develop", "analyze", "optimize", "build"]
+            for word in action_words:
+                if word in goal_desc.lower():
+                    return f"{prefix} begin to {word} initial aspects"
+        
+        return f"{prefix} {goal_desc.lower()} with {adaptation['focus']}"
+    
+    def _assess_sub_goal_complexity(self, sub_goal_desc: str) -> float:
+        """Assess complexity of a sub-goal"""
+        complexity_score = 0.3  # Base complexity
+        
+        # Factors that increase complexity
+        complexity_indicators = {
+            "multiple": 0.1,
+            "integrate": 0.15,
+            "coordinate": 0.15,
+            "optimize": 0.1,
+            "analyze": 0.1,
+            "complex": 0.2,
+            "system": 0.1,
+            "comprehensive": 0.15
+        }
+        
+        desc_lower = sub_goal_desc.lower()
+        for indicator, weight in complexity_indicators.items():
+            if indicator in desc_lower:
+                complexity_score += weight
+        
+        # Length also indicates complexity
+        word_count = len(sub_goal_desc.split())
+        if word_count > 15:
+            complexity_score += 0.1
+        elif word_count > 25:
+            complexity_score += 0.2
+        
+        # Number of conjunctions suggests multiple parts
+        conjunctions = ["and", "or", "while", "but"]
+        conjunction_count = sum(1 for conj in conjunctions if f" {conj} " in desc_lower)
+        complexity_score += conjunction_count * 0.05
+        
+        return min(1.0, complexity_score)
+    
+    def _identify_sub_goal_dependencies(self, sub_goal_desc: str, 
+                                      all_sub_goals: List[str], 
+                                      causal_analysis: Dict[str, Any]) -> List[str]:
+        """Identify dependencies for a sub-goal"""
+        dependencies = []
+        desc_lower = sub_goal_desc.lower()
+        
+        # Sequential dependencies based on process order
+        sequential_patterns = [
+            ("implement", ["design", "plan", "analyze"]),
+            ("deploy", ["build", "test", "implement"]),
+            ("optimize", ["measure", "analyze", "implement"]),
+            ("evaluate", ["implement", "monitor", "collect"]),
+            ("scale", ["pilot", "validate", "optimize"])
+        ]
+        
+        for key_term, prereqs in sequential_patterns:
+            if key_term in desc_lower:
+                for prereq in prereqs:
+                    for other_goal in all_sub_goals:
+                        if prereq in other_goal.lower() and other_goal != sub_goal_desc:
+                            dependencies.append(f"Requires: {other_goal}")
+        
+        # Data dependencies
+        if "analyze" in desc_lower or "process" in desc_lower:
+            for other_goal in all_sub_goals:
+                if "collect" in other_goal.lower() or "gather" in other_goal.lower():
+                    dependencies.append(f"Data from: {other_goal}")
+        
+        # Resource dependencies from causal analysis
+        if causal_analysis.get("shared_resources"):
+            for resource in causal_analysis["shared_resources"]:
+                if resource.lower() in desc_lower:
+                    dependencies.append(f"Shares resource: {resource}")
+        
+        return list(set(dependencies))[:3]  # Return top 3 unique dependencies
+    
+    def _calculate_sub_goal_priority(self, sub_goal_desc: str, 
+                                   parent_goal: Dict[str, Any], 
+                                   causal_analysis: Dict[str, Any]) -> float:
+        """Calculate priority for a sub-goal"""
+        base_priority = parent_goal.get("priority", 0.5) * 0.8  # Inherit from parent
+        
+        # Priority modifiers
+        priority_boosts = {
+            "critical": 0.3,
+            "essential": 0.25,
+            "foundation": 0.2,
+            "prerequisite": 0.2,
+            "immediate": 0.15,
+            "urgent": 0.15,
+            "blocker": 0.25
+        }
+        
+        desc_lower = sub_goal_desc.lower()
+        for term, boost in priority_boosts.items():
+            if term in desc_lower:
+                base_priority += boost
+        
+        # Check if it's on critical path
+        if causal_analysis.get("critical_path_nodes"):
+            for node in causal_analysis["critical_path_nodes"]:
+                if node.lower() in desc_lower:
+                    base_priority += 0.2
+        
+        # Early phase sub-goals get priority boost
+        if any(phase in desc_lower for phase in ["preparation", "initial", "first"]):
+            base_priority += 0.1
+        
+        return min(1.0, base_priority)
+    
+    def _estimate_sub_goal_effort(self, sub_goal_desc: str) -> str:
+        """Estimate effort required for sub-goal"""
+        desc_lower = sub_goal_desc.lower()
+        
+        # Effort indicators
+        high_effort_indicators = [
+            "comprehensive", "complete", "entire", "all",
+            "system-wide", "organization-wide", "redesign", "overhaul"
+        ]
+        
+        medium_effort_indicators = [
+            "develop", "implement", "create", "build",
+            "analyze", "design", "integrate", "optimize"
+        ]
+        
+        low_effort_indicators = [
+            "identify", "document", "review", "assess",
+            "gather", "collect", "update", "minor"
+        ]
+        
+        # Check indicators
+        high_count = sum(1 for ind in high_effort_indicators if ind in desc_lower)
+        medium_count = sum(1 for ind in medium_effort_indicators if ind in desc_lower)
+        low_count = sum(1 for ind in low_effort_indicators if ind in desc_lower)
+        
+        # Determine effort level
+        if high_count > 0 or (medium_count > 2):
+            return "high"
+        elif medium_count > 0 or (low_count > 3):
+            return "medium"
+        else:
+            return "low"
+    
+    def _define_sub_goal_criteria(self, sub_goal_desc: str) -> List[Dict[str, Any]]:
+        """Define success criteria for sub-goal"""
+        criteria = []
+        desc_lower = sub_goal_desc.lower()
+        
+        # Universal criteria
+        criteria.append({
+            "criterion": "completion",
+            "measure": "Task completed as specified",
+            "target": "100%",
+            "verification": "Deliverable review"
+        })
+        
+        # Type-specific criteria
+        if "analyze" in desc_lower:
+            criteria.append({
+                "criterion": "analysis_quality",
+                "measure": "Insights generated",
+                "target": "≥3 actionable insights",
+                "verification": "Peer review"
+            })
+        
+        if "implement" in desc_lower or "build" in desc_lower:
+            criteria.append({
+                "criterion": "functionality",
+                "measure": "Feature working as designed",
+                "target": "All tests passing",
+                "verification": "Testing suite"
+            })
+        
+        if "optimize" in desc_lower:
+            criteria.append({
+                "criterion": "improvement",
+                "measure": "Performance gain",
+                "target": "≥20% improvement",
+                "verification": "Before/after metrics"
+            })
+        
+        if "document" in desc_lower:
+            criteria.append({
+                "criterion": "documentation_quality",
+                "measure": "Completeness and clarity",
+                "target": "All sections complete",
+                "verification": "Documentation review"
+            })
+        
+        return criteria
+    
+    def _order_sub_goals_by_dependencies(self, sub_goals: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Order sub-goals considering dependencies"""
+        # Build dependency graph
+        dependency_graph = defaultdict(list)
+        in_degree = defaultdict(int)
+        
+        for sub_goal in sub_goals:
+            sub_goal_id = sub_goal["id"]
+            for dep in sub_goal.get("dependencies", []):
+                # Extract dependency ID from description
+                for other in sub_goals:
+                    if other["description"] in dep:
+                        dependency_graph[other["id"]].append(sub_goal_id)
+                        in_degree[sub_goal_id] += 1
+        
+        # Topological sort
+        ordered = []
+        queue = [sg for sg in sub_goals if in_degree[sg["id"]] == 0]
+        
+        while queue:
+            # Sort queue by priority for tie-breaking
+            queue.sort(key=lambda x: x.get("priority", 0), reverse=True)
+            current = queue.pop(0)
+            ordered.append(current)
+            
+            # Update in-degrees
+            for neighbor in dependency_graph[current["id"]]:
+                in_degree[neighbor] -= 1
+                if in_degree[neighbor] == 0:
+                    neighbor_obj = next(sg for sg in sub_goals if sg["id"] == neighbor)
+                    queue.append(neighbor_obj)
+        
+        # Add any remaining (circular dependencies)
+        remaining = [sg for sg in sub_goals if sg not in ordered]
+        ordered.extend(sorted(remaining, key=lambda x: x.get("priority", 0), reverse=True))
+        
+        return ordered
+    
+    def _extract_context_params(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        """Extract relevant parameters from context for customization"""
+        params = {
+            "domain": self._extract_context_domain(context),
+            "complexity_level": "medium",
+            "user_expertise": "intermediate",
+            "time_pressure": "normal",
+            "resource_constraints": []
+        }
+        
+        # Analyze user input for complexity indicators
+        user_input = context.get("user_input", "").lower()
+        
+        if any(term in user_input for term in ["simple", "basic", "easy"]):
+            params["complexity_level"] = "low"
+        elif any(term in user_input for term in ["complex", "advanced", "sophisticated"]):
+            params["complexity_level"] = "high"
+        
+        # Check for expertise indicators
+        if any(term in user_input for term in ["beginner", "new to", "learning"]):
+            params["user_expertise"] = "beginner"
+        elif any(term in user_input for term in ["expert", "experienced", "advanced"]):
+            params["user_expertise"] = "expert"
+        
+        # Check for time pressure
+        if any(term in user_input for term in ["urgent", "asap", "immediately", "quickly"]):
+            params["time_pressure"] = "high"
+        elif any(term in user_input for term in ["whenever", "no rush", "eventually"]):
+            params["time_pressure"] = "low"
+        
+        # Extract constraints
+        if "constraints" in context:
+            params["resource_constraints"] = context["constraints"]
+        
+        return params
+    
+    # ========================================================================================
+    # STRING AND SIMILARITY CALCULATION METHODS
+    # ========================================================================================
+    
+    def _calculate_edit_distance(self, s1: str, s2: str) -> int:
+        """Calculate Levenshtein edit distance between two strings"""
+        if len(s1) < len(s2):
+            return self._calculate_edit_distance(s2, s1)
+        
+        if len(s2) == 0:
+            return len(s1)
+        
+        previous_row = range(len(s2) + 1)
+        for i, c1 in enumerate(s1):
+            current_row = [i + 1]
+            for j, c2 in enumerate(s2):
+                # j+1 instead of j since previous_row and current_row are one character longer
+                insertions = previous_row[j + 1] + 1
+                deletions = current_row[j] + 1
+                substitutions = previous_row[j] + (c1 != c2)
+                current_row.append(min(insertions, deletions, substitutions))
+            previous_row = current_row
+        
+        return previous_row[-1]
+    
+    def _longest_common_prefix(self, s1: str, s2: str) -> str:
+        """Find longest common prefix of two strings"""
+        min_len = min(len(s1), len(s2))
+        for i in range(min_len):
+            if s1[i] != s2[i]:
+                return s1[:i]
+        return s1[:min_len]
+    
+    def _longest_common_suffix(self, s1: str, s2: str) -> str:
+        """Find longest common suffix of two strings"""
+        s1_rev = s1[::-1]
+        s2_rev = s2[::-1]
+        prefix = self._longest_common_prefix(s1_rev, s2_rev)
+        return prefix[::-1]
+    
+    def _simulate_word_embedding_similarity(self, word1: str, word2: str) -> float:
+        """Simulate word embedding similarity using heuristics"""
+        # This is a simplified simulation - in production, use actual embeddings
+        
+        # Exact match
+        if word1 == word2:
+            return 1.0
+        
+        # Common synonyms and related terms
+        synonym_groups = [
+            {"increase", "boost", "raise", "enhance", "improve"},
+            {"decrease", "reduce", "lower", "diminish", "minimize"},
+            {"create", "make", "build", "construct", "develop"},
+            {"analyze", "examine", "study", "investigate", "assess"},
+            {"problem", "issue", "challenge", "difficulty", "obstacle"},
+            {"solution", "answer", "resolution", "fix", "remedy"},
+            {"good", "positive", "beneficial", "favorable", "advantageous"},
+            {"bad", "negative", "harmful", "detrimental", "adverse"}
+        ]
+        
+        for group in synonym_groups:
+            if word1 in group and word2 in group:
+                return 0.85
+        
+        # Check for common stems
+        stem1 = self._get_word_stem(word1)
+        stem2 = self._get_word_stem(word2)
+        if stem1 == stem2 and len(stem1) > 3:
+            return 0.7
+        
+        # Check for prefix/suffix relationships
+        if word1.startswith(word2) or word2.startswith(word1):
+            return 0.6
+        
+        # Character overlap
+        chars1 = set(word1)
+        chars2 = set(word2)
+        if chars1 and chars2:
+            overlap = len(chars1.intersection(chars2)) / len(chars1.union(chars2))
+            return overlap * 0.5
+        
+        return 0.0
+    
+    def _calculate_string_similarity(self, s1: str, s2: str) -> float:
+        """Calculate overall string similarity"""
+        if not s1 or not s2:
+            return 0.0
+        
+        s1_lower = s1.lower()
+        s2_lower = s2.lower()
+        
+        if s1_lower == s2_lower:
+            return 1.0
+        
+        # Combine multiple similarity measures
+        similarities = []
+        
+        # Token-based similarity
+        tokens1 = set(s1_lower.split())
+        tokens2 = set(s2_lower.split())
+        if tokens1 and tokens2:
+            token_sim = len(tokens1.intersection(tokens2)) / len(tokens1.union(tokens2))
+            similarities.append(token_sim)
+        
+        # Edit distance similarity
+        edit_dist = self._calculate_edit_distance(s1_lower, s2_lower)
+        max_len = max(len(s1_lower), len(s2_lower))
+        edit_sim = 1.0 - (edit_dist / max_len) if max_len > 0 else 0
+        similarities.append(edit_sim)
+        
+        # Character n-gram similarity
+        def get_char_ngrams(s, n=2):
+            return set(s[i:i+n] for i in range(len(s)-n+1))
+        
+        if len(s1_lower) > 1 and len(s2_lower) > 1:
+            ngrams1 = get_char_ngrams(s1_lower)
+            ngrams2 = get_char_ngrams(s2_lower)
+            if ngrams1 and ngrams2:
+                ngram_sim = len(ngrams1.intersection(ngrams2)) / len(ngrams1.union(ngrams2))
+                similarities.append(ngram_sim)
+        
+        return np.mean(similarities) if similarities else 0.0
+    
+    def _calculate_list_similarity(self, list1: List[Any], list2: List[Any]) -> float:
+        """Calculate similarity between two lists"""
+        if not list1 and not list2:
+            return 1.0
+        if not list1 or not list2:
+            return 0.0
+        
+        # Convert to sets if possible
+        try:
+            set1 = set(list1)
+            set2 = set(list2)
+            
+            # Jaccard similarity
+            intersection = len(set1.intersection(set2))
+            union = len(set1.union(set2))
+            
+            return intersection / union if union > 0 else 0.0
+        except TypeError:
+            # Elements not hashable, use position-based similarity
+            matches = 0
+            max_len = max(len(list1), len(list2))
+            
+            for i in range(min(len(list1), len(list2))):
+                if list1[i] == list2[i]:
+                    matches += 1
+            
+            return matches / max_len if max_len > 0 else 0.0
+    
+    def _calculate_property_depth(self, props: Dict[str, Any], depth: int = 0) -> int:
+        """Calculate maximum depth of nested properties"""
+        if not isinstance(props, dict):
+            return depth
+        
+        max_depth = depth
+        for value in props.values():
+            if isinstance(value, dict):
+                max_depth = max(max_depth, self._calculate_property_depth(value, depth + 1))
+            elif isinstance(value, list):
+                for item in value:
+                    if isinstance(item, dict):
+                        max_depth = max(max_depth, self._calculate_property_depth(item, depth + 1))
+        
+        return max_depth
+    
+    # ========================================================================================
+    # ADVANCED SIMILARITY CALCULATION METHODS
+    # ========================================================================================
+    
+    def _calculate_semantic_field_similarity(self, concept1: Dict[str, Any], 
+                                           concept2: Dict[str, Any]) -> float:
+        """Calculate similarity based on semantic fields"""
+        # Extract semantic indicators
+        name1 = concept1.get("name", "").lower()
+        name2 = concept2.get("name", "").lower()
+        
+        # Define semantic fields
+        semantic_fields = {
+            "temporal": ["time", "duration", "period", "moment", "schedule", "timeline"],
+            "spatial": ["location", "position", "area", "region", "space", "place"],
+            "quantitative": ["amount", "number", "quantity", "measure", "count", "value"],
+            "qualitative": ["quality", "characteristic", "property", "attribute", "feature"],
+            "process": ["method", "procedure", "process", "technique", "approach", "strategy"],
+            "state": ["condition", "status", "state", "situation", "circumstance"],
+            "action": ["action", "activity", "operation", "task", "function", "behavior"],
+            "entity": ["object", "entity", "thing", "item", "element", "component"]
+        }
+        
+        # Find semantic fields for each concept
+        fields1 = set()
+        fields2 = set()
+        
+        for field, indicators in semantic_fields.items():
+            if any(ind in name1 for ind in indicators):
+                fields1.add(field)
+            if any(ind in name2 for ind in indicators):
+                fields2.add(field)
+        
+        # Add fields from properties
+        props1 = concept1.get("properties", {})
+        props2 = concept2.get("properties", {})
+        
+        for field, indicators in semantic_fields.items():
+            if any(ind in str(props1).lower() for ind in indicators):
+                fields1.add(field)
+            if any(ind in str(props2).lower() for ind in indicators):
+                fields2.add(field)
+        
+        # Calculate field overlap
+        if not fields1 and not fields2:
+            return 0.5  # No semantic field information
+        
+        if not fields1 or not fields2:
+            return 0.0
+        
+        intersection = len(fields1.intersection(fields2))
+        union = len(fields1.union(fields2))
+        
+        return intersection / union if union > 0 else 0.0
+    
+    def _calculate_relational_similarity(self, concept1: Dict[str, Any], 
+                                       concept2: Dict[str, Any]) -> float:
+        """Calculate similarity based on relational patterns"""
+        # In a full implementation, this would analyze the relations each concept participates in
+        # For now, we'll use property-based heuristics
+        
+        props1 = concept1.get("properties", {})
+        props2 = concept2.get("properties", {})
+        
+        # Look for relational properties
+        relational_props = ["relates_to", "connected_to", "depends_on", "influences", 
+                           "caused_by", "leads_to", "part_of", "contains"]
+        
+        relations1 = {k: v for k, v in props1.items() if any(rp in k for rp in relational_props)}
+        relations2 = {k: v for k, v in props2.items() if any(rp in k for rp in relational_props)}
+        
+        if not relations1 and not relations2:
+            return 0.5  # No relational information
+        
+        # Compare relational patterns
+        pattern_similarity = 0.0
+        pattern_count = 0
+        
+        for rel_type in relational_props:
+            rels1 = [v for k, v in relations1.items() if rel_type in k]
+            rels2 = [v for k, v in relations2.items() if rel_type in k]
+            
+            if rels1 or rels2:
+                if rels1 and rels2:
+                    # Both have this relation type
+                    pattern_similarity += 0.8
+                else:
+                    # Only one has this relation type
+                    pattern_similarity += 0.2
+                pattern_count += 1
+        
+        return pattern_similarity / pattern_count if pattern_count > 0 else 0.0
+    
+    def _calculate_functional_similarity(self, concept1: Dict[str, Any], 
+                                       concept2: Dict[str, Any]) -> float:
+        """Calculate similarity based on functional roles"""
+        # Extract functional indicators
+        name1 = concept1.get("name", "").lower()
+        name2 = concept2.get("name", "").lower()
+        props1 = concept1.get("properties", {})
+        props2 = concept2.get("properties", {})
+        
+        # Define functional categories
+        functional_categories = {
+            "input": ["input", "source", "data", "information", "parameter"],
+            "output": ["output", "result", "product", "outcome", "return"],
+            "process": ["process", "transform", "compute", "calculate", "analyze"],
+            "storage": ["store", "save", "cache", "memory", "database"],
+            "control": ["control", "manage", "coordinate", "regulate", "govern"],
+            "interface": ["interface", "api", "endpoint", "connection", "bridge"],
+            "validation": ["validate", "verify", "check", "ensure", "confirm"]
+        }
+        
+        # Identify functions for each concept
+        functions1 = set()
+        functions2 = set()
+        
+        for func, indicators in functional_categories.items():
+            if any(ind in name1 or ind in str(props1) for ind in indicators):
+                functions1.add(func)
+            if any(ind in name2 or ind in str(props2) for ind in indicators):
+                functions2.add(func)
+        
+        # Calculate functional overlap
+        if not functions1 and not functions2:
+            return 0.5
+        
+        if not functions1 or not functions2:
+            return 0.0
+        
+        intersection = len(functions1.intersection(functions2))
+        union = len(functions1.union(functions2))
+        
+        return intersection / union if union > 0 else 0.0
+    
+    def _calculate_contextual_similarity_advanced(self, concept1: Dict[str, Any], 
+                                                concept2: Dict[str, Any]) -> float:
+        """Calculate advanced contextual similarity"""
+        # This would ideally use the actual graph context
+        # For now, use property overlap as a proxy
+        
+        props1 = set(concept1.get("properties", {}).keys())
+        props2 = set(concept2.get("properties", {}).keys())
+        
+        if not props1 and not props2:
+            return 0.5
+        
+        # Property key overlap
+        key_overlap = len(props1.intersection(props2)) / len(props1.union(props2)) if props1.union(props2) else 0
+        
+        # Value similarity for common properties
+        common_props = props1.intersection(props2)
+        value_similarities = []
+        
+        for prop in common_props:
+            val1 = concept1["properties"][prop]
+            val2 = concept2["properties"][prop]
+            
+            if type(val1) == type(val2):
+                if isinstance(val1, (str, int, float)):
+                    if val1 == val2:
+                        value_similarities.append(1.0)
+                    else:
+                        value_similarities.append(0.0)
+        
+        value_sim = np.mean(value_similarities) if value_similarities else 0.0
+        
+        # Combine
+        return 0.6 * key_overlap + 0.4 * value_sim
+    
+    # ========================================================================================
+    # PROPERTY ANALYSIS METHODS
+    # ========================================================================================
+    
+    def _are_semantically_opposite(self, val1: str, val2: str) -> bool:
+        """Check if two values are semantically opposite"""
+        opposites = [
+            ("increase", "decrease"), ("up", "down"), ("left", "right"),
+            ("true", "false"), ("yes", "no"), ("positive", "negative"),
+            ("hot", "cold"), ("fast", "slow"), ("high", "low"),
+            ("open", "closed"), ("start", "stop"), ("begin", "end"),
+            ("enable", "disable"), ("allow", "deny"), ("accept", "reject")
+        ]
+        
+        val1_lower = val1.lower()
+        val2_lower = val2.lower()
+        
+        for opp1, opp2 in opposites:
+            if (opp1 in val1_lower and opp2 in val2_lower) or \
+               (opp2 in val1_lower and opp1 in val2_lower):
+                return True
+        
+        return False
+    
+    def _are_complementary_properties(self, prop1: str, prop2: str) -> bool:
+        """Check if two properties are complementary"""
+        complementary_pairs = [
+            ("min", "max"), ("start", "end"), ("from", "to"),
+            ("source", "target"), ("input", "output"), ("question", "answer"),
+            ("problem", "solution"), ("cause", "effect"), ("before", "after"),
+            ("width", "height"), ("latitude", "longitude"), ("x", "y")
+        ]
+        
+        prop1_lower = prop1.lower()
+        prop2_lower = prop2.lower()
+        
+        for comp1, comp2 in complementary_pairs:
+            if (comp1 in prop1_lower and comp2 in prop2_lower) or \
+               (comp2 in prop1_lower and comp1 in prop2_lower):
+                return True
+        
+        return False
+    
+    def _get_complement_relationship(self, prop1: str, prop2: str) -> str:
+        """Get the type of complementary relationship"""
+        prop1_lower = prop1.lower()
+        prop2_lower = prop2.lower()
+        
+        if ("min" in prop1_lower and "max" in prop2_lower) or \
+           ("max" in prop1_lower and "min" in prop2_lower):
+            return "range_bounds"
+        
+        if ("start" in prop1_lower and "end" in prop2_lower) or \
+           ("from" in prop1_lower and "to" in prop2_lower):
+            return "interval_bounds"
+        
+        if ("input" in prop1_lower and "output" in prop2_lower) or \
+           ("source" in prop1_lower and "target" in prop2_lower):
+            return "flow_endpoints"
+        
+        if ("cause" in prop1_lower and "effect" in prop2_lower):
+            return "causal_pair"
+        
+        return "complementary"
+    
+    def _extract_property_domains(self, props: Dict[str, Any]) -> Set[str]:
+        """Extract domains from properties"""
+        domains = set()
+        
+        domain_indicators = {
+            "technical": ["system", "code", "api", "database", "algorithm"],
+            "business": ["revenue", "cost", "profit", "customer", "market"],
+            "temporal": ["time", "date", "duration", "schedule", "deadline"],
+            "spatial": ["location", "position", "coordinate", "area", "region"],
+            "quantitative": ["amount", "count", "number", "quantity", "measure"],
+            "qualitative": ["quality", "rating", "category", "type", "class"]
+        }
+        
+        props_str = str(props).lower()
+        
+        for domain, indicators in domain_indicators.items():
+            if any(ind in props_str for ind in indicators):
+                domains.add(domain)
+        
+        return domains
+    
+    def _property_in_domain(self, prop: str, domain: str) -> bool:
+        """Check if a property belongs to a domain"""
+        domain_keywords = {
+            "technical": ["system", "code", "api", "database", "algorithm"],
+            "business": ["revenue", "cost", "profit", "customer", "market"],
+            "temporal": ["time", "date", "duration", "schedule", "deadline"],
+            "spatial": ["location", "position", "coordinate", "area", "region"],
+            "quantitative": ["amount", "count", "number", "quantity", "measure"],
+            "qualitative": ["quality", "rating", "category", "type", "class"]
+        }
+        
+        keywords = domain_keywords.get(domain, [])
+        prop_lower = prop.lower()
+        
+        return any(keyword in prop_lower for keyword in keywords)
+    
+    def _analyze_type_compatibility(self, props1: Dict[str, Any], 
+                                   props2: Dict[str, Any]) -> Dict[str, Any]:
+        """Analyze type system compatibility between properties"""
+        result = {
+            "compatible": True,
+            "score": 1.0,
+            "warnings": [],
+            "type_conflicts": []
+        }
+        
+        # Extract type information
+        types1 = self._extract_types(props1)
+        types2 = self._extract_types(props2)
+        
+        # Check for type system conflicts
+        if types1.get("schema") and types2.get("schema"):
+            if types1["schema"] != types2["schema"]:
+                result["compatible"] = False
+                result["warnings"].append({
+                    "type": "schema_mismatch",
+                    "message": f"Different schemas: {types1['schema']} vs {types2['schema']}"
+                })
+                result["score"] *= 0.5
+        
+        # Check for data type conflicts
+        common_fields = set(types1.get("fields", {}).keys()).intersection(
+            set(types2.get("fields", {}).keys())
+        )
+        
+        for field in common_fields:
+            type1 = types1["fields"][field]
+            type2 = types2["fields"][field]
+            
+            if type1 != type2:
+                result["type_conflicts"].append({
+                    "field": field,
+                    "type1": type1,
+                    "type2": type2
+                })
+                result["score"] *= 0.8
+        
+        return result
+    
+    def _extract_types(self, props: Dict[str, Any]) -> Dict[str, Any]:
+        """Extract type information from properties"""
+        types = {
+            "schema": props.get("schema") or props.get("$schema"),
+            "fields": {}
+        }
+        
+        for key, value in props.items():
+            if key in ["type", "dataType", "data_type"]:
+                types["primary_type"] = value
+            elif isinstance(value, dict) and "type" in value:
+                types["fields"][key] = value["type"]
+            else:
+                # Infer type from value
+                types["fields"][key] = type(value).__name__
+        
+        return types
+    
+    def _analyze_domain_compatibility(self, props1: Dict[str, Any], 
+                                    props2: Dict[str, Any]) -> Dict[str, Any]:
+        """Analyze domain compatibility between properties"""
+        domains1 = self._extract_property_domains(props1)
+        domains2 = self._extract_property_domains(props2)
+        
+        if not domains1 and not domains2:
+            return {"score": 0.5, "domains": []}
+        
+        if not domains1 or not domains2:
+            return {"score": 0.2, "domains": list(domains1.union(domains2))}
+        
+        intersection = domains1.intersection(domains2)
+        union = domains1.union(domains2)
+        
+        score = len(intersection) / len(union) if union else 0
+        
+        return {
+            "score": score,
+            "domains": list(union),
+            "common_domains": list(intersection),
+            "unique_to_1": list(domains1 - domains2),
+            "unique_to_2": list(domains2 - domains1)
+        }
+    
+    def _generate_compatibility_recommendations(self, comparison: Dict[str, Any],
+                                              props1: Dict[str, Any],
+                                              props2: Dict[str, Any]) -> List[Dict[str, str]]:
+        """Generate recommendations for improving compatibility"""
+        recommendations = []
+        
+        # Handle conflicts
+        if comparison["conflicts"]:
+            recommendations.append({
+                "type": "conflict_resolution",
+                "priority": "high",
+                "action": "Resolve property conflicts",
+                "details": f"Address {len(comparison['conflicts'])} conflicts, starting with highest severity"
+            })
+        
+        # Leverage complementary properties
+        if comparison["complementary"]:
+            recommendations.append({
+                "type": "integration_opportunity",
+                "priority": "medium",
+                "action": "Integrate complementary properties",
+                "details": f"Combine {len(comparison['complementary'])} complementary property pairs"
+            })
+        
+        # Build on synergies
+        if comparison["synergies"]:
+            recommendations.append({
+                "type": "synergy_exploitation",
+                "priority": "medium",
+                "action": "Maximize synergistic effects",
+                "details": f"Leverage {len(comparison['synergies'])} identified synergies"
+            })
+        
+        # Address warnings
+        if comparison["warnings"]:
+            recommendations.append({
+                "type": "risk_mitigation",
+                "priority": "high",
+                "action": "Address compatibility warnings",
+                "details": f"Resolve {len(comparison['warnings'])} compatibility issues"
+            })
+        
+        return recommendations
+    
+    # ========================================================================================
+    # CLUSTERING METHODS
+    # ========================================================================================
+    
+    def _grow_adaptive_dense_cluster(self, start_node: str, space: Any, 
+                                   visited: Set[str], density_threshold: float) -> Dict[str, Any]:
+        """Grow a dense cluster from a starting node"""
+        cluster = {
+            "members": [start_node],
+            "size": 1,
+            "type": "density",
+            "density": 1.0,
+            "center": start_node
+        }
+        
+        visited.add(start_node)
+        frontier = [start_node]
+        
+        while frontier:
+            current = frontier.pop(0)
+            
+            # Get neighbors
+            neighbors = self._get_node_neighbors(current, space)
+            
+            # Calculate local density
+            local_density = len(neighbors) / len(space.concepts) if space.concepts else 0
+            
+            if local_density >= density_threshold:
+                for neighbor in neighbors:
+                    if neighbor not in visited:
+                        visited.add(neighbor)
+                        cluster["members"].append(neighbor)
+                        cluster["size"] += 1
+                        frontier.append(neighbor)
+        
+        # Calculate final cluster density
+        internal_edges = 0
+        for member in cluster["members"]:
+            member_neighbors = self._get_node_neighbors(member, space)
+            internal_edges += len([n for n in member_neighbors if n in cluster["members"]])
+        
+        max_edges = cluster["size"] * (cluster["size"] - 1)
+        cluster["density"] = internal_edges / max_edges if max_edges > 0 else 0
+        
+        return cluster
+    
+    def _get_node_neighbors(self, node: str, space: Any) -> List[str]:
+        """Get neighbors of a node in the concept space"""
+        neighbors = []
+        
+        for relation in space.relations:
+            if relation.get("source") == node:
+                neighbors.append(relation.get("target"))
+            elif relation.get("target") == node and not relation.get("directed", True):
+                neighbors.append(relation.get("source"))
+        
+        return list(set(neighbors))
+    
+    def _calculate_name_similarity_advanced(self, name1: str, name2: str) -> float:
+        """Advanced name similarity calculation"""
+        # Already implemented in parent, but adding more sophisticated features
+        if not name1 or not name2:
+            return 0.0
+        
+        name1_lower = name1.lower()
+        name2_lower = name2.lower()
+        
+        if name1_lower == name2_lower:
+            return 1.0
+        
+        # Multiple similarity measures
+        similarities = []
+        
+        # Word-level similarity
+        words1 = set(name1_lower.split())
+        words2 = set(name2_lower.split())
+        
+        if words1 and words2:
+            # Exact word overlap
+            word_overlap = len(words1.intersection(words2)) / len(words1.union(words2))
+            similarities.append(word_overlap)
+            
+            # Stem overlap
+            stems1 = {self._get_word_stem(w) for w in words1}
+            stems2 = {self._get_word_stem(w) for w in words2}
+            stem_overlap = len(stems1.intersection(stems2)) / len(stems1.union(stems2))
+            similarities.append(stem_overlap * 0.8)
+        
+        # Character-level similarity
+        char_sim = self._calculate_string_similarity(name1_lower, name2_lower)
+        similarities.append(char_sim)
+        
+        # Semantic similarity
+        semantic_sim = self._simulate_word_embedding_similarity(name1_lower, name2_lower)
+        similarities.append(semantic_sim)
+        
+        return np.mean(similarities) if similarities else 0.0
+    
+    def _calculate_property_similarity_advanced(self, props1: Dict[str, Any], 
+                                              props2: Dict[str, Any]) -> float:
+        """Advanced property similarity calculation"""
+        if not props1 and not props2:
+            return 1.0
+        if not props1 or not props2:
+            return 0.0
+        
+        return self._calculate_structural_property_similarity(props1, props2)
+    
+    def _calculate_contextual_similarity(self, node1: str, node2: str, space: Any) -> float:
+        """Calculate contextual similarity based on graph neighborhood"""
+        # Get neighbors
+        neighbors1 = set(self._get_node_neighbors(node1, space))
+        neighbors2 = set(self._get_node_neighbors(node2, space))
+        
+        if not neighbors1 and not neighbors2:
+            return 0.5
+        
+        if not neighbors1 or not neighbors2:
+            return 0.0
+        
+        # Neighbor overlap
+        overlap = len(neighbors1.intersection(neighbors2))
+        union = len(neighbors1.union(neighbors2))
+        
+        return overlap / union if union > 0 else 0.0
+    
+    def _affinity_propagation(self, similarity_matrix: np.ndarray) -> Dict[int, List[int]]:
+        """Simplified affinity propagation clustering"""
+        n = similarity_matrix.shape[0]
+        
+        # Initialize
+        availability = np.zeros((n, n))
+        responsibility = np.zeros((n, n))
+        
+        # Parameters
+        damping = 0.5
+        max_iter = 50
+        
+        for _ in range(max_iter):
+            # Update responsibilities
+            for i in range(n):
+                for k in range(n):
+                    max_val = -np.inf
+                    for kp in range(n):
+                        if kp != k:
+                            val = availability[i, kp] + similarity_matrix[i, kp]
+                            if val > max_val:
+                                max_val = val
+                    
+                    responsibility[i, k] = (1 - damping) * (similarity_matrix[i, k] - max_val) + \
+                                           damping * responsibility[i, k]
+            
+            # Update availabilities
+            for i in range(n):
+                for k in range(n):
+                    if i == k:
+                        sum_val = 0
+                        for ip in range(n):
+                            if ip != k:
+                                sum_val += max(0, responsibility[ip, k])
+                        availability[i, k] = (1 - damping) * sum_val + damping * availability[i, k]
+                    else:
+                        sum_val = 0
+                        for ip in range(n):
+                            if ip != i and ip != k:
+                                sum_val += max(0, responsibility[ip, k])
+                        availability[i, k] = (1 - damping) * min(0, responsibility[k, k] + sum_val) + \
+                                            damping * availability[i, k]
+        
+        # Find exemplars
+        exemplars = []
+        for i in range(n):
+            if responsibility[i, i] + availability[i, i] > 0:
+                exemplars.append(i)
+        
+        # Assign points to clusters
+        clusters = defaultdict(list)
+        for i in range(n):
+            if i in exemplars:
+                clusters[i].append(i)
+            else:
+                # Find best exemplar
+                best_exemplar = None
+                best_score = -np.inf
+                
+                for ex in exemplars:
+                    score = similarity_matrix[i, ex]
+                    if score > best_score:
+                        best_score = score
+                        best_exemplar = ex
+                
+                if best_exemplar is not None:
+                    clusters[best_exemplar].append(i)
+        
+        return dict(clusters)
+    
+    # ========================================================================================
+    # ADDITIONAL CLUSTERING AND HIERARCHY METHODS
+    # ========================================================================================
+    
+    def _find_dag_roots(self, parent_children: Dict, child_parents: Dict) -> List[str]:
+        """Find roots for DAG hierarchies"""
+        all_nodes = set(parent_children.keys()) | set(child_parents.keys())
+        
+        # Nodes with no parents or only self-references
+        roots = []
+        for node in all_nodes:
+            parents = child_parents.get(node, [])
+            if not parents or (len(parents) == 1 and parents[0] == node):
+                # Verify it has children
+                if parent_children.get(node):
+                    roots.append(node)
+        
+        return roots
+    
+    def _build_dag_hierarchy(self, root: str, parent_children: Dict, 
+                            child_parents: Dict, space: Any) -> Dict[str, Any]:
+        """Build DAG hierarchy allowing multiple parents"""
+        hierarchy = {
+            "root": root,
+            "hierarchy_type": "dag",
+            "levels": defaultdict(list),
+            "total_nodes": 0,
+            "max_depth": 0,
+            "dag_structure": defaultdict(dict),
+            "node_metadata": {}
+        }
+        
+        # Modified BFS for DAG
+        visited = set()
+        queue = [(root, 0)]
+        node_levels = {}
+        
+        while queue:
+            node_id, level = queue.pop(0)
+            
+            if node_id in node_levels:
+                # Update to maximum level
+                node_levels[node_id] = max(node_levels[node_id], level)
+                continue
+            
+            node_levels[node_id] = level
+            visited.add(node_id)
+            
+            hierarchy["levels"][level].append(node_id)
+            hierarchy["total_nodes"] = len(visited)
+            hierarchy["max_depth"] = max(hierarchy["max_depth"], level)
+            
+            # Store node metadata
+            node_data = space.concepts.get(node_id, {})
+            hierarchy["node_metadata"][node_id] = {
+                "name": node_data.get("name", node_id),
+                "level": level,
+                "parents": child_parents.get(node_id, []),
+                "children": parent_children.get(node_id, [])
+            }
+            
+            # Add children
+            for child in parent_children.get(node_id, []):
+                queue.append((child, level + 1))
+        
+        return hierarchy
+    
+    def _find_domain_hierarchies(self, space: Any, parent_children: Dict, 
+                               relation_types: Dict) -> List[Dict[str, Any]]:
+        """Find domain-specific hierarchies"""
+        hierarchies = []
+        
+        # Group by relation type
+        for node, rel_counts in relation_types.items():
+            dominant_relation = max(rel_counts.items(), key=lambda x: x[1])[0] if rel_counts else None
+            
+            if dominant_relation and parent_children.get(node):
+                hierarchy = self._build_complete_hierarchy(node, parent_children, space, f"domain_{dominant_relation}")
+                
+                if hierarchy["total_nodes"] > 3:
+                    hierarchy["domain_relation"] = dominant_relation
+                    hierarchies.append(hierarchy)
+        
+        return hierarchies
+    
+    def _find_property_based_hierarchies(self, space: Any) -> List[Dict[str, Any]]:
+        """Find hierarchies based on property inheritance"""
+        hierarchies = []
+        
+        # Build property inheritance map
+        property_inheritance = defaultdict(list)
+        
+        for concept_id, concept in space.concepts.items():
+            props = set(concept.get("properties", {}).keys())
+            
+            # Find potential parents (concepts with subset of properties)
+            for other_id, other_concept in space.concepts.items():
+                if other_id != concept_id:
+                    other_props = set(other_concept.get("properties", {}).keys())
+                    
+                    if other_props and props and other_props.issubset(props):
+                        property_inheritance[other_id].append(concept_id)
+        
+        # Find roots and build hierarchies
+        roots = [node for node in property_inheritance if node not in 
+                 set(child for children in property_inheritance.values() for child in children)]
+        
+        for root in roots:
+            hierarchy = self._build_complete_hierarchy(root, property_inheritance, space, "property_based")
+            
+            if hierarchy["total_nodes"] > 2:
+                hierarchies.append(hierarchy)
+        
+        return hierarchies
+    
+    def _analyze_hierarchy_characteristics(self, hierarchy: Dict[str, Any], 
+                                         parent_children: Dict, child_parents: Dict, 
+                                         space: Any):
+        """Analyze characteristics of a hierarchy"""
+        chars = hierarchy.setdefault("characteristics", {})
+        
+        # Balance analysis
+        level_sizes = [len(nodes) for nodes in hierarchy["levels"].values()]
+        chars["balance"] = np.std(level_sizes) / np.mean(level_sizes) if level_sizes else 0
+        
+        # Branching factor
+        branching_factors = []
+        for node in hierarchy["tree_structure"]:
+            children = len(hierarchy["tree_structure"][node])
+            if children > 0:
+                branching_factors.append(children)
+        
+        chars["avg_branching_factor"] = np.mean(branching_factors) if branching_factors else 0
+        chars["max_branching_factor"] = max(branching_factors) if branching_factors else 0
+        
+        # Depth distribution
+        chars["depth_distribution"] = {
+            level: count for level, count in enumerate(level_sizes)
+        }
+        
+        # Semantic coherence
+        chars["semantic_coherence"] = self._calculate_hierarchy_coherence(hierarchy, space)
+    
+    def _calculate_hierarchy_coherence(self, hierarchy: Dict[str, Any], space: Any) -> float:
+        """Calculate semantic coherence of hierarchy"""
+        coherence_scores = []
+        
+        # Check parent-child semantic similarity
+        for parent, children in hierarchy.get("tree_structure", {}).items():
+            parent_concept = space.concepts.get(parent, {})
+            
+            for child in children:
+                child_concept = space.concepts.get(child, {})
+                
+                similarity = self._calculate_comprehensive_similarity(parent_concept, child_concept)
+                coherence_scores.append(similarity)
+        
+        return np.mean(coherence_scores) if coherence_scores else 0.0
+    
+    def _calculate_hierarchy_metrics(self, hierarchy: Dict[str, Any], space: Any):
+        """Calculate quality metrics for hierarchy"""
+        metrics = hierarchy.setdefault("quality_metrics", {})
+        
+        # Completeness (% of concepts included)
+        total_concepts = len(space.concepts)
+        metrics["completeness"] = hierarchy["total_nodes"] / total_concepts if total_concepts > 0 else 0
+        
+        # Depth appropriateness
+        ideal_depth = math.log2(hierarchy["total_nodes"]) if hierarchy["total_nodes"] > 1 else 1
+        metrics["depth_appropriateness"] = 1 - abs(hierarchy["max_depth"] - ideal_depth) / ideal_depth
+        
+        # Coherence
+        metrics["coherence"] = hierarchy["characteristics"].get("semantic_coherence", 0)
+        
+        # Overall quality
+        metrics["quality_score"] = np.mean([
+            metrics["completeness"],
+            metrics["depth_appropriateness"],
+            metrics["coherence"]
+        ])
+    
+    def _calculate_tree_statistics(self, hierarchy: Dict[str, Any]) -> Dict[str, Any]:
+        """Calculate statistics for tree structure"""
+        stats = {
+            "total_nodes": hierarchy["total_nodes"],
+            "max_depth": hierarchy["max_depth"],
+            "levels": len(hierarchy["levels"]),
+            "leaf_nodes": 0,
+            "internal_nodes": 0,
+            "avg_depth": 0
+        }
+        
+        # Count leaf and internal nodes
+        depths = []
+        for node_id, node_meta in hierarchy["node_metadata"].items():
+            if not hierarchy["tree_structure"].get(node_id):
+                stats["leaf_nodes"] += 1
+            else:
+                stats["internal_nodes"] += 1
+            
+            depths.append(node_meta["level"])
+        
+        stats["avg_depth"] = np.mean(depths) if depths else 0
+        
+        return stats
+    
+    # ========================================================================================
+    # ADDITIONAL CLUSTERING ALGORITHMS
+    # ========================================================================================
+    
+    def _property_clustering_advanced(self, space: Any) -> List[Dict[str, Any]]:
+        """Advanced property-based clustering"""
+        clusters = []
+        concepts = list(space.concepts.items())
+        
+        # Build property vectors
+        all_props = set()
+        for _, concept in concepts:
+            all_props.update(concept.get("properties", {}).keys())
+        
+        prop_list = list(all_props)
+        
+        # Create binary property matrix
+        property_matrix = []
+        for _, concept in concepts:
+            props = concept.get("properties", {})
+            vector = [1 if prop in props else 0 for prop in prop_list]
+            property_matrix.append(vector)
+        
+        if not property_matrix:
+            return clusters
+        
+        # Cluster using property patterns
+        property_matrix = np.array(property_matrix)
+        
+        # Find concepts with similar property patterns
+        similarity_threshold = 0.7
+        clustered = set()
+        
+        for i in range(len(concepts)):
+            if i in clustered:
+                continue
+            
+            cluster = {
+                "members": [concepts[i][0]],
+                "size": 1,
+                "type": "property_based",
+                "common_properties": []
+            }
+            clustered.add(i)
+            
+            for j in range(i + 1, len(concepts)):
+                if j in clustered:
+                    continue
+                
+                # Calculate property similarity
+                if len(prop_list) > 0:
+                    similarity = np.dot(property_matrix[i], property_matrix[j]) / len(prop_list)
+                    
+                    if similarity >= similarity_threshold:
+                        cluster["members"].append(concepts[j][0])
+                        cluster["size"] += 1
+                        clustered.add(j)
+            
+            if cluster["size"] >= 3:
+                # Find common properties
+                common_props = []
+                for prop_idx, prop in enumerate(prop_list):
+                    if all(property_matrix[concepts.index((cid, space.concepts[cid]))][prop_idx] 
+                          for cid in cluster["members"] if cid in space.concepts):
+                        common_props.append(prop)
+                
+                cluster["common_properties"] = common_props
+                clusters.append(cluster)
+        
+        return clusters
+    
+    def _relational_clustering(self, space: Any) -> List[Dict[str, Any]]:
+        """Cluster based on relational patterns"""
+        clusters = []
+        
+        # Build relation patterns for each concept
+        relation_patterns = defaultdict(lambda: defaultdict(int))
+        
+        for relation in space.relations:
+            source = relation.get("source")
+            target = relation.get("target")
+            rel_type = relation.get("relation_type", "unknown")
+            
+            relation_patterns[source][f"out_{rel_type}"] += 1
+            relation_patterns[target][f"in_{rel_type}"] += 1
+        
+        # Convert to vectors
+        all_patterns = set()
+        for patterns in relation_patterns.values():
+            all_patterns.update(patterns.keys())
+        
+        pattern_list = list(all_patterns)
+        concepts = list(relation_patterns.keys())
+        
+        # Create pattern matrix
+        pattern_matrix = []
+        for concept in concepts:
+            patterns = relation_patterns[concept]
+            vector = [patterns.get(pat, 0) for pat in pattern_list]
+            pattern_matrix.append(vector)
+        
+        if not pattern_matrix:
+            return clusters
+        
+        # Normalize vectors
+        pattern_matrix = np.array(pattern_matrix)
+        norms = np.linalg.norm(pattern_matrix, axis=1)
+        pattern_matrix = pattern_matrix / (norms[:, np.newaxis] + 1e-10)
+        
+        # Cluster using cosine similarity
+        similarity_threshold = 0.8
+        clustered = set()
+        
+        for i in range(len(concepts)):
+            if i in clustered:
+                continue
+            
+            cluster = {
+                "members": [concepts[i]],
+                "size": 1,
+                "type": "relational",
+                "pattern": pattern_matrix[i].tolist()
+            }
+            clustered.add(i)
+            
+            for j in range(i + 1, len(concepts)):
+                if j in clustered:
+                    continue
+                
+                # Cosine similarity
+                similarity = np.dot(pattern_matrix[i], pattern_matrix[j])
+                
+                if similarity >= similarity_threshold:
+                    cluster["members"].append(concepts[j])
+                    cluster["size"] += 1
+                    clustered.add(j)
+            
+            if cluster["size"] >= 3:
+                clusters.append(cluster)
+        
+        return clusters
+    
+    def _hierarchical_clustering(self, space: Any) -> List[Dict[str, Any]]:
+        """Hierarchical agglomerative clustering"""
+        clusters = []
+        concepts = list(space.concepts.keys())
+        
+        if len(concepts) < 3:
+            return clusters
+        
+        # Build distance matrix
+        n = len(concepts)
+        distance_matrix = np.zeros((n, n))
+        
+        for i in range(n):
+            for j in range(i + 1, n):
+                similarity = self._calculate_comprehensive_similarity(
+                    space.concepts[concepts[i]], 
+                    space.concepts[concepts[j]]
+                )
+                distance = 1 - similarity
+                distance_matrix[i, j] = distance
+                distance_matrix[j, i] = distance
+        
+        # Simple agglomerative clustering
+        active_clusters = [{i} for i in range(n)]
+        cluster_distances = distance_matrix.copy()
+        
+        while len(active_clusters) > 1:
+            # Find closest clusters
+            min_dist = np.inf
+            merge_i, merge_j = -1, -1
+            
+            for i in range(len(active_clusters)):
+                for j in range(i + 1, len(active_clusters)):
+                    # Average linkage
+                    dist = np.mean([
+                        cluster_distances[ci, cj]
+                        for ci in active_clusters[i]
+                        for cj in active_clusters[j]
+                    ])
+                    
+                    if dist < min_dist:
+                        min_dist = dist
+                        merge_i, merge_j = i, j
+            
+            if min_dist > 0.7:  # Stop if clusters too far apart
+                break
+            
+            # Merge clusters
+            new_cluster = active_clusters[merge_i].union(active_clusters[merge_j])
+            active_clusters = [c for i, c in enumerate(active_clusters) 
+                              if i not in [merge_i, merge_j]]
+            active_clusters.append(new_cluster)
+            
+            # Record cluster if size appropriate
+            if 3 <= len(new_cluster) <= len(concepts) * 0.5:
+                clusters.append({
+                    "members": [concepts[i] for i in new_cluster],
+                    "size": len(new_cluster),
+                    "type": "hierarchical",
+                    "merge_distance": min_dist
+                })
+        
+        return clusters
+    
+    def _advanced_cluster_merging(self, *cluster_lists, space: Any) -> List[Dict[str, Any]]:
+        """Merge clusters from different algorithms intelligently"""
+        all_clusters = []
+        for cl in cluster_lists:
+            all_clusters.extend(cl)
+        
+        if not all_clusters:
+            return []
+        
+        # Build cluster similarity matrix
+        n = len(all_clusters)
+        similarity_matrix = np.zeros((n, n))
+        
+        for i in range(n):
+            for j in range(i + 1, n):
+                members1 = set(all_clusters[i]["members"])
+                members2 = set(all_clusters[j]["members"])
+                
+                # Jaccard similarity of members
+                if members1 or members2:
+                    similarity = len(members1.intersection(members2)) / len(members1.union(members2))
+                    similarity_matrix[i, j] = similarity
+                    similarity_matrix[j, i] = similarity
+        
+        # Merge similar clusters
+        merged = []
+        used = set()
+        
+        for i in range(n):
+            if i in used:
+                continue
+            
+            # Find all similar clusters
+            similar = [i]
+            for j in range(n):
+                if j != i and j not in used and similarity_matrix[i, j] > 0.5:
+                    similar.append(j)
+                    used.add(j)
+            
+            # Merge
+            merged_cluster = {
+                "members": list(set().union(*[set(all_clusters[idx]["members"]) for idx in similar])),
+                "size": 0,
+                "type": "merged",
+                "source_types": list(set(all_clusters[idx]["type"] for idx in similar)),
+                "merge_count": len(similar)
+            }
+            
+            merged_cluster["size"] = len(merged_cluster["members"])
+            
+            if merged_cluster["size"] >= 3:
+                merged.append(merged_cluster)
+        
+        return merged
+    
+    def _calculate_cluster_quality_metrics(self, cluster: Dict[str, Any], space: Any) -> Dict[str, Any]:
+        """Calculate comprehensive quality metrics for a cluster"""
+        metrics = {
+            "cohesion": 0.0,
+            "separation": 0.0,
+            "stability": 0.0,
+            "coverage": 0.0,
+            "overall_quality": 0.0
+        }
+        
+        members = cluster["members"]
+        if len(members) < 2:
+            return metrics
+        
+        # Cohesion: average pairwise similarity within cluster
+        cohesion_scores = []
+        for i, member1 in enumerate(members):
+            for member2 in members[i+1:]:
+                if member1 in space.concepts and member2 in space.concepts:
+                    sim = self._calculate_comprehensive_similarity(
+                        space.concepts[member1], space.concepts[member2]
+                    )
+                    cohesion_scores.append(sim)
+        
+        metrics["cohesion"] = np.mean(cohesion_scores) if cohesion_scores else 0
+        
+        # Separation: average distance to non-cluster members
+        non_members = [c for c in space.concepts if c not in members]
+        if non_members:
+            separation_scores = []
+            for member in members:
+                for non_member in non_members[:10]:  # Sample for efficiency
+                    if member in space.concepts and non_member in space.concepts:
+                        sim = self._calculate_comprehensive_similarity(
+                            space.concepts[member], space.concepts[non_member]
+                        )
+                        separation_scores.append(1 - sim)
+            
+            metrics["separation"] = np.mean(separation_scores) if separation_scores else 0
+        
+        # Stability: based on cluster type and size
+        if cluster["type"] in ["semantic", "property_based"]:
+            metrics["stability"] = 0.8
+        elif cluster["type"] == "density":
+            metrics["stability"] = 0.7
+        else:
+            metrics["stability"] = 0.6
+        
+        # Coverage
+        metrics["coverage"] = len(members) / len(space.concepts) if space.concepts else 0
+        
+        # Overall quality
+        metrics["overall_quality"] = np.mean([
+            metrics["cohesion"],
+            metrics["separation"],
+            metrics["stability"],
+            min(metrics["coverage"] * 5, 1.0)  # Normalize coverage
+        ])
+        
+        return metrics
+    
+    def _identify_cluster_characteristics(self, cluster: Dict[str, Any], space: Any) -> Dict[str, Any]:
+        """Identify key characteristics of a cluster"""
+        chars = {
+            "dominant_properties": [],
+            "common_patterns": [],
+            "cluster_role": "unknown",
+            "key_concepts": []
+        }
+        
+        members = cluster["members"]
+        
+        # Find dominant properties
+        property_counts = defaultdict(int)
+        for member in members:
+            if member in space.concepts:
+                for prop in space.concepts[member].get("properties", {}):
+                    property_counts[prop] += 1
+        
+        # Properties in >70% of members
+        threshold = len(members) * 0.7
+        chars["dominant_properties"] = [
+            prop for prop, count in property_counts.items() 
+            if count >= threshold
+        ]
+        
+        # Identify cluster role
+        if cluster["type"] == "hierarchical":
+            chars["cluster_role"] = "taxonomic_group"
+        elif cluster["type"] == "semantic":
+            chars["cluster_role"] = "semantic_category"
+        elif cluster["type"] == "relational":
+            chars["cluster_role"] = "functional_group"
+        
+        # Key concepts (most connected within cluster)
+        connection_counts = defaultdict(int)
+        for relation in space.relations:
+            if relation["source"] in members and relation["target"] in members:
+                connection_counts[relation["source"]] += 1
+                connection_counts[relation["target"]] += 1
+        
+        # Top 3 most connected
+        chars["key_concepts"] = [
+            k for k, v in sorted(connection_counts.items(), 
+                               key=lambda x: x[1], reverse=True)[:3]
+        ]
+        
+        return chars
+    
+    def _find_cluster_exemplars(self, cluster: Dict[str, Any], space: Any) -> List[str]:
+        """Find exemplar concepts that best represent the cluster"""
+        members = cluster["members"]
+        if len(members) <= 3:
+            return members
+        
+        exemplars = []
+        
+        # Method 1: Centrality-based exemplar
+        centrality_scores = {}
+        for member in members:
+            if member in space.concepts:
+                # Calculate average similarity to other members
+                similarities = []
+                for other in members:
+                    if other != member and other in space.concepts:
+                        sim = self._calculate_comprehensive_similarity(
+                            space.concepts[member], space.concepts[other]
+                        )
+                        similarities.append(sim)
+                
+                centrality_scores[member] = np.mean(similarities) if similarities else 0
+        
+        # Top 3 by centrality
+        central_exemplars = sorted(centrality_scores.items(), 
+                                  key=lambda x: x[1], reverse=True)[:3]
+        exemplars.extend([ex[0] for ex in central_exemplars])
+        
+        # Method 2: Coverage-based exemplar
+        # Find minimal set that covers all major properties
+        if cluster.get("dominant_properties"):
+            covered_props = set()
+            coverage_exemplars = []
+            
+            for member in members:
+                if member in space.concepts:
+                    member_props = set(space.concepts[member].get("properties", {}).keys())
+                    new_props = member_props - covered_props
+                    
+                    if new_props:
+                        coverage_exemplars.append(member)
+                        covered_props.update(member_props)
+                        
+                        if len(coverage_exemplars) >= 2:
+                            break
+            
+            exemplars.extend(coverage_exemplars)
+        
+        # Remove duplicates while preserving order
+        seen = set()
+        unique_exemplars = []
+        for ex in exemplars:
+            if ex not in seen:
+                seen.add(ex)
+                unique_exemplars.append(ex)
+        
+        return unique_exemplars[:3]
+    
+    def _detect_sub_clusters(self, cluster: Dict[str, Any], space: Any) -> List[Dict[str, Any]]:
+        """Detect sub-clusters within a larger cluster"""
+        members = cluster["members"]
+        if len(members) < 6:  # Too small to have meaningful sub-clusters
+            return []
+        
+        # Build similarity matrix for cluster members
+        member_indices = {member: i for i, member in enumerate(members)}
+        n = len(members)
+        similarity_matrix = np.zeros((n, n))
+        
+        for i, member1 in enumerate(members):
+            for j, member2 in enumerate(members[i+1:], i+1):
+                if member1 in space.concepts and member2 in space.concepts:
+                    sim = self._calculate_comprehensive_similarity(
+                        space.concepts[member1], space.concepts[member2]
+                    )
+                    similarity_matrix[i, j] = sim
+                    similarity_matrix[j, i] = sim
+        
+        # Apply clustering to find sub-groups
+        sub_clusters = []
+        threshold = 0.8  # Higher threshold for sub-clusters
+        clustered = set()
+        
+        for i in range(n):
+            if i in clustered:
+                continue
+            
+            sub_cluster = {
+                "members": [members[i]],
+                "parent_cluster": cluster.get("id", "unknown")
+            }
+            clustered.add(i)
+            
+            for j in range(n):
+                if j not in clustered and similarity_matrix[i, j] >= threshold:
+                    sub_cluster["members"].append(members[j])
+                    clustered.add(j)
+            
+            if len(sub_cluster["members"]) >= 3:
+                sub_cluster["size"] = len(sub_cluster["members"])
+                sub_clusters.append(sub_cluster)
+        
+        return sub_clusters
+    
+    # ========================================================================================
+    # PATH FINDING HELPER METHODS
+    # ========================================================================================
+    
+    async def _similarity_heuristic(self, current: str, goal: str, concepts: Dict[str, Any]) -> float:
+        """Heuristic function for A* search based on similarity"""
+        if current == goal:
+            return 0.0
+        
+        if current not in concepts or goal not in concepts:
+            return 1.0
+        
+        similarity = await self._calculate_comprehensive_similarity(
+            concepts[current], concepts[goal]
+        )
+        
+        # Convert similarity to distance
+        return 1.0 - similarity
+    
+    async def _get_similarity_neighbors(self, node: str, concepts: Dict[str, Any], 
+                                      top_k: int = 5) -> List[Tuple[str, float]]:
+        """Get top-k most similar neighbors"""
+        if node not in concepts:
+            return []
+        
+        neighbors = []
+        node_concept = concepts[node]
+        
+        for other_id, other_concept in concepts.items():
+            if other_id != node:
+                similarity = await self._calculate_comprehensive_similarity(
+                    node_concept, other_concept
+                )
+                neighbors.append((other_id, similarity))
+        
+        # Sort by similarity and return top-k
+        neighbors.sort(key=lambda x: x[1], reverse=True)
+        return neighbors[:top_k]
+    
+    async def _identify_concept_clusters(self, concepts: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+        """Identify concept clusters for path finding"""
+        # Simplified clustering for path finding
+        clusters = {}
+        cluster_id = 0
+        
+        # Use property-based clustering
+        clustered = set()
+        
+        for concept_id, concept in concepts.items():
+            if concept_id in clustered:
+                continue
+            
+            # Start new cluster
+            cluster = {
+                "id": f"cluster_{cluster_id}",
+                "members": [concept_id],
+                "center": concept_id,
+                "properties": set(concept.get("properties", {}).keys())
+            }
+            clustered.add(concept_id)
+            
+            # Find similar concepts
+            for other_id, other_concept in concepts.items():
+                if other_id in clustered:
+                    continue
+                
+                other_props = set(other_concept.get("properties", {}).keys())
+                if cluster["properties"] and other_props:
+                    overlap = len(cluster["properties"].intersection(other_props))
+                    union = len(cluster["properties"].union(other_props))
+                    
+                    if union > 0 and overlap / union > 0.6:
+                        cluster["members"].append(other_id)
+                        clustered.add(other_id)
+            
+            if len(cluster["members"]) >= 2:
+                clusters[cluster["id"]] = cluster
+                cluster_id += 1
+        
+        return clusters
+    
+    async def _find_intra_cluster_path(self, start: str, end: str, 
+                                     cluster: Dict[str, Any], 
+                                     concepts: Dict[str, Any]) -> Optional[List[str]]:
+        """Find path within a cluster"""
+        members = cluster["members"]
+        
+        if start not in members or end not in members:
+            return None
+        
+        # For small clusters, try direct path
+        if len(members) <= 5:
+            return [start, end]
+        
+        # Find intermediate node with high similarity to both
+        best_intermediate = None
+        best_score = 0.0
+        
+        for member in members:
+            if member not in [start, end]:
+                score1 = await self._calculate_comprehensive_similarity(
+                    concepts[start], concepts[member]
+                )
+                score2 = await self._calculate_comprehensive_similarity(
+                    concepts[member], concepts[end]
+                )
+                
+                combined_score = (score1 * score2) ** 0.5
+                
+                if combined_score > best_score:
+                    best_score = combined_score
+                    best_intermediate = member
+        
+        if best_intermediate and best_score > 0.5:
+            return [start, best_intermediate, end]
+        
+        return [start, end]
+    
+    async def _find_cluster_bridges(self, cluster1_id: str, cluster2_id: str, 
+                                  clusters: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Find bridge nodes between clusters"""
+        bridges = []
+        
+        cluster1 = clusters.get(cluster1_id, {})
+        cluster2 = clusters.get(cluster2_id, {})
+        
+        if not cluster1 or not cluster2:
+            return bridges
+        
+        # Find nodes with properties from both clusters
+        props1 = cluster1.get("properties", set())
+        props2 = cluster2.get("properties", set())
+        
+        # Look for concepts that bridge the property gap
+        common_props = props1.intersection(props2)
+        unique_props1 = props1 - props2
+        unique_props2 = props2 - props1
+        
+        # Create synthetic bridge description
+        bridges.append({
+            "type": "property_bridge",
+            "common_properties": list(common_props),
+            "bridges_from": list(unique_props1)[:3],
+            "bridges_to": list(unique_props2)[:3]
+        })
+        
+        return bridges
+    
+    async def _construct_cluster_bridge_path(self, start: str, end: str, 
+                                           bridge: Dict[str, Any],
+                                           start_cluster: str, end_cluster: str,
+                                           clusters: Dict[str, Dict[str, Any]],
+                                           concepts: Dict[str, Any]) -> Optional[List[str]]:
+        """Construct path using cluster bridge"""
+        # Find exit point from start cluster
+        start_cluster_members = clusters[start_cluster]["members"]
+        exit_point = start
+        
+        # Find entry point to end cluster
+        end_cluster_members = clusters[end_cluster]["members"]
+        entry_point = end
+        
+        # Look for better exit/entry points based on bridge properties
+        if bridge["type"] == "property_bridge":
+            # Find member of start cluster with most bridge properties
+            best_exit_score = 0
+            for member in start_cluster_members:
+                if member in concepts:
+                    member_props = set(concepts[member].get("properties", {}).keys())
+                    score = len(member_props.intersection(set(bridge["common_properties"])))
+                    
+                    if score > best_exit_score:
+                        best_exit_score = score
+                        exit_point = member
+            
+            # Find member of end cluster with most bridge properties
+            best_entry_score = 0
+            for member in end_cluster_members:
+                if member in concepts:
+                    member_props = set(concepts[member].get("properties", {}).keys())
+                    score = len(member_props.intersection(set(bridge["common_properties"])))
+                    
+                    if score > best_entry_score:
+                        best_entry_score = score
+                        entry_point = member
+        
+        # Construct path
+        path = [start]
+        if start != exit_point:
+            path.append(exit_point)
+        if exit_point != entry_point:
+            path.append(entry_point)
+        if entry_point != end:
+            path.append(end)
+        
+        return path
+    
+    async def _find_concept_analogies(self, start: str, end: str, 
+                                    concepts: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Find analogical relationships between concepts"""
+        analogies = []
+        
+        if start not in concepts or end not in concepts:
+            return analogies
+        
+        start_concept = concepts[start]
+        end_concept = concepts[end]
+        
+        # Type 1: Proportional analogy (A:B :: C:D)
+        # Find concepts with similar property relationships
+        start_props = set(start_concept.get("properties", {}).keys())
+        end_props = set(end_concept.get("properties", {}).keys())
+        
+        prop_diff = start_props.symmetric_difference(end_props)
+        
+        if prop_diff:
+            # Look for other concept pairs with similar differences
+            for concept1_id, concept1 in concepts.items():
+                if concept1_id in [start, end]:
+                    continue
+                
+                props1 = set(concept1.get("properties", {}).keys())
+                
+                for concept2_id, concept2 in concepts.items():
+                    if concept2_id in [start, end, concept1_id]:
+                        continue
+                    
+                    props2 = set(concept2.get("properties", {}).keys())
+                    diff2 = props1.symmetric_difference(props2)
+                    
+                    if len(diff2) > 0 and len(prop_diff.intersection(diff2)) / len(prop_diff) > 0.6:
+                        analogies.append({
+                            "type": "proportional",
+                            "intermediate1": concept1_id,
+                            "intermediate2": concept2_id,
+                            "similarity": len(prop_diff.intersection(diff2)) / len(prop_diff)
+                        })
+        
+        # Type 2: Structural analogy
+        # Find concepts that share structural patterns
+        if start_props and end_props:
+            pattern_similarity = len(start_props.intersection(end_props)) / len(start_props.union(end_props))
+            
+            if pattern_similarity > 0.3 and pattern_similarity < 0.7:
+                # Find intermediate concepts that bridge the gap
+                mapping_nodes = []
+                
+                for concept_id, concept in concepts.items():
+                    if concept_id in [start, end]:
+                        continue
+                    
+                    props = set(concept.get("properties", {}).keys())
+                    
+                    # Check if it shares properties with both
+                    start_overlap = len(props.intersection(start_props))
+                    end_overlap = len(props.intersection(end_props))
+                    
+                    if start_overlap > 0 and end_overlap > 0:
+                        mapping_nodes.append(concept_id)
+                
+                if mapping_nodes:
+                    analogies.append({
+                        "type": "structural",
+                        "mapping_nodes": mapping_nodes[:3],
+                        "pattern_similarity": pattern_similarity
+                    })
+        
+        # Type 3: Functional analogy
+        # Based on property patterns suggesting similar functions
+        functional_patterns = {
+            "input_output": {"input", "output", "process"},
+            "container": {"contains", "capacity", "items"},
+            "controller": {"controls", "regulates", "monitors"}
+        }
+        
+        for pattern_name, pattern_props in functional_patterns.items():
+            start_match = len(start_props.intersection(pattern_props)) / len(pattern_props)
+            end_match = len(end_props.intersection(pattern_props)) / len(pattern_props)
+            
+            if start_match > 0.5 and end_match > 0.5:
+                # Find a concept that exemplifies this function
+                for concept_id, concept in concepts.items():
+                    if concept_id in [start, end]:
+                        continue
+                    
+                    props = set(concept.get("properties", {}).keys())
+                    match = len(props.intersection(pattern_props)) / len(pattern_props)
+                    
+                    if match > 0.8:
+                        analogies.append({
+                            "type": "functional",
+                            "function_node": concept_id,
+                            "function_type": pattern_name
+                        })
+                        break
+        
+        # Sort by quality
+        analogies.sort(key=lambda x: x.get("similarity", 0.5), reverse=True)
+        
+        return analogies[:5]
+    
+    def _validate_analogy_path(self, path: List[str], concepts: Dict[str, Any]) -> bool:
+        """Validate that an analogy-based path is reasonable"""
+        if len(path) < 2:
+            return False
+        
+        # Check that all nodes exist
+        for node in path:
+            if node not in concepts:
+                return False
+        
+        # Check that consecutive nodes have some similarity
+        for i in range(len(path) - 1):
+            concept1 = concepts[path[i]]
+            concept2 = concepts[path[i + 1]]
+            
+            # They should share at least some properties
+            props1 = set(concept1.get("properties", {}).keys())
+            props2 = set(concept2.get("properties", {}).keys())
+            
+            if props1 and props2 and not props1.intersection(props2):
+                return False
+        
+        return True
+    
+    def _deduplicate_paths(self, paths: List[List[str]]) -> List[List[str]]:
+        """Remove duplicate paths"""
+        unique_paths = []
+        seen = set()
+        
+        for path in paths:
+            path_tuple = tuple(path)
+            if path_tuple not in seen:
+                seen.add(path_tuple)
+                unique_paths.append(path)
+        
+        return unique_paths
+    
+    def _score_similarity_path(self, path: List[str], concepts: Dict[str, Any]) -> float:
+        """Score a similarity path based on quality"""
+        if len(path) < 2:
+            return 0.0
+        
+        scores = []
+        
+        # Score based on consecutive similarities
+        for i in range(len(path) - 1):
+            if path[i] in concepts and path[i + 1] in concepts:
+                sim = self._calculate_comprehensive_similarity(
+                    concepts[path[i]], concepts[path[i + 1]]
+                )
+                scores.append(sim)
+        
+        if not scores:
+            return 0.0
+        
+        # Penalize longer paths
+        length_penalty = 1.0 / (1 + len(path) - 2)
+        
+        # Combine average similarity with length penalty
+        return np.mean(scores) * length_penalty
+    
+    # ========================================================================================
+    # PATTERN EXTRACTION AND ANALYSIS METHODS
+    # ========================================================================================
+    
+    def _extract_goal_from_input(self, user_input: str) -> str:
+        """Extract goal from user input"""
+        # Remove question words
+        question_words = ["how", "what", "why", "when", "where", "who", "can", "could", "would", "should"]
+        
+        words = user_input.lower().split()
+        filtered_words = [w for w in words if w not in question_words]
+        
+        # Look for goal indicators
+        goal_indicators = ["to", "want", "need", "goal", "objective", "aim", "purpose"]
+        
+        for i, word in enumerate(filtered_words):
+            if word in goal_indicators and i < len(filtered_words) - 1:
+                # Return everything after the indicator
+                return " ".join(filtered_words[i+1:])
+        
+        # Default: return cleaned input
+        return " ".join(filtered_words)
+    
+    def _identify_source_domain(self, user_input: str) -> str:
+        """Identify source domain from user input"""
+        input_lower = user_input.lower()
+        
+        # Domain keywords
+        domains = {
+            "biology": ["organism", "cell", "evolution", "species", "ecosystem"],
+            "physics": ["force", "energy", "motion", "wave", "particle"],
+            "chemistry": ["reaction", "molecule", "compound", "element", "bond"],
+            "psychology": ["mind", "behavior", "emotion", "cognition", "personality"],
+            "economics": ["market", "supply", "demand", "price", "trade"],
+            "technology": ["system", "algorithm", "data", "network", "software"],
+            "sociology": ["society", "culture", "group", "community", "social"]
+        }
+        
+        domain_scores = {}
+        
+        for domain, keywords in domains.items():
+            score = sum(1 for keyword in keywords if keyword in input_lower)
+            if score > 0:
+                domain_scores[domain] = score
+        
+        if domain_scores:
+            return max(domain_scores.items(), key=lambda x: x[1])[0]
+        
+        return "general"
+    
+    def _extract_concrete_patterns(self, user_input: str, source_domain: str) -> List[Dict[str, Any]]:
+        """Extract concrete patterns from input"""
+        patterns = []
+        
+        # Extract entities and their relationships
+        sentences = user_input.split('.')
+        
+        for sentence in sentences:
+            if len(sentence.strip()) < 10:
+                continue
+            
+            # Simple entity extraction (would use NLP in production)
+            nouns = []
+            verbs = []
+            
+            words = sentence.split()
+            for i, word in enumerate(words):
+                word_lower = word.lower().strip('.,!?')
+                
+                # Simple heuristics for nouns and verbs
+                if i == 0 or words[i-1].lower() in ["the", "a", "an"]:
+                    nouns.append(word_lower)
+                elif word_lower.endswith("ing") or word_lower.endswith("ed"):
+                    verbs.append(word_lower)
+            
+            if nouns and verbs:
+                patterns.append({
+                    "description": sentence.strip(),
+                    "elements": nouns,
+                    "relationships": verbs,
+                    "level": "concrete",
+                    "domain": source_domain
+                })
+        
+        return patterns
+    
+    def _extract_abstract_patterns(self, user_input: str, source_domain: str) -> List[Dict[str, Any]]:
+        """Extract abstract patterns from input"""
+        patterns = []
+        
+        # Abstract pattern indicators
+        abstract_indicators = {
+            "causation": ["causes", "leads to", "results in", "produces", "affects"],
+            "correlation": ["relates to", "associated with", "linked to", "connected to"],
+            "transformation": ["becomes", "transforms", "changes into", "evolves"],
+            "hierarchy": ["consists of", "contains", "includes", "part of", "type of"],
+            "flow": ["flows", "moves", "transfers", "passes", "propagates"]
+        }
+        
+        input_lower = user_input.lower()
+        
+        for pattern_type, indicators in abstract_indicators.items():
+            for indicator in indicators:
+                if indicator in input_lower:
+                    # Extract context around indicator
+                    index = input_lower.find(indicator)
+                    start = max(0, index - 50)
+                    end = min(len(input_lower), index + 50)
+                    context = user_input[start:end]
+                    
+                    patterns.append({
+                        "description": context,
+                        "pattern_type": pattern_type,
+                        "indicator": indicator,
+                        "level": "abstract",
+                        "domain": source_domain,
+                        "elements": self._extract_pattern_elements(context, pattern_type)
+                    })
+        
+        return patterns
+    
+    def _extract_meta_patterns(self, user_input: str, source_domain: str) -> List[Dict[str, Any]]:
+        """Extract meta-level patterns from input"""
+        patterns = []
+        
+        # Meta-pattern types
+        meta_patterns = {
+            "feedback_loop": ["feedback", "reinforces", "amplifies", "dampens", "stabilizes"],
+            "emergence": ["emerges", "arises from", "self-organizes", "spontaneous"],
+            "optimization": ["optimizes", "maximizes", "minimizes", "balances", "efficient"],
+            "adaptation": ["adapts", "evolves", "learns", "adjusts", "responds"],
+            "network_effect": ["network", "connections", "interactions", "spreads", "propagates"]
+        }
+        
+        input_lower = user_input.lower()
+        
+        for pattern_name, keywords in meta_patterns.items():
+            if any(keyword in input_lower for keyword in keywords):
+                patterns.append({
+                    "description": f"Meta-pattern: {pattern_name}",
+                    "pattern_type": pattern_name,
+                    "level": "meta",
+                    "domain": source_domain,
+                    "characteristics": self._get_meta_pattern_characteristics(pattern_name),
+                    "elements": []
+                })
+        
+        return patterns
+    
+    def _extract_pattern_elements(self, context: str, pattern_type: str) -> List[str]:
+        """Extract elements involved in a pattern"""
+        elements = []
+        
+        # Pattern-specific extraction rules
+        if pattern_type == "causation":
+            # Look for cause and effect
+            parts = context.split("causes")
+            if len(parts) == 2:
+                elements.extend(["cause: " + parts[0].strip(), "effect: " + parts[1].strip()])
+        
+        elif pattern_type == "hierarchy":
+            # Look for parent and children
+            if "contains" in context:
+                parts = context.split("contains")
+                if len(parts) == 2:
+                    elements.extend(["parent: " + parts[0].strip(), "children: " + parts[1].strip()])
+        
+        # Default: extract nouns
+        if not elements:
+            words = context.split()
+            for word in words:
+                if word[0].isupper() and len(word) > 2:
+                    elements.append(word)
+        
+        return elements[:5]  # Limit to 5 elements
+    
+    def _get_meta_pattern_characteristics(self, pattern_name: str) -> Dict[str, Any]:
+        """Get characteristics of meta-patterns"""
+        characteristics = {
+            "feedback_loop": {
+                "dynamics": "circular_causality",
+                "stability": "variable",
+                "time_scale": "continuous"
+            },
+            "emergence": {
+                "dynamics": "bottom_up",
+                "predictability": "low",
+                "complexity": "high"
+            },
+            "optimization": {
+                "dynamics": "goal_seeking",
+                "constraints": "present",
+                "trade_offs": "likely"
+            },
+            "adaptation": {
+                "dynamics": "responsive",
+                "learning": "present",
+                "flexibility": "high"
+            },
+            "network_effect": {
+                "dynamics": "multiplicative",
+                "scaling": "non_linear",
+                "connectivity": "critical"
+            }
+        }
+        
+        return characteristics.get(pattern_name, {})
+    
+    def _analyze_pattern_structure(self, pattern: Dict[str, Any]) -> Dict[str, Any]:
+        """Analyze the structure of a pattern"""
+        structure = {
+            "complexity": "simple",
+            "components": len(pattern.get("elements", [])),
+            "relationships": len(pattern.get("relationships", [])),
+            "abstraction_level": pattern.get("level", "unknown"),
+            "pattern_type": pattern.get("pattern_type", "generic")
+        }
+        
+        # Assess complexity
+        total_components = structure["components"] + structure["relationships"]
+        if total_components > 5:
+            structure["complexity"] = "complex"
+        elif total_components > 2:
+            structure["complexity"] = "moderate"
+        
+        # Identify structure type
+        if pattern.get("pattern_type") == "hierarchy":
+            structure["structure_type"] = "tree"
+        elif pattern.get("pattern_type") == "flow":
+            structure["structure_type"] = "directed_graph"
+        elif pattern.get("pattern_type") == "network_effect":
+            structure["structure_type"] = "network"
+        else:
+            structure["structure_type"] = "generic"
+        
+        return structure
+    
+    def _assess_pattern_transferability(self, pattern: Dict[str, Any]) -> float:
+        """Assess how transferable a pattern is to other domains"""
+        transferability = 0.5  # Base score
+        
+        # More abstract patterns are more transferable
+        if pattern.get("level") == "meta":
+            transferability += 0.3
+        elif pattern.get("level") == "abstract":
+            transferability += 0.2
+        
+        # Generic patterns are more transferable
+        pattern_type = pattern.get("pattern_type", "")
+        universal_patterns = ["causation", "hierarchy", "flow", "feedback_loop", "optimization"]
+        
+        if pattern_type in universal_patterns:
+            transferability += 0.2
+        
+        # Patterns with fewer domain-specific elements are more transferable
+        elements = pattern.get("elements", [])
+        domain = pattern.get("domain", "")
+        
+        domain_specific_count = sum(1 for elem in elements if domain in str(elem).lower())
+        if domain_specific_count == 0:
+            transferability += 0.1
+        elif domain_specific_count > len(elements) / 2:
+            transferability -= 0.2
+        
+        return min(1.0, max(0.0, transferability))
+    
+    def _extract_pattern_insights(self, pattern: Dict[str, Any]) -> List[str]:
+        """Extract key insights from a pattern"""
+        insights = []
+        
+        pattern_type = pattern.get("pattern_type", "")
+        level = pattern.get("level", "")
+        
+        # Level-specific insights
+        if level == "meta":
+            insights.append(f"This represents a {pattern_type} meta-pattern that appears across many systems")
+        elif level == "abstract":
+            insights.append(f"Abstract {pattern_type} relationship that can be instantiated in various ways")
+        
+        # Pattern-specific insights
+        if pattern_type == "causation":
+            insights.append("Causal relationship suggests intervention opportunities")
+        elif pattern_type == "feedback_loop":
+            insights.append("Feedback dynamics can lead to amplification or stabilization")
+        elif pattern_type == "hierarchy":
+            insights.append("Hierarchical structure enables decomposition and aggregation")
+        elif pattern_type == "emergence":
+            insights.append("Emergent properties arise from component interactions")
+        
+        # Transferability insight
+        transferability = self._assess_pattern_transferability(pattern)
+        if transferability > 0.7:
+            insights.append("Highly transferable pattern applicable across domains")
+        elif transferability < 0.3:
+            insights.append("Domain-specific pattern with limited transferability")
+        
+        return insights
+    
+    # ========================================================================================
+    # TARGET MAPPING METHODS
+    # ========================================================================================
+    
+    def _identify_target_domain(self, context: Dict[str, Any], source_domain: str) -> str:
+        """Identify target domain for analogical reasoning"""
+        user_input = context.get("user_input", "").lower()
+        
+        # Look for explicit domain transitions
+        transition_phrases = ["like in", "similar to", "as in", "compared to", "analogous to"]
+        
+        for phrase in transition_phrases:
+            if phrase in user_input:
+                index = user_input.find(phrase)
+                after_phrase = user_input[index + len(phrase):].strip()
+                
+                # Extract domain from what follows
+                words = after_phrase.split()[:3]  # Look at first few words
+                potential_domain = " ".join(words)
+                
+                # Check against known domains
+                domains = ["biology", "physics", "chemistry", "psychology", "economics", 
+                          "technology", "sociology", "business", "nature", "engineering"]
+                
+                for domain in domains:
+                    if domain in potential_domain:
+                        return domain
+        
+        # If no explicit target, choose complementary domain
+        domain_complements = {
+            "biology": "technology",
+            "technology": "biology",
+            "physics": "economics",
+            "economics": "physics",
+            "psychology": "sociology",
+            "sociology": "psychology"
+        }
+        
+        return domain_complements.get(source_domain, "general")
+    
+    def _extract_target_elements(self, context: Dict[str, Any], target_domain: str) -> List[Dict[str, Any]]:
+        """Extract elements from target domain"""
+        elements = []
+        
+        # Domain-specific element templates
+        domain_elements = {
+            "technology": ["system", "component", "interface", "data", "process", "user", "network"],
+            "biology": ["organism", "cell", "gene", "protein", "ecosystem", "species", "function"],
+            "economics": ["market", "agent", "resource", "price", "supply", "demand", "utility"],
+            "physics": ["particle", "force", "energy", "field", "wave", "mass", "motion"],
+            "psychology": ["mind", "behavior", "emotion", "memory", "perception", "learning", "motivation"],
+            "business": ["company", "product", "customer", "revenue", "strategy", "competition", "innovation"]
+        }
+        
+        # Get relevant elements for target domain
+        relevant_elements = domain_elements.get(target_domain, ["entity", "property", "relation", "process"])
+        
+        # Create element structures
+        for i, elem_type in enumerate(relevant_elements[:5]):
+            elements.append({
+                "id": f"{target_domain}_{elem_type}_{i}",
+                "type": elem_type,
+                "domain": target_domain,
+                "properties": self._get_element_properties(elem_type, target_domain)
+            })
+        
+        return elements
+    
+    def _get_element_properties(self, elem_type: str, domain: str) -> Dict[str, Any]:
+        """Get typical properties for an element type in a domain"""
+        # Simplified property assignment
+        properties = {
+            "domain": domain,
+            "type": elem_type
+        }
+        
+        # Add domain-specific properties
+        if domain == "technology" and elem_type == "system":
+            properties.update({
+                "complexity": "high",
+                "components": "multiple",
+                "interfaces": "defined"
+            })
+        elif domain == "biology" and elem_type == "organism":
+            properties.update({
+                "living": True,
+                "reproduces": True,
+                "evolves": True
+            })
+        
+        return properties
+    
+    def _calculate_mapping_score(self, source_elem: Any, target_elem: Dict[str, Any],
+                               source_pattern: Dict[str, Any], target_domain: str) -> float:
+        """Calculate mapping score between source and target elements"""
+        score = 0.0
+        
+        # Type compatibility
+        if isinstance(source_elem, dict):
+            source_type = source_elem.get("type", "")
+            target_type = target_elem.get("type", "")
+            
+            # Check for functional similarity
+            type_mappings = {
+                ("cause", "input"): 0.8,
+                ("effect", "output"): 0.8,
+                ("parent", "system"): 0.7,
+                ("children", "component"): 0.7,
+                ("flow", "process"): 0.8
+            }
+            
+            for (s_type, t_type), mapping_score in type_mappings.items():
+                if s_type in source_type and t_type in target_type:
+                    score += mapping_score
+        
+        # Structural similarity
+        if source_pattern.get("pattern_type") == "hierarchy" and "system" in target_elem.get("type", ""):
+            score += 0.3
+        elif source_pattern.get("pattern_type") == "flow" and "process" in target_elem.get("type", ""):
+            score += 0.3
+        
+        # Abstract property matching
+        if source_pattern.get("level") in ["abstract", "meta"]:
+            score += 0.2  # Abstract patterns map more easily
+        
+        return min(1.0, score)
+    
+    def _determine_mapping_type(self, source_elem: Any, target_elem: Dict[str, Any]) -> str:
+        """Determine the type of mapping between elements"""
+        if isinstance(source_elem, str):
+            # Simple string mapping
+            if "cause" in source_elem and "input" in target_elem.get("type", ""):
+                return "causal_to_functional"
+            elif "effect" in source_elem and "output" in target_elem.get("type", ""):
+                return "result_mapping"
+        
+        # Default mapping types
+        source_type = source_elem.get("type", "") if isinstance(source_elem, dict) else str(source_elem)
+        target_type = target_elem.get("type", "")
+        
+        if source_type == target_type:
+            return "direct_correspondence"
+        elif "parent" in source_type and "system" in target_type:
+            return "hierarchical_mapping"
+        else:
+            return "analogical_mapping"
+    
+    def _calculate_mapping_confidence(self, mapping_score: float, 
+                                    source_elem: Any, target_elem: Dict[str, Any]) -> float:
+        """Calculate confidence in a mapping"""
+        confidence = mapping_score  # Start with mapping score
+        
+        # Boost confidence for clear mappings
+        if mapping_score > 0.8:
+            confidence *= 1.1
+        
+        # Reduce confidence for ambiguous mappings
+        if isinstance(source_elem, str) and len(source_elem) < 10:
+            confidence *= 0.9  # Short descriptions are less reliable
+        
+        # Domain expertise factor (simplified)
+        confidence *= 0.85  # Assume moderate domain expertise
+        
+        return min(1.0, confidence)
+    
+    def _map_relationships(self, source_relationships: List[Any], 
+                         target_elements: List[Dict[str, Any]], 
+                         element_mappings: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Map relationships from source to target"""
+        relationship_mappings = []
+        
+        # Create element mapping lookup
+        mapping_lookup = {}
+        for mapping in element_mappings:
+            source = mapping.get("source_element")
+            target = mapping.get("target_element")
+            if isinstance(source, dict):
+                source_key = source.get("id", str(source))
+            else:
+                source_key = str(source)
+            mapping_lookup[source_key] = target
+        
+        # Map each relationship
+        for rel in source_relationships[:5]:  # Limit for efficiency
+            if isinstance(rel, str):
+                # Simple relationship
+                rel_mapping = {
+                    "source_relationship": rel,
+                    "mapped_relationship": self._map_relationship_type(rel),
+                    "confidence": 0.7
+                }
+                relationship_mappings.append(rel_mapping)
+            elif isinstance(rel, dict):
+                # Complex relationship
+                source_node = rel.get("source")
+                target_node = rel.get("target")
+                rel_type = rel.get("type", "relates_to")
+                
+                # Try to find mapped elements
+                mapped_source = mapping_lookup.get(source_node)
+                mapped_target = mapping_lookup.get(target_node)
+                
+                if mapped_source and mapped_target:
+                    rel_mapping = {
+                        "source_relationship": rel,
+                        "mapped_relationship": {
+                            "source": mapped_source,
+                            "target": mapped_target,
+                            "type": self._map_relationship_type(rel_type)
+                        },
+                        "confidence": 0.8
+                    }
+                    relationship_mappings.append(rel_mapping)
+        
+        return relationship_mappings
+    
+    def _map_relationship_type(self, rel_type: str) -> str:
+        """Map relationship type to target domain"""
+        # Relationship type mappings
+        mappings = {
+            "causes": "triggers",
+            "leads_to": "results_in",
+            "contains": "includes",
+            "part_of": "component_of",
+            "flows_to": "transfers_to",
+            "depends_on": "requires",
+            "transforms": "processes"
+        }
+        
+        return mappings.get(rel_type, rel_type)
+    
+    def _validate_mapping_consistency(self, element_mappings: List[Dict[str, Any]], 
+                                    relationship_mappings: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Validate consistency of mappings"""
+        validation = {
+            "is_valid": True,
+            "consistency_score": 1.0,
+            "issues": []
+        }
+        
+        # Check element mapping coverage
+        if len(element_mappings) < 2:
+            validation["issues"].append("Insufficient element mappings")
+            validation["consistency_score"] *= 0.7
+        
+        # Check relationship preservation
+        if len(relationship_mappings) == 0 and len(element_mappings) > 2:
+            validation["issues"].append("No relationships mapped despite multiple elements")
+            validation["consistency_score"] *= 0.8
+        
+        # Check mapping confidence distribution
+        confidences = [m.get("confidence", 0.5) for m in element_mappings]
+        if confidences:
+            avg_confidence = np.mean(confidences)
+            if avg_confidence < 0.5:
+                validation["issues"].append("Low average mapping confidence")
+                validation["consistency_score"] *= 0.6
+                validation["is_valid"] = False
+        
+        # Check for orphaned elements
+        mapped_elements = set()
+        for rel in relationship_mappings:
+            if isinstance(rel.get("mapped_relationship"), dict):
+                mapped_elements.add(rel["mapped_relationship"].get("source"))
+                mapped_elements.add(rel["mapped_relationship"].get("target"))
+        
+        orphaned_count = len(element_mappings) - len(mapped_elements)
+        if orphaned_count > len(element_mappings) / 2:
+            validation["issues"].append("Many mapped elements not used in relationships")
+            validation["consistency_score"] *= 0.85
+        
+        return validation
+    
+    def _calculate_overall_mapping_quality(self, element_mappings: List[Dict[str, Any]], 
+                                         relationship_mappings: List[Dict[str, Any]]) -> float:
+        """Calculate overall quality of mapping"""
+        if not element_mappings:
+            return 0.0
+        
+        # Element mapping quality
+        element_scores = [m.get("similarity", 0) * m.get("confidence", 1) 
+                         for m in element_mappings]
+        element_quality = np.mean(element_scores) if element_scores else 0
+        
+        # Relationship mapping quality
+        rel_scores = [m.get("confidence", 0.5) for m in relationship_mappings]
+        rel_quality = np.mean(rel_scores) if rel_scores else 0
+        
+        # Coverage quality
+        coverage = len(element_mappings) / 10  # Normalize to expected ~10 elements
+        coverage_quality = min(1.0, coverage)
+        
+        # Combine with weights
+        quality = (0.4 * element_quality + 
+                   0.3 * rel_quality + 
+                   0.3 * coverage_quality)
+        
+        return quality
+    
+    def _generate_mapping_insights(self, source_pattern: Dict[str, Any], 
+                                 mappings: List[Dict[str, Any]], 
+                                 target_domain: str) -> List[str]:
+        """Generate insights from the mapping"""
+        insights = []
+        
+        # Pattern transfer insight
+        pattern_type = source_pattern.get("pattern_type", "generic")
+        insights.append(f"The {pattern_type} pattern from {source_pattern.get('domain', 'source')} "
+                       f"can be applied to {target_domain} through analogical mapping")
+        
+        # Mapping strength insight
+        if len(mappings) > 5:
+            insights.append("Strong mapping with multiple correspondence points identified")
+        elif len(mappings) > 2:
+            insights.append("Moderate mapping with key elements successfully transferred")
+        else:
+            insights.append("Weak mapping - consider alternative source patterns")
+        
+        # Application suggestions
+        if pattern_type == "causation":
+            insights.append(f"Causal relationships in {target_domain} can be analyzed using this mapping")
+        elif pattern_type == "hierarchy":
+            insights.append(f"Hierarchical structure suggests decomposition opportunities in {target_domain}")
+        elif pattern_type == "flow":
+            insights.append(f"Flow patterns indicate process optimization potential in {target_domain}")
+        
+        return insights
+    
+    # ========================================================================================
+    # CUSTOM ACTION EXECUTION METHODS
+    # ========================================================================================
+    
+    async def _execute_custom_generation(self, action: str, params: Dict, 
+                                       context: Dict, results: Dict) -> Dict[str, Any]:
+        """Execute custom generation actions"""
+        generation_type = action.split("_", 2)[2] if len(action.split("_")) > 2 else "general"
+        
+        result = {
+            "action": action,
+            "status": "completed",
+            "outputs": {},
+            "metadata": {"generation_type": generation_type}
+        }
+        
+        if generation_type == "hypothesis":
+            # Generate hypotheses
+            hypotheses = self._generate_hypotheses(params, context, results)
+            result["outputs"] = {
+                "hypotheses": hypotheses,
+                "count": len(hypotheses)
+            }
+        
+        elif generation_type == "solution":
+            # Generate solutions
+            solutions = self._generate_solutions(params, context, results)
+            result["outputs"] = {
+                "solutions": solutions,
+                "count": len(solutions)
+            }
+        
+        elif generation_type == "question":
+            # Generate questions
+            questions = self._generate_questions(params, context, results)
+            result["outputs"] = {
+                "questions": questions,
+                "count": len(questions)
+            }
+        
+        return result
+    
+    async def _execute_custom_evaluation(self, action: str, params: Dict, 
+                                       context: Dict, results: Dict) -> Dict[str, Any]:
+        """Execute custom evaluation actions"""
+        evaluation_type = action.split("_", 2)[2] if len(action.split("_")) > 2 else "general"
+        
+        result = {
+            "action": action,
+            "status": "completed",
+            "outputs": {},
+            "metadata": {"evaluation_type": evaluation_type}
+        }
+        
+        target = params.get("target", results)
+        
+        if evaluation_type == "feasibility":
+            feasibility = self._evaluate_feasibility(target, context)
+            result["outputs"] = feasibility
+        
+        elif evaluation_type == "quality":
+            quality = self._evaluate_quality(target, context)
+            result["outputs"] = quality
+        
+        elif evaluation_type == "impact":
+            impact = self._evaluate_impact(target, context)
+            result["outputs"] = impact
+        
+        return result
+    
+    async def _execute_custom_transformation(self, action: str, params: Dict, 
+                                           context: Dict, results: Dict) -> Dict[str, Any]:
+        """Execute custom transformation actions"""
+        transformation_type = action.split("_", 2)[2] if len(action.split("_")) > 2 else "general"
+        
+        result = {
+            "action": action,
+            "status": "completed",
+            "outputs": {},
+            "metadata": {"transformation_type": transformation_type}
+        }
+        
+        input_data = params.get("input", results)
+        
+        if transformation_type == "abstract":
+            # Transform to abstract representation
+            abstracted = self._transform_to_abstract(input_data)
+            result["outputs"] = {"abstracted": abstracted}
+        
+        elif transformation_type == "concrete":
+            # Transform to concrete representation
+            concrete = self._transform_to_concrete(input_data)
+            result["outputs"] = {"concrete": concrete}
+        
+        elif transformation_type == "structured":
+            # Transform to structured format
+            structured = self._transform_to_structured(input_data)
+            result["outputs"] = {"structured": structured}
+        
+        return result
+    
+    async def _execute_generic_custom(self, action: str, params: Dict, 
+                                    context: Dict, results: Dict) -> Dict[str, Any]:
+        """Execute generic custom actions"""
+        return {
+            "action": action,
+            "status": "completed",
+            "outputs": {
+                "message": f"Executed custom action: {action}",
+                "params_received": list(params.keys()),
+                "context_available": bool(context),
+                "previous_results": bool(results)
+            },
+            "metadata": {"action_type": "generic_custom"}
+        }
+    
+    # ========================================================================================
+    # ANALYSIS HELPER METHODS
+    # ========================================================================================
+    
+    def _analyze_sentiment_detailed(self, text: str) -> Dict[str, Any]:
+        """Detailed sentiment analysis"""
+        sentiment = {
+            "polarity": "neutral",
+            "score": 0.0,
+            "confidence": 0.5,
+            "emotions": {},
+            "aspects": []
+        }
+        
+        text_lower = text.lower()
+        
+        # Sentiment indicators
+        positive_words = ["good", "great", "excellent", "amazing", "wonderful", "positive", 
+                         "success", "achieve", "improve", "benefit", "opportunity"]
+        negative_words = ["bad", "poor", "terrible", "awful", "negative", "fail", 
+                         "problem", "issue", "difficult", "challenge", "risk"]
+        
+        # Count sentiment words
+        positive_count = sum(1 for word in positive_words if word in text_lower)
+        negative_count = sum(1 for word in negative_words if word in text_lower)
+        
+        # Calculate polarity
+        if positive_count > negative_count:
+            sentiment["polarity"] = "positive"
+            sentiment["score"] = min(1.0, positive_count / 10)
+        elif negative_count > positive_count:
+            sentiment["polarity"] = "negative"
+            sentiment["score"] = -min(1.0, negative_count / 10)
+        
+        # Emotion detection
+        emotion_indicators = {
+            "joy": ["happy", "joy", "excited", "delighted"],
+            "anger": ["angry", "frustrated", "annoyed", "furious"],
+            "fear": ["afraid", "scared", "worried", "anxious"],
+            "sadness": ["sad", "depressed", "disappointed", "unhappy"],
+            "surprise": ["surprised", "amazed", "astonished", "unexpected"]
+        }
+        
+        for emotion, indicators in emotion_indicators.items():
+            count = sum(1 for ind in indicators if ind in text_lower)
+            if count > 0:
+                sentiment["emotions"][emotion] = min(1.0, count / 3)
+        
+        # Confidence based on clarity of sentiment
+        total_sentiment_words = positive_count + negative_count
+        if total_sentiment_words > 5:
+            sentiment["confidence"] = 0.9
+        elif total_sentiment_words > 2:
+            sentiment["confidence"] = 0.7
+        else:
+            sentiment["confidence"] = 0.4
+        
+        return sentiment
+    
+    def _analyze_complexity_detailed(self, target: str) -> Dict[str, Any]:
+        """Detailed complexity analysis"""
+        complexity = {
+            "score": 0.3,  # Base complexity
+            "factors": [],
+            "level": "low"
+        }
+        
+        # Length factor
+        word_count = len(target.split())
+        if word_count > 50:
+            complexity["score"] += 0.2
+            complexity["factors"].append("high_word_count")
+        elif word_count > 20:
+            complexity["score"] += 0.1
+            complexity["factors"].append("moderate_word_count")
+        
+        # Structural complexity
+        if any(conj in target.lower() for conj in ["and", "or", "but", "while", "although"]):
+            complexity["score"] += 0.1
+            complexity["factors"].append("multiple_clauses")
+        
+        # Technical terms
+        technical_indicators = ["algorithm", "system", "process", "mechanism", "framework",
+                              "architecture", "protocol", "interface", "implementation"]
+        tech_count = sum(1 for term in technical_indicators if term in target.lower())
+        if tech_count > 2:
+            complexity["score"] += 0.2
+            complexity["factors"].append("technical_content")
+        
+        # Nested structures
+        if target.count("(") > 1 or target.count("[") > 1:
+            complexity["score"] += 0.1
+            complexity["factors"].append("nested_structures")
+        
+        # Determine level
+        if complexity["score"] > 0.7:
+            complexity["level"] = "high"
+        elif complexity["score"] > 0.4:
+            complexity["level"] = "medium"
+        else:
+            complexity["level"] = "low"
+        
+        return complexity
+    
+    def _analyze_opportunities(self, situation: Dict[str, Any], results: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Analyze opportunities in a situation"""
+        opportunities = []
+        
+        # Generic opportunity patterns
+        opportunity_patterns = [
+            {
+                "trigger": "gap",
+                "description": "Gap between current and desired state",
+                "action": "Bridge the gap with targeted intervention"
+            },
+            {
+                "trigger": "inefficiency",
+                "description": "Inefficient process identified",
+                "action": "Optimize for better resource utilization"
+            },
+            {
+                "trigger": "unmet_need",
+                "description": "Unmet need in the system",
+                "action": "Develop solution to address need"
+            },
+            {
+                "trigger": "emerging_trend",
+                "description": "Emerging trend detected",
+                "action": "Position to capitalize on trend"
+            }
+        ]
+        
+        # Check for opportunity triggers
+        situation_str = str(situation).lower()
+        
+        for pattern in opportunity_patterns:
+            if pattern["trigger"] in situation_str or len(opportunities) < 2:
+                opportunities.append({
+                    "type": pattern["trigger"],
+                    "description": pattern["description"],
+                    "recommended_action": pattern["action"],
+                    "confidence": 0.7,
+                    "potential_impact": "moderate"
+                })
+        
+        return opportunities
+    
+    def _calculate_opportunity_score(self, opportunities: List[Dict[str, Any]]) -> float:
+        """Calculate overall opportunity score"""
+        if not opportunities:
+            return 0.0
+        
+        scores = []
+        for opp in opportunities:
+            base_score = opp.get("confidence", 0.5)
+            
+            # Adjust for impact
+            impact = opp.get("potential_impact", "moderate")
+            if impact == "high":
+                base_score *= 1.3
+            elif impact == "low":
+                base_score *= 0.7
+            
+            scores.append(base_score)
+        
+        return np.mean(scores) if scores else 0.0
+    
+    def _recommend_opportunity_actions(self, opportunities: List[Dict[str, Any]]) -> List[Dict[str, str]]:
+        """Recommend actions based on opportunities"""
+        recommendations = []
+        
+        # Sort by confidence
+        sorted_opps = sorted(opportunities, 
+                            key=lambda x: x.get("confidence", 0.5), 
+                            reverse=True)
+        
+        for i, opp in enumerate(sorted_opps[:3]):  # Top 3
+            rec = {
+                "priority": f"P{i+1}",
+                "opportunity": opp["type"],
+                "action": opp["recommended_action"],
+                "reasoning": f"High confidence ({opp.get('confidence', 0.5):.2f}) opportunity",
+                "timeline": "short-term" if i == 0 else "medium-term"
+            }
+            recommendations.append(rec)
+        
+        return recommendations
+    
+    # ========================================================================================
+    # GENERATION HELPER METHODS
+    # ========================================================================================
+    
+    def _generate_hypotheses(self, params: Dict, context: Dict, results: Dict) -> List[Dict[str, Any]]:
+        """Generate hypotheses based on context and results"""
+        hypotheses = []
+        
+        # Extract relevant information
+        domain = context.get("domain", "general")
+        topic = params.get("topic", context.get("user_input", ""))
+        
+        # Hypothesis templates
+        templates = [
+            "If {condition}, then {outcome} due to {mechanism}",
+            "{factor} influences {target} through {pathway}",
+            "The relationship between {var1} and {var2} is mediated by {mediator}",
+            "{cause} leads to {effect} under {conditions}"
+        ]
+        
+        # Generate domain-specific hypotheses
+        if domain == "science":
+            hypotheses.extend([
+                {
+                    "hypothesis": "Increased temperature accelerates reaction rate through enhanced molecular kinetics",
+                    "testable": True,
+                    "variables": ["temperature", "reaction_rate"],
+                    "mechanism": "molecular_kinetics"
+                },
+                {
+                    "hypothesis": "System complexity emerges from simple rule interactions",
+                    "testable": True,
+                    "variables": ["rule_complexity", "system_behavior"],
+                    "mechanism": "emergence"
+                }
+            ])
+        
+        # Generate context-specific hypotheses
+        if "causal" in str(results).lower():
+            hypotheses.append({
+                "hypothesis": "The observed causal relationship is strengthened by feedback loops",
+                "testable": True,
+                "variables": ["causal_strength", "feedback_presence"],
+                "mechanism": "reinforcement"
+            })
+        
+        # Ensure minimum hypotheses
+        while len(hypotheses) < 3:
+            hypotheses.append({
+                "hypothesis": f"Factor X influences outcome Y through mechanism Z (hypothesis {len(hypotheses)+1})",
+                "testable": True,
+                "variables": ["factor_x", "outcome_y"],
+                "mechanism": "unknown"
+            })
+        
+        return hypotheses
+    
+    def _generate_solutions(self, params: Dict, context: Dict, results: Dict) -> List[Dict[str, Any]]:
+        """Generate solution options"""
+        solutions = []
+        
+        problem = params.get("problem", context.get("user_input", ""))
+        constraints = context.get("constraints", [])
+        
+        # Solution generation strategies
+        strategies = [
+            {
+                "approach": "direct",
+                "description": "Address the problem directly",
+                "pros": ["Simple", "Fast"],
+                "cons": ["May miss root cause"]
+            },
+            {
+                "approach": "systematic",
+                "description": "Break down and solve systematically",
+                "pros": ["Thorough", "Scalable"],
+                "cons": ["Time-consuming"]
+            },
+            {
+                "approach": "innovative",
+                "description": "Apply creative problem-solving",
+                "pros": ["Novel solutions", "Breakthrough potential"],
+                "cons": ["Higher risk"]
+            }
+        ]
+        
+        for strategy in strategies:
+            solution = {
+                "approach": strategy["approach"],
+                "description": strategy["description"],
+                "implementation_steps": self._generate_implementation_steps(strategy["approach"]),
+                "pros": strategy["pros"],
+                "cons": strategy["cons"],
+                "feasibility": self._assess_solution_feasibility(strategy, constraints),
+                "estimated_effort": self._estimate_solution_effort(strategy["approach"])
+            }
+            solutions.append(solution)
+        
+        return solutions
+    
+    def _generate_questions(self, params: Dict, context: Dict, results: Dict) -> List[Dict[str, Any]]:
+        """Generate insightful questions"""
+        questions = []
+        
+        topic = params.get("topic", context.get("user_input", ""))
+        question_type = params.get("type", "exploratory")
+        
+        # Question templates by type
+        if question_type == "exploratory":
+            question_templates = [
+                "What factors influence {topic}?",
+                "How does {topic} change over time?",
+                "What are the boundaries of {topic}?",
+                "What assumptions underlie {topic}?"
+            ]
+        elif question_type == "analytical":
+            question_templates = [
+                "What patterns exist in {topic}?",
+                "How do components of {topic} interact?",
+                "What causes variation in {topic}?",
+                "What predicts {topic} outcomes?"
+            ]
+        elif question_type == "evaluative":
+            question_templates = [
+                "How effective is {topic}?",
+                "What are the strengths and weaknesses of {topic}?",
+                "How does {topic} compare to alternatives?",
+                "What improvements could be made to {topic}?"
+            ]
+        else:
+            question_templates = [
+                "What is the nature of {topic}?",
+                "Why is {topic} important?",
+                "How can {topic} be measured?",
+                "What are the implications of {topic}?"
+            ]
+        
+        # Generate questions
+        for i, template in enumerate(question_templates[:4]):
+            questions.append({
+                "question": template.format(topic=topic),
+                "type": question_type,
+                "priority": "high" if i < 2 else "medium",
+                "follow_ups": self._generate_follow_up_questions(template, topic)
+            })
+        
+        return questions
+    
+    def _generate_implementation_steps(self, approach: str) -> List[str]:
+        """Generate implementation steps for a solution approach"""
+        steps_map = {
+            "direct": [
+                "Identify the immediate issue",
+                "Apply targeted intervention",
+                "Monitor results",
+                "Adjust as needed"
+            ],
+            "systematic": [
+                "Analyze problem structure",
+                "Decompose into sub-problems",
+                "Solve sub-problems sequentially",
+                "Integrate solutions",
+                "Validate complete solution"
+            ],
+            "innovative": [
+                "Challenge assumptions",
+                "Generate creative alternatives",
+                "Prototype solutions",
+                "Test and iterate",
+                "Scale successful approach"
+            ]
+        }
+        
+        return steps_map.get(approach, ["Define", "Plan", "Execute", "Review"])
+    
+    def _assess_solution_feasibility(self, strategy: Dict[str, Any], 
+                                   constraints: List[str]) -> float:
+        """Assess feasibility of a solution strategy"""
+        feasibility = 0.8  # Base feasibility
+        
+        # Check constraints
+        if "limited_resources" in constraints:
+            if strategy["approach"] == "systematic":
+                feasibility -= 0.2  # Resource intensive
+        
+        if "time_critical" in constraints:
+            if strategy["approach"] == "innovative":
+                feasibility -= 0.3  # Takes time to develop
+        
+        if "low_risk" in constraints:
+            if strategy["approach"] == "innovative":
+                feasibility -= 0.2  # Higher risk
+        
+        return max(0.1, feasibility)
+    
+    def _estimate_solution_effort(self, approach: str) -> str:
+        """Estimate effort required for solution approach"""
+        effort_map = {
+            "direct": "low",
+            "systematic": "high",
+            "innovative": "medium-high"
+        }
+        
+        return effort_map.get(approach, "medium")
+    
+    def _generate_follow_up_questions(self, template: str, topic: str) -> List[str]:
+        """Generate follow-up questions"""
+        follow_ups = []
+        
+        if "factors" in template:
+            follow_ups.extend([
+                f"Which factors are most influential for {topic}?",
+                f"How do these factors interact?"
+            ])
+        elif "patterns" in template:
+            follow_ups.extend([
+                f"Are these patterns consistent across contexts?",
+                f"What drives these patterns?"
+            ])
+        elif "effective" in template:
+            follow_ups.extend([
+                f"How is effectiveness measured?",
+                f"What are the success criteria?"
+            ])
+        
+        return follow_ups[:2]
+    
+    # ========================================================================================
+    # EVALUATION HELPER METHODS  
+    # ========================================================================================
+    
+    def _evaluate_feasibility(self, target: Any, context: Dict[str, Any]) -> Dict[str, Any]:
+        """Evaluate feasibility of a target"""
+        feasibility = {
+            "overall_score": 0.5,
+            "factors": {},
+            "risks": [],
+            "enablers": [],
+            "recommendation": ""
+        }
+        
+        # Evaluate different feasibility factors
+        factors = {
+            "technical": self._assess_technical_feasibility(target),
+            "resource": self._assess_resource_feasibility(target, context),
+            "temporal": self._assess_temporal_feasibility(target, context),
+            "organizational": self._assess_organizational_feasibility(target)
+        }
+        
+        feasibility["factors"] = factors
+        
+        # Calculate overall score
+        weights = {"technical": 0.3, "resource": 0.3, "temporal": 0.2, "organizational": 0.2}
+        feasibility["overall_score"] = sum(factors[k] * weights[k] for k in factors)
+        
+        # Identify risks and enablers
+        if factors["technical"] < 0.5:
+            feasibility["risks"].append("Technical complexity may pose challenges")
+        if factors["resource"] < 0.5:
+            feasibility["risks"].append("Resource constraints could limit implementation")
+        
+        if factors["technical"] > 0.7:
+            feasibility["enablers"].append("Strong technical foundation available")
+        if factors["organizational"] > 0.7:
+            feasibility["enablers"].append("Good organizational alignment")
+        
+        # Make recommendation
+        if feasibility["overall_score"] > 0.7:
+            feasibility["recommendation"] = "Highly feasible - proceed with confidence"
+        elif feasibility["overall_score"] > 0.5:
+            feasibility["recommendation"] = "Moderately feasible - proceed with risk mitigation"
+        else:
+            feasibility["recommendation"] = "Low feasibility - consider alternatives"
+        
+        return feasibility
+    
+    def _evaluate_quality(self, target: Any, context: Dict[str, Any]) -> Dict[str, Any]:
+        """Evaluate quality of a target"""
+        quality = {
+            "overall_score": 0.5,
+            "dimensions": {},
+            "strengths": [],
+            "improvements": []
+        }
+        
+        # Quality dimensions
+        dimensions = {
+            "completeness": self._assess_completeness(target),
+            "correctness": self._assess_correctness(target),
+            "clarity": self._assess_clarity(target),
+            "consistency": self._assess_consistency(target),
+            "relevance": self._assess_relevance(target, context)
+        }
+        
+        quality["dimensions"] = dimensions
+        
+        # Calculate overall score
+        quality["overall_score"] = np.mean(list(dimensions.values()))
+        
+        # Identify strengths and improvements
+        for dim, score in dimensions.items():
+            if score > 0.7:
+                quality["strengths"].append(f"High {dim}")
+            elif score < 0.5:
+                quality["improvements"].append(f"Improve {dim}")
+        
+        return quality
+    
+    def _evaluate_impact(self, target: Any, context: Dict[str, Any]) -> Dict[str, Any]:
+        """Evaluate potential impact"""
+        impact = {
+            "magnitude": "medium",
+            "scope": "moderate",
+            "duration": "medium-term",
+            "categories": {},
+            "overall_assessment": ""
+        }
+        
+        # Assess different impact categories
+        categories = {
+            "direct": 0.6,  # Direct impact score
+            "indirect": 0.4,  # Indirect/ripple effects
+            "strategic": 0.5,  # Strategic value
+            "operational": 0.7   # Operational improvement
+        }
+        
+        impact["categories"] = categories
+        
+        # Determine magnitude
+        avg_impact = np.mean(list(categories.values()))
+        if avg_impact > 0.7:
+            impact["magnitude"] = "high"
+        elif avg_impact < 0.4:
+            impact["magnitude"] = "low"
+        
+        # Overall assessment
+        if impact["magnitude"] == "high":
+            impact["overall_assessment"] = "Significant positive impact expected"
+        elif impact["magnitude"] == "medium":
+            impact["overall_assessment"] = "Moderate positive impact likely"
+        else:
+            impact["overall_assessment"] = "Limited impact anticipated"
+        
+        return impact
+    
+    # ========================================================================================
+    # FEASIBILITY ASSESSMENT HELPER METHODS
+    # ========================================================================================
+    
+    def _assess_technical_feasibility(self, target: Any) -> float:
+        """Assess technical feasibility"""
+        # Simplified assessment
+        if isinstance(target, dict):
+            complexity = target.get("complexity", "medium")
+            if complexity == "low":
+                return 0.9
+            elif complexity == "high":
+                return 0.4
+        
+        return 0.6  # Default medium feasibility
+    
+    def _assess_resource_feasibility(self, target: Any, context: Dict[str, Any]) -> float:
+        """Assess resource feasibility"""
+        constraints = context.get("constraints", [])
+        
+        if "limited_resources" in constraints:
+            return 0.3
+        elif "abundant_resources" in constraints:
+            return 0.9
+        
+        return 0.6  # Default medium feasibility
+    
+    def _assess_temporal_feasibility(self, target: Any, context: Dict[str, Any]) -> float:
+        """Assess temporal feasibility"""
+        constraints = context.get("constraints", [])
+        
+        if "time_critical" in constraints or "urgent" in constraints:
+            return 0.4
+        elif "flexible_timeline" in constraints:
+            return 0.8
+        
+        return 0.6  # Default medium feasibility
+    
+    def _assess_organizational_feasibility(self, target: Any) -> float:
+        """Assess organizational feasibility"""
+        # Simplified assessment
+        if isinstance(target, dict):
+            if target.get("requires_change_management"):
+                return 0.4
+            elif target.get("aligns_with_culture"):
+                return 0.8
+        
+        return 0.6  # Default medium feasibility
+    
+    # ========================================================================================
+    # QUALITY ASSESSMENT HELPER METHODS
+    # ========================================================================================
+    
+    def _assess_completeness(self, target: Any) -> float:
+        """Assess completeness"""
+        if isinstance(target, dict):
+            required_fields = ["description", "approach", "implementation"]
+            present_fields = sum(1 for field in required_fields if field in target)
+            return present_fields / len(required_fields)
+        elif isinstance(target, list):
+            return min(1.0, len(target) / 5)  # Expect at least 5 items
+        
+        return 0.5
+    
+    def _assess_correctness(self, target: Any) -> float:
+        """Assess correctness"""
+        # Simplified assessment - in production would validate against rules
+        return 0.7  # Assume mostly correct
+    
+    def _assess_clarity(self, target: Any) -> float:
+        """Assess clarity"""
+        if isinstance(target, str):
+            # Check for clarity indicators
+            if len(target) > 200:  # Too long
+                return 0.4
+            elif len(target) < 20:  # Too short
+                return 0.3
+            else:
+                return 0.8
+        
+        return 0.6
+    
+    def _assess_consistency(self, target: Any) -> float:
+        """Assess consistency"""
+        # Check for internal consistency
+        if isinstance(target, dict):
+            # Check if related fields align
+            return 0.7  # Simplified
+        elif isinstance(target, list):
+            # Check if all items follow same format
+            if all(isinstance(item, type(target[0])) for item in target):
+                return 0.9
+        
+        return 0.6
+    
+    def _assess_relevance(self, target: Any, context: Dict[str, Any]) -> float:
+        """Assess relevance to context"""
+        # Check alignment with context
+        if context.get("domain"):
+            # Simplified relevance check
+            return 0.7
+        
+        return 0.5
+    
+    # ========================================================================================
+    # TRANSFORMATION HELPER METHODS
+    # ========================================================================================
+    
+    def _transform_to_abstract(self, input_data: Any) -> Dict[str, Any]:
+        """Transform data to abstract representation"""
+        abstract = {
+            "type": type(input_data).__name__,
+            "structure": "",
+            "patterns": [],
+            "properties": {}
+        }
+        
+        if isinstance(input_data, dict):
+            abstract["structure"] = "hierarchical"
+            abstract["properties"] = {
+                "depth": self._calculate_dict_depth(input_data),
+                "breadth": len(input_data),
+                "key_types": list(set(type(k).__name__ for k in input_data.keys()))
+            }
+        elif isinstance(input_data, list):
+            abstract["structure"] = "sequential"
+            abstract["properties"] = {
+                "length": len(input_data),
+                "homogeneous": len(set(type(item).__name__ for item in input_data)) == 1
+            }
+        elif isinstance(input_data, str):
+            abstract["structure"] = "textual"
+            abstract["properties"] = {
+                "length": len(input_data),
+                "words": len(input_data.split())
+            }
+        
+        return abstract
+    
+    def _transform_to_concrete(self, input_data: Any) -> Dict[str, Any]:
+        """Transform data to concrete representation"""
+        concrete = {
+            "examples": [],
+            "instances": [],
+            "specific_values": {}
+        }
+        
+        if isinstance(input_data, dict):
+            # Extract concrete examples
+            for key, value in list(input_data.items())[:3]:  # First 3 items
+                concrete["examples"].append({
+                    "key": key,
+                    "value": str(value)[:100],  # Truncate long values
+                    "type": type(value).__name__
+                })
+        elif isinstance(input_data, list):
+            concrete["instances"] = input_data[:5]  # First 5 items
+        
+        return concrete
+    
+    def _transform_to_structured(self, input_data: Any) -> Dict[str, Any]:
+        """Transform data to structured format"""
+        structured = {
+            "schema": {},
+            "data": {},
+            "metadata": {}
+        }
+        
+        if isinstance(input_data, dict):
+            # Extract schema
+            structured["schema"] = {
+                key: type(value).__name__ for key, value in input_data.items()
+            }
+            structured["data"] = input_data
+        elif isinstance(input_data, list):
+            # Convert to structured format
+            structured["schema"] = {"items": "array"}
+            structured["data"] = {"items": input_data}
+        else:
+            # Wrap in structure
+            structured["schema"] = {"value": type(input_data).__name__}
+            structured["data"] = {"value": input_data}
+        
+        structured["metadata"] = {
+            "transformed_at": datetime.now().isoformat(),
+            "original_type": type(input_data).__name__
+        }
+        
+        return structured
+    
+    def _calculate_dict_depth(self, d: Dict, current_depth: int = 0) -> int:
+        """Calculate maximum depth of nested dictionary"""
+        if not isinstance(d, dict):
+            return current_depth
+        
+        if not d:
+            return current_depth
+        
+        return max(self._calculate_dict_depth(v, current_depth + 1) 
+                   for v in d.values() if isinstance(v, dict))
+    
