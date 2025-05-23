@@ -436,12 +436,27 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             else:
                 self.memory_core = original_memory_core
             
-            self.memory_orchestrator = MemoryOrchestrator(self.user_id, self.conversation_id)
-            await self.memory_orchestrator.initialize()
+            original_memory_orchestrator = MemoryOrchestrator(self.user_id, self.conversation_id)
+            await original_memory_orchestrator.initialize()
+            
+            if self.use_a2a_integration:
+                from nyx.core.a2a.context_aware_memory_orchestrator import ContextAwareMemoryOrchestrator
+                self.memory_orchestrator = ContextAwareMemoryOrchestrator(original_memory_orchestrator)
+                logger.debug("Enhanced MemoryOrchestrator with A2A context distribution")
+            else:
+                self.memory_orchestrator = original_memory_orchestrator
             
             self.identity_evolution = IdentityEvolutionSystem(hormone_system=self.hormone_system)
-            self.knowledge_core = KnowledgeCoreAgents()
-            await self.knowledge_core.initialize()
+            
+            original_knowledge_core = KnowledgeCoreAgents()
+            await original_knowledge_core.initialize()
+            
+            if self.use_a2a_integration:
+                from nyx.core.a2a.context_aware_knowledge_core import ContextAwareKnowledgeCore
+                self.knowledge_core = ContextAwareKnowledgeCore(original_knowledge_core)
+                logger.debug("Enhanced KnowledgeCore with A2A context distribution")
+            else:
+                self.knowledge_core = original_knowledge_core
 
             if self.config.attentional_controller.enabled:
                 from nyx.core.attentional_controller import AttentionalController
