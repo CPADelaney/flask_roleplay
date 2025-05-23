@@ -1,9 +1,19 @@
 # nyx/core/a2a/context_aware_reasoning_core.py
 
-import logging
-from typing import Dict, List, Any, Optional, Set
+import numpy as np
+import torch
+from typing import Dict, List, Any, Set, Tuple, Optional
 from datetime import datetime
+import logging
+from collections import defaultdict
+import networkx as nx
+from sentence_transformers import SentenceTransformer
+import nltk
+from nltk.corpus import stopwords
+from sklearn.metrics.pairwise import cosine_similarity
+import spacy
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 
 from nyx.core.brain.integration_layer import ContextAwareModule
 from nyx.core.brain.context_distribution import SharedContext, ContextUpdate, ContextScope, ContextPriority
