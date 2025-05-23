@@ -7,6 +7,7 @@ import asyncpg # Use asyncpg
 from contextlib import asynccontextmanager
 from quart import Quart 
 from typing import Optional
+import pgvector.asyncpg as pgvector_asyncpg
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -99,9 +100,8 @@ async def get_db_connection_pool():
             raise ConnectionError("Could not initialize DB pool.")
     return DB_POOL
 
-
 @asynccontextmanager
-async def get_db_connection_context(timeout: Optional[float] = 30.0, app: Optional[Quart] = None): # <<< ADDED app: Optional[Quart] = None
+async def get_db_connection_context(timeout: Optional[float] = 30.0, app: Optional[Quart] = None):
     global DB_POOL
     current_pool_to_use: Optional[asyncpg.Pool] = None
 
@@ -112,17 +112,17 @@ async def get_db_connection_context(timeout: Optional[float] = 30.0, app: Option
     
     if current_pool_to_use is None:
         logger.warning(f"Process {os.getpid()}: DB pool not initialized. Attempting lazy init for get_db_connection_context.")
-        if not await initialize_connection_pool(app=app): # Pass app to lazy init too
+        if not await initialize_connection_pool(app=app):
             raise ConnectionError("DB pool unavailable and lazy init failed.")
-        # Re-fetch pool after lazy init
         current_pool_to_use = app.db_pool if app and hasattr(app, 'db_pool') else DB_POOL
-        if current_pool_to_use is None: # Still none
+        if current_pool_to_use is None:
             raise ConnectionError("DB pool is None even after lazy init attempt.")
 
     conn: Optional[asyncpg.Connection] = None
-    # ... (rest of get_db_connection_context as in previous good examples, using current_pool_to_use)
     try:
         conn = await asyncio.wait_for(current_pool_to_use.acquire(), timeout=timeout)
+        # 👇👇👇 ADD THIS LINE:
+        await pgvector_asyncpg.register_vector(conn)
         yield conn
     except asyncio.TimeoutError:
         logger.error(f"Timeout ({timeout}s) acquiring DB connection from pool.")
@@ -138,6 +138,7 @@ async def get_db_connection_context(timeout: Optional[float] = 30.0, app: Option
                 except Exception as close_err: logger.error(f"Error forcing close on {id(conn)}: {close_err}")
             except Exception as release_err:
                 logger.error(f"Error releasing conn {id(conn)}: {release_err}", exc_info=True)
+
 
 async def close_connection_pool(app: Optional[Quart] = None): # <<< ADDED app: Optional[Quart] = None
     """Closes the DB_POOL, preferentially using app.db_pool if app is provided."""
