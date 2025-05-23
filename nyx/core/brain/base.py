@@ -496,8 +496,31 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             else:
                 self.context_system = base_attention_system
             
-            self.reasoning_core = integrated_reasoning_agent
-            self.reasoning_triage_agent = reasoning_triage_agent
+            from nyx.core.reasoning_core import ReasoningCore
+            
+            # Create the original reasoning core instance
+            original_reasoning_core = ReasoningCore(knowledge_core=self.knowledge_core)
+            
+            # Wrap with context-aware version if A2A enabled
+            if self.use_a2a_integration:
+                from nyx.core.a2a.context_aware_reasoning_core import ContextAwareReasoningCore
+                self.reasoning_core = ContextAwareReasoningCore(original_reasoning_core)
+                logger.debug("Enhanced ReasoningCore with A2A context distribution")
+                
+                # Also wrap the agents
+                from nyx.core.a2a.context_aware_reasoning_agents import ContextAwareReasoningAgents
+                self.reasoning_agents = ContextAwareReasoningAgents(
+                    reasoning_triage_agent,
+                    integrated_reasoning_agent, 
+                    self.reasoning_core
+                )
+                logger.debug("Enhanced ReasoningAgents with A2A context distribution")
+                
+                # Set the integrated agent as the main reasoning interface
+                self.reasoning_core = self.reasoning_agents
+            else:
+                self.reasoning_core = integrated_reasoning_agent
+                self.reasoning_triage_agent = reasoning_triage_agent
             
             if self.use_a2a_integration:
                 from nyx.core.a2a.context_aware_internal_feedback_system import ContextAwareInternalFeedbackSystem
