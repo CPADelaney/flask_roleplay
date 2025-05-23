@@ -2728,49 +2728,6 @@ class ContextAwareReasoningCore(ContextAwareModule):
         
         return min(1.0, importance)
     
-    def _find_conceptual_gradients(self, space) -> List[Dict[str, Any]]:
-        """Enhanced conceptual gradient detection"""
-        gradients = []
-        analyzed_pairs = set()
-        
-        # Find concepts that could be endpoints
-        endpoint_candidates = self._identify_gradient_endpoints(space)
-        
-        for start_id, start_type in endpoint_candidates:
-            for end_id, end_type in endpoint_candidates:
-                if start_id == end_id or (start_id, end_id) in analyzed_pairs:
-                    continue
-                
-                analyzed_pairs.add((start_id, end_id))
-                analyzed_pairs.add((end_id, start_id))
-                
-                # Only look for gradients between different types
-                if start_type != end_type:
-                    # Find gradient path
-                    gradient_path = self._find_gradient_path(start_id, end_id, space)
-                    
-                    if gradient_path and len(gradient_path) >= 3:
-                        # Analyze gradient quality
-                        quality = self._analyze_gradient_quality(gradient_path, space)
-                        
-                        if quality["smoothness"] > 0.6:
-                            dimension = self._identify_gradient_dimension_advanced(
-                                gradient_path, space
-                            )
-                            
-                            gradients.append({
-                                "dimension": dimension,
-                                "start": space.concepts[start_id]["name"],
-                                "end": space.concepts[end_id]["name"],
-                                "path": [space.concepts[cid]["name"] for cid in gradient_path],
-                                "smoothness": quality["smoothness"],
-                                "monotonicity": quality["monotonicity"],
-                                "length": len(gradient_path),
-                                "gradient_type": self._classify_gradient_type(quality)
-                            })
-        
-        return gradients
-    
     def _identify_gradient_endpoints(self, space) -> List[Tuple[str, str]]:
         """Identify potential gradient endpoints"""
         endpoints = []
@@ -2882,46 +2839,47 @@ class ContextAwareReasoningCore(ContextAwareModule):
         return min(1.0, potential)
     
     def _find_conceptual_gradients(self, space) -> List[Dict[str, Any]]:
-        """Find smooth conceptual transitions (gradients) in the space"""
+        """Enhanced conceptual gradient detection"""
         gradients = []
+        analyzed_pairs = set()
         
-        # Look for chains of concepts with gradual property changes
-        for concept1_id, concept1 in space.concepts.items():
-            for concept2_id, concept2 in space.concepts.items():
-                if concept1_id == concept2_id:
+        # Find concepts that could be endpoints
+        endpoint_candidates = self._identify_gradient_endpoints(space)
+        
+        for start_id, start_type in endpoint_candidates:
+            for end_id, end_type in endpoint_candidates:
+                if start_id == end_id or (start_id, end_id) in analyzed_pairs:
                     continue
                 
-                # Find path between concepts
-                path = self._find_conceptual_path(concept1_id, concept2_id, space)
+                analyzed_pairs.add((start_id, end_id))
+                analyzed_pairs.add((end_id, start_id))
                 
-                if path and len(path) >= 3:
-                    # Assess gradient smoothness
-                    smoothness = self._assess_path_smoothness(path, space)
+                # Only look for gradients between different types
+                if start_type != end_type:
+                    # Find gradient path
+                    gradient_path = self._find_gradient_path(start_id, end_id, space)
                     
-                    if smoothness > 0.6:  # Smooth gradient threshold
-                        # Identify the dimension of change
-                        dimension = self._identify_gradient_dimension(path, space)
+                    if gradient_path and len(gradient_path) >= 3:
+                        # Analyze gradient quality
+                        quality = self._analyze_gradient_quality(gradient_path, space)
                         
-                        gradients.append({
-                            "dimension": dimension,
-                            "start": concept1["name"],
-                            "end": concept2["name"],
-                            "path": [space.concepts[cid]["name"] for cid in path],
-                            "smoothness": smoothness,
-                            "length": len(path)
-                        })
+                        if quality["smoothness"] > 0.6:
+                            dimension = self._identify_gradient_dimension_advanced(
+                                gradient_path, space
+                            )
+                            
+                            gradients.append({
+                                "dimension": dimension,
+                                "start": space.concepts[start_id]["name"],
+                                "end": space.concepts[end_id]["name"],
+                                "path": [space.concepts[cid]["name"] for cid in gradient_path],
+                                "smoothness": quality["smoothness"],
+                                "monotonicity": quality["monotonicity"],
+                                "length": len(gradient_path),
+                                "gradient_type": self._classify_gradient_type(quality)
+                            })
         
-        # Remove duplicate/reverse gradients
-        unique_gradients = []
-        seen_pairs = set()
-        
-        for gradient in gradients:
-            pair = tuple(sorted([gradient["start"], gradient["end"]]))
-            if pair not in seen_pairs:
-                seen_pairs.add(pair)
-                unique_gradients.append(gradient)
-        
-        return unique_gradients[:5]  # Limit to top 5 gradients
+        return gradients
     
     def _find_conceptual_path(self, start_id: str, end_id: str, space) -> List[str]:
         """Find a path between two concepts"""
