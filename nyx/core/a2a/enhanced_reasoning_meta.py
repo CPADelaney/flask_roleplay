@@ -852,22 +852,99 @@ class ExplanationGenerator:
         return f"{weakest_link} (strength: {weakest_strength:.2f})"
     
     def _generate_causal_example(self, start: str, end: str) -> str:
-        """Generate an example for causal relationship"""
-        # Domain-specific examples
-        examples = {
-            ("temperature", "ice"): "As temperature drops below 0°C, water turns to ice",
-            ("exercise", "health"): "Regular exercise improves cardiovascular health",
-            ("education", "income"): "Higher education often leads to increased earning potential",
-            ("stress", "performance"): "Moderate stress can enhance performance, but too much impairs it"
+        """Generate rich, context-aware examples for causal relationships"""
+        # Expanded example database with categories
+        example_database = {
+            # Climate/Environment
+            ("temperature", "ice"): "As temperature drops below 0°C, water molecules slow down and form crystalline structures, creating ice",
+            ("greenhouse gases", "temperature"): "CO2 and methane trap heat in atmosphere, causing global temperatures to rise (greenhouse effect)",
+            ("deforestation", "climate"): "Removing forests reduces CO2 absorption and alters local weather patterns, affecting regional climate",
+            
+            # Health/Medicine
+            ("exercise", "health"): "Regular aerobic exercise strengthens heart muscle, improves circulation, and releases endorphins for mental wellbeing",
+            ("stress", "immune system"): "Chronic stress elevates cortisol, suppressing T-cell function and making you more susceptible to illness",
+            ("sleep", "memory"): "During REM sleep, the brain consolidates memories by strengthening neural connections formed during the day",
+            ("diet", "energy"): "Balanced nutrition provides steady glucose levels, supporting consistent ATP production for cellular energy",
+            
+            # Psychology/Behavior
+            ("practice", "skill"): "Repeated practice creates stronger neural pathways through myelination, making actions more automatic and efficient",
+            ("reward", "motivation"): "Positive reinforcement triggers dopamine release, strengthening behavior-reward associations",
+            ("trauma", "behavior"): "Traumatic experiences can alter amygdala responses, leading to hypervigilance or avoidance behaviors",
+            
+            # Economics/Business
+            ("supply", "price"): "When supply decreases while demand remains constant, scarcity drives prices upward",
+            ("innovation", "productivity"): "New technologies automate tasks and optimize processes, increasing output per worker hour",
+            ("education", "income"): "Higher education provides specialized skills and networks, opening access to higher-paying positions",
+            
+            # Technology
+            ("data", "insights"): "Large datasets reveal patterns invisible at smaller scales through statistical analysis and machine learning",
+            ("automation", "efficiency"): "Automated systems eliminate human bottlenecks and operate 24/7, dramatically increasing throughput",
+            ("connectivity", "collaboration"): "High-speed networks enable real-time communication, allowing distributed teams to work seamlessly",
+            
+            # Social/Relationships
+            ("trust", "cooperation"): "When people trust each other, they're willing to take risks and share resources for mutual benefit",
+            ("communication", "understanding"): "Clear, empathetic communication reduces misinterpretations and builds shared mental models",
+            ("isolation", "depression"): "Social isolation reduces oxytocin and increases inflammation markers linked to depressive symptoms"
         }
         
-        # Try to find matching example
-        for (s, e), example in examples.items():
-            if s in start.lower() and e in end.lower():
+        # Try exact match first
+        start_lower = start.lower()
+        end_lower = end.lower()
+        
+        for (s, e), example in example_database.items():
+            if (s in start_lower and e in end_lower) or (e in start_lower and s in end_lower):
                 return example
         
-        # Generic example
-        return f"When {start} increases, we typically observe changes in {end}"
+        # Try partial matches
+        for (s, e), example in example_database.items():
+            # Check if any key words match
+            start_words = set(start_lower.split())
+            end_words = set(end_lower.split())
+            key_words = set(s.split() + e.split())
+            
+            if (start_words.intersection(key_words) and end_words.intersection(key_words)):
+                return example
+        
+        # Generate contextual example based on patterns
+        return self._generate_contextual_example(start, end)
+
+    def _generate_contextual_example(self, start: str, end: str) -> str:
+        """Generate a contextual example when no direct match exists"""
+        # Identify the likely domain
+        domains = {
+            "physical": ["temperature", "pressure", "force", "energy", "matter", "speed"],
+            "biological": ["cell", "organism", "gene", "protein", "growth", "evolution"],
+            "psychological": ["mind", "emotion", "thought", "behavior", "perception", "memory"],
+            "social": ["group", "society", "culture", "relationship", "community", "network"],
+            "economic": ["money", "market", "trade", "value", "resource", "capital"],
+            "technological": ["system", "data", "algorithm", "computer", "network", "software"]
+        }
+        
+        start_domain = "general"
+        end_domain = "general"
+        
+        for domain, keywords in domains.items():
+            if any(kw in start.lower() for kw in keywords):
+                start_domain = domain
+            if any(kw in end.lower() for kw in keywords):
+                end_domain = domain
+        
+        # Generate domain-appropriate example
+        if start_domain == "physical" or end_domain == "physical":
+            return f"Changes in {start} create measurable effects on {end} through physical mechanisms"
+        elif start_domain == "biological" or end_domain == "biological":
+            return f"{start} influences {end} through complex biological pathways and feedback loops"
+        elif start_domain == "psychological" or end_domain == "psychological":
+            return f"{start} shapes {end} through cognitive and emotional processing mechanisms"
+        elif start_domain == "social" or end_domain == "social":
+            return f"{start} affects {end} through social dynamics and interpersonal interactions"
+        elif start_domain == "economic" or end_domain == "economic":
+            return f"Changes in {start} drive {end} through market forces and economic incentives"
+        elif start_domain == "technological" or end_domain == "technological":
+            return f"{start} enables {end} through technological processes and system interactions"
+        else:
+            # Generic causal statement
+            return f"When {start} changes, it influences {end} through a series of intermediate steps"
     
     async def create_visual_reasoning_map(self, reasoning_path: List[Any]) -> Dict[str, Any]:
         """Create visual representation of reasoning process"""
