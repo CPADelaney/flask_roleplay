@@ -6,7 +6,7 @@ Part 1: Core module with emotion integration, goal alignment, and memory pattern
 
 import logging
 from typing import Dict, List, Any, Optional, Set, Tuple, Callable
-from datetime import datetime
+from datetime import datetime, timedelta
 import asyncio
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -23,6 +23,7 @@ from collections import defaultdict, Counter
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 import networkx as nx
+import hashlib
 
 logger = logging.getLogger(__name__)
 
@@ -171,6 +172,1318 @@ class ReasoningConfiguration:
             emotion, 
             EmotionalInfluenceConfig(emotion="neutral")
         )
+
+# ========================================================================================
+# MODEL DEFINITIONS AND ENUMS
+# ========================================================================================
+
+class NodeType(Enum):
+    """Types of nodes in causal models"""
+    INPUT = "input"
+    INTERMEDIATE = "intermediate"
+    OUTCOME = "outcome"
+    CONFOUNDER = "confounder"
+    MEDIATOR = "mediator"
+    MODERATOR = "moderator"
+    LATENT = "latent"
+
+class EdgeType(Enum):
+    """Types of causal relationships"""
+    DIRECT = "direct"
+    INDIRECT = "indirect"
+    BIDIRECTIONAL = "bidirectional"
+    MODERATED = "moderated"
+    TIME_DELAYED = "time_delayed"
+    THRESHOLD = "threshold"
+    NONLINEAR = "nonlinear"
+
+@dataclass
+class ModelMetadata:
+    """Metadata for causal models"""
+    model_id: str
+    name: str
+    domain: str
+    version: str = "1.0"
+    created_at: datetime = field(default_factory=datetime.now)
+    updated_at: datetime = field(default_factory=datetime.now)
+    author: str = "system"
+    validation_status: str = "validated"
+    confidence_score: float = 0.8
+    sample_size: Optional[int] = None
+    data_sources: List[str] = field(default_factory=list)
+    assumptions: List[str] = field(default_factory=list)
+    limitations: List[str] = field(default_factory=list)
+    tags: List[str] = field(default_factory=list)
+
+# ========================================================================================
+# CAUSAL MODEL REPOSITORY
+# ========================================================================================
+
+class CausalModelRepository:
+    """Simulated repository for causal models"""
+    
+    def __init__(self):
+        self.models = {}
+        self._initialize_model_templates()
+        self._initialize_model_registry()
+    
+    def _initialize_model_templates(self):
+        """Initialize comprehensive model templates"""
+        self.model_templates = {
+            # Health Domain Models
+            "health_outcomes_comprehensive": {
+                "metadata": ModelMetadata(
+                    model_id="health_outcomes_comprehensive_v2",
+                    name="Comprehensive Health Outcomes Model",
+                    domain="health",
+                    version="2.0",
+                    confidence_score=0.85,
+                    sample_size=10000,
+                    data_sources=["WHO Health Database", "CDC Reports", "Meta-analysis Studies"],
+                    assumptions=["Linear relationships for simplification", "Population-level effects"],
+                    tags=["health", "wellness", "lifestyle", "comprehensive"]
+                ),
+                "nodes": {
+                    # Input factors
+                    "lifestyle_factors": {
+                        "type": "input", 
+                        "modifiable": True,
+                        "description": "Composite lifestyle score",
+                        "measurement_scale": "0-100",
+                        "subcategories": ["sleep_quality", "work_life_balance", "social_connections"]
+                    },
+                    "dietary_habits": {
+                        "type": "input", 
+                        "modifiable": True,
+                        "description": "Nutritional quality and eating patterns",
+                        "measurement_scale": "categorical",
+                        "categories": ["poor", "fair", "good", "excellent"]
+                    },
+                    "exercise_level": {
+                        "type": "input", 
+                        "modifiable": True,
+                        "description": "Physical activity frequency and intensity",
+                        "measurement_scale": "minutes_per_week",
+                        "recommended_range": [150, 300]
+                    },
+                    "genetic_factors": {
+                        "type": "input", 
+                        "modifiable": False,
+                        "description": "Genetic predisposition index",
+                        "measurement_scale": "risk_score",
+                        "note": "Polygenic risk score"
+                    },
+                    "environmental_exposure": {
+                        "type": "input",
+                        "modifiable": "partial",
+                        "description": "Environmental health factors",
+                        "subcategories": ["air_quality", "water_quality", "noise_pollution"]
+                    },
+                    "socioeconomic_status": {
+                        "type": "confounder",
+                        "modifiable": "partial",
+                        "description": "SES composite score",
+                        "components": ["income", "education", "occupation"]
+                    },
+                    
+                    # Intermediate factors
+                    "stress_level": {
+                        "type": "intermediate", 
+                        "modifiable": True,
+                        "description": "Psychological stress index",
+                        "measurement_scale": "PSS-10",
+                        "clinical_threshold": 20
+                    },
+                    "metabolic_health": {
+                        "type": "intermediate", 
+                        "modifiable": False,
+                        "description": "Metabolic syndrome indicators",
+                        "biomarkers": ["glucose", "lipids", "blood_pressure", "waist_circumference"]
+                    },
+                    "inflammation_markers": {
+                        "type": "intermediate",
+                        "modifiable": False,
+                        "description": "Systemic inflammation level",
+                        "biomarkers": ["CRP", "IL-6", "TNF-alpha"]
+                    },
+                    "immune_function": {
+                        "type": "intermediate",
+                        "modifiable": False,
+                        "description": "Immune system status",
+                        "indicators": ["WBC_count", "antibody_levels", "T-cell_function"]
+                    },
+                    "mental_health": {
+                        "type": "intermediate",
+                        "modifiable": True,
+                        "description": "Mental health composite",
+                        "components": ["depression", "anxiety", "wellbeing"]
+                    },
+                    
+                    # Outcome factors
+                    "cardiovascular_health": {
+                        "type": "outcome", 
+                        "modifiable": False,
+                        "description": "Cardiovascular disease risk",
+                        "measurement_scale": "10-year_risk_percentage",
+                        "clinical_categories": ["low", "moderate", "high"]
+                    },
+                    "chronic_disease_risk": {
+                        "type": "outcome",
+                        "modifiable": False,
+                        "description": "Risk of developing chronic diseases",
+                        "diseases": ["diabetes", "hypertension", "cancer"]
+                    },
+                    "cognitive_function": {
+                        "type": "outcome",
+                        "modifiable": False,
+                        "description": "Cognitive performance score",
+                        "domains": ["memory", "attention", "executive_function"]
+                    },
+                    "longevity": {
+                        "type": "outcome",
+                        "modifiable": False,
+                        "description": "Predicted lifespan",
+                        "measurement_scale": "years",
+                        "confidence_interval": "95%"
+                    },
+                    "quality_of_life": {
+                        "type": "outcome",
+                        "modifiable": False,
+                        "description": "Health-related quality of life",
+                        "measurement_scale": "SF-36",
+                        "domains": ["physical", "mental", "social"]
+                    },
+                    "overall_wellness": {
+                        "type": "outcome", 
+                        "modifiable": False,
+                        "description": "Holistic wellness score",
+                        "measurement_scale": "composite_index",
+                        "components": ["physical", "mental", "social", "spiritual"]
+                    }
+                },
+                "edges": [
+                    # Direct effects
+                    {"from": "lifestyle_factors", "to": "stress_level", "strength": 0.7, "type": "direct"},
+                    {"from": "dietary_habits", "to": "metabolic_health", "strength": 0.8, "type": "direct"},
+                    {"from": "exercise_level", "to": "cardiovascular_health", "strength": 0.9, "type": "direct"},
+                    {"from": "exercise_level", "to": "mental_health", "strength": 0.6, "type": "direct"},
+                    {"from": "genetic_factors", "to": "metabolic_health", "strength": 0.5, "type": "direct"},
+                    {"from": "genetic_factors", "to": "chronic_disease_risk", "strength": 0.6, "type": "direct"},
+                    
+                    # Environmental effects
+                    {"from": "environmental_exposure", "to": "inflammation_markers", "strength": 0.4, "type": "direct"},
+                    {"from": "environmental_exposure", "to": "cardiovascular_health", "strength": 0.3, "type": "direct"},
+                    
+                    # Stress pathways
+                    {"from": "stress_level", "to": "cardiovascular_health", "strength": -0.6, "type": "direct"},
+                    {"from": "stress_level", "to": "immune_function", "strength": -0.5, "type": "direct"},
+                    {"from": "stress_level", "to": "mental_health", "strength": -0.8, "type": "direct"},
+                    
+                    # Metabolic pathways
+                    {"from": "metabolic_health", "to": "cardiovascular_health", "strength": 0.7, "type": "direct"},
+                    {"from": "metabolic_health", "to": "chronic_disease_risk", "strength": 0.8, "type": "direct"},
+                    {"from": "metabolic_health", "to": "overall_wellness", "strength": 0.7, "type": "direct"},
+                    
+                    # Inflammation pathways
+                    {"from": "inflammation_markers", "to": "cardiovascular_health", "strength": -0.5, "type": "direct"},
+                    {"from": "inflammation_markers", "to": "chronic_disease_risk", "strength": 0.6, "type": "direct"},
+                    {"from": "inflammation_markers", "to": "cognitive_function", "strength": -0.4, "type": "direct"},
+                    
+                    # Mental health pathways
+                    {"from": "mental_health", "to": "quality_of_life", "strength": 0.8, "type": "direct"},
+                    {"from": "mental_health", "to": "overall_wellness", "strength": 0.7, "type": "direct"},
+                    {"from": "mental_health", "to": "immune_function", "strength": 0.4, "type": "direct"},
+                    
+                    # Outcome interconnections
+                    {"from": "cardiovascular_health", "to": "longevity", "strength": 0.8, "type": "direct"},
+                    {"from": "cardiovascular_health", "to": "overall_wellness", "strength": 0.8, "type": "direct"},
+                    {"from": "chronic_disease_risk", "to": "longevity", "strength": -0.7, "type": "direct"},
+                    {"from": "cognitive_function", "to": "quality_of_life", "strength": 0.6, "type": "direct"},
+                    {"from": "quality_of_life", "to": "overall_wellness", "strength": 0.9, "type": "direct"},
+                    
+                    # Socioeconomic confounding
+                    {"from": "socioeconomic_status", "to": "dietary_habits", "strength": 0.5, "type": "confounder"},
+                    {"from": "socioeconomic_status", "to": "exercise_level", "strength": 0.4, "type": "confounder"},
+                    {"from": "socioeconomic_status", "to": "environmental_exposure", "strength": -0.6, "type": "confounder"},
+                    {"from": "socioeconomic_status", "to": "stress_level", "strength": -0.5, "type": "confounder"},
+                    
+                    # Time-delayed effects
+                    {"from": "dietary_habits", "to": "chronic_disease_risk", "strength": 0.6, "type": "time_delayed", "delay_years": 5},
+                    {"from": "exercise_level", "to": "cognitive_function", "strength": 0.5, "type": "time_delayed", "delay_years": 10},
+                    
+                    # Nonlinear relationships
+                    {"from": "exercise_level", "to": "overall_wellness", "strength": 0.7, "type": "nonlinear", "function": "logarithmic"},
+                    {"from": "stress_level", "to": "cardiovascular_health", "strength": -0.4, "type": "threshold", "threshold": 15}
+                ],
+                "interaction_effects": [
+                    {
+                        "factors": ["dietary_habits", "exercise_level"],
+                        "target": "metabolic_health",
+                        "type": "synergistic",
+                        "strength": 0.3
+                    },
+                    {
+                        "factors": ["genetic_factors", "lifestyle_factors"],
+                        "target": "chronic_disease_risk",
+                        "type": "moderation",
+                        "description": "Lifestyle can moderate genetic risk"
+                    }
+                ]
+            },
+            
+            # Business Domain Models
+            "business_performance_advanced": {
+                "metadata": ModelMetadata(
+                    model_id="business_performance_advanced_v3",
+                    name="Advanced Business Performance Model",
+                    domain="business",
+                    version="3.0",
+                    confidence_score=0.82,
+                    data_sources=["Industry Reports", "Financial Analytics", "Market Research"],
+                    tags=["business", "performance", "revenue", "growth"]
+                ),
+                "nodes": {
+                    # Market factors
+                    "market_conditions": {
+                        "type": "input", 
+                        "modifiable": False,
+                        "description": "Overall market health",
+                        "indicators": ["gdp_growth", "industry_growth", "competition_index"]
+                    },
+                    "regulatory_environment": {
+                        "type": "input",
+                        "modifiable": False,
+                        "description": "Regulatory and policy factors",
+                        "categories": ["favorable", "neutral", "restrictive"]
+                    },
+                    "technology_trends": {
+                        "type": "input",
+                        "modifiable": False,
+                        "description": "Technological disruption level",
+                        "measurement_scale": "disruption_index"
+                    },
+                    
+                    # Internal factors
+                    "marketing_spend": {
+                        "type": "input", 
+                        "modifiable": True,
+                        "description": "Marketing budget allocation",
+                        "measurement_scale": "percentage_of_revenue",
+                        "subcategories": ["digital", "traditional", "events", "content"]
+                    },
+                    "product_quality": {
+                        "type": "input", 
+                        "modifiable": True,
+                        "description": "Product/service quality score",
+                        "measurement_scale": "composite_score",
+                        "components": ["features", "reliability", "usability", "support"]
+                    },
+                    "innovation_investment": {
+                        "type": "input",
+                        "modifiable": True,
+                        "description": "R&D and innovation spending",
+                        "measurement_scale": "percentage_of_revenue"
+                    },
+                    "operational_efficiency": {
+                        "type": "input",
+                        "modifiable": True,
+                        "description": "Operations effectiveness",
+                        "kpis": ["cost_per_unit", "cycle_time", "defect_rate"]
+                    },
+                    "talent_quality": {
+                        "type": "input",
+                        "modifiable": True,
+                        "description": "Workforce capability index",
+                        "components": ["skills", "experience", "engagement", "retention"]
+                    },
+                    "pricing_strategy": {
+                        "type": "input",
+                        "modifiable": True,
+                        "description": "Pricing approach and positioning",
+                        "strategies": ["premium", "competitive", "penetration", "value"]
+                    },
+                    
+                    # Intermediate outcomes
+                    "customer_satisfaction": {
+                        "type": "intermediate", 
+                        "modifiable": False,
+                        "description": "Customer satisfaction index",
+                        "measurement_scale": "NPS",
+                        "benchmarks": {"excellent": ">70", "good": "50-70", "poor": "<30"}
+                    },
+                    "brand_reputation": {
+                        "type": "intermediate", 
+                        "modifiable": False,
+                        "description": "Brand strength and perception",
+                        "components": ["awareness", "consideration", "preference", "advocacy"]
+                    },
+                    "market_share": {
+                        "type": "intermediate",
+                        "modifiable": False,
+                        "description": "Relative market position",
+                        "measurement_scale": "percentage"
+                    },
+                    "customer_retention": {
+                        "type": "intermediate",
+                        "modifiable": False,
+                        "description": "Customer retention rate",
+                        "measurement_scale": "percentage",
+                        "calculation": "annual_retention"
+                    },
+                    "employee_productivity": {
+                        "type": "intermediate",
+                        "modifiable": False,
+                        "description": "Workforce productivity index",
+                        "measurement_scale": "revenue_per_employee"
+                    },
+                    "innovation_pipeline": {
+                        "type": "intermediate",
+                        "modifiable": False,
+                        "description": "Innovation output quality",
+                        "metrics": ["new_products", "time_to_market", "innovation_revenue_percentage"]
+                    },
+                    
+                    # Financial outcomes
+                    "sales_volume": {
+                        "type": "outcome", 
+                        "modifiable": False,
+                        "description": "Total units sold",
+                        "measurement_scale": "units",
+                        "breakdown": ["new_customers", "repeat_customers", "upsells"]
+                    },
+                    "revenue": {
+                        "type": "outcome", 
+                        "modifiable": False,
+                        "description": "Total revenue generated",
+                        "measurement_scale": "currency",
+                        "components": ["product_revenue", "service_revenue", "recurring_revenue"]
+                    },
+                    "profitability": {
+                        "type": "outcome", 
+                        "modifiable": False,
+                        "description": "Net profit margin",
+                        "measurement_scale": "percentage",
+                        "targets": {"excellent": ">20%", "good": "10-20%", "poor": "<5%"}
+                    },
+                    "growth_rate": {
+                        "type": "outcome",
+                        "modifiable": False,
+                        "description": "Year-over-year growth",
+                        "measurement_scale": "percentage",
+                        "components": ["organic_growth", "acquisition_growth"]
+                    },
+                    "shareholder_value": {
+                        "type": "outcome",
+                        "modifiable": False,
+                        "description": "Total shareholder return",
+                        "components": ["stock_appreciation", "dividends"]
+                    },
+                    "sustainability_score": {
+                        "type": "outcome",
+                        "modifiable": False,
+                        "description": "Long-term business sustainability",
+                        "dimensions": ["financial", "environmental", "social", "governance"]
+                    }
+                },
+                "edges": [
+                    # Quality and satisfaction pathways
+                    {"from": "product_quality", "to": "customer_satisfaction", "strength": 0.9, "type": "direct"},
+                    {"from": "customer_satisfaction", "to": "brand_reputation", "strength": 0.8, "type": "direct"},
+                    {"from": "customer_satisfaction", "to": "customer_retention", "strength": 0.85, "type": "direct"},
+                    
+                    # Marketing effectiveness
+                    {"from": "marketing_spend", "to": "brand_reputation", "strength": 0.6, "type": "direct"},
+                    {"from": "marketing_spend", "to": "sales_volume", "strength": 0.6, "type": "direct"},
+                    {"from": "brand_reputation", "to": "sales_volume", "strength": 0.7, "type": "direct"},
+                    {"from": "brand_reputation", "to": "market_share", "strength": 0.65, "type": "direct"},
+                    
+                    # Innovation pathways
+                    {"from": "innovation_investment", "to": "innovation_pipeline", "strength": 0.8, "type": "direct"},
+                    {"from": "innovation_pipeline", "to": "product_quality", "strength": 0.7, "type": "time_delayed", "delay_months": 12},
+                    {"from": "innovation_pipeline", "to": "market_share", "strength": 0.6, "type": "time_delayed", "delay_months": 18},
+                    
+                    # Operational excellence
+                    {"from": "operational_efficiency", "to": "profitability", "strength": 0.7, "type": "direct"},
+                    {"from": "operational_efficiency", "to": "customer_satisfaction", "strength": 0.5, "type": "direct"},
+                    {"from": "operational_efficiency", "to": "employee_productivity", "strength": 0.6, "type": "direct"},
+                    
+                    # Talent impact
+                    {"from": "talent_quality", "to": "employee_productivity", "strength": 0.8, "type": "direct"},
+                    {"from": "talent_quality", "to": "innovation_pipeline", "strength": 0.7, "type": "direct"},
+                    {"from": "talent_quality", "to": "customer_satisfaction", "strength": 0.5, "type": "direct"},
+                    {"from": "employee_productivity", "to": "profitability", "strength": 0.6, "type": "direct"},
+                    
+                    # Pricing dynamics
+                    {"from": "pricing_strategy", "to": "sales_volume", "strength": 0.7, "type": "nonlinear", "function": "inverse_quadratic"},
+                    {"from": "pricing_strategy", "to": "profitability", "strength": 0.8, "type": "direct"},
+                    {"from": "pricing_strategy", "to": "market_share", "strength": -0.4, "type": "direct"},
+                    
+                    # Revenue and profit generation
+                    {"from": "sales_volume", "to": "revenue", "strength": 0.95, "type": "direct"},
+                    {"from": "customer_retention", "to": "revenue", "strength": 0.7, "type": "direct"},
+                    {"from": "revenue", "to": "profitability", "strength": 0.7, "type": "direct"},
+                    {"from": "market_share", "to": "revenue", "strength": 0.6, "type": "direct"},
+                    
+                    # Growth dynamics
+                    {"from": "revenue", "to": "growth_rate", "strength": 0.8, "type": "direct"},
+                    {"from": "market_share", "to": "growth_rate", "strength": 0.6, "type": "direct"},
+                    {"from": "innovation_pipeline", "to": "growth_rate", "strength": 0.5, "type": "direct"},
+                    
+                    # Long-term value
+                    {"from": "profitability", "to": "shareholder_value", "strength": 0.8, "type": "direct"},
+                    {"from": "growth_rate", "to": "shareholder_value", "strength": 0.7, "type": "direct"},
+                    {"from": "brand_reputation", "to": "shareholder_value", "strength": 0.5, "type": "direct"},
+                    {"from": "customer_retention", "to": "sustainability_score", "strength": 0.6, "type": "direct"},
+                    {"from": "innovation_pipeline", "to": "sustainability_score", "strength": 0.7, "type": "direct"},
+                    
+                    # Market condition effects
+                    {"from": "market_conditions", "to": "sales_volume", "strength": 0.5, "type": "moderator"},
+                    {"from": "regulatory_environment", "to": "operational_efficiency", "strength": -0.4, "type": "direct"},
+                    {"from": "technology_trends", "to": "innovation_investment", "strength": 0.6, "type": "direct"}
+                ],
+                "feedback_loops": [
+                    {
+                        "loop": ["revenue", "marketing_spend", "brand_reputation", "sales_volume", "revenue"],
+                        "type": "reinforcing",
+                        "description": "Revenue enables marketing investment"
+                    },
+                    {
+                        "loop": ["profitability", "innovation_investment", "product_quality", "customer_satisfaction", "revenue", "profitability"],
+                        "type": "reinforcing",
+                        "description": "Profit-innovation virtuous cycle"
+                    }
+                ]
+            },
+            
+            # Education Domain Model
+            "education_outcomes": {
+                "metadata": ModelMetadata(
+                    model_id="education_outcomes_v1",
+                    name="Educational Outcomes Model",
+                    domain="education",
+                    confidence_score=0.78,
+                    tags=["education", "learning", "student_success"]
+                ),
+                "nodes": {
+                    # Student factors
+                    "prior_knowledge": {"type": "input", "modifiable": False},
+                    "learning_motivation": {"type": "input", "modifiable": True},
+                    "study_habits": {"type": "input", "modifiable": True},
+                    "socioeconomic_background": {"type": "confounder", "modifiable": False},
+                    
+                    # Educational inputs
+                    "teaching_quality": {"type": "input", "modifiable": True},
+                    "curriculum_design": {"type": "input", "modifiable": True},
+                    "learning_resources": {"type": "input", "modifiable": True},
+                    "class_size": {"type": "input", "modifiable": True},
+                    "technology_integration": {"type": "input", "modifiable": True},
+                    
+                    # Intermediate outcomes
+                    "student_engagement": {"type": "intermediate", "modifiable": False},
+                    "knowledge_retention": {"type": "intermediate", "modifiable": False},
+                    "skill_development": {"type": "intermediate", "modifiable": False},
+                    "self_efficacy": {"type": "intermediate", "modifiable": False},
+                    
+                    # Learning outcomes
+                    "academic_achievement": {"type": "outcome", "modifiable": False},
+                    "critical_thinking": {"type": "outcome", "modifiable": False},
+                    "career_readiness": {"type": "outcome", "modifiable": False},
+                    "lifelong_learning": {"type": "outcome", "modifiable": False}
+                },
+                "edges": [
+                    {"from": "prior_knowledge", "to": "knowledge_retention", "strength": 0.7},
+                    {"from": "learning_motivation", "to": "student_engagement", "strength": 0.8},
+                    {"from": "study_habits", "to": "academic_achievement", "strength": 0.7},
+                    {"from": "teaching_quality", "to": "student_engagement", "strength": 0.8},
+                    {"from": "curriculum_design", "to": "skill_development", "strength": 0.7},
+                    {"from": "student_engagement", "to": "academic_achievement", "strength": 0.8},
+                    {"from": "knowledge_retention", "to": "academic_achievement", "strength": 0.9},
+                    {"from": "skill_development", "to": "career_readiness", "strength": 0.8},
+                    {"from": "self_efficacy", "to": "lifelong_learning", "strength": 0.7}
+                ]
+            },
+            
+            # Environmental Model
+            "climate_change_impacts": {
+                "metadata": ModelMetadata(
+                    model_id="climate_change_impacts_v1",
+                    name="Climate Change Impact Model",
+                    domain="environment",
+                    confidence_score=0.88,
+                    tags=["climate", "environment", "sustainability"]
+                ),
+                "nodes": {
+                    # Emission sources
+                    "fossil_fuel_use": {"type": "input", "modifiable": True},
+                    "deforestation": {"type": "input", "modifiable": True},
+                    "industrial_processes": {"type": "input", "modifiable": True},
+                    "agriculture_emissions": {"type": "input", "modifiable": True},
+                    
+                    # Mitigation factors
+                    "renewable_energy": {"type": "input", "modifiable": True},
+                    "carbon_capture": {"type": "input", "modifiable": True},
+                    "reforestation": {"type": "input", "modifiable": True},
+                    
+                    # Atmospheric changes
+                    "greenhouse_gas_concentration": {"type": "intermediate", "modifiable": False},
+                    "global_temperature": {"type": "intermediate", "modifiable": False},
+                    "ocean_acidification": {"type": "intermediate", "modifiable": False},
+                    
+                    # Environmental impacts
+                    "sea_level_rise": {"type": "outcome", "modifiable": False},
+                    "extreme_weather": {"type": "outcome", "modifiable": False},
+                    "biodiversity_loss": {"type": "outcome", "modifiable": False},
+                    "food_security": {"type": "outcome", "modifiable": False},
+                    "human_displacement": {"type": "outcome", "modifiable": False}
+                },
+                "edges": [
+                    {"from": "fossil_fuel_use", "to": "greenhouse_gas_concentration", "strength": 0.9},
+                    {"from": "deforestation", "to": "greenhouse_gas_concentration", "strength": 0.7},
+                    {"from": "renewable_energy", "to": "greenhouse_gas_concentration", "strength": -0.6},
+                    {"from": "greenhouse_gas_concentration", "to": "global_temperature", "strength": 0.95},
+                    {"from": "global_temperature", "to": "sea_level_rise", "strength": 0.8},
+                    {"from": "global_temperature", "to": "extreme_weather", "strength": 0.85},
+                    {"from": "extreme_weather", "to": "food_security", "strength": -0.7},
+                    {"from": "sea_level_rise", "to": "human_displacement", "strength": 0.8}
+                ]
+            }
+        }
+    
+    def _initialize_model_registry(self):
+        """Initialize model registry with searchable index"""
+        self.model_registry = {
+            "by_domain": defaultdict(list),
+            "by_tags": defaultdict(list),
+            "by_confidence": defaultdict(list),
+            "all_models": []
+        }
+        
+        # Register all template models
+        for template_id, template in self.model_templates.items():
+            if "metadata" in template:
+                metadata = template["metadata"]
+                self.model_registry["by_domain"][metadata.domain].append(metadata.model_id)
+                
+                for tag in metadata.tags:
+                    self.model_registry["by_tags"][tag].append(metadata.model_id)
+                
+                confidence_bucket = f"{int(metadata.confidence_score * 10) / 10:.1f}"
+                self.model_registry["by_confidence"][confidence_bucket].append(metadata.model_id)
+                
+                self.model_registry["all_models"].append(metadata.model_id)
+
+# ========================================================================================
+# ENHANCED GET CAUSAL MODEL INFO METHOD
+# ========================================================================================
+
+async def _get_causal_model_info(self, model_id: str) -> Dict[str, Any]:
+    """Enhanced method to get detailed causal model information"""
+    
+    # Initialize repository if not exists
+    if not hasattr(self, 'causal_repository'):
+        self.causal_repository = CausalModelRepository()
+    
+    # Try exact match first
+    if model_id in self.causal_repository.model_templates:
+        model = self.causal_repository.model_templates[model_id].copy()
+        return await self._enrich_model_with_analytics(model)
+    
+    # Try to find by partial match or characteristics
+    matched_model = await self._find_best_matching_model(model_id)
+    if matched_model:
+        return await self._enrich_model_with_analytics(matched_model)
+    
+    # Generate a custom model based on the request
+    generated_model = await self._generate_custom_causal_model(model_id)
+    return generated_model
+
+async def _find_best_matching_model(self, model_id: str) -> Optional[Dict[str, Any]]:
+    """Find the best matching model based on various criteria"""
+    model_id_lower = model_id.lower()
+    
+    # Extract characteristics from model_id
+    characteristics = self._extract_model_characteristics(model_id_lower)
+    
+    best_match = None
+    best_score = 0.0
+    
+    for template_id, template in self.causal_repository.model_templates.items():
+        if "metadata" not in template:
+            continue
+            
+        metadata = template["metadata"]
+        score = 0.0
+        
+        # Domain matching
+        if characteristics["domain"] and metadata.domain == characteristics["domain"]:
+            score += 0.4
+        
+        # Tag matching
+        matching_tags = set(characteristics["tags"]).intersection(set(metadata.tags))
+        if matching_tags:
+            score += 0.3 * (len(matching_tags) / len(characteristics["tags"]))
+        
+        # Name similarity
+        name_similarity = self._calculate_string_similarity(
+            model_id_lower, 
+            metadata.name.lower()
+        )
+        score += 0.2 * name_similarity
+        
+        # Version preference (newer is better)
+        version_score = float(metadata.version.split('.')[0]) / 10
+        score += 0.1 * min(version_score, 1.0)
+        
+        if score > best_score:
+            best_score = score
+            best_match = template.copy()
+    
+    # Only return if confidence is high enough
+    if best_score > 0.5:
+        return best_match
+    
+    return None
+
+def _extract_model_characteristics(self, model_id: str) -> Dict[str, Any]:
+    """Extract domain, tags, and other characteristics from model ID"""
+    characteristics = {
+        "domain": None,
+        "tags": [],
+        "scope": None,
+        "version": None
+    }
+    
+    # Domain detection
+    domains = ["health", "business", "education", "environment", "economics", 
+               "technology", "social", "psychology"]
+    
+    for domain in domains:
+        if domain in model_id:
+            characteristics["domain"] = domain
+            break
+    
+    # Tag extraction
+    tag_keywords = {
+        "performance": ["performance", "kpi", "metric"],
+        "outcome": ["outcome", "result", "impact"],
+        "risk": ["risk", "threat", "vulnerability"],
+        "intervention": ["intervention", "treatment", "action"],
+        "prediction": ["prediction", "forecast", "projection"],
+        "comprehensive": ["comprehensive", "complete", "full"],
+        "simple": ["simple", "basic", "minimal"],
+        "advanced": ["advanced", "complex", "sophisticated"]
+    }
+    
+    for tag, keywords in tag_keywords.items():
+        if any(keyword in model_id for keyword in keywords):
+            characteristics["tags"].append(tag)
+    
+    # Scope detection
+    if "micro" in model_id:
+        characteristics["scope"] = "micro"
+    elif "macro" in model_id:
+        characteristics["scope"] = "macro"
+    elif "comprehensive" in model_id or "full" in model_id:
+        characteristics["scope"] = "comprehensive"
+    
+    # Version detection
+    version_match = re.search(r'v(\d+)', model_id)
+    if version_match:
+        characteristics["version"] = version_match.group(1)
+    
+    return characteristics
+
+async def _generate_custom_causal_model(self, model_id: str) -> Dict[str, Any]:
+    """Generate a custom causal model based on the model ID"""
+    
+    characteristics = self._extract_model_characteristics(model_id.lower())
+    domain = characteristics["domain"] or "general"
+    
+    # Create metadata
+    metadata = ModelMetadata(
+        model_id=f"{model_id}_generated_{datetime.now().strftime('%Y%m%d')}",
+        name=f"Generated {domain.title()} Model",
+        domain=domain,
+        version="1.0",
+        confidence_score=0.65,  # Lower confidence for generated models
+        tags=characteristics["tags"] + ["generated", domain]
+    )
+    
+    # Generate domain-specific model structure
+    if domain == "health":
+        model = self._generate_health_model(characteristics)
+    elif domain == "business":
+        model = self._generate_business_model(characteristics)
+    elif domain == "education":
+        model = self._generate_education_model(characteristics)
+    elif domain == "environment":
+        model = self._generate_environment_model(characteristics)
+    else:
+        model = self._generate_generic_model(characteristics)
+    
+    model["metadata"] = metadata.__dict__
+    
+    # Add analytics
+    return await self._enrich_model_with_analytics(model)
+
+def _generate_health_model(self, characteristics: Dict[str, Any]) -> Dict[str, Any]:
+    """Generate a health domain causal model"""
+    nodes = {}
+    edges = []
+    
+    # Determine model focus based on tags
+    if "mental" in str(characteristics["tags"]):
+        # Mental health focused model
+        nodes.update({
+            "stress_factors": {"type": "input", "modifiable": True},
+            "social_support": {"type": "input", "modifiable": True},
+            "therapy_engagement": {"type": "input", "modifiable": True},
+            "neurotransmitter_balance": {"type": "intermediate", "modifiable": False},
+            "cognitive_patterns": {"type": "intermediate", "modifiable": True},
+            "mental_health_outcome": {"type": "outcome", "modifiable": False},
+            "quality_of_life": {"type": "outcome", "modifiable": False}
+        })
+        
+        edges.extend([
+            {"from": "stress_factors", "to": "neurotransmitter_balance", "strength": -0.7},
+            {"from": "social_support", "to": "mental_health_outcome", "strength": 0.8},
+            {"from": "therapy_engagement", "to": "cognitive_patterns", "strength": 0.7},
+            {"from": "cognitive_patterns", "to": "mental_health_outcome", "strength": 0.8},
+            {"from": "mental_health_outcome", "to": "quality_of_life", "strength": 0.9}
+        ])
+        
+    elif "chronic" in str(characteristics["tags"]):
+        # Chronic disease focused model
+        nodes.update({
+            "genetic_predisposition": {"type": "input", "modifiable": False},
+            "lifestyle_factors": {"type": "input", "modifiable": True},
+            "medication_adherence": {"type": "input", "modifiable": True},
+            "disease_progression": {"type": "intermediate", "modifiable": False},
+            "symptom_severity": {"type": "intermediate", "modifiable": False},
+            "disease_control": {"type": "outcome", "modifiable": False},
+            "hospitalization_risk": {"type": "outcome", "modifiable": False}
+        })
+        
+        edges.extend([
+            {"from": "genetic_predisposition", "to": "disease_progression", "strength": 0.6},
+            {"from": "lifestyle_factors", "to": "disease_progression", "strength": -0.5},
+            {"from": "medication_adherence", "to": "disease_control", "strength": 0.8},
+            {"from": "disease_progression", "to": "symptom_severity", "strength": 0.9},
+            {"from": "symptom_severity", "to": "hospitalization_risk", "strength": 0.7}
+        ])
+        
+    else:
+        # General health model
+        nodes.update({
+            "health_behaviors": {"type": "input", "modifiable": True},
+            "environmental_factors": {"type": "input", "modifiable": "partial"},
+            "preventive_care": {"type": "input", "modifiable": True},
+            "biomarkers": {"type": "intermediate", "modifiable": False},
+            "functional_status": {"type": "intermediate", "modifiable": False},
+            "health_outcome": {"type": "outcome", "modifiable": False}
+        })
+        
+        edges.extend([
+            {"from": "health_behaviors", "to": "biomarkers", "strength": 0.7},
+            {"from": "environmental_factors", "to": "health_outcome", "strength": 0.4},
+            {"from": "preventive_care", "to": "functional_status", "strength": 0.6},
+            {"from": "biomarkers", "to": "health_outcome", "strength": 0.8},
+            {"from": "functional_status", "to": "health_outcome", "strength": 0.7}
+        ])
+    
+    return {"nodes": nodes, "edges": edges}
+
+def _generate_business_model(self, characteristics: Dict[str, Any]) -> Dict[str, Any]:
+    """Generate a business domain causal model"""
+    nodes = {}
+    edges = []
+    
+    if "startup" in str(characteristics["tags"]) or "growth" in str(characteristics["tags"]):
+        # Startup/growth focused model
+        nodes.update({
+            "funding": {"type": "input", "modifiable": True},
+            "product_market_fit": {"type": "input", "modifiable": True},
+            "team_quality": {"type": "input", "modifiable": True},
+            "market_timing": {"type": "input", "modifiable": False},
+            "user_acquisition": {"type": "intermediate", "modifiable": False},
+            "burn_rate": {"type": "intermediate", "modifiable": True},
+            "growth_rate": {"type": "outcome", "modifiable": False},
+            "valuation": {"type": "outcome", "modifiable": False}
+        })
+        
+        edges.extend([
+            {"from": "funding", "to": "burn_rate", "strength": 0.8},
+            {"from": "product_market_fit", "to": "user_acquisition", "strength": 0.9},
+            {"from": "team_quality", "to": "product_market_fit", "strength": 0.7},
+            {"from": "user_acquisition", "to": "growth_rate", "strength": 0.9},
+            {"from": "growth_rate", "to": "valuation", "strength": 0.8}
+        ])
+    else:
+        # General business model
+        nodes.update({
+            "investment": {"type": "input", "modifiable": True},
+            "operations": {"type": "input", "modifiable": True},
+            "market_demand": {"type": "input", "modifiable": False},
+            "efficiency": {"type": "intermediate", "modifiable": True},
+            "customer_base": {"type": "intermediate", "modifiable": False},
+            "revenue": {"type": "outcome", "modifiable": False},
+            "profit": {"type": "outcome", "modifiable": False}
+        })
+        
+        edges.extend([
+            {"from": "investment", "to": "operations", "strength": 0.7},
+            {"from": "operations", "to": "efficiency", "strength": 0.8},
+            {"from": "market_demand", "to": "customer_base", "strength": 0.8},
+            {"from": "efficiency", "to": "profit", "strength": 0.7},
+            {"from": "customer_base", "to": "revenue", "strength": 0.9}
+        ])
+    
+    return {"nodes": nodes, "edges": edges}
+
+def _generate_generic_model(self, characteristics: Dict[str, Any]) -> Dict[str, Any]:
+    """Generate a generic causal model structure"""
+    
+    # Determine model size based on scope
+    if characteristics["scope"] == "comprehensive":
+        num_inputs = 5
+        num_intermediates = 4
+        num_outcomes = 3
+    elif characteristics["scope"] == "simple":
+        num_inputs = 2
+        num_intermediates = 1
+        num_outcomes = 1
+    else:  # medium
+        num_inputs = 3
+        num_intermediates = 2
+        num_outcomes = 2
+    
+    nodes = {}
+    edges = []
+    
+    # Generate inputs
+    for i in range(num_inputs):
+        node_id = f"input_factor_{i+1}"
+        nodes[node_id] = {
+            "type": "input",
+            "modifiable": i < num_inputs - 1,  # Last input is not modifiable
+            "description": f"Input factor {i+1}"
+        }
+    
+    # Generate intermediates
+    for i in range(num_intermediates):
+        node_id = f"intermediate_factor_{i+1}"
+        nodes[node_id] = {
+            "type": "intermediate",
+            "modifiable": False,
+            "description": f"Intermediate factor {i+1}"
+        }
+    
+    # Generate outcomes
+    for i in range(num_outcomes):
+        node_id = f"outcome_{i+1}"
+        nodes[node_id] = {
+            "type": "outcome",
+            "modifiable": False,
+            "description": f"Outcome {i+1}"
+        }
+    
+    # Generate edges (simplified connectivity)
+    # Connect inputs to intermediates
+    for i in range(num_inputs):
+        for j in range(num_intermediates):
+            if (i + j) % 2 == 0:  # Create some sparsity
+                edges.append({
+                    "from": f"input_factor_{i+1}",
+                    "to": f"intermediate_factor_{j+1}",
+                    "strength": 0.5 + (i * 0.1)
+                })
+    
+    # Connect intermediates to outcomes
+    for i in range(num_intermediates):
+        for j in range(num_outcomes):
+            edges.append({
+                "from": f"intermediate_factor_{i+1}",
+                "to": f"outcome_{j+1}",
+                "strength": 0.6 + (j * 0.1)
+            })
+    
+    return {"nodes": nodes, "edges": edges}
+
+async def _enrich_model_with_analytics(self, model: Dict[str, Any]) -> Dict[str, Any]:
+    """Enrich model with analytical insights and additional metadata"""
+    
+    # Calculate model statistics
+    model["analytics"] = {
+        "node_count": len(model.get("nodes", {})),
+        "edge_count": len(model.get("edges", [])),
+        "complexity_score": self._calculate_model_complexity(model),
+        "connectivity_metrics": self._calculate_connectivity_metrics(model),
+        "critical_paths": await self._identify_critical_paths(model),
+        "intervention_recommendations": self._generate_intervention_recommendations(model),
+        "sensitivity_analysis": self._perform_sensitivity_analysis(model),
+        "validation_status": model.get("metadata", {}).get("validation_status", "unvalidated")
+    }
+    
+    # Add usage guidelines
+    model["usage_guidelines"] = self._generate_usage_guidelines(model)
+    
+    # Add limitations and assumptions
+    if "metadata" in model:
+        model["limitations"] = model["metadata"].get("limitations", ["Model assumes linear relationships unless specified"])
+        model["assumptions"] = model["metadata"].get("assumptions", ["Causal directions are based on domain knowledge"])
+    
+    return model
+
+def _calculate_model_complexity(self, model: Dict[str, Any]) -> float:
+    """Calculate complexity score for the model"""
+    nodes = model.get("nodes", {})
+    edges = model.get("edges", [])
+    
+    # Base complexity from size
+    size_complexity = (len(nodes) + len(edges)) / 50  # Normalize
+    
+    # Edge type complexity
+    edge_types = set(edge.get("type", "direct") for edge in edges)
+    type_complexity = len(edge_types) / 5  # Normalize by expected types
+    
+    # Feedback loop complexity
+    feedback_loops = model.get("feedback_loops", [])
+    loop_complexity = len(feedback_loops) / 3  # Normalize
+    
+    # Interaction effects
+    interactions = model.get("interaction_effects", [])
+    interaction_complexity = len(interactions) / 5  # Normalize
+    
+    # Combined score
+    complexity = (
+        size_complexity * 0.3 +
+        type_complexity * 0.2 +
+        loop_complexity * 0.3 +
+        interaction_complexity * 0.2
+    )
+    
+    return min(1.0, complexity)
+
+def _calculate_connectivity_metrics(self, model: Dict[str, Any]) -> Dict[str, Any]:
+    """Calculate graph connectivity metrics"""
+    # Build networkx graph
+    G = nx.DiGraph()
+    
+    for edge in model.get("edges", []):
+        G.add_edge(edge["from"], edge["to"], weight=abs(edge.get("strength", 0.5)))
+    
+    metrics = {
+        "density": nx.density(G) if len(G) > 0 else 0,
+        "average_degree": sum(dict(G.degree()).values()) / len(G) if len(G) > 0 else 0,
+        "strongly_connected_components": nx.number_strongly_connected_components(G),
+        "weakly_connected_components": nx.number_weakly_connected_components(G)
+    }
+    
+    # Calculate centrality for key nodes
+    if len(G) > 0:
+        betweenness = nx.betweenness_centrality(G)
+        top_central_nodes = sorted(betweenness.items(), key=lambda x: x[1], reverse=True)[:3]
+        metrics["most_central_nodes"] = [
+            {"node": node, "centrality": score} 
+            for node, score in top_central_nodes
+        ]
+    
+    return metrics
+
+async def _identify_critical_paths(self, model: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Identify critical causal paths in the model"""
+    critical_paths = []
+    
+    # Get outcome nodes
+    outcome_nodes = [
+        node_id for node_id, node_info in model.get("nodes", {}).items()
+        if node_info.get("type") == "outcome"
+    ]
+    
+    # Get modifiable input nodes
+    modifiable_inputs = [
+        node_id for node_id, node_info in model.get("nodes", {}).items()
+        if node_info.get("type") == "input" and node_info.get("modifiable", False)
+    ]
+    
+    # Build graph
+    G = nx.DiGraph()
+    for edge in model.get("edges", []):
+        G.add_edge(edge["from"], edge["to"], weight=abs(edge.get("strength", 0.5)))
+    
+    # Find paths from modifiable inputs to outcomes
+    for input_node in modifiable_inputs[:3]:  # Limit for performance
+        for outcome_node in outcome_nodes[:3]:
+            if input_node in G and outcome_node in G:
+                try:
+                    # Find up to 3 shortest paths
+                    paths = list(nx.shortest_simple_paths(G, input_node, outcome_node))[:3]
+                    
+                    for path in paths:
+                        # Calculate path strength
+                        path_strength = 1.0
+                        for i in range(len(path) - 1):
+                            edge_data = G.get_edge_data(path[i], path[i+1])
+                            if edge_data:
+                                path_strength *= edge_data.get("weight", 0.5)
+                        
+                        critical_paths.append({
+                            "from": input_node,
+                            "to": outcome_node,
+                            "path": path,
+                            "length": len(path),
+                            "strength": path_strength,
+                            "modifiable_nodes": [n for n in path if model["nodes"].get(n, {}).get("modifiable", False)]
+                        })
+                except nx.NetworkXNoPath:
+                    continue
+    
+    # Sort by strength
+    critical_paths.sort(key=lambda x: x["strength"], reverse=True)
+    
+    return critical_paths[:5]  # Return top 5 critical paths
+
+def _generate_intervention_recommendations(self, model: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Generate intervention recommendations based on model structure"""
+    recommendations = []
+    
+    # Find high-leverage modifiable nodes
+    modifiable_nodes = [
+        (node_id, node_info) for node_id, node_info in model.get("nodes", {}).items()
+        if node_info.get("modifiable", False)
+    ]
+    
+    # Build graph for analysis
+    G = nx.DiGraph()
+    for edge in model.get("edges", []):
+        G.add_edge(edge["from"], edge["to"], weight=abs(edge.get("strength", 0.5)))
+    
+    for node_id, node_info in modifiable_nodes:
+        if node_id not in G:
+            continue
+            
+        # Calculate downstream impact
+        downstream_nodes = list(nx.descendants(G, node_id))
+        outcome_impact = sum(
+            1 for node in downstream_nodes 
+            if model["nodes"].get(node, {}).get("type") == "outcome"
+        )
+        
+        if outcome_impact > 0:
+            recommendations.append({
+                "node": node_id,
+                "type": node_info.get("type", "unknown"),
+                "description": f"Intervene at {node_id}",
+                "impact_score": outcome_impact / max(1, len(downstream_nodes)),
+                "affected_outcomes": outcome_impact,
+                "feasibility": "high" if node_info.get("type") == "input" else "medium",
+                "recommendation": self._generate_specific_recommendation(node_id, node_info, model)
+            })
+    
+    # Sort by impact
+    recommendations.sort(key=lambda x: x["impact_score"], reverse=True)
+    
+    return recommendations[:5]
+
+def _generate_specific_recommendation(self, node_id: str, node_info: Dict[str, Any], 
+                                    model: Dict[str, Any]) -> str:
+    """Generate specific recommendation text for a node"""
+    node_type = node_info.get("type", "factor")
+    
+    # Domain-specific recommendations
+    if "health" in model.get("metadata", {}).get("domain", ""):
+        if "exercise" in node_id.lower():
+            return "Increase physical activity to recommended 150+ minutes per week"
+        elif "diet" in node_id.lower():
+            return "Improve dietary quality with focus on whole foods and balanced nutrition"
+        elif "stress" in node_id.lower():
+            return "Implement stress management techniques (meditation, therapy, lifestyle changes)"
+    
+    elif "business" in model.get("metadata", {}).get("domain", ""):
+        if "marketing" in node_id.lower():
+            return "Optimize marketing spend allocation across channels based on ROI"
+        elif "quality" in node_id.lower():
+            return "Enhance product/service quality through customer feedback integration"
+        elif "efficiency" in node_id.lower():
+            return "Streamline operations to reduce costs and improve productivity"
+    
+    # Generic recommendations
+    if node_type == "input":
+        return f"Adjust {node_id.replace('_', ' ')} to optimal levels"
+    else:
+        return f"Monitor and influence {node_id.replace('_', ' ')}"
+
+def _perform_sensitivity_analysis(self, model: Dict[str, Any]) -> Dict[str, Any]:
+    """Perform basic sensitivity analysis on the model"""
+    sensitivity = {
+        "high_sensitivity_edges": [],
+        "robust_relationships": [],
+        "volatile_nodes": []
+    }
+    
+    # Identify high sensitivity edges (strong relationships)
+    for edge in model.get("edges", []):
+        strength = abs(edge.get("strength", 0.5))
+        if strength > 0.8:
+            sensitivity["high_sensitivity_edges"].append({
+                "from": edge["from"],
+                "to": edge["to"],
+                "strength": strength,
+                "interpretation": "Small changes in source lead to large changes in target"
+            })
+        elif strength > 0.6:
+            sensitivity["robust_relationships"].append({
+                "from": edge["from"],
+                "to": edge["to"],
+                "strength": strength
+            })
+    
+    # Identify volatile nodes (many strong incoming edges)
+    nodes = model.get("nodes", {})
+    for node_id in nodes:
+        incoming_edges = [
+            e for e in model.get("edges", []) 
+            if e["to"] == node_id and abs(e.get("strength", 0)) > 0.6
+        ]
+        
+        if len(incoming_edges) > 2:
+            sensitivity["volatile_nodes"].append({
+                "node": node_id,
+                "incoming_strong_edges": len(incoming_edges),
+                "volatility_reason": "Multiple strong influences make this node sensitive to changes"
+            })
+    
+    return sensitivity
+
+def _generate_usage_guidelines(self, model: Dict[str, Any]) -> List[str]:
+    """Generate guidelines for using the causal model"""
+    guidelines = []
+    
+    domain = model.get("metadata", {}).get("domain", "general")
+    complexity = model.get("analytics", {}).get("complexity_score", 0.5)
+    
+    # General guidelines
+    guidelines.append("This model represents causal relationships based on current evidence")
+    guidelines.append("Edge strengths indicate relative magnitude of causal effects")
+    
+    # Complexity-based guidelines
+    if complexity > 0.7:
+        guidelines.append("This is a complex model - consider focusing on critical paths for intervention")
+        guidelines.append("Multiple feedback loops present - system behavior may be non-linear")
+    elif complexity < 0.3:
+        guidelines.append("This is a simplified model - additional factors may influence outcomes")
+    
+    # Domain-specific guidelines
+    if domain == "health":
+        guidelines.append("Individual variations may differ from population-level effects")
+        guidelines.append("Consult healthcare professionals before making health decisions")
+    elif domain == "business":
+        guidelines.append("Market conditions can significantly moderate these relationships")
+        guidelines.append("Regular model validation recommended as business environment changes")
+    
+    # Intervention guidelines
+    if model.get("analytics", {}).get("intervention_recommendations"):
+        guidelines.append("Focus interventions on high-leverage modifiable nodes")
+        guidelines.append("Monitor intermediate outcomes to track intervention effectiveness")
+    
+    return guidelines
+
+# ========================================================================================
+# ADDITIONAL MODEL TEMPLATES
+# ========================================================================================
+
+def _generate_education_model(self, characteristics: Dict[str, Any]) -> Dict[str, Any]:
+    """Generate an education domain causal model"""
+    nodes = {}
+    edges = []
+    
+    if "online" in str(characteristics["tags"]) or "digital" in str(characteristics["tags"]):
+        # Online education focused model
+        nodes.update({
+            "platform_quality": {"type": "input", "modifiable": True},
+            "content_quality": {"type": "input", "modifiable": True},
+            "student_engagement_tools": {"type": "input", "modifiable": True},
+            "technical_accessibility": {"type": "input", "modifiable": True},
+            "online_interaction": {"type": "intermediate", "modifiable": False},
+            "self_directed_learning": {"type": "intermediate", "modifiable": True},
+            "learning_outcomes": {"type": "outcome", "modifiable": False},
+            "completion_rate": {"type": "outcome", "modifiable": False}
+        })
+        
+        edges.extend([
+            {"from": "platform_quality", "to": "online_interaction", "strength": 0.7},
+            {"from": "content_quality", "to": "learning_outcomes", "strength": 0.8},
+            {"from": "student_engagement_tools", "to": "online_interaction", "strength": 0.8},
+            {"from": "online_interaction", "to": "completion_rate", "strength": 0.7},
+            {"from": "self_directed_learning", "to": "learning_outcomes", "strength": 0.8}
+        ])
+    else:
+        # Traditional education model
+        nodes.update({
+            "teacher_quality": {"type": "input", "modifiable": True},
+            "classroom_environment": {"type": "input", "modifiable": True},
+            "curriculum_relevance": {"type": "input", "modifiable": True},
+            "student_motivation": {"type": "intermediate", "modifiable": True},
+            "knowledge_acquisition": {"type": "intermediate", "modifiable": False},
+            "academic_performance": {"type": "outcome", "modifiable": False},
+            "skill_development": {"type": "outcome", "modifiable": False}
+        })
+        
+        edges.extend([
+            {"from": "teacher_quality", "to": "student_motivation", "strength": 0.7},
+            {"from": "classroom_environment", "to": "student_motivation", "strength": 0.6},
+            {"from": "curriculum_relevance", "to": "knowledge_acquisition", "strength": 0.8},
+            {"from": "student_motivation", "to": "academic_performance", "strength": 0.8},
+            {"from": "knowledge_acquisition", "to": "skill_development", "strength": 0.7}
+        ])
+    
+    return {"nodes": nodes, "edges": edges}
+
+def _generate_environment_model(self, characteristics: Dict[str, Any]) -> Dict[str, Any]:
+    """Generate an environment domain causal model"""
+    nodes = {}
+    edges = []
+    
+    if "urban" in str(characteristics["tags"]) or "city" in str(characteristics["tags"]):
+        # Urban environment model
+        nodes.update({
+            "urban_planning": {"type": "input", "modifiable": True},
+            "public_transport": {"type": "input", "modifiable": True},
+            "green_spaces": {"type": "input", "modifiable": True},
+            "air_quality": {"type": "intermediate", "modifiable": False},
+            "urban_heat": {"type": "intermediate", "modifiable": False},
+            "livability": {"type": "outcome", "modifiable": False},
+            "public_health": {"type": "outcome", "modifiable": False}
+        })
+        
+        edges.extend([
+            {"from": "urban_planning", "to": "air_quality", "strength": 0.6},
+            {"from": "public_transport", "to": "air_quality", "strength": 0.7},
+            {"from": "green_spaces", "to": "urban_heat", "strength": -0.6},
+            {"from": "air_quality", "to": "public_health", "strength": -0.8},
+            {"from": "urban_heat", "to": "livability", "strength": -0.5}
+        ])
+    else:
+        # Ecosystem model
+        nodes.update({
+            "habitat_protection": {"type": "input", "modifiable": True},
+            "pollution_control": {"type": "input", "modifiable": True},
+            "resource_extraction": {"type": "input", "modifiable": True},
+            "biodiversity": {"type": "intermediate", "modifiable": False},
+            "ecosystem_services": {"type": "intermediate", "modifiable": False},
+            "environmental_health": {"type": "outcome", "modifiable": False},
+            "sustainability": {"type": "outcome", "modifiable": False}
+        })
+        
+        edges.extend([
+            {"from": "habitat_protection", "to": "biodiversity", "strength": 0.9},
+            {"from": "pollution_control", "to": "environmental_health", "strength": 0.8},
+            {"from": "resource_extraction", "to": "sustainability", "strength": -0.7},
+            {"from": "biodiversity", "to": "ecosystem_services", "strength": 0.8},
+            {"from": "ecosystem_services", "to": "environmental_health", "strength": 0.7}
+        ])
+    
+    return {"nodes": nodes, "edges": edges}
 
 # ========================================================================================
 # STATE MANAGEMENT
