@@ -41,6 +41,7 @@ Flax==0.10.6
 SQLAlchemy==2.0.41
 alembic==1.15.2
 mysqlclient==2.2.7
+pgvector
 
 # Caching
 redis==6.1.0
