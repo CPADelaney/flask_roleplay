@@ -362,6 +362,10 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             from nyx.core.a2a.context_aware_internal_feedback_system import ContextAwareInternalFeedbackSystem
             from nyx.core.a2a.context_aware_internal_thoughts import ContextAwareInternalThoughts
             from nyx.core.a2a.context_aware_issue_tracking_system import ContextAwareIssueTrackingSystem
+            from nyx.core.a2a.context_aware_knowledge_core import ContextAwareKnowledgeCore
+            from nyx.core.a2a.context_aware_memory_core import ContextAwareMemoryCore
+            from nyx.core.a2a.context_aware_memory_orchestrator import ContextAwareMemoryOrchestrator
+            from nyx.core.a2a.context_aware_identity_evolution import ContextAwareIdentityEvolution
     
             from dev_log.storage import get_dev_log_storage
             self.dev_log_storage = get_dev_log_storage()
@@ -445,8 +449,16 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
                 logger.debug("Enhanced MemoryOrchestrator with A2A context distribution")
             else:
                 self.memory_orchestrator = original_memory_orchestrator
-            
-            self.identity_evolution = IdentityEvolutionSystem(hormone_system=self.hormone_system)
+
+            original_identity_evolution = IdentityEvolutionSystem(hormone_system=self.hormone_system)
+            await original_identity_evolution.initialize()
+
+            if self.use_a2a_integration:
+                from nyx.core.a2a.context_aware_identity_evolution import ContextAwareIdentityEvolution
+                self.identity_evolution = ContextAwareIdentityEvolution(original_identity_evolution)
+                logger.debug("Enhanced IdentityEvolution with A2A context distribution")
+            else:
+                self.identity_evolution = original_identity_evolution
             
             original_knowledge_core = KnowledgeCoreAgents()
             await original_knowledge_core.initialize()
