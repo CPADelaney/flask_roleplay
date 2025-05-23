@@ -369,6 +369,10 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             from nyx.core.a2a.context_aware_meta_core import ContextAwareMetaCore
             from nyx.core.a2a.context_aware_mode_integration import ContextAwareModeIntegration
             from nyx.core.a2a.context_aware_mood_manager import ContextAwareMoodManager
+            from nyx.core.a2a.context_aware_novelty_engine import ContextAwareNoveltyEngine
+            from nyx.core.a2a.context_aware_parallel import ContextAwareParallelExecutor  
+            from nyx.core.a2a.context_aware_passive_observation import ContextAwarePassiveObservation
+            from nyx.core.a2a.context_aware_prediction_engine import ContextAwarePredictionEngine
     
             from dev_log.storage import get_dev_log_storage
             self.dev_log_storage = get_dev_log_storage()
@@ -749,8 +753,18 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             await self.femdom_integration_manager.initialize()
             logger.debug("Femdom integration manager initialized")
     
-            self.novelty_engine = NoveltyEngine(imagination_simulator=self.imagination_simulator, memory_core=self.memory_core)
-            await self.novelty_engine.initialize()
+            original_novelty_engine = NoveltyEngine(
+                imagination_simulator=self.imagination_simulator, 
+                memory_core=self.memory_core,
+                reasoning_core=self.reasoning_core  # Add if available
+            )
+            await original_novelty_engine.initialize()
+            
+            if self.use_a2a_integration:
+                self.novelty_engine = ContextAwareNoveltyEngine(original_novelty_engine)
+                logger.debug("Enhanced NoveltyEngine with A2A context distribution")
+            else:
+                self.novelty_engine = original_novelty_engine
             
             self.recognition_memory = RecognitionMemorySystem(memory_core=self.memory_core, context_awareness=self.context_system)
             await self.recognition_memory.initialize()
@@ -877,6 +891,15 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
                 identity_evolution=self.identity_evolution, attention_controller=self.attentional_controller
             )
             await self.passive_observation_system.start()
+
+            if self.use_a2a_integration:
+                from nyx.core.a2a.context_aware_passive_observation import ContextAwarePassiveObservation
+                # Store original for reference if needed
+                original_passive_observation = self.passive_observation_system
+                self.passive_observation_system = ContextAwarePassiveObservation(original_passive_observation)
+                logger.debug("Enhanced PassiveObservationSystem with A2A context distribution")
+                # Re-start the wrapped system
+                await self.passive_observation_system.start()
     
             self.proactive_communication_engine = ProactiveCommunicationEngine(
                 action_generator=self.agentic_action_generator, emotional_core=self.emotional_core,
@@ -919,6 +942,16 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
                 emotional_core=self.emotional_core, 
                 memory_core=self.memory_core
             )
+
+            if not hasattr(self, 'prediction_engine'):
+                from nyx.core.prediction_engine import PredictionEngine
+                self.prediction_engine = PredictionEngine()
+            
+            # Wrap with context-aware version if A2A enabled
+            if self.use_a2a_integration:
+                from nyx.core.a2a.context_aware_prediction_engine import ContextAwarePredictionEngine
+                self.prediction_engine = ContextAwarePredictionEngine(self.prediction_engine)
+                logger.debug("Enhanced PredictionEngine with A2A context distribution")
             
             if self.use_a2a_integration:
                 from nyx.core.a2a.context_aware_internal_thoughts import ContextAwareInternalThoughts
@@ -986,7 +1019,12 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             await self.integration_manager.initialize()
             self.sync_daemon = NyxSyncDaemon()
             self.agent_evaluator = AgentEvaluator()
-            self.parallel_executor = ParallelToolExecutor(max_concurrent=5)
+            
+            if self.use_a2a_integration:
+                from nyx.core.a2a.context_aware_parallel import ContextAwareParallelExecutor
+                self.parallel_executor = ContextAwareParallelExecutor(self.parallel_executor)
+                logger.debug("Enhanced ParallelToolExecutor with A2A context distribution")
+            
             self.thinking_tools = {
                 "should_use_extended_thinking": function_tool(should_use_extended_thinking),
                 "think_before_responding": function_tool(generate_reasoned_response),
@@ -7075,12 +7113,24 @@ System Prompt End
             # Add ALL your internal modules here
         }
 
-# These two are implemented here incorrectly
+# These are implemented here incorrectly
 #        if hasattr(self, 'autobiographical_narrative') and self.autobiographical_narrative:
 #            self.module_registry['autobiographical_narrative'] = self.autobiographical_narrative
             
 #        if hasattr(self, 'distributed_processing') and self.distributed_processing:
 #            self.module_registry['distributed_processing'] = self.distributed_processing
+
+ #       if hasattr(self, "novelty_engine") and self.novelty_engine:
+ #           self.internal_module_registry["novelty_engine"] = self.novelty_engine
+
+#        if hasattr(self, "parallel_executor") and self.parallel_executor:
+#            self.internal_module_registry["parallel_executor"] = self.parallel_executor
+    
+#        if hasattr(self, "passive_observation_system") and self.passive_observation_system:
+#           self.internal_module_registry["passive_observation"] = self.passive_observation_system
+    
+#        if hasattr(self, "prediction_engine") and self.prediction_engine:
+#           self.internal_module_registry["prediction_engine"] = self.prediction_engine
 
         for name, definition in module_defs.items():
              if hasattr(self, name) and getattr(self, name):
