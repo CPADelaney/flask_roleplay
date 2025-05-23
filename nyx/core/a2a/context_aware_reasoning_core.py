@@ -3738,6 +3738,606 @@ class ContextAwareReasoningCore(ContextAwareModule):
         
         return False
     
+    def _get_concept_neighbors(self, concept_id: str, space) -> List[str]:
+        """Get all concepts connected to a given concept"""
+        neighbors = set()
+        
+        # Check all relations in the space
+        for relation in space.relations:
+            if relation.get("source") == concept_id:
+                neighbors.add(relation.get("target"))
+            elif relation.get("target") == concept_id:
+                neighbors.add(relation.get("source"))
+        
+        return list(neighbors)
+    
+    def _concepts_connected(self, concept1_id: str, concept2_id: str, space) -> bool:
+        """Check if two concepts are directly connected"""
+        for relation in space.relations:
+            if (relation.get("source") == concept1_id and relation.get("target") == concept2_id) or \
+               (relation.get("source") == concept2_id and relation.get("target") == concept1_id):
+                return True
+        return False
+    
+    def _merge_cluster_results(self, dense_clusters: List[Dict[str, Any]], 
+                             semantic_clusters: List[Dict[str, Any]], 
+                             property_clusters: List[Dict[str, Any]], 
+                             space) -> List[Dict[str, Any]]:
+        """Merge results from different clustering strategies"""
+        merged_clusters = []
+        all_clusters = dense_clusters + semantic_clusters + property_clusters
+        
+        # Track which concepts have been assigned to merged clusters
+        assigned_concepts = set()
+        
+        # Sort clusters by size and quality
+        all_clusters.sort(key=lambda c: c.get("size", 0) * c.get("density", 0.5), reverse=True)
+        
+        for cluster in all_clusters:
+            cluster_members = set(cluster["members"])
+            
+            # Check overlap with existing merged clusters
+            best_merge_candidate = None
+            best_overlap = 0
+            
+            for i, merged in enumerate(merged_clusters):
+                merged_members = set(merged["members"])
+                overlap = len(cluster_members.intersection(merged_members))
+                
+                # If significant overlap, consider merging
+                if overlap >= min(len(cluster_members), len(merged_members)) * 0.5:
+                    if overlap > best_overlap:
+                        best_overlap = overlap
+                        best_merge_candidate = i
+            
+            if best_merge_candidate is not None:
+                # Merge with existing cluster
+                merged = merged_clusters[best_merge_candidate]
+                merged["members"] = list(set(merged["members"]).union(cluster_members))
+                merged["size"] = len(merged["members"])
+                
+                # Update cluster type to reflect merge
+                if merged.get("cluster_type") != cluster.get("cluster_type"):
+                    merged["cluster_type"] = "hybrid"
+                
+                # Recalculate metrics
+                merged["density"] = self._calculate_cluster_density(merged["members"], space)
+                merged["cohesion"] = self._calculate_cluster_cohesion(merged["members"], space)
+                
+            else:
+                # Create new merged cluster
+                new_merged = {
+                    "members": cluster["members"],
+                    "size": cluster["size"],
+                    "density": cluster.get("density", 0),
+                    "cohesion": cluster.get("cohesion", 0),
+                    "cluster_type": cluster.get("cluster_type", "unknown"),
+                    "source_methods": [cluster.get("cluster_type", "unknown")]
+                }
+                merged_clusters.append(new_merged)
+                assigned_concepts.update(cluster["members"])
+        
+        # Post-process: ensure no overlapping clusters
+        final_clusters = []
+        processed_concepts = set()
+        
+        for cluster in merged_clusters:
+            # Remove already processed concepts
+            unique_members = [m for m in cluster["members"] if m not in processed_concepts]
+            
+            if len(unique_members) >= 3:  # Minimum cluster size
+                cluster["members"] = unique_members
+                cluster["size"] = len(unique_members)
+                final_clusters.append(cluster)
+                processed_concepts.update(unique_members)
+        
+        return final_clusters
+    
+    def _analyze_cluster_properties(self, cluster: Dict[str, Any], space) -> Dict[str, Any]:
+        """Analyze detailed properties of a cluster"""
+        analysis = {
+            "central_concepts": [],
+            "peripheral_concepts": [],
+            "cluster_theme": "",
+            "internal_structure": "",
+            "boundary_strength": 0.0,
+            "homogeneity": 0.0
+        }
+        
+        members = cluster["members"]
+        
+        # Find central vs peripheral concepts
+        centrality_scores = {}
+        for member in members:
+            # Count internal connections
+            internal_connections = sum(1 for other in members 
+                                     if other != member and 
+                                     self._concepts_connected(member, other, space))
+            centrality_scores[member] = internal_connections
+        
+        # Sort by centrality
+        sorted_members = sorted(centrality_scores.items(), key=lambda x: x[1], reverse=True)
+        
+        # Top 20% are central
+        central_count = max(1, len(members) // 5)
+        analysis["central_concepts"] = [m[0] for m in sorted_members[:central_count]]
+        analysis["peripheral_concepts"] = [m[0] for m in sorted_members[-central_count:]]
+        
+        # Determine cluster theme
+        analysis["cluster_theme"] = self._determine_cluster_theme(members, space)
+        
+        # Analyze internal structure
+        avg_connections = sum(centrality_scores.values()) / len(members) if members else 0
+        if avg_connections > len(members) * 0.7:
+            analysis["internal_structure"] = "highly_connected"
+        elif avg_connections > len(members) * 0.4:
+            analysis["internal_structure"] = "moderately_connected"
+        else:
+            analysis["internal_structure"] = "loosely_connected"
+        
+        # Calculate boundary strength
+        internal_edges = sum(centrality_scores.values()) / 2  # Each edge counted twice
+        external_edges = 0
+        
+        for member in members:
+            neighbors = self._get_concept_neighbors(member, space)
+            external_edges += sum(1 for n in neighbors if n not in members)
+        
+        if internal_edges + external_edges > 0:
+            analysis["boundary_strength"] = internal_edges / (internal_edges + external_edges)
+        
+        # Calculate homogeneity
+        property_overlap_scores = []
+        for i, member1 in enumerate(members):
+            for member2 in members[i+1:]:
+                concept1 = space.concepts.get(member1, {})
+                concept2 = space.concepts.get(member2, {})
+                
+                props1 = set(concept1.get("properties", {}).keys())
+                props2 = set(concept2.get("properties", {}).keys())
+                
+                if props1 or props2:
+                    overlap = len(props1.intersection(props2)) / len(props1.union(props2))
+                    property_overlap_scores.append(overlap)
+        
+        if property_overlap_scores:
+            analysis["homogeneity"] = sum(property_overlap_scores) / len(property_overlap_scores)
+        
+        return analysis
+    
+    def _calculate_cluster_quality(self, cluster: Dict[str, Any], space) -> float:
+        """Calculate overall quality score for a cluster"""
+        quality = 0.0
+        
+        # Size factor (larger clusters up to a point)
+        size = cluster.get("size", 0)
+        if size >= 3 and size <= 10:
+            quality += 0.2
+        elif size > 10 and size <= 20:
+            quality += 0.15
+        elif size > 20:
+            quality += 0.1
+        
+        # Density factor
+        density = cluster.get("density", 0)
+        quality += density * 0.3
+        
+        # Cohesion factor
+        cohesion = cluster.get("cohesion", 0)
+        quality += cohesion * 0.3
+        
+        # Boundary strength (from analysis if available)
+        if "analysis" in cluster:
+            boundary_strength = cluster["analysis"].get("boundary_strength", 0)
+            quality += boundary_strength * 0.2
+        
+        return min(1.0, quality)
+    
+    def _calculate_modularity_gain(self, node: str, community: set, space) -> float:
+        """Calculate modularity gain from adding node to community"""
+        # Simplified modularity calculation
+        # Q = (edges_inside_community / total_edges) - (expected_edges / total_edges)²
+        
+        # Count edges
+        edges_to_community = 0
+        total_node_edges = 0
+        
+        neighbors = self._get_concept_neighbors(node, space)
+        total_node_edges = len(neighbors)
+        
+        for neighbor in neighbors:
+            if neighbor in community:
+                edges_to_community += 1
+        
+        if total_node_edges == 0:
+            return 0.0
+        
+        # Calculate gain
+        current_fraction = edges_to_community / total_node_edges
+        
+        # Expected fraction (simplified - assumes random connections)
+        community_size = len(community)
+        total_concepts = len(space.concepts)
+        expected_fraction = community_size / total_concepts if total_concepts > 0 else 0
+        
+        # Modularity gain
+        gain = current_fraction - expected_fraction
+        
+        return gain
+    
+    def _find_all_short_paths(self, start: str, end: str, space, max_length: int = 5) -> List[List[str]]:
+        """Find all short paths between two concepts"""
+        if start == end:
+            return [[start]]
+        
+        paths = []
+        queue = [(start, [start])]
+        
+        while queue:
+            current, path = queue.pop(0)
+            
+            if len(path) > max_length:
+                continue
+            
+            neighbors = self._get_concept_neighbors(current, space)
+            
+            for neighbor in neighbors:
+                if neighbor not in path:  # Avoid cycles
+                    new_path = path + [neighbor]
+                    
+                    if neighbor == end:
+                        paths.append(new_path)
+                    else:
+                        queue.append((neighbor, new_path))
+        
+        return paths
+    
+    def _classify_bridge_type(self, bridge_id: str, bridge_connections: Dict[int, List[str]], 
+                            space) -> str:
+        """Classify the type of bridge concept"""
+        bridge_concept = space.concepts.get(bridge_id, {})
+        
+        # Analyze connection patterns
+        connection_counts = [len(connections) for connections in bridge_connections.values()]
+        total_connections = sum(connection_counts)
+        
+        if len(connection_counts) == 2 and all(c == 1 for c in connection_counts):
+            return "simple_bridge"  # Connects exactly 2 communities with 1 connection each
+        
+        elif len(connection_counts) >= 3:
+            return "hub_bridge"  # Connects 3+ communities
+        
+        elif max(connection_counts) > 3:
+            return "strong_bridge"  # Many connections to at least one community
+        
+        elif total_connections > len(connection_counts) * 2:
+            return "integrator_bridge"  # Multiple connections per community
+        
+        else:
+            return "weak_bridge"  # Default
+    
+    def _check_local_gradient_quality(self, prev: str, current: str, next: str, space) -> float:
+        """Check if three consecutive concepts maintain gradient property"""
+        # Get concepts
+        prev_concept = space.concepts.get(prev, {})
+        current_concept = space.concepts.get(current, {})
+        next_concept = space.concepts.get(next, {})
+        
+        # Check if properties change monotonically
+        monotonic_score = 0.0
+        property_changes = 0
+        
+        # Get common properties
+        all_props = set()
+        all_props.update(prev_concept.get("properties", {}).keys())
+        all_props.update(current_concept.get("properties", {}).keys())
+        all_props.update(next_concept.get("properties", {}).keys())
+        
+        for prop in all_props:
+            prev_val = prev_concept.get("properties", {}).get(prop)
+            curr_val = current_concept.get("properties", {}).get(prop)
+            next_val = next_concept.get("properties", {}).get(prop)
+            
+            if prev_val is not None and curr_val is not None and next_val is not None:
+                # Check for monotonic change
+                if isinstance(prev_val, (int, float)) and isinstance(curr_val, (int, float)) and isinstance(next_val, (int, float)):
+                    if (prev_val <= curr_val <= next_val) or (prev_val >= curr_val >= next_val):
+                        monotonic_score += 1
+                    property_changes += 1
+                elif isinstance(prev_val, str) and isinstance(curr_val, str) and isinstance(next_val, str):
+                    # For strings, check if there's a progression
+                    if prev_val != curr_val and curr_val != next_val:
+                        monotonic_score += 0.5
+                    property_changes += 1
+        
+        if property_changes > 0:
+            quality = monotonic_score / property_changes
+        else:
+            # Check semantic gradient
+            sim1 = self._calculate_concept_similarity_simple(prev_concept, current_concept)
+            sim2 = self._calculate_concept_similarity_simple(current_concept, next_concept)
+            
+            # Good gradient has similar step sizes
+            quality = 1.0 - abs(sim1 - sim2)
+        
+        return quality
+    
+    def _analyze_gradient_quality(self, path: List[str], space) -> Dict[str, Any]:
+        """Analyze the quality of a gradient path"""
+        quality = {
+            "smoothness": 0.0,
+            "monotonicity": 0.0,
+            "step_uniformity": 0.0,
+            "semantic_coherence": 0.0
+        }
+        
+        if len(path) < 2:
+            return quality
+        
+        # Calculate step similarities
+        step_similarities = []
+        for i in range(len(path) - 1):
+            concept1 = space.concepts.get(path[i], {})
+            concept2 = space.concepts.get(path[i + 1], {})
+            similarity = self._calculate_concept_similarity_simple(concept1, concept2)
+            step_similarities.append(similarity)
+        
+        # Smoothness: average similarity between consecutive steps
+        quality["smoothness"] = sum(step_similarities) / len(step_similarities) if step_similarities else 0
+        
+        # Step uniformity: how similar are the step sizes
+        if len(step_similarities) > 1:
+            step_variance = np.var(step_similarities)
+            quality["step_uniformity"] = 1.0 / (1.0 + step_variance)
+        else:
+            quality["step_uniformity"] = 1.0
+        
+        # Monotonicity: check property changes
+        monotonic_props = 0
+        total_props_checked = 0
+        
+        # Get all properties across path
+        all_properties = set()
+        for node_id in path:
+            concept = space.concepts.get(node_id, {})
+            all_properties.update(concept.get("properties", {}).keys())
+        
+        for prop in all_properties:
+            values = []
+            for node_id in path:
+                concept = space.concepts.get(node_id, {})
+                if prop in concept.get("properties", {}):
+                    values.append(concept["properties"][prop])
+            
+            if len(values) >= 3:
+                # Check if values show monotonic trend
+                if self._is_monotonic_sequence(values):
+                    monotonic_props += 1
+                total_props_checked += 1
+        
+        if total_props_checked > 0:
+            quality["monotonicity"] = monotonic_props / total_props_checked
+        
+        # Semantic coherence: no sudden jumps in meaning
+        max_step_diff = max(step_similarities) - min(step_similarities) if step_similarities else 0
+        quality["semantic_coherence"] = 1.0 - max_step_diff
+        
+        return quality
+    
+    def _identify_gradient_dimension_advanced(self, path: List[str], space) -> str:
+        """Advanced identification of gradient dimension"""
+        if len(path) < 2:
+            return "undefined_dimension"
+        
+        # Analyze property changes along path
+        property_trajectories = {}
+        
+        for prop_name in self._get_all_properties_in_path(path, space):
+            values = []
+            for node_id in path:
+                concept = space.concepts.get(node_id, {})
+                if prop_name in concept.get("properties", {}):
+                    values.append(concept["properties"][prop_name])
+            
+            if len(values) >= len(path) * 0.7:  # Property present in most nodes
+                property_trajectories[prop_name] = values
+        
+        # Find property with most consistent change
+        best_property = None
+        best_score = 0
+        
+        for prop_name, values in property_trajectories.items():
+            # Calculate consistency score
+            if all(isinstance(v, (int, float)) for v in values):
+                # Numeric property - check for linear trend
+                if len(values) >= 3:
+                    # Simple linear regression
+                    x = list(range(len(values)))
+                    correlation = abs(np.corrcoef(x, values)[0, 1]) if len(set(values)) > 1 else 0
+                    if correlation > best_score:
+                        best_score = correlation
+                        best_property = prop_name
+            
+            elif all(isinstance(v, str) for v in values):
+                # String property - check for systematic changes
+                unique_ratio = len(set(values)) / len(values)
+                if 0.5 < unique_ratio < 1.0:  # Some change but not random
+                    if unique_ratio > best_score:
+                        best_score = unique_ratio
+                        best_property = prop_name
+        
+        # Determine dimension name
+        if best_property:
+            return f"{best_property}_gradient"
+        
+        # Fallback: analyze concept names
+        name_patterns = self._analyze_name_patterns(path, space)
+        if name_patterns:
+            return f"{name_patterns}_dimension"
+        
+        return "abstract_dimension"
+    
+    def _classify_gradient_type(self, quality: Dict[str, Any]) -> str:
+        """Classify the type of gradient based on quality metrics"""
+        smoothness = quality.get("smoothness", 0)
+        monotonicity = quality.get("monotonicity", 0)
+        uniformity = quality.get("step_uniformity", 0)
+        coherence = quality.get("semantic_coherence", 0)
+        
+        # Calculate overall quality
+        overall_quality = (smoothness + monotonicity + uniformity + coherence) / 4
+        
+        if overall_quality > 0.8:
+            if monotonicity > 0.8:
+                return "linear_gradient"
+            else:
+                return "smooth_gradient"
+        
+        elif overall_quality > 0.6:
+            if uniformity < 0.5:
+                return "variable_gradient"
+            else:
+                return "moderate_gradient"
+        
+        elif smoothness > 0.7 but monotonicity < 0.3:
+            return "oscillating_gradient"
+        
+        elif coherence < 0.4:
+            return "discontinuous_gradient"
+        
+        else:
+            return "weak_gradient"
+    
+    # Additional helper methods for the above functions
+    
+    def _determine_cluster_theme(self, members: List[str], space) -> str:
+        """Determine the thematic focus of a cluster"""
+        # Collect all concept names and properties
+        words = []
+        properties = []
+        
+        for member_id in members:
+            concept = space.concepts.get(member_id, {})
+            
+            # Add concept name words
+            name_words = concept.get("name", "").lower().split()
+            words.extend(name_words)
+            
+            # Add property names
+            properties.extend(concept.get("properties", {}).keys())
+        
+        # Find most common words (excluding stop words)
+        stop_words = {"the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for", "of", "with", "by"}
+        word_freq = {}
+        
+        for word in words:
+            if word not in stop_words and len(word) > 2:
+                word_freq[word] = word_freq.get(word, 0) + 1
+        
+        # Find most common meaningful word
+        if word_freq:
+            theme_word = max(word_freq.items(), key=lambda x: x[1])[0]
+            
+            # Check if it's a domain term
+            domain_terms = {
+                "system": "systems_and_processes",
+                "process": "procedural_elements", 
+                "state": "states_and_conditions",
+                "action": "actions_and_behaviors",
+                "property": "properties_and_attributes",
+                "relation": "relationships_and_connections"
+            }
+            
+            for term, theme in domain_terms.items():
+                if term in theme_word:
+                    return theme
+            
+            return f"{theme_word}_related"
+        
+        # Fallback to property analysis
+        if properties:
+            common_prop = max(set(properties), key=properties.count)
+            return f"{common_prop}_focused"
+        
+        return "mixed_theme"
+    
+    def _is_monotonic_sequence(self, values: List[Any]) -> bool:
+        """Check if a sequence of values is monotonic"""
+        if len(values) < 2:
+            return True
+        
+        # For numeric values
+        if all(isinstance(v, (int, float)) for v in values):
+            increasing = all(values[i] <= values[i+1] for i in range(len(values)-1))
+            decreasing = all(values[i] >= values[i+1] for i in range(len(values)-1))
+            return increasing or decreasing
+        
+        # For string values, check if there's a pattern
+        if all(isinstance(v, str) for v in values):
+            # Check if all different (indicating progression)
+            return len(set(values)) == len(values)
+        
+        return False
+    
+    def _get_all_properties_in_path(self, path: List[str], space) -> Set[str]:
+        """Get all properties present in concepts along a path"""
+        all_properties = set()
+        
+        for node_id in path:
+            concept = space.concepts.get(node_id, {})
+            all_properties.update(concept.get("properties", {}).keys())
+        
+        return all_properties
+    
+    def _analyze_name_patterns(self, path: List[str], space) -> str:
+        """Analyze naming patterns in a path"""
+        names = []
+        for node_id in path:
+            concept = space.concepts.get(node_id, {})
+            names.append(concept.get("name", "").lower())
+        
+        if not names:
+            return ""
+        
+        # Look for common prefixes/suffixes
+        if len(names) >= 3:
+            # Check prefixes
+            common_prefix = ""
+            for i in range(min(len(n) for n in names)):
+                if all(name[i] == names[0][i] for name in names):
+                    common_prefix += names[0][i]
+                else:
+                    break
+            
+            if len(common_prefix) >= 3:
+                return common_prefix.strip()
+            
+            # Check suffixes
+            reversed_names = [name[::-1] for name in names]
+            common_suffix = ""
+            for i in range(min(len(n) for n in reversed_names)):
+                if all(name[i] == reversed_names[0][i] for name in reversed_names):
+                    common_suffix += reversed_names[0][i]
+                else:
+                    break
+            
+            if len(common_suffix) >= 3:
+                return common_suffix[::-1].strip()
+        
+        # Look for numeric patterns
+        numbers = []
+        for name in names:
+            import re
+            nums = re.findall(r'\d+', name)
+            if nums:
+                numbers.extend([int(n) for n in nums])
+        
+        if numbers and len(numbers) == len(names):
+            if self._is_monotonic_sequence(numbers):
+                return "numeric_progression"
+        
+        return ""
+    
     # ========================================================================================
     # DELEGATE TO ORIGINAL CORE
     # ========================================================================================
