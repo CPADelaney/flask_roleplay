@@ -33,7 +33,6 @@ from .enhanced_reasoning_meta import (
     UncertaintyManager, ReasoningTemplateSystem,
     UncertaintyType, UncertaintyEstimate
 )
-)
 
 logger = logging.getLogger(__name__)
 
@@ -244,258 +243,245 @@ class CutVertexDetector:
             if neighbor not in visited:
                 self._dfs_component(neighbor, adjacency, visited, component)
 
-# Enhanced version integrated with the path robustness calculation
-
-def _is_cut_vertex_complete(self, node: str, graph: Dict[str, Any]) -> bool:
-    """
-    Complete implementation using Tarjan's algorithm to detect cut vertices.
+    # Enhanced version integrated with the path robustness calculation
     
-    This properly handles:
-    - Directed graphs (converts to undirected)
-    - Disconnected graphs
-    - Multiple components
-    - Edge cases (single node, no edges, etc.)
-    """
-    detector = CutVertexDetector()
-    return detector.is_cut_vertex(node, graph)
-
-def analyze_graph_vulnerabilities(self, graph: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Comprehensive analysis of graph vulnerabilities including cut vertices and bridges.
+    def analyze_graph_vulnerabilities(self, graph: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Comprehensive analysis of graph vulnerabilities including cut vertices and bridges.
+        
+        Returns detailed information about critical points in the graph structure.
+        """
+        detector = CutVertexDetector()
+        
+        # Build undirected adjacency
+        undirected_adj = detector._build_undirected_adjacency(graph)
+        
+        # Find all articulation points
+        articulation_points = detector.find_all_articulation_points(undirected_adj)
+        
+        # Find all bridges
+        bridges = detector.find_bridges(undirected_adj)
+        
+        # Find biconnected components
+        biconnected_components = detector.get_biconnected_components(undirected_adj)
+        
+        # Analyze impact of each articulation point
+        ap_impact = {}
+        for ap in articulation_points:
+            impact = self._analyze_articulation_point_impact(ap, graph, undirected_adj)
+            ap_impact[ap] = impact
+        
+        # Analyze bridge criticality
+        bridge_criticality = {}
+        for bridge in bridges:
+            criticality = self._analyze_bridge_criticality(bridge, graph)
+            bridge_criticality[bridge] = criticality
+        
+        # Calculate overall graph robustness metrics
+        total_nodes = len(graph.get('node_properties', {}))
+        total_edges = sum(len(targets) for targets in graph.get('adjacency', {}).values())
+        
+        vulnerability_metrics = {
+            'articulation_point_ratio': len(articulation_points) / max(total_nodes, 1),
+            'bridge_ratio': len(bridges) / max(total_edges, 1),
+            'largest_biconnected_component': max(len(c) for c in biconnected_components) if biconnected_components else 0,
+            'component_count': len(biconnected_components),
+            'is_biconnected': len(articulation_points) == 0,
+            'is_bridge_connected': len(bridges) == 0
+        }
+        
+        # Identify most critical vulnerabilities
+        critical_nodes = [
+            node for node, impact in ap_impact.items()
+            if impact['severity'] == 'critical'
+        ]
+        
+        critical_edges = [
+            edge for edge, criticality in bridge_criticality.items()
+            if criticality['severity'] == 'critical'
+        ]
+        
+        return {
+            'articulation_points': list(articulation_points),
+            'articulation_point_impacts': ap_impact,
+            'bridges': [list(b) for b in bridges],
+            'bridge_criticality': {f"{b[0]}->{b[1]}": crit for b, crit in bridge_criticality.items()},
+            'biconnected_components': [list(c) for c in biconnected_components],
+            'vulnerability_metrics': vulnerability_metrics,
+            'critical_vulnerabilities': {
+                'nodes': critical_nodes,
+                'edges': critical_edges
+            },
+            'recommendations': self._generate_vulnerability_recommendations(
+                articulation_points, bridges, vulnerability_metrics
+            )
+        }
     
-    Returns detailed information about critical points in the graph structure.
-    """
-    detector = CutVertexDetector()
+    def _analyze_articulation_point_impact(self, node: str, graph: Dict[str, Any], 
+                                         undirected_adj: Dict[str, Set[str]]) -> Dict[str, Any]:
+        """Analyze the impact of removing an articulation point"""
+        # Count components before removal
+        components_before = self._count_connected_components(undirected_adj)
+        
+        # Simulate removal
+        modified_adj = {k: v.copy() for k, v in undirected_adj.items()}
+        if node in modified_adj:
+            # Remove node and all its edges
+            neighbors = modified_adj[node].copy()
+            del modified_adj[node]
+            for neighbor in neighbors:
+                if neighbor in modified_adj:
+                    modified_adj[neighbor].discard(node)
+        
+        # Count components after removal
+        components_after = self._count_connected_components(modified_adj)
+        
+        # Calculate impact metrics
+        components_created = components_after - components_before
+        nodes_isolated = self._count_isolated_nodes(modified_adj)
+        
+        # Determine severity
+        if components_created >= 3:
+            severity = 'critical'
+        elif components_created == 2:
+            severity = 'high'
+        else:
+            severity = 'medium'
+        
+        # Check if critical paths go through this node
+        node_props = graph.get('node_properties', {}).get(node, {})
+        if node_props.get('criticality', 0) > 0.8:
+            severity = 'critical'
+        
+        return {
+            'components_created': components_created,
+            'nodes_isolated': nodes_isolated,
+            'neighbor_count': len(undirected_adj.get(node, set())),
+            'severity': severity,
+            'node_criticality': node_props.get('criticality', 0.5),
+            'current_load': node_props.get('current_load', 0),
+            'capacity': node_props.get('capacity', 1.0)
+        }
     
-    # Build undirected adjacency
-    undirected_adj = detector._build_undirected_adjacency(graph)
+    def _analyze_bridge_criticality(self, bridge: Tuple[str, str], 
+                                   graph: Dict[str, Any]) -> Dict[str, Any]:
+        """Analyze the criticality of a bridge (cut edge)"""
+        u, v = bridge
+        
+        # Get edge properties
+        edge_strength = graph.get('edge_strengths', {}).get((u, v), 0.5)
+        
+        # Check if this is the only path between important nodes
+        u_props = graph.get('node_properties', {}).get(u, {})
+        v_props = graph.get('node_properties', {}).get(v, {})
+        
+        # Calculate criticality based on multiple factors
+        criticality_score = 0.0
+        
+        # Factor 1: Node importance
+        u_importance = u_props.get('criticality', 0.5)
+        v_importance = v_props.get('criticality', 0.5)
+        criticality_score += (u_importance + v_importance) / 2 * 0.3
+        
+        # Factor 2: Traffic/load through edge
+        if 'edge_loads' in graph:
+            edge_load = graph['edge_loads'].get((u, v), 0)
+            max_load = max(graph['edge_loads'].values()) if graph['edge_loads'] else 1
+            criticality_score += (edge_load / max_load) * 0.3
+        
+        # Factor 3: Edge strength (weak edges are more critical as bridges)
+        criticality_score += (1.0 - edge_strength) * 0.2
+        
+        # Factor 4: Component sizes that would be separated
+        # (This is approximate - full calculation would be expensive)
+        u_degree = len(graph.get('adjacency', {}).get(u, []))
+        v_degree = len(graph.get('adjacency', {}).get(v, []))
+        degree_factor = min(u_degree, v_degree) / max(u_degree, v_degree)
+        criticality_score += (1.0 - degree_factor) * 0.2
+        
+        # Determine severity
+        if criticality_score > 0.7:
+            severity = 'critical'
+        elif criticality_score > 0.5:
+            severity = 'high'
+        elif criticality_score > 0.3:
+            severity = 'medium'
+        else:
+            severity = 'low'
+        
+        return {
+            'criticality_score': criticality_score,
+            'severity': severity,
+            'edge_strength': edge_strength,
+            'connects_critical_nodes': u_importance > 0.7 or v_importance > 0.7,
+            'is_weak_link': edge_strength < 0.3
+        }
     
-    # Find all articulation points
-    articulation_points = detector.find_all_articulation_points(undirected_adj)
+    def _count_connected_components(self, adjacency: Dict[str, Set[str]]) -> int:
+        """Count the number of connected components in the graph"""
+        visited = set()
+        component_count = 0
+        
+        for node in adjacency:
+            if node not in visited:
+                # Start DFS from this node
+                stack = [node]
+                while stack:
+                    current = stack.pop()
+                    if current not in visited:
+                        visited.add(current)
+                        stack.extend(adjacency.get(current, set()) - visited)
+                component_count += 1
+        
+        return component_count
     
-    # Find all bridges
-    bridges = detector.find_bridges(undirected_adj)
+    def _count_isolated_nodes(self, adjacency: Dict[str, Set[str]]) -> int:
+        """Count nodes with no connections"""
+        return sum(1 for node, neighbors in adjacency.items() if not neighbors)
     
-    # Find biconnected components
-    biconnected_components = detector.get_biconnected_components(undirected_adj)
-    
-    # Analyze impact of each articulation point
-    ap_impact = {}
-    for ap in articulation_points:
-        impact = self._analyze_articulation_point_impact(ap, graph, undirected_adj)
-        ap_impact[ap] = impact
-    
-    # Analyze bridge criticality
-    bridge_criticality = {}
-    for bridge in bridges:
-        criticality = self._analyze_bridge_criticality(bridge, graph)
-        bridge_criticality[bridge] = criticality
-    
-    # Calculate overall graph robustness metrics
-    total_nodes = len(graph.get('node_properties', {}))
-    total_edges = sum(len(targets) for targets in graph.get('adjacency', {}).values())
-    
-    vulnerability_metrics = {
-        'articulation_point_ratio': len(articulation_points) / max(total_nodes, 1),
-        'bridge_ratio': len(bridges) / max(total_edges, 1),
-        'largest_biconnected_component': max(len(c) for c in biconnected_components) if biconnected_components else 0,
-        'component_count': len(biconnected_components),
-        'is_biconnected': len(articulation_points) == 0,
-        'is_bridge_connected': len(bridges) == 0
-    }
-    
-    # Identify most critical vulnerabilities
-    critical_nodes = [
-        node for node, impact in ap_impact.items()
-        if impact['severity'] == 'critical'
-    ]
-    
-    critical_edges = [
-        edge for edge, criticality in bridge_criticality.items()
-        if criticality['severity'] == 'critical'
-    ]
-    
-    return {
-        'articulation_points': list(articulation_points),
-        'articulation_point_impacts': ap_impact,
-        'bridges': [list(b) for b in bridges],
-        'bridge_criticality': {f"{b[0]}->{b[1]}": crit for b, crit in bridge_criticality.items()},
-        'biconnected_components': [list(c) for c in biconnected_components],
-        'vulnerability_metrics': vulnerability_metrics,
-        'critical_vulnerabilities': {
-            'nodes': critical_nodes,
-            'edges': critical_edges
-        },
-        'recommendations': self._generate_vulnerability_recommendations(
-            articulation_points, bridges, vulnerability_metrics
-        )
-    }
-
-def _analyze_articulation_point_impact(self, node: str, graph: Dict[str, Any], 
-                                     undirected_adj: Dict[str, Set[str]]) -> Dict[str, Any]:
-    """Analyze the impact of removing an articulation point"""
-    # Count components before removal
-    components_before = self._count_connected_components(undirected_adj)
-    
-    # Simulate removal
-    modified_adj = {k: v.copy() for k, v in undirected_adj.items()}
-    if node in modified_adj:
-        # Remove node and all its edges
-        neighbors = modified_adj[node].copy()
-        del modified_adj[node]
-        for neighbor in neighbors:
-            if neighbor in modified_adj:
-                modified_adj[neighbor].discard(node)
-    
-    # Count components after removal
-    components_after = self._count_connected_components(modified_adj)
-    
-    # Calculate impact metrics
-    components_created = components_after - components_before
-    nodes_isolated = self._count_isolated_nodes(modified_adj)
-    
-    # Determine severity
-    if components_created >= 3:
-        severity = 'critical'
-    elif components_created == 2:
-        severity = 'high'
-    else:
-        severity = 'medium'
-    
-    # Check if critical paths go through this node
-    node_props = graph.get('node_properties', {}).get(node, {})
-    if node_props.get('criticality', 0) > 0.8:
-        severity = 'critical'
-    
-    return {
-        'components_created': components_created,
-        'nodes_isolated': nodes_isolated,
-        'neighbor_count': len(undirected_adj.get(node, set())),
-        'severity': severity,
-        'node_criticality': node_props.get('criticality', 0.5),
-        'current_load': node_props.get('current_load', 0),
-        'capacity': node_props.get('capacity', 1.0)
-    }
-
-def _analyze_bridge_criticality(self, bridge: Tuple[str, str], 
-                               graph: Dict[str, Any]) -> Dict[str, Any]:
-    """Analyze the criticality of a bridge (cut edge)"""
-    u, v = bridge
-    
-    # Get edge properties
-    edge_strength = graph.get('edge_strengths', {}).get((u, v), 0.5)
-    
-    # Check if this is the only path between important nodes
-    u_props = graph.get('node_properties', {}).get(u, {})
-    v_props = graph.get('node_properties', {}).get(v, {})
-    
-    # Calculate criticality based on multiple factors
-    criticality_score = 0.0
-    
-    # Factor 1: Node importance
-    u_importance = u_props.get('criticality', 0.5)
-    v_importance = v_props.get('criticality', 0.5)
-    criticality_score += (u_importance + v_importance) / 2 * 0.3
-    
-    # Factor 2: Traffic/load through edge
-    if 'edge_loads' in graph:
-        edge_load = graph['edge_loads'].get((u, v), 0)
-        max_load = max(graph['edge_loads'].values()) if graph['edge_loads'] else 1
-        criticality_score += (edge_load / max_load) * 0.3
-    
-    # Factor 3: Edge strength (weak edges are more critical as bridges)
-    criticality_score += (1.0 - edge_strength) * 0.2
-    
-    # Factor 4: Component sizes that would be separated
-    # (This is approximate - full calculation would be expensive)
-    u_degree = len(graph.get('adjacency', {}).get(u, []))
-    v_degree = len(graph.get('adjacency', {}).get(v, []))
-    degree_factor = min(u_degree, v_degree) / max(u_degree, v_degree)
-    criticality_score += (1.0 - degree_factor) * 0.2
-    
-    # Determine severity
-    if criticality_score > 0.7:
-        severity = 'critical'
-    elif criticality_score > 0.5:
-        severity = 'high'
-    elif criticality_score > 0.3:
-        severity = 'medium'
-    else:
-        severity = 'low'
-    
-    return {
-        'criticality_score': criticality_score,
-        'severity': severity,
-        'edge_strength': edge_strength,
-        'connects_critical_nodes': u_importance > 0.7 or v_importance > 0.7,
-        'is_weak_link': edge_strength < 0.3
-    }
-
-def _count_connected_components(self, adjacency: Dict[str, Set[str]]) -> int:
-    """Count the number of connected components in the graph"""
-    visited = set()
-    component_count = 0
-    
-    for node in adjacency:
-        if node not in visited:
-            # Start DFS from this node
-            stack = [node]
-            while stack:
-                current = stack.pop()
-                if current not in visited:
-                    visited.add(current)
-                    stack.extend(adjacency.get(current, set()) - visited)
-            component_count += 1
-    
-    return component_count
-
-def _count_isolated_nodes(self, adjacency: Dict[str, Set[str]]) -> int:
-    """Count nodes with no connections"""
-    return sum(1 for node, neighbors in adjacency.items() if not neighbors)
-
-def _generate_vulnerability_recommendations(self, articulation_points: Set[str], 
-                                          bridges: Set[Tuple[str, str]], 
-                                          metrics: Dict[str, Any]) -> List[Dict[str, str]]:
-    """Generate recommendations based on vulnerability analysis"""
-    recommendations = []
-    
-    # High ratio of articulation points
-    if metrics['articulation_point_ratio'] > 0.2:
-        recommendations.append({
-            'type': 'add_redundancy',
-            'priority': 'high',
-            'description': f"{len(articulation_points)} nodes are single points of failure. Add redundant connections to create alternate paths.",
-            'specific_nodes': list(articulation_points)[:5]  # Top 5
-        })
-    
-    # Many bridges
-    if metrics['bridge_ratio'] > 0.3:
-        recommendations.append({
-            'type': 'add_parallel_edges',
-            'priority': 'high',
-            'description': f"{len(bridges)} edges are bridges. Add parallel connections for critical edges.",
-            'specific_edges': [list(b) for b in list(bridges)[:5]]
-        })
-    
-    # Not biconnected
-    if not metrics['is_biconnected']:
-        recommendations.append({
-            'type': 'improve_connectivity',
-            'priority': 'medium',
-            'description': "Graph is not biconnected. Consider adding edges to eliminate articulation points.",
-            'target_state': 'biconnected'
-        })
-    
-    # Many small components
-    if metrics['component_count'] > 5:
-        recommendations.append({
-            'type': 'merge_components',
-            'priority': 'medium',
-            'description': f"Graph has {metrics['component_count']} biconnected components. Consider connecting smaller components.",
-            'benefit': 'improved_fault_tolerance'
-        })
-    
-    return recommendations
+    def _generate_vulnerability_recommendations(self, articulation_points: Set[str], 
+                                              bridges: Set[Tuple[str, str]], 
+                                              metrics: Dict[str, Any]) -> List[Dict[str, str]]:
+        """Generate recommendations based on vulnerability analysis"""
+        recommendations = []
+        
+        # High ratio of articulation points
+        if metrics['articulation_point_ratio'] > 0.2:
+            recommendations.append({
+                'type': 'add_redundancy',
+                'priority': 'high',
+                'description': f"{len(articulation_points)} nodes are single points of failure. Add redundant connections to create alternate paths.",
+                'specific_nodes': list(articulation_points)[:5]  # Top 5
+            })
+        
+        # Many bridges
+        if metrics['bridge_ratio'] > 0.3:
+            recommendations.append({
+                'type': 'add_parallel_edges',
+                'priority': 'high',
+                'description': f"{len(bridges)} edges are bridges. Add parallel connections for critical edges.",
+                'specific_edges': [list(b) for b in list(bridges)[:5]]
+            })
+        
+        # Not biconnected
+        if not metrics['is_biconnected']:
+            recommendations.append({
+                'type': 'improve_connectivity',
+                'priority': 'medium',
+                'description': "Graph is not biconnected. Consider adding edges to eliminate articulation points.",
+                'target_state': 'biconnected'
+            })
+        
+        # Many small components
+        if metrics['component_count'] > 5:
+            recommendations.append({
+                'type': 'merge_components',
+                'priority': 'medium',
+                'description': f"Graph has {metrics['component_count']} biconnected components. Consider connecting smaller components.",
+                'benefit': 'improved_fault_tolerance'
+            })
+        
+        return recommendations
 
 @dataclass
 class RobustnessFactors:
@@ -517,657 +503,634 @@ class RobustnessFactors:
                 self.length_penalty * 
                 self.feedback_bonus)
 
-def _calculate_path_robustness(self, path: List[str], model) -> float:
-    """
-    Calculate how robust a path is to perturbations.
-    
-    This comprehensive implementation considers:
-    1. Edge reliability along the path
-    2. Alternative paths between nodes
-    3. Node vulnerabilities
-    4. Critical bottlenecks
-    5. Path length effects
-    6. Feedback loops and cycles
-    7. Cascade failure risks
-    """
-    if len(path) < 2:
-        return 1.0
-    
-    # Build graph representation for analysis
-    graph = self._build_graph_from_model(model)
-    
-    # Calculate various robustness factors
-    factors = RobustnessFactors(
-        edge_reliability=self._calculate_edge_reliability(path, model),
-        path_redundancy=self._calculate_path_redundancy(path, graph),
-        node_reliability=self._calculate_node_reliability(path, model, graph),
-        bottleneck_penalty=self._calculate_bottleneck_penalty(path, graph),
-        length_penalty=self._calculate_length_penalty(path),
-        feedback_bonus=self._calculate_feedback_bonus(path, graph)
-    )
-    
-    # Consider cascade failure risk
-    cascade_risk = self._assess_cascade_failure_risk(path, model, graph)
-    
-    # Calculate final robustness
-    base_robustness = factors.overall_robustness
-    cascade_adjusted = base_robustness * (1.0 - cascade_risk)
-    
-    # Ensure robustness is in [0, 1] range
-    return max(0.0, min(1.0, cascade_adjusted))
-
-def _build_graph_from_model(self, model) -> Dict[str, Any]:
-    """Build graph representation from model for analysis"""
-    graph = {
-        'adjacency': defaultdict(list),
-        'reverse_adjacency': defaultdict(list),
-        'edge_strengths': {},
-        'node_properties': {}
-    }
-    
-    # Build adjacency lists
-    for relation in model.relations:
-        graph['adjacency'][relation.source].append(relation.target)
-        graph['reverse_adjacency'][relation.target].append(relation.source)
-        graph['edge_strengths'][(relation.source, relation.target)] = relation.strength
-    
-    # Store node properties
-    for node_id, node in model.nodes.items():
-        graph['node_properties'][node_id] = {
-            'type': getattr(node, 'node_type', 'standard'),
-            'criticality': getattr(node, 'criticality', 0.5),
-            'reliability': getattr(node, 'reliability', 0.9),
-            'capacity': getattr(node, 'capacity', 1.0),
-            'current_load': getattr(node, 'current_load', 0.5)
-        }
-    
-    return graph
-
-def _calculate_edge_reliability(self, path: List[str], model) -> float:
-    """Calculate reliability based on edge strengths along path"""
-    if len(path) < 2:
-        return 1.0
-    
-    edge_strengths = []
-    
-    for i in range(len(path) - 1):
-        source = path[i]
-        target = path[i + 1]
+    def _calculate_path_robustness(self, path: List[str], model) -> float:
+        """
+        Calculate how robust a path is to perturbations.
         
-        # Find edge strength
-        edge_strength = 0.0
-        for relation in model.relations:
-            if relation.source == source and relation.target == target:
-                edge_strength = relation.strength
-                
-                # Adjust for edge properties
-                if hasattr(relation, 'reliability'):
-                    edge_strength *= relation.reliability
-                if hasattr(relation, 'variability'):
-                    # High variability reduces effective strength
-                    edge_strength *= (1.0 - relation.variability * 0.5)
-                break
+        This comprehensive implementation considers:
+        1. Edge reliability along the path
+        2. Alternative paths between nodes
+        3. Node vulnerabilities
+        4. Critical bottlenecks
+        5. Path length effects
+        6. Feedback loops and cycles
+        7. Cascade failure risks
+        """
+        if len(path) < 2:
+            return 1.0
         
-        edge_strengths.append(edge_strength)
-    
-    # Use geometric mean for overall edge reliability
-    # This penalizes weak links more than arithmetic mean
-    if edge_strengths:
-        return np.power(np.prod(edge_strengths), 1.0 / len(edge_strengths))
-    return 0.0
-
-def _calculate_path_redundancy(self, path: List[str], graph: Dict[str, Any]) -> float:
-    """Calculate redundancy based on alternative paths"""
-    if len(path) < 2:
-        return 1.0
-    
-    redundancy_scores = []
-    
-    for i in range(len(path) - 1):
-        source = path[i]
-        target = path[i + 1]
+        # Build graph representation for analysis
+        graph = self._build_graph_from_model(model)
         
-        # Find all alternative paths between consecutive nodes
-        alternatives = self._find_alternative_paths(
-            source, target, graph, 
-            exclude_edge=(source, target),
-            max_length=5  # Don't consider very long alternatives
+        # Calculate various robustness factors
+        factors = RobustnessFactors(
+            edge_reliability=self._calculate_edge_reliability(path, model),
+            path_redundancy=self._calculate_path_redundancy(path, graph),
+            node_reliability=self._calculate_node_reliability(path, model, graph),
+            bottleneck_penalty=self._calculate_bottleneck_penalty(path, graph),
+            length_penalty=self._calculate_length_penalty(path),
+            feedback_bonus=self._calculate_feedback_bonus(path, graph)
         )
         
-        # Calculate redundancy score for this segment
-        if alternatives:
-            # Consider both quantity and quality of alternatives
-            alt_count = len(alternatives)
-            alt_quality = np.mean([self._evaluate_path_quality(alt, graph) 
-                                  for alt in alternatives])
+        # Consider cascade failure risk
+        cascade_risk = self._assess_cascade_failure_risk(path, model, graph)
+        
+        # Calculate final robustness
+        base_robustness = factors.overall_robustness
+        cascade_adjusted = base_robustness * (1.0 - cascade_risk)
+        
+        # Ensure robustness is in [0, 1] range
+        return max(0.0, min(1.0, cascade_adjusted))
+    
+    def _build_graph_from_model(self, model) -> Dict[str, Any]:
+        """Build graph representation from model for analysis"""
+        graph = {
+            'adjacency': defaultdict(list),
+            'reverse_adjacency': defaultdict(list),
+            'edge_strengths': {},
+            'node_properties': {}
+        }
+        
+        # Build adjacency lists
+        for relation in model.relations:
+            graph['adjacency'][relation.source].append(relation.target)
+            graph['reverse_adjacency'][relation.target].append(relation.source)
+            graph['edge_strengths'][(relation.source, relation.target)] = relation.strength
+        
+        # Store node properties
+        for node_id, node in model.nodes.items():
+            graph['node_properties'][node_id] = {
+                'type': getattr(node, 'node_type', 'standard'),
+                'criticality': getattr(node, 'criticality', 0.5),
+                'reliability': getattr(node, 'reliability', 0.9),
+                'capacity': getattr(node, 'capacity', 1.0),
+                'current_load': getattr(node, 'current_load', 0.5)
+            }
+        
+        return graph
+    
+    def _calculate_edge_reliability(self, path: List[str], model) -> float:
+        """Calculate reliability based on edge strengths along path"""
+        if len(path) < 2:
+            return 1.0
+        
+        edge_strengths = []
+        
+        for i in range(len(path) - 1):
+            source = path[i]
+            target = path[i + 1]
             
-            # Redundancy increases with more high-quality alternatives
-            # Using log to prevent excessive bonus from many weak alternatives
-            segment_redundancy = 1.0 + np.log1p(alt_count) * alt_quality * 0.3
-        else:
-            # No alternatives - this segment is critical
-            segment_redundancy = 0.5
+            # Find edge strength
+            edge_strength = 0.0
+            for relation in model.relations:
+                if relation.source == source and relation.target == target:
+                    edge_strength = relation.strength
+                    
+                    # Adjust for edge properties
+                    if hasattr(relation, 'reliability'):
+                        edge_strength *= relation.reliability
+                    if hasattr(relation, 'variability'):
+                        # High variability reduces effective strength
+                        edge_strength *= (1.0 - relation.variability * 0.5)
+                    break
+            
+            edge_strengths.append(edge_strength)
         
-        redundancy_scores.append(segment_redundancy)
+        # Use geometric mean for overall edge reliability
+        # This penalizes weak links more than arithmetic mean
+        if edge_strengths:
+            return np.power(np.prod(edge_strengths), 1.0 / len(edge_strengths))
+        return 0.0
     
-    # Overall redundancy is limited by weakest segment
-    return np.mean(redundancy_scores) * np.min(redundancy_scores) / np.max(redundancy_scores)
-
-def _find_alternative_paths(self, source: str, target: str, graph: Dict[str, Any],
-                           exclude_edge: Optional[Tuple[str, str]] = None,
-                           max_length: int = 5) -> List[List[str]]:
-    """Find alternative paths between source and target using BFS"""
-    alternatives = []
+    def _calculate_path_redundancy(self, path: List[str], graph: Dict[str, Any]) -> float:
+        """Calculate redundancy based on alternative paths"""
+        if len(path) < 2:
+            return 1.0
+        
+        redundancy_scores = []
+        
+        for i in range(len(path) - 1):
+            source = path[i]
+            target = path[i + 1]
+            
+            # Find all alternative paths between consecutive nodes
+            alternatives = self._find_alternative_paths(
+                source, target, graph, 
+                exclude_edge=(source, target),
+                max_length=5  # Don't consider very long alternatives
+            )
+            
+            # Calculate redundancy score for this segment
+            if alternatives:
+                # Consider both quantity and quality of alternatives
+                alt_count = len(alternatives)
+                alt_quality = np.mean([self._evaluate_path_quality(alt, graph) 
+                                      for alt in alternatives])
+                
+                # Redundancy increases with more high-quality alternatives
+                # Using log to prevent excessive bonus from many weak alternatives
+                segment_redundancy = 1.0 + np.log1p(alt_count) * alt_quality * 0.3
+            else:
+                # No alternatives - this segment is critical
+                segment_redundancy = 0.5
+            
+            redundancy_scores.append(segment_redundancy)
+        
+        # Overall redundancy is limited by weakest segment
+        return np.mean(redundancy_scores) * np.min(redundancy_scores) / np.max(redundancy_scores)
     
-    # BFS to find paths
-    queue = deque([(source, [source])])
-    visited_paths = set()
-    
-    while queue and len(alternatives) < 10:  # Limit to 10 alternatives
-        current, path = queue.popleft()
+    def _find_alternative_paths(self, source: str, target: str, graph: Dict[str, Any],
+                               exclude_edge: Optional[Tuple[str, str]] = None,
+                               max_length: int = 5) -> List[List[str]]:
+        """Find alternative paths between source and target using BFS"""
+        alternatives = []
         
-        # Skip if path is too long
-        if len(path) > max_length:
-            continue
+        # BFS to find paths
+        queue = deque([(source, [source])])
+        visited_paths = set()
         
-        # Check if we reached target
-        if current == target and len(path) > 1:
-            path_tuple = tuple(path)
-            if path_tuple not in visited_paths:
-                visited_paths.add(path_tuple)
-                alternatives.append(path)
-            continue
-        
-        # Explore neighbors
-        for neighbor in graph['adjacency'].get(current, []):
-            # Skip excluded edge
-            if exclude_edge and (current, neighbor) == exclude_edge:
+        while queue and len(alternatives) < 10:  # Limit to 10 alternatives
+            current, path = queue.popleft()
+            
+            # Skip if path is too long
+            if len(path) > max_length:
                 continue
             
-            # Avoid cycles
-            if neighbor not in path:
-                new_path = path + [neighbor]
-                queue.append((neighbor, new_path))
+            # Check if we reached target
+            if current == target and len(path) > 1:
+                path_tuple = tuple(path)
+                if path_tuple not in visited_paths:
+                    visited_paths.add(path_tuple)
+                    alternatives.append(path)
+                continue
+            
+            # Explore neighbors
+            for neighbor in graph['adjacency'].get(current, []):
+                # Skip excluded edge
+                if exclude_edge and (current, neighbor) == exclude_edge:
+                    continue
+                
+                # Avoid cycles
+                if neighbor not in path:
+                    new_path = path + [neighbor]
+                    queue.append((neighbor, new_path))
+        
+        return alternatives
     
-    return alternatives
-
-def _evaluate_path_quality(self, path: List[str], graph: Dict[str, Any]) -> float:
-    """Evaluate quality of an alternative path"""
-    if len(path) < 2:
+    def _evaluate_path_quality(self, path: List[str], graph: Dict[str, Any]) -> float:
+        """Evaluate quality of an alternative path"""
+        if len(path) < 2:
+            return 0.0
+        
+        quality = 1.0
+        
+        # Factor 1: Path strength (product of edge strengths)
+        for i in range(len(path) - 1):
+            edge_key = (path[i], path[i + 1])
+            edge_strength = graph['edge_strengths'].get(edge_key, 0.5)
+            quality *= edge_strength
+        
+        # Factor 2: Length penalty (shorter is better)
+        length_penalty = 1.0 / (1.0 + 0.2 * (len(path) - 2))
+        quality *= length_penalty
+        
+        # Factor 3: Node reliability along path
+        node_reliability = 1.0
+        for node in path[1:-1]:  # Exclude source and target
+            node_props = graph['node_properties'].get(node, {})
+            node_reliability *= node_props.get('reliability', 0.9)
+        quality *= node_reliability
+        
+        return quality
+    
+    def _calculate_node_reliability(self, path: List[str], model, graph: Dict[str, Any]) -> float:
+        """Calculate reliability based on node properties and vulnerabilities"""
+        if not path:
+            return 1.0
+        
+        node_scores = []
+        
+        for node in path:
+            node_data = graph['node_properties'].get(node, {})
+            base_reliability = node_data.get('reliability', 0.9)
+            
+            # Check for vulnerabilities
+            vulnerabilities = self._identify_node_vulnerabilities(node, model, graph)
+            
+            # Adjust reliability based on vulnerabilities
+            vulnerability_penalty = 1.0
+            for vuln in vulnerabilities:
+                if vuln == NodeVulnerability.SINGLE_POINT_FAILURE:
+                    vulnerability_penalty *= 0.6
+                elif vuln == NodeVulnerability.HIGH_CENTRALITY:
+                    vulnerability_penalty *= 0.8
+                elif vuln == NodeVulnerability.RESOURCE_CONSTRAINED:
+                    # Check load vs capacity
+                    load_ratio = node_data.get('current_load', 0.5) / node_data.get('capacity', 1.0)
+                    if load_ratio > 0.8:
+                        vulnerability_penalty *= 0.7
+                elif vuln == NodeVulnerability.EXTERNAL_DEPENDENCY:
+                    vulnerability_penalty *= 0.85
+            
+            node_reliability = base_reliability * vulnerability_penalty
+            node_scores.append(node_reliability)
+        
+        # Use harmonic mean to emphasize weak nodes
+        if node_scores:
+            return len(node_scores) / sum(1.0 / score for score in node_scores)
         return 0.0
     
-    quality = 1.0
-    
-    # Factor 1: Path strength (product of edge strengths)
-    for i in range(len(path) - 1):
-        edge_key = (path[i], path[i + 1])
-        edge_strength = graph['edge_strengths'].get(edge_key, 0.5)
-        quality *= edge_strength
-    
-    # Factor 2: Length penalty (shorter is better)
-    length_penalty = 1.0 / (1.0 + 0.2 * (len(path) - 2))
-    quality *= length_penalty
-    
-    # Factor 3: Node reliability along path
-    node_reliability = 1.0
-    for node in path[1:-1]:  # Exclude source and target
-        node_props = graph['node_properties'].get(node, {})
-        node_reliability *= node_props.get('reliability', 0.9)
-    quality *= node_reliability
-    
-    return quality
-
-def _calculate_node_reliability(self, path: List[str], model, graph: Dict[str, Any]) -> float:
-    """Calculate reliability based on node properties and vulnerabilities"""
-    if not path:
-        return 1.0
-    
-    node_scores = []
-    
-    for node in path:
+    def _identify_node_vulnerabilities(self, node: str, model, graph: Dict[str, Any]) -> List[NodeVulnerability]:
+        """Identify vulnerabilities of a specific node"""
+        vulnerabilities = []
+        
+        # Check if it's a single point of failure
+        in_degree = len(graph['reverse_adjacency'].get(node, []))
+        out_degree = len(graph['adjacency'].get(node, []))
+        
+        # High centrality - many connections
+        total_degree = in_degree + out_degree
+        if total_degree > len(graph['node_properties']) * 0.3:  # Connected to >30% of nodes
+            vulnerabilities.append(NodeVulnerability.HIGH_CENTRALITY)
+        
+        # Single point of failure - uses the integrated CutVertexDetector
+        if self._is_cut_vertex(node, graph):
+            vulnerabilities.append(NodeVulnerability.SINGLE_POINT_FAILURE)
+        
+        # Resource constrained
         node_data = graph['node_properties'].get(node, {})
-        base_reliability = node_data.get('reliability', 0.9)
+        if node_data.get('current_load', 0) / node_data.get('capacity', 1.0) > 0.8:
+            vulnerabilities.append(NodeVulnerability.RESOURCE_CONSTRAINED)
         
-        # Check for vulnerabilities
-        vulnerabilities = self._identify_node_vulnerabilities(node, model, graph)
+        # External dependency (simplified check)
+        if node_data.get('type') == 'external' or 'external' in node.lower():
+            vulnerabilities.append(NodeVulnerability.EXTERNAL_DEPENDENCY)
         
-        # Adjust reliability based on vulnerabilities
-        vulnerability_penalty = 1.0
-        for vuln in vulnerabilities:
-            if vuln == NodeVulnerability.SINGLE_POINT_FAILURE:
-                vulnerability_penalty *= 0.6
-            elif vuln == NodeVulnerability.HIGH_CENTRALITY:
-                vulnerability_penalty *= 0.8
-            elif vuln == NodeVulnerability.RESOURCE_CONSTRAINED:
-                # Check load vs capacity
-                load_ratio = node_data.get('current_load', 0.5) / node_data.get('capacity', 1.0)
-                if load_ratio > 0.8:
-                    vulnerability_penalty *= 0.7
-            elif vuln == NodeVulnerability.EXTERNAL_DEPENDENCY:
-                vulnerability_penalty *= 0.85
+        return vulnerabilities
+    
+    def _path_exists_excluding(self, source: str, target: str, exclude: str, 
+                              graph: Dict[str, Any]) -> bool:
+        """Check if path exists between source and target excluding a node"""
+        visited = set([exclude])  # Exclude the node
+        queue = deque([source])
         
-        node_reliability = base_reliability * vulnerability_penalty
-        node_scores.append(node_reliability)
-    
-    # Use harmonic mean to emphasize weak nodes
-    if node_scores:
-        return len(node_scores) / sum(1.0 / score for score in node_scores)
-    return 0.0
-
-def _identify_node_vulnerabilities(self, node: str, model, graph: Dict[str, Any]) -> List[NodeVulnerability]:
-    """Identify vulnerabilities of a specific node"""
-    vulnerabilities = []
-    
-    # Check if it's a single point of failure
-    in_degree = len(graph['reverse_adjacency'].get(node, []))
-    out_degree = len(graph['adjacency'].get(node, []))
-    
-    # High centrality - many connections
-    total_degree = in_degree + out_degree
-    if total_degree > len(graph['node_properties']) * 0.3:  # Connected to >30% of nodes
-        vulnerabilities.append(NodeVulnerability.HIGH_CENTRALITY)
-    
-    # Single point of failure - critical position with no alternatives
-    if self._is_cut_vertex(node, graph):
-        vulnerabilities.append(NodeVulnerability.SINGLE_POINT_FAILURE)
-    
-    # Resource constrained
-    node_data = graph['node_properties'].get(node, {})
-    if node_data.get('current_load', 0) / node_data.get('capacity', 1.0) > 0.8:
-        vulnerabilities.append(NodeVulnerability.RESOURCE_CONSTRAINED)
-    
-    # External dependency (simplified check)
-    if node_data.get('type') == 'external' or 'external' in node.lower():
-        vulnerabilities.append(NodeVulnerability.EXTERNAL_DEPENDENCY)
-    
-    return vulnerabilities
-
-def _is_cut_vertex(self, node: str, graph: Dict[str, Any]) -> bool:
-    """Check if removing this node disconnects the graph (simplified)"""
-    # A more complete implementation would use Tarjan's algorithm
-    # This is a simplified check for nodes that connect otherwise disconnected components
-    
-    neighbors = set(graph['adjacency'].get(node, []))
-    neighbors.update(graph['reverse_adjacency'].get(node, []))
-    
-    if len(neighbors) < 2:
+        while queue:
+            current = queue.popleft()
+            if current == target:
+                return True
+            
+            if current in visited:
+                continue
+                
+            visited.add(current)
+            
+            for neighbor in graph['adjacency'].get(current, []):
+                if neighbor not in visited:
+                    queue.append(neighbor)
+        
         return False
     
-    # Check if neighbors are connected without going through this node
-    neighbor_list = list(neighbors)
-    for i in range(len(neighbor_list)):
-        for j in range(i + 1, len(neighbor_list)):
-            n1, n2 = neighbor_list[i], neighbor_list[j]
+    def _calculate_bottleneck_penalty(self, path: List[str], graph: Dict[str, Any]) -> float:
+        """Calculate penalty for bottlenecks in the path"""
+        if len(path) < 2:
+            return 1.0
+        
+        penalties = []
+        
+        for i, node in enumerate(path):
+            # Skip source and target
+            if i == 0 or i == len(path) - 1:
+                continue
             
-            # Check if path exists between n1 and n2 without using node
-            if not self._path_exists_excluding(n1, n2, node, graph):
-                return True
-    
-    return False
-
-def _path_exists_excluding(self, source: str, target: str, exclude: str, 
-                          graph: Dict[str, Any]) -> bool:
-    """Check if path exists between source and target excluding a node"""
-    visited = set([exclude])  # Exclude the node
-    queue = deque([source])
-    
-    while queue:
-        current = queue.popleft()
-        if current == target:
-            return True
-        
-        if current in visited:
-            continue
+            # Check if this node is a bottleneck
+            bottleneck_score = self._calculate_bottleneck_score(node, graph)
             
-        visited.add(current)
+            # Convert to penalty (1.0 = no penalty, 0.0 = complete bottleneck)
+            penalty = 1.0 - bottleneck_score
+            penalties.append(penalty)
         
-        for neighbor in graph['adjacency'].get(current, []):
-            if neighbor not in visited:
-                queue.append(neighbor)
-    
-    return False
-
-def _calculate_bottleneck_penalty(self, path: List[str], graph: Dict[str, Any]) -> float:
-    """Calculate penalty for bottlenecks in the path"""
-    if len(path) < 2:
-        return 1.0
-    
-    penalties = []
-    
-    for i, node in enumerate(path):
-        # Skip source and target
-        if i == 0 or i == len(path) - 1:
-            continue
+        # If no intermediate nodes, no bottleneck penalty
+        if not penalties:
+            return 1.0
         
-        # Check if this node is a bottleneck
-        bottleneck_score = self._calculate_bottleneck_score(node, graph)
+        # Overall penalty is product (all bottlenecks matter)
+        return np.prod(penalties)
+    
+    def _calculate_bottleneck_score(self, node: str, graph: Dict[str, Any]) -> float:
+        """Calculate how much of a bottleneck a node is (0 = not bottleneck, 1 = severe)"""
+        # Factor 1: Betweenness centrality approximation
+        in_degree = len(graph['reverse_adjacency'].get(node, []))
+        out_degree = len(graph['adjacency'].get(node, []))
+        total_nodes = len(graph['node_properties'])
         
-        # Convert to penalty (1.0 = no penalty, 0.0 = complete bottleneck)
-        penalty = 1.0 - bottleneck_score
-        penalties.append(penalty)
-    
-    # If no intermediate nodes, no bottleneck penalty
-    if not penalties:
-        return 1.0
-    
-    # Overall penalty is product (all bottlenecks matter)
-    return np.prod(penalties)
-
-def _calculate_bottleneck_score(self, node: str, graph: Dict[str, Any]) -> float:
-    """Calculate how much of a bottleneck a node is (0 = not bottleneck, 1 = severe)"""
-    # Factor 1: Betweenness centrality approximation
-    in_degree = len(graph['reverse_adjacency'].get(node, []))
-    out_degree = len(graph['adjacency'].get(node, []))
-    total_nodes = len(graph['node_properties'])
-    
-    # High in/out degree relative to graph size indicates bottleneck
-    centrality_score = (in_degree + out_degree) / (2 * total_nodes)
-    
-    # Factor 2: Load vs capacity
-    node_data = graph['node_properties'].get(node, {})
-    load_ratio = node_data.get('current_load', 0.5) / node_data.get('capacity', 1.0)
-    
-    # Factor 3: Number of paths going through this node (simplified)
-    # In a full implementation, we'd count actual paths
-    path_concentration = min(1.0, centrality_score * 2)
-    
-    # Combine factors
-    bottleneck_score = (centrality_score * 0.4 + 
-                       load_ratio * 0.4 + 
-                       path_concentration * 0.2)
-    
-    return min(1.0, bottleneck_score)
-
-def _calculate_length_penalty(self, path: List[str]) -> float:
-    """Calculate penalty based on path length"""
-    if not path:
-        return 1.0
-    
-    length = len(path)
-    
-    # Short paths are more robust (fewer failure points)
-    # Using exponential decay
-    optimal_length = 3  # Paths of length 3 are considered optimal
-    
-    if length <= optimal_length:
-        return 1.0
-    else:
-        # Decay factor of 0.9 per additional hop
-        excess_length = length - optimal_length
-        return 0.9 ** excess_length
-
-def _calculate_feedback_bonus(self, path: List[str], graph: Dict[str, Any]) -> float:
-    """Calculate bonus for positive feedback loops that strengthen the path"""
-    if len(path) < 3:
-        return 1.0
-    
-    feedback_strength = 0.0
-    
-    # Check for feedback loops involving path nodes
-    for i, node in enumerate(path):
-        # Look for cycles that include this node and other path nodes
-        for j, other_node in enumerate(path):
-            if i != j and abs(i - j) > 1:  # Not adjacent in path
-                # Check if there's a connection from other_node back to node
-                if node in graph['adjacency'].get(other_node, []):
-                    # Found a feedback loop
-                    edge_strength = graph['edge_strengths'].get((other_node, node), 0.5)
-                    
-                    # Positive feedback if it reinforces the path direction
-                    if j > i:  # Forward feedback
-                        feedback_strength += edge_strength * 0.1
-    
-    # Convert to bonus factor (capped at 1.2 for 20% maximum bonus)
-    return min(1.2, 1.0 + feedback_strength)
-
-def _assess_cascade_failure_risk(self, path: List[str], model, graph: Dict[str, Any]) -> float:
-    """Assess risk of cascade failures along the path"""
-    if len(path) < 2:
-        return 0.0
-    
-    cascade_risks = []
-    
-    for i, node in enumerate(path):
-        # Skip endpoints
-        if i == 0 or i == len(path) - 1:
-            continue
+        # High in/out degree relative to graph size indicates bottleneck
+        centrality_score = (in_degree + out_degree) / (2 * total_nodes)
         
-        # Calculate cascade risk for this node
-        node_risk = 0.0
-        
-        # Factor 1: High connectivity increases cascade risk
-        total_connections = (len(graph['adjacency'].get(node, [])) + 
-                           len(graph['reverse_adjacency'].get(node, [])))
-        connectivity_risk = min(1.0, total_connections / (len(graph['node_properties']) * 0.5))
-        node_risk += connectivity_risk * 0.3
-        
-        # Factor 2: Load near capacity increases risk
+        # Factor 2: Load vs capacity
         node_data = graph['node_properties'].get(node, {})
         load_ratio = node_data.get('current_load', 0.5) / node_data.get('capacity', 1.0)
-        if load_ratio > 0.7:
-            capacity_risk = (load_ratio - 0.7) / 0.3  # Linear increase from 0.7 to 1.0
-            node_risk += capacity_risk * 0.4
         
-        # Factor 3: Dependency chains
-        downstream_nodes = self._count_downstream_dependencies(node, graph, max_depth=3)
-        dependency_risk = min(1.0, downstream_nodes / len(graph['node_properties']))
-        node_risk += dependency_risk * 0.3
+        # Factor 3: Number of paths going through this node (simplified)
+        # In a full implementation, we'd count actual paths
+        path_concentration = min(1.0, centrality_score * 2)
         
-        cascade_risks.append(node_risk)
+        # Combine factors
+        bottleneck_score = (centrality_score * 0.4 + 
+                           load_ratio * 0.4 + 
+                           path_concentration * 0.2)
+        
+        return min(1.0, bottleneck_score)
     
-    # Overall cascade risk is the maximum risk among nodes
-    # (cascade can start from the weakest point)
-    return max(cascade_risks) if cascade_risks else 0.0
-
-def _count_downstream_dependencies(self, start_node: str, graph: Dict[str, Any], 
-                                  max_depth: int = 3) -> int:
-    """Count nodes that depend on the given node (downstream)"""
-    visited = set()
-    queue = deque([(start_node, 0)])
-    count = 0
-    
-    while queue:
-        node, depth = queue.popleft()
+    def _calculate_length_penalty(self, path: List[str]) -> float:
+        """Calculate penalty based on path length"""
+        if not path:
+            return 1.0
         
-        if depth > max_depth or node in visited:
-            continue
+        length = len(path)
+        
+        # Short paths are more robust (fewer failure points)
+        # Using exponential decay
+        optimal_length = 3  # Paths of length 3 are considered optimal
+        
+        if length <= optimal_length:
+            return 1.0
+        else:
+            # Decay factor of 0.9 per additional hop
+            excess_length = length - optimal_length
+            return 0.9 ** excess_length
+    
+    def _calculate_feedback_bonus(self, path: List[str], graph: Dict[str, Any]) -> float:
+        """Calculate bonus for positive feedback loops that strengthen the path"""
+        if len(path) < 3:
+            return 1.0
+        
+        feedback_strength = 0.0
+        
+        # Check for feedback loops involving path nodes
+        for i, node in enumerate(path):
+            # Look for cycles that include this node and other path nodes
+            for j, other_node in enumerate(path):
+                if i != j and abs(i - j) > 1:  # Not adjacent in path
+                    # Check if there's a connection from other_node back to node
+                    if node in graph['adjacency'].get(other_node, []):
+                        # Found a feedback loop
+                        edge_strength = graph['edge_strengths'].get((other_node, node), 0.5)
+                        
+                        # Positive feedback if it reinforces the path direction
+                        if j > i:  # Forward feedback
+                            feedback_strength += edge_strength * 0.1
+        
+        # Convert to bonus factor (capped at 1.2 for 20% maximum bonus)
+        return min(1.2, 1.0 + feedback_strength)
+    
+    def _assess_cascade_failure_risk(self, path: List[str], model, graph: Dict[str, Any]) -> float:
+        """Assess risk of cascade failures along the path"""
+        if len(path) < 2:
+            return 0.0
+        
+        cascade_risks = []
+        
+        for i, node in enumerate(path):
+            # Skip endpoints
+            if i == 0 or i == len(path) - 1:
+                continue
             
-        visited.add(node)
-        if node != start_node:
-            count += 1
+            # Calculate cascade risk for this node
+            node_risk = 0.0
+            
+            # Factor 1: High connectivity increases cascade risk
+            total_connections = (len(graph['adjacency'].get(node, [])) + 
+                               len(graph['reverse_adjacency'].get(node, [])))
+            connectivity_risk = min(1.0, total_connections / (len(graph['node_properties']) * 0.5))
+            node_risk += connectivity_risk * 0.3
+            
+            # Factor 2: Load near capacity increases risk
+            node_data = graph['node_properties'].get(node, {})
+            load_ratio = node_data.get('current_load', 0.5) / node_data.get('capacity', 1.0)
+            if load_ratio > 0.7:
+                capacity_risk = (load_ratio - 0.7) / 0.3  # Linear increase from 0.7 to 1.0
+                node_risk += capacity_risk * 0.4
+            
+            # Factor 3: Dependency chains
+            downstream_nodes = self._count_downstream_dependencies(node, graph, max_depth=3)
+            dependency_risk = min(1.0, downstream_nodes / len(graph['node_properties']))
+            node_risk += dependency_risk * 0.3
+            
+            cascade_risks.append(node_risk)
         
-        # Add downstream nodes
-        for neighbor in graph['adjacency'].get(node, []):
-            if neighbor not in visited:
-                queue.append((neighbor, depth + 1))
+        # Overall cascade risk is the maximum risk among nodes
+        # (cascade can start from the weakest point)
+        return max(cascade_risks) if cascade_risks else 0.0
     
-    return count
-
-# Additional analysis methods for comprehensive robustness
-
-def analyze_path_robustness_detailed(self, path: List[str], model) -> Dict[str, Any]:
-    """Provide detailed robustness analysis with actionable insights"""
-    robustness = self._calculate_path_robustness(path, model)
-    graph = self._build_graph_from_model(model)
+    def _count_downstream_dependencies(self, start_node: str, graph: Dict[str, Any], 
+                                      max_depth: int = 3) -> int:
+        """Count nodes that depend on the given node (downstream)"""
+        visited = set()
+        queue = deque([(start_node, 0)])
+        count = 0
+        
+        while queue:
+            node, depth = queue.popleft()
+            
+            if depth > max_depth or node in visited:
+                continue
+                
+            visited.add(node)
+            if node != start_node:
+                count += 1
+            
+            # Add downstream nodes
+            for neighbor in graph['adjacency'].get(node, []):
+                if neighbor not in visited:
+                    queue.append((neighbor, depth + 1))
+        
+        return count
     
-    # Detailed factor analysis
-    factors = {
-        'overall_robustness': robustness,
-        'edge_reliability': self._calculate_edge_reliability(path, model),
-        'path_redundancy': self._calculate_path_redundancy(path, graph),
-        'node_reliability': self._calculate_node_reliability(path, model, graph),
-        'bottleneck_penalty': self._calculate_bottleneck_penalty(path, graph),
-        'length_penalty': self._calculate_length_penalty(path),
-        'feedback_bonus': self._calculate_feedback_bonus(path, graph),
-        'cascade_risk': self._assess_cascade_failure_risk(path, model, graph)
-    }
+    # Additional analysis methods for comprehensive robustness
     
-    # Identify weak points
-    weak_points = []
-    for i in range(len(path) - 1):
-        segment_robustness = self._calculate_segment_robustness(
-            path[i], path[i + 1], model, graph
+    def analyze_path_robustness_detailed(self, path: List[str], model) -> Dict[str, Any]:
+        """Provide detailed robustness analysis with actionable insights"""
+        robustness = self._calculate_path_robustness(path, model)
+        graph = self._build_graph_from_model(model)
+        
+        # Detailed factor analysis
+        factors = {
+            'overall_robustness': robustness,
+            'edge_reliability': self._calculate_edge_reliability(path, model),
+            'path_redundancy': self._calculate_path_redundancy(path, graph),
+            'node_reliability': self._calculate_node_reliability(path, model, graph),
+            'bottleneck_penalty': self._calculate_bottleneck_penalty(path, graph),
+            'length_penalty': self._calculate_length_penalty(path),
+            'feedback_bonus': self._calculate_feedback_bonus(path, graph),
+            'cascade_risk': self._assess_cascade_failure_risk(path, model, graph)
+        }
+        
+        # Identify weak points
+        weak_points = []
+        for i in range(len(path) - 1):
+            segment_robustness = self._calculate_segment_robustness(
+                path[i], path[i + 1], model, graph
+            )
+            if segment_robustness < 0.5:
+                weak_points.append({
+                    'from': path[i],
+                    'to': path[i + 1],
+                    'robustness': segment_robustness,
+                    'issues': self._identify_segment_issues(path[i], path[i + 1], model, graph)
+                })
+        
+        # Improvement recommendations
+        recommendations = self._generate_robustness_recommendations(
+            path, factors, weak_points, model, graph
         )
-        if segment_robustness < 0.5:
-            weak_points.append({
-                'from': path[i],
-                'to': path[i + 1],
-                'robustness': segment_robustness,
-                'issues': self._identify_segment_issues(path[i], path[i + 1], model, graph)
+        
+        return {
+            'robustness_score': robustness,
+            'factors': factors,
+            'weak_points': weak_points,
+            'recommendations': recommendations,
+            'risk_assessment': self._assess_overall_risk(factors)
+        }
+    
+    def _calculate_segment_robustness(self, source: str, target: str, 
+                                    model, graph: Dict[str, Any]) -> float:
+        """Calculate robustness of a single path segment"""
+        # Edge strength
+        edge_strength = graph['edge_strengths'].get((source, target), 0.5)
+        
+        # Alternative paths
+        alternatives = self._find_alternative_paths(source, target, graph, 
+                                                  exclude_edge=(source, target))
+        redundancy = 1.0 if alternatives else 0.5
+        
+        # Node reliabilities
+        source_reliability = graph['node_properties'].get(source, {}).get('reliability', 0.9)
+        target_reliability = graph['node_properties'].get(target, {}).get('reliability', 0.9)
+        
+        return edge_strength * redundancy * source_reliability * target_reliability
+    
+    def _identify_segment_issues(self, source: str, target: str, 
+                               model, graph: Dict[str, Any]) -> List[str]:
+        """Identify specific issues with a path segment"""
+        issues = []
+        
+        edge_strength = graph['edge_strengths'].get((source, target), 0.5)
+        if edge_strength < 0.3:
+            issues.append("weak_connection")
+        
+        alternatives = self._find_alternative_paths(source, target, graph, 
+                                                  exclude_edge=(source, target))
+        if not alternatives:
+            issues.append("no_redundancy")
+        
+        source_load = graph['node_properties'].get(source, {}).get('current_load', 0.5)
+        source_capacity = graph['node_properties'].get(source, {}).get('capacity', 1.0)
+        if source_load / source_capacity > 0.8:
+            issues.append("source_overloaded")
+        
+        if self._is_cut_vertex(source, graph):
+            issues.append("source_is_critical_point")
+        
+        return issues
+    
+    def _generate_robustness_recommendations(self, path: List[str], factors: Dict[str, float],
+                                           weak_points: List[Dict], model, 
+                                           graph: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Generate recommendations to improve path robustness"""
+        recommendations = []
+        
+        # Edge reliability improvements
+        if factors['edge_reliability'] < 0.6:
+            recommendations.append({
+                'type': 'strengthen_edges',
+                'priority': 'high',
+                'description': 'Strengthen weak connections along the path',
+                'specific_edges': [(wp['from'], wp['to']) for wp in weak_points 
+                                 if 'weak_connection' in wp.get('issues', [])]
             })
+        
+        # Redundancy improvements
+        if factors['path_redundancy'] < 0.7:
+            recommendations.append({
+                'type': 'add_redundancy',
+                'priority': 'high',
+                'description': 'Add alternative paths between critical segments',
+                'specific_segments': [(wp['from'], wp['to']) for wp in weak_points 
+                                    if 'no_redundancy' in wp.get('issues', [])]
+            })
+        
+        # Node reliability improvements
+        if factors['node_reliability'] < 0.7:
+            critical_nodes = [node for node in path if 
+                             self._is_cut_vertex(node, graph) or
+                             graph['node_properties'].get(node, {}).get('reliability', 1.0) < 0.7]
+            recommendations.append({
+                'type': 'improve_node_reliability',
+                'priority': 'medium',
+                'description': 'Improve reliability of critical nodes',
+                'specific_nodes': critical_nodes
+            })
+        
+        # Capacity improvements
+        overloaded_nodes = [node for node in path if 
+                           graph['node_properties'].get(node, {}).get('current_load', 0) /
+                           graph['node_properties'].get(node, {}).get('capacity', 1) > 0.8]
+        if overloaded_nodes:
+            recommendations.append({
+                'type': 'increase_capacity',
+                'priority': 'high',
+                'description': 'Increase capacity of overloaded nodes',
+                'specific_nodes': overloaded_nodes
+            })
+        
+        # Path length optimization
+        if factors['length_penalty'] < 0.7 and len(path) > 5:
+            recommendations.append({
+                'type': 'shorten_path',
+                'priority': 'low',
+                'description': 'Consider shorter alternative paths to reduce failure points',
+                'current_length': len(path),
+                'recommended_max': 5
+            })
+        
+        return recommendations
     
-    # Improvement recommendations
-    recommendations = self._generate_robustness_recommendations(
-        path, factors, weak_points, model, graph
-    )
-    
-    return {
-        'robustness_score': robustness,
-        'factors': factors,
-        'weak_points': weak_points,
-        'recommendations': recommendations,
-        'risk_assessment': self._assess_overall_risk(factors)
-    }
-
-def _calculate_segment_robustness(self, source: str, target: str, 
-                                model, graph: Dict[str, Any]) -> float:
-    """Calculate robustness of a single path segment"""
-    # Edge strength
-    edge_strength = graph['edge_strengths'].get((source, target), 0.5)
-    
-    # Alternative paths
-    alternatives = self._find_alternative_paths(source, target, graph, 
-                                              exclude_edge=(source, target))
-    redundancy = 1.0 if alternatives else 0.5
-    
-    # Node reliabilities
-    source_reliability = graph['node_properties'].get(source, {}).get('reliability', 0.9)
-    target_reliability = graph['node_properties'].get(target, {}).get('reliability', 0.9)
-    
-    return edge_strength * redundancy * source_reliability * target_reliability
-
-def _identify_segment_issues(self, source: str, target: str, 
-                           model, graph: Dict[str, Any]) -> List[str]:
-    """Identify specific issues with a path segment"""
-    issues = []
-    
-    edge_strength = graph['edge_strengths'].get((source, target), 0.5)
-    if edge_strength < 0.3:
-        issues.append("weak_connection")
-    
-    alternatives = self._find_alternative_paths(source, target, graph, 
-                                              exclude_edge=(source, target))
-    if not alternatives:
-        issues.append("no_redundancy")
-    
-    source_load = graph['node_properties'].get(source, {}).get('current_load', 0.5)
-    source_capacity = graph['node_properties'].get(source, {}).get('capacity', 1.0)
-    if source_load / source_capacity > 0.8:
-        issues.append("source_overloaded")
-    
-    if self._is_cut_vertex(source, graph):
-        issues.append("source_is_critical_point")
-    
-    return issues
-
-def _generate_robustness_recommendations(self, path: List[str], factors: Dict[str, float],
-                                       weak_points: List[Dict], model, 
-                                       graph: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """Generate recommendations to improve path robustness"""
-    recommendations = []
-    
-    # Edge reliability improvements
-    if factors['edge_reliability'] < 0.6:
-        recommendations.append({
-            'type': 'strengthen_edges',
-            'priority': 'high',
-            'description': 'Strengthen weak connections along the path',
-            'specific_edges': [(wp['from'], wp['to']) for wp in weak_points 
-                             if 'weak_connection' in wp.get('issues', [])]
-        })
-    
-    # Redundancy improvements
-    if factors['path_redundancy'] < 0.7:
-        recommendations.append({
-            'type': 'add_redundancy',
-            'priority': 'high',
-            'description': 'Add alternative paths between critical segments',
-            'specific_segments': [(wp['from'], wp['to']) for wp in weak_points 
-                                if 'no_redundancy' in wp.get('issues', [])]
-        })
-    
-    # Node reliability improvements
-    if factors['node_reliability'] < 0.7:
-        critical_nodes = [node for node in path if 
-                         self._is_cut_vertex(node, graph) or
-                         graph['node_properties'].get(node, {}).get('reliability', 1.0) < 0.7]
-        recommendations.append({
-            'type': 'improve_node_reliability',
-            'priority': 'medium',
-            'description': 'Improve reliability of critical nodes',
-            'specific_nodes': critical_nodes
-        })
-    
-    # Capacity improvements
-    overloaded_nodes = [node for node in path if 
-                       graph['node_properties'].get(node, {}).get('current_load', 0) /
-                       graph['node_properties'].get(node, {}).get('capacity', 1) > 0.8]
-    if overloaded_nodes:
-        recommendations.append({
-            'type': 'increase_capacity',
-            'priority': 'high',
-            'description': 'Increase capacity of overloaded nodes',
-            'specific_nodes': overloaded_nodes
-        })
-    
-    # Path length optimization
-    if factors['length_penalty'] < 0.7 and len(path) > 5:
-        recommendations.append({
-            'type': 'shorten_path',
-            'priority': 'low',
-            'description': 'Consider shorter alternative paths to reduce failure points',
-            'current_length': len(path),
-            'recommended_max': 5
-        })
-    
-    return recommendations
-
-def _assess_overall_risk(self, factors: Dict[str, float]) -> Dict[str, Any]:
-    """Assess overall risk level based on robustness factors"""
-    robustness = factors['overall_robustness']
-    
-    if robustness > 0.8:
-        risk_level = 'low'
-        description = 'Path is highly robust with good redundancy and reliability'
-    elif robustness > 0.6:
-        risk_level = 'medium'
-        description = 'Path has moderate robustness but some vulnerabilities exist'
-    elif robustness > 0.4:
-        risk_level = 'high'
-        description = 'Path has significant vulnerabilities and limited redundancy'
-    else:
-        risk_level = 'critical'
-        description = 'Path is highly vulnerable with multiple critical failure points'
-    
-    # Identify primary risk factors
-    risk_factors = []
-    if factors['edge_reliability'] < 0.6:
-        risk_factors.append('weak_connections')
-    if factors['path_redundancy'] < 0.6:
-        risk_factors.append('lack_of_alternatives')
-    if factors['node_reliability'] < 0.6:
-        risk_factors.append('unreliable_nodes')
-    if factors['cascade_risk'] > 0.7:
-        risk_factors.append('cascade_failure_risk')
-    
-    return {
-        'risk_level': risk_level,
-        'description': description,
-        'primary_risks': risk_factors,
-        'mitigation_priority': 'immediate' if risk_level == 'critical' else 
-                             'high' if risk_level == 'high' else 
-                             'medium' if risk_level == 'medium' else 'low'
-    }
+    def _assess_overall_risk(self, factors: Dict[str, float]) -> Dict[str, Any]:
+        """Assess overall risk level based on robustness factors"""
+        robustness = factors['overall_robustness']
+        
+        if robustness > 0.8:
+            risk_level = 'low'
+            description = 'Path is highly robust with good redundancy and reliability'
+        elif robustness > 0.6:
+            risk_level = 'medium'
+            description = 'Path has moderate robustness but some vulnerabilities exist'
+        elif robustness > 0.4:
+            risk_level = 'high'
+            description = 'Path has significant vulnerabilities and limited redundancy'
+        else:
+            risk_level = 'critical'
+            description = 'Path is highly vulnerable with multiple critical failure points'
+        
+        # Identify primary risk factors
+        risk_factors = []
+        if factors['edge_reliability'] < 0.6:
+            risk_factors.append('weak_connections')
+        if factors['path_redundancy'] < 0.6:
+            risk_factors.append('lack_of_alternatives')
+        if factors['node_reliability'] < 0.6:
+            risk_factors.append('unreliable_nodes')
+        if factors['cascade_risk'] > 0.7:
+            risk_factors.append('cascade_failure_risk')
+        
+        return {
+            'risk_level': risk_level,
+            'description': description,
+            'primary_risks': risk_factors,
+            'mitigation_priority': 'immediate' if risk_level == 'critical' else 
+                                 'high' if risk_level == 'high' else 
+                                 'medium' if risk_level == 'medium' else 'low'
+        }
 
 # ========================================================================================
 # CACHING SYSTEM
@@ -2177,6 +2140,8 @@ class EnhancedContextAwareReasoningCore(ContextAwareModule):
         # Configuration
         self.config = ReasoningConfiguration()
         self.config.validate()
+
+        self.cut_vertex_detector = CutVertexDetector()
         
         # State management
         self.state = ReasoningState()
@@ -2232,6 +2197,93 @@ class EnhancedContextAwareReasoningCore(ContextAwareModule):
             "use_caching": True,
             "prune_frequency": 100,
             "max_retained_paths": 50
+        }
+
+    def _is_cut_vertex(self, node: str, graph: Dict[str, Any]) -> bool:
+        """
+        Check if a node is a cut vertex (articulation point) using the CutVertexDetector.
+        
+        This method properly integrates the CutVertexDetector with the reasoning core.
+        
+        Args:
+            node: The node to check
+            graph: Graph representation with 'adjacency' and 'reverse_adjacency'
+            
+        Returns:
+            True if the node is a cut vertex, False otherwise
+        """
+        return self.cut_vertex_detector.is_cut_vertex(node, graph)
+    
+    def analyze_graph_vulnerabilities(self, graph: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Comprehensive analysis of graph vulnerabilities including cut vertices and bridges.
+        
+        This method uses the CutVertexDetector to provide detailed vulnerability analysis.
+        
+        Returns detailed information about critical points in the graph structure.
+        """
+        # Build undirected adjacency
+        undirected_adj = self.cut_vertex_detector._build_undirected_adjacency(graph)
+        
+        # Find all articulation points
+        articulation_points = self.cut_vertex_detector.find_all_articulation_points(undirected_adj)
+        
+        # Find all bridges
+        bridges = self.cut_vertex_detector.find_bridges(undirected_adj)
+        
+        # Find biconnected components
+        biconnected_components = self.cut_vertex_detector.get_biconnected_components(undirected_adj)
+        
+        # Analyze impact of each articulation point
+        ap_impact = {}
+        for ap in articulation_points:
+            impact = self._analyze_articulation_point_impact(ap, graph, undirected_adj)
+            ap_impact[ap] = impact
+        
+        # Analyze bridge criticality
+        bridge_criticality = {}
+        for bridge in bridges:
+            criticality = self._analyze_bridge_criticality(bridge, graph)
+            bridge_criticality[bridge] = criticality
+        
+        # Calculate overall graph robustness metrics
+        total_nodes = len(graph.get('node_properties', {}))
+        total_edges = sum(len(targets) for targets in graph.get('adjacency', {}).values())
+        
+        vulnerability_metrics = {
+            'articulation_point_ratio': len(articulation_points) / max(total_nodes, 1),
+            'bridge_ratio': len(bridges) / max(total_edges, 1),
+            'largest_biconnected_component': max(len(c) for c in biconnected_components) if biconnected_components else 0,
+            'component_count': len(biconnected_components),
+            'is_biconnected': len(articulation_points) == 0,
+            'is_bridge_connected': len(bridges) == 0
+        }
+        
+        # Identify most critical vulnerabilities
+        critical_nodes = [
+            node for node, impact in ap_impact.items()
+            if impact['severity'] == 'critical'
+        ]
+        
+        critical_edges = [
+            edge for edge, criticality in bridge_criticality.items()
+            if criticality['severity'] == 'critical'
+        ]
+        
+        return {
+            'articulation_points': list(articulation_points),
+            'articulation_point_impacts': ap_impact,
+            'bridges': [list(b) for b in bridges],
+            'bridge_criticality': {f"{b[0]}->{b[1]}": crit for b, crit in bridge_criticality.items()},
+            'biconnected_components': [list(c) for c in biconnected_components],
+            'vulnerability_metrics': vulnerability_metrics,
+            'critical_vulnerabilities': {
+                'nodes': critical_nodes,
+                'edges': critical_edges
+            },
+            'recommendations': self._generate_vulnerability_recommendations(
+                articulation_points, bridges, vulnerability_metrics
+            )
         }
     
     async def on_context_received(self, context: SharedContext):
