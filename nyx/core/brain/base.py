@@ -366,6 +366,9 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             from nyx.core.a2a.context_aware_memory_core import ContextAwareMemoryCore
             from nyx.core.a2a.context_aware_memory_orchestrator import ContextAwareMemoryOrchestrator
             from nyx.core.a2a.context_aware_identity_evolution import ContextAwareIdentityEvolution
+            from nyx.core.a2a.context_aware_meta_core import ContextAwareMetaCore
+            from nyx.core.a2a.context_aware_mode_integration import ContextAwareModeIntegration
+            from nyx.core.a2a.context_aware_mood_manager import ContextAwareMoodManager
     
             from dev_log.storage import get_dev_log_storage
             self.dev_log_storage = get_dev_log_storage()
@@ -586,9 +589,18 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
     
             logger.debug(f"NyxBrain Init Step 4: Core Systems - Tier 2 (Interdependent) for {self.user_id}-{self.conversation_id}")
             self.mood_manager = MoodManager(
-                emotional_core=self.emotional_core, hormone_system=self.hormone_system,
-                needs_system=self.needs_system, goal_manager=self.goal_manager
+                emotional_core=self.emotional_core, 
+                hormone_system=self.hormone_system,
+                needs_system=self.needs_system, 
+                goal_manager=self.goal_manager
             )
+            
+            # Wrap with context-aware version if A2A enabled
+            if self.use_a2a_integration:
+                from nyx.core.a2a.context_aware_mood_manager import ContextAwareMoodManager
+                self.mood_manager = ContextAwareMoodManager(self.mood_manager)
+                logger.debug("Enhanced MoodManager with A2A context distribution")
+            
             self.reward_system = RewardSignalProcessor(
                 emotional_core=self.emotional_core, 
                 identity_evolution=self.identity_evolution, 
@@ -596,6 +608,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
                 mood_manager=self.mood_manager,
                 needs_system=self.needs_system  # Add this line
             )
+            
             self.digital_somatosensory_system = DigitalSomatosensorySystem(
                 memory_core=self.memory_core, emotional_core=self.emotional_core, reward_system=self.reward_system
             )
@@ -808,6 +821,11 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
                 "theory_of_mind": self.theory_of_mind, "imagination": self.imagination_simulator
             }
             await self.meta_core.initialize(meta_core_deps)
+
+            if self.use_a2a_integration:
+                from nyx.core.a2a.context_aware_meta_core import ContextAwareMetaCore
+                self.meta_core = ContextAwareMetaCore(self.meta_core)
+                logger.debug("Enhanced MetaCore with A2A context distribution")
     
             self.agentic_action_generator = EnhancedAgenticActionGenerator(
                 emotional_core=self.emotional_core, hormone_system=self.hormone_system,
@@ -928,6 +946,13 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
                 self.mode_manager = original_mode_manager
             
             self.mode_integration = ModeIntegrationManager(nyx_brain=self)
+            
+            # Wrap with context-aware version if A2A enabled
+            if self.use_a2a_integration:
+                from nyx.core.a2a.context_aware_mode_integration import ContextAwareModeIntegration
+                self.mode_integration = ContextAwareModeIntegration(self.mode_integration)
+                logger.debug("Enhanced ModeIntegrationManager with A2A context distribution")
+            
             if self.agentic_action_generator: self.agentic_action_generator.mode_integration = self.mode_integration
     
             original_issue_tracker = IssueTrackingSystem(
