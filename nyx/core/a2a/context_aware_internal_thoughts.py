@@ -1,7 +1,7 @@
 # nyx/core/a2a/context_aware_internal_thoughts.py
 
 import logging
-from typing import Dict, List, Any, Optional, Tuple
+from typing import Dict, List, Any, Optional, Tuple, Set
 from datetime import datetime
 import asyncio
 
