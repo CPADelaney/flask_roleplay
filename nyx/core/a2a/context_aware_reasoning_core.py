@@ -17,6 +17,30 @@ class ContextAwareReasoningCore(ContextAwareModule):
     
     def __init__(self, original_reasoning_core):
         super().__init__("reasoning_core")
+
+        # Module discovery registry
+        self.discovered_modules = {}
+        
+        # Context persistence tracking
+        self._last_user_input = ""
+        self._last_session_id = ""
+        self._last_emotional_state = {}
+        self._last_goal_context = {}
+        self._last_memory_context = {}
+        
+        # Performance metrics
+        self._contexts_processed = 0
+        self._updates_received = 0
+        self._updates_sent = 0
+        self._avg_processing_time = 0.0
+        self._processing_times = []  # For calculating average
+        
+        # Auto-save flag
+        self._auto_save_enabled = False
+        
+        # Schedule initial module discovery
+        asyncio.create_task(self.discover_modules())
+        
         self.original_core = original_reasoning_core
         self.context_subscriptions = [
             "emotional_state_update", "memory_retrieval_complete", 
@@ -31,9 +55,221 @@ class ContextAwareReasoningCore(ContextAwareModule):
         self.active_spaces: Set[str] = set()
         self.active_interventions: Set[str] = set()
         self.reasoning_context: Dict[str, Any] = {}
+
+    async def send_context_update(self, update_type: str, data: Dict[str, Any], 
+                                  priority: ContextPriority = ContextPriority.MEDIUM,
+                                  target_modules: List[str] = None,
+                                  scope: ContextScope = ContextScope.LOCAL) -> bool:
+        """
+        Send context update to other modules through the integration layer.
+        
+        Args:
+            update_type: Type of update (e.g., "reasoning_context_available")
+            data: Update data to send
+            priority: Priority level for the update
+            target_modules: Specific modules to target (None = broadcast to all)
+            scope: Scope of the update (LOCAL, GLOBAL, or CROSS_SESSION)
+            
+        Returns:
+            bool: True if update was sent successfully
+        """
+        try:
+            # Track for metrics
+            self._updates_sent += 1
+            
+            # Create context update object
+            update = ContextUpdate(
+                source_module=self.module_id,
+                update_type=update_type,
+                data=data,
+                priority=priority,
+                scope=scope,
+                timestamp=datetime.now(),
+                session_id=getattr(self, '_last_session_id', None)
+            )
+            
+            # Add metadata
+            update.metadata = {
+                "reasoning_context": {
+                    "active_models": list(self.active_models),
+                    "active_spaces": list(self.active_spaces),
+                    "confidence": data.get("confidence", 0.0)
+                }
+            }
+            
+            # Log the update
+            logger.debug(f"ReasoningCore sending {update_type} update with priority {priority.name}")
+            
+            # Send through integration layer
+            if target_modules:
+                # Send to specific modules
+                success = True
+                for target_module in target_modules:
+                    # Check if module is available
+                    if not await self.is_module_available(target_module):
+                        logger.warning(f"Target module {target_module} not available")
+                        continue
+                        
+                    try:
+                        await self.integration_layer.send_update_to_module(
+                            target_module=target_module,
+                            update=update
+                        )
+                    except Exception as e:
+                        logger.error(f"Failed to send update to {target_module}: {e}")
+                        success = False
+                
+                return success
+            else:
+                # Broadcast to all subscribed modules
+                await self.integration_layer.broadcast_update(update)
+                return True
+                
+        except Exception as e:
+            logger.error(f"Error sending context update: {e}")
+            return False
+    
+    async def send_priority_update(self, update_type: str, data: Dict[str, Any],
+                                   target_modules: List[str] = None) -> bool:
+        """
+        Send high-priority context update that requires immediate attention.
+        
+        Args:
+            update_type: Type of update
+            data: Update data
+            target_modules: Specific modules to target
+            
+        Returns:
+            bool: True if update was sent successfully
+        """
+        return await self.send_context_update(
+            update_type=update_type,
+            data=data,
+            priority=ContextPriority.CRITICAL,
+            target_modules=target_modules,
+            scope=ContextScope.GLOBAL
+        )
+    
+    async def request_context_from_module(self, module_name: str, request_type: str,
+                                          request_data: Dict[str, Any] = None) -> Optional[Dict[str, Any]]:
+        """
+        Request specific context information from another module.
+        
+        Args:
+            module_name: Name of the module to request from
+            request_type: Type of request
+            request_data: Additional request parameters
+            
+        Returns:
+            Response data from the module, or None if request failed
+        """
+        try:
+            # Check if module is available
+            if not await self.is_module_available(module_name):
+                logger.warning(f"Module {module_name} not available for request")
+                return None
+            
+            # Create request update
+            request_id = f"{self.module_id}_request_{datetime.now().timestamp()}"
+            
+            await self.send_context_update(
+                update_type=f"{module_name}_request",
+                data={
+                    "request_id": request_id,
+                    "request_type": request_type,
+                    "request_data": request_data or {},
+                    "response_needed": True
+                },
+                priority=ContextPriority.HIGH,
+                target_modules=[module_name]
+            )
+            
+            # Wait for response (with timeout)
+            response = await self._wait_for_response(request_id, timeout=5.0)
+            
+            return response
+            
+        except Exception as e:
+            logger.error(f"Error requesting context from {module_name}: {e}")
+            return None
+    
+    async def _wait_for_response(self, request_id: str, timeout: float = 5.0) -> Optional[Dict[str, Any]]:
+        """
+        Wait for a response to a specific request.
+        
+        Args:
+            request_id: ID of the request to wait for
+            timeout: Maximum time to wait in seconds
+            
+        Returns:
+            Response data or None if timeout
+        """
+        start_time = time.time()
+        
+        while time.time() - start_time < timeout:
+            # Check if response has been received
+            messages = await self.get_cross_module_messages()
+            
+            for source_module, module_messages in messages.items():
+                for message in module_messages:
+                    if message.get("response_to") == request_id:
+                        return message.get("data", {})
+            
+            # Wait a bit before checking again
+            await asyncio.sleep(0.1)
+        
+        logger.warning(f"Timeout waiting for response to request {request_id}")
+        return None
+    
+    async def broadcast_discovery(self, discovery_type: str, discovery_data: Dict[str, Any]):
+        """
+        Broadcast a discovery or insight to all interested modules.
+        
+        Args:
+            discovery_type: Type of discovery (e.g., "causal_pattern", "novel_concept")
+            discovery_data: Details of the discovery
+        """
+        await self.send_context_update(
+            update_type=f"reasoning_discovery_{discovery_type}",
+            data={
+                "discovery_type": discovery_type,
+                "discovery_data": discovery_data,
+                "timestamp": datetime.now().isoformat(),
+                "confidence": discovery_data.get("confidence", 0.7),
+                "models_involved": list(self.active_models),
+                "spaces_involved": list(self.active_spaces)
+            },
+            priority=ContextPriority.HIGH,
+            scope=ContextScope.GLOBAL
+        )
+        
+        logger.info(f"Broadcasted {discovery_type} discovery to all modules")
+    
+    # Helper method to get cross-module messages (if not already defined)
+    async def get_cross_module_messages(self) -> Dict[str, List[Dict[str, Any]]]:
+        """
+        Get messages from other modules since last check.
+        
+        Returns:
+            Dictionary mapping module names to their messages
+        """
+        if hasattr(self, 'integration_layer'):
+            return await self.integration_layer.get_messages_for_module(self.module_id)
+        else:
+            # Fallback if integration layer not available
+            return {}
     
     async def on_context_received(self, context: SharedContext):
         """Initialize reasoning processing for this context"""
+        # Track context for persistence
+        self._last_user_input = context.user_input
+        self._last_session_id = context.session_context.get("session_id", "")
+        self._last_emotional_state = context.emotional_state or {}
+        self._last_goal_context = context.goal_context or {}
+        self._last_memory_context = context.memory_context or {}
+        self._contexts_processed += 1
+        
+        start_time = time.time()
         logger.debug(f"ReasoningCore received context for user: {context.user_id}")
         
         # Analyze input for reasoning-related content
@@ -55,74 +291,362 @@ class ContextAwareReasoningCore(ContextAwareModule):
             },
             priority=ContextPriority.HIGH
         )
+        # Track processing time
+        processing_time = time.time() - start_time
+        self._processing_times.append(processing_time)
+        if len(self._processing_times) > 100:  # Keep last 100
+            self._processing_times.pop(0)
+        self._avg_processing_time = sum(self._processing_times) / len(self._processing_times)
     
     async def on_context_update(self, update: ContextUpdate):
-        """Handle updates from other modules that affect reasoning"""
+        """
+        Handle updates from other modules that affect reasoning.
+        Production version with comprehensive error handling and validation.
+        """
+        start_time = time.time()
         
-        if update.update_type == "perception_input":
-            # Update causal models with new perceptual data
-            percept = update.data.get("percept")
-            if percept and hasattr(self.original_core, 'update_with_perception'):
-                await self.original_core.update_with_perception(percept)
-                
-                # Notify about model updates
-                await self.send_context_update(
-                    update_type="causal_models_updated",
-                    data={
-                        "updated_models": list(self.active_models),
-                        "perception_modality": percept.modality if hasattr(percept, 'modality') else "unknown"
-                    }
-                )
-        
-        elif update.update_type == "causal_discovery_request":
-            # Handle request for causal discovery
-            model_id = update.data.get("model_id")
-            if model_id:
-                discovery_result = await self.original_core.discover_causal_relations(model_id)
-                
-                await self.send_context_update(
-                    update_type="causal_discovery_complete",
-                    data={
-                        "model_id": model_id,
-                        "discovery_result": discovery_result,
-                        "new_relations": discovery_result.get("accepted_relations", 0)
-                    },
-                    priority=ContextPriority.HIGH
-                )
-        
-        elif update.update_type == "conceptual_blend_request":
-            # Handle request for conceptual blending
-            space_ids = update.data.get("space_ids", [])
-            blend_type = update.data.get("blend_type", "composition")
+        try:
+            # Track metrics
+            self._updates_received += 1
             
-            if len(space_ids) >= 2:
-                # Perform blending through the original core
-                # This is a simplified version - the actual implementation would use the blending methods
-                blend_result = await self._perform_contextual_blending(space_ids, blend_type)
-                
-                await self.send_context_update(
-                    update_type="conceptual_blend_complete",
-                    data={
-                        "blend_result": blend_result,
-                        "input_spaces": space_ids,
-                        "blend_type": blend_type
-                    }
+            # Validate update
+            if not self._validate_update(update):
+                logger.warning(f"Invalid update received: {update.update_type}")
+                return
+            
+            # Log update receipt
+            logger.debug(f"ReasoningCore received {update.update_type} from {update.source_module}")
+            
+            # Route to appropriate handler
+            handlers = {
+                "perception_input": self._handle_perception_update,
+                "causal_discovery_request": self._handle_causal_discovery_request,
+                "conceptual_blend_request": self._handle_conceptual_blend_request,
+                "emotional_state_update": self._handle_emotional_update,
+                "goal_context_available": self._handle_goal_update,
+                "memory_retrieval_complete": self._handle_memory_update,
+                "intervention_request": self._handle_intervention_request,
+                "counterfactual_query": self._handle_counterfactual_query,
+                "knowledge_update": self._handle_knowledge_update,
+                "multimodal_integration": self._handle_multimodal_update
+            }
+            
+            # Check for handler
+            handler = handlers.get(update.update_type)
+            
+            if handler:
+                # Execute handler asynchronously
+                try:
+                    await handler(update)
+                    
+                    # Track success
+                    if not hasattr(self, '_handler_success_count'):
+                        self._handler_success_count = defaultdict(int)
+                    self._handler_success_count[update.update_type] += 1
+                    
+                except Exception as e:
+                    logger.error(f"Error in handler for {update.update_type}: {e}", exc_info=True)
+                    
+                    # Send error notification if critical
+                    if update.priority == ContextPriority.CRITICAL:
+                        await self.send_context_update(
+                            update_type="reasoning_error",
+                            data={
+                                "error_type": "handler_failure",
+                                "original_update": update.update_type,
+                                "error_message": str(e)
+                            },
+                            priority=ContextPriority.HIGH
+                        )
+            else:
+                # Unknown update type - log and check if it's a module-specific request
+                if "_request" in update.update_type or "_query" in update.update_type:
+                    await self._handle_generic_request(update)
+                else:
+                    logger.info(f"No handler for update type: {update.update_type}")
+            
+            # Track processing time
+            processing_time = time.time() - start_time
+            self._track_processing_time(update.update_type, processing_time)
+            
+        except Exception as e:
+            logger.error(f"Critical error in on_context_update: {e}", exc_info=True)
+    
+    def _validate_update(self, update: ContextUpdate) -> bool:
+        """Validate incoming update"""
+        if not update:
+            return False
+        
+        if not hasattr(update, 'update_type') or not update.update_type:
+            return False
+        
+        if not hasattr(update, 'data') or update.data is None:
+            return False
+        
+        return True
+    
+    async def _handle_perception_update(self, update: ContextUpdate):
+        """Handle perception input updates"""
+        percept = update.data.get("percept")
+        
+        if not percept:
+            logger.warning("Perception update missing percept data")
+            return
+        
+        # Update causal models with new perceptual data
+        if hasattr(self.original_core, 'update_with_perception'):
+            # Run in executor to avoid blocking
+            await asyncio.get_event_loop().run_in_executor(
+                self.executor,
+                self.original_core.update_with_perception,
+                percept
+            )
+        
+        # Extract modality information safely
+        modality = "unknown"
+        if hasattr(percept, 'modality'):
+            modality = str(percept.modality)
+        elif isinstance(percept, dict) and 'modality' in percept:
+            modality = percept['modality']
+        
+        # Notify about model updates
+        await self.send_context_update(
+            update_type="causal_models_updated",
+            data={
+                "updated_models": list(self.active_models),
+                "perception_modality": modality,
+                "update_count": len(self.active_models),
+                "timestamp": datetime.now().isoformat()
+            },
+            priority=ContextPriority.MEDIUM
+        )
+    
+    async def _handle_causal_discovery_request(self, update: ContextUpdate):
+        """Handle causal discovery requests"""
+        model_id = update.data.get("model_id")
+        
+        if not model_id:
+            logger.warning("Causal discovery request missing model_id")
+            return
+        
+        # Validate model exists
+        if model_id not in self.original_core.causal_models:
+            await self.send_context_update(
+                update_type="causal_discovery_error",
+                data={
+                    "model_id": model_id,
+                    "error": "Model not found",
+                    "available_models": list(self.original_core.causal_models.keys())
+                },
+                priority=ContextPriority.HIGH
+            )
+            return
+        
+        try:
+            # Perform discovery
+            discovery_result = await self.original_core.discover_causal_relations(model_id)
+            
+            # Prepare detailed response
+            response_data = {
+                "model_id": model_id,
+                "discovery_result": discovery_result,
+                "new_relations": discovery_result.get("accepted_relations", 0),
+                "potential_relations": discovery_result.get("potential_relations", 0),
+                "validation_score": discovery_result.get("validation", {}).get("score", 0.0),
+                "timestamp": datetime.now().isoformat()
+            }
+            
+            # Add discovery insights if available
+            if discovery_result.get("accepted_relations", 0) > 0:
+                response_data["insights"] = self._generate_discovery_insights(
+                    model_id, discovery_result
                 )
+            
+            await self.send_context_update(
+                update_type="causal_discovery_complete",
+                data=response_data,
+                priority=ContextPriority.HIGH
+            )
+            
+        except Exception as e:
+            logger.error(f"Error in causal discovery: {e}")
+            await self.send_context_update(
+                update_type="causal_discovery_error",
+                data={
+                    "model_id": model_id,
+                    "error": str(e)
+                },
+                priority=ContextPriority.HIGH
+            )
+    
+    async def _handle_conceptual_blend_request(self, update: ContextUpdate):
+        """Handle conceptual blending requests"""
+        space_ids = update.data.get("space_ids", [])
+        blend_type = update.data.get("blend_type", "composition")
+        constraints = update.data.get("constraints", {})
         
-        elif update.update_type == "emotional_state_update":
-            # Emotional state can influence causal reasoning
-            emotional_data = update.data
-            await self._adjust_reasoning_from_emotion(emotional_data)
+        # Validate inputs
+        if len(space_ids) < 2:
+            await self.send_context_update(
+                update_type="conceptual_blend_error",
+                data={
+                    "error": "At least 2 concept spaces required",
+                    "provided_spaces": len(space_ids)
+                },
+                priority=ContextPriority.HIGH
+            )
+            return
         
-        elif update.update_type == "goal_context_available":
-            # Goals can guide reasoning direction
-            goal_data = update.data
-            await self._align_reasoning_with_goals(goal_data)
+        # Validate spaces exist
+        missing_spaces = [sid for sid in space_ids 
+                         if sid not in self.original_core.concept_spaces]
         
-        elif update.update_type == "memory_retrieval_complete":
-            # Use retrieved memories to inform causal models
-            memory_data = update.data
-            await self._inform_reasoning_from_memory(memory_data)
+        if missing_spaces:
+            await self.send_context_update(
+                update_type="conceptual_blend_error",
+                data={
+                    "error": "Space(s) not found",
+                    "missing_spaces": missing_spaces,
+                    "available_spaces": list(self.original_core.concept_spaces.keys())
+                },
+                priority=ContextPriority.HIGH
+            )
+            return
+        
+        try:
+            # Perform blending
+            blend_result = await self._perform_contextual_blending(
+                space_ids, blend_type, constraints
+            )
+            
+            # Send result
+            await self.send_context_update(
+                update_type="conceptual_blend_complete",
+                data={
+                    "blend_result": blend_result,
+                    "input_spaces": space_ids,
+                    "blend_type": blend_type,
+                    "success": blend_result.get("success", False),
+                    "timestamp": datetime.now().isoformat()
+                },
+                priority=ContextPriority.HIGH
+            )
+            
+        except Exception as e:
+            logger.error(f"Error in conceptual blending: {e}")
+            await self.send_context_update(
+                update_type="conceptual_blend_error",
+                data={
+                    "error": str(e),
+                    "space_ids": space_ids,
+                    "blend_type": blend_type
+                },
+                priority=ContextPriority.HIGH
+            )
+    
+    async def _handle_emotional_update(self, update: ContextUpdate):
+        """Handle emotional state updates"""
+        emotional_data = update.data
+        
+        # Validate emotional data
+        if not isinstance(emotional_data, dict):
+            logger.warning("Invalid emotional data format")
+            return
+        
+        # Update reasoning based on emotion
+        await self._adjust_reasoning_from_emotion(emotional_data)
+        
+        # Log emotional influence
+        dominant_emotion = emotional_data.get("dominant_emotion")
+        if dominant_emotion:
+            logger.info(f"Reasoning adjusted for emotion: {dominant_emotion}")
+    
+    async def _handle_goal_update(self, update: ContextUpdate):
+        """Handle goal context updates"""
+        goal_data = update.data
+        
+        # Validate goal data
+        if not isinstance(goal_data, dict):
+            logger.warning("Invalid goal data format")
+            return
+        
+        # Align reasoning with goals
+        await self._align_reasoning_with_goals(goal_data)
+        
+        # Check if any goals require specific reasoning
+        active_goals = goal_data.get("active_goals", [])
+        for goal in active_goals:
+            if goal.get("requires_reasoning", False):
+                await self._initiate_goal_reasoning(goal)
+    
+    async def _handle_memory_update(self, update: ContextUpdate):
+        """Handle memory retrieval updates"""
+        memory_data = update.data
+        
+        # Validate memory data
+        if not isinstance(memory_data, dict):
+            logger.warning("Invalid memory data format")
+            return
+        
+        # Inform reasoning from memory
+        await self._inform_reasoning_from_memory(memory_data)
+        
+        # Check if memories suggest model updates
+        if memory_data.get("suggests_model_update", False):
+            await self._update_models_from_memory(memory_data)
+    
+    async def _handle_generic_request(self, update: ContextUpdate):
+        """Handle generic reasoning requests"""
+        request_type = update.data.get("request_type", "unknown")
+        request_data = update.data.get("request_data", {})
+        
+        logger.info(f"Handling generic request: {request_type}")
+        
+        # Prepare response
+        response = {
+            "request_id": update.data.get("request_id"),
+            "request_type": request_type,
+            "status": "processing"
+        }
+        
+        # Send acknowledgment
+        await self.send_context_update(
+            update_type=f"{update.source_module}_response",
+            data=response,
+            priority=update.priority
+        )
+    
+    def _track_processing_time(self, update_type: str, processing_time: float):
+        """Track processing time metrics"""
+        if not hasattr(self, '_processing_metrics'):
+            self._processing_metrics = defaultdict(list)
+        
+        self._processing_metrics[update_type].append(processing_time)
+        
+        # Keep only last 100 entries per type
+        if len(self._processing_metrics[update_type]) > 100:
+            self._processing_metrics[update_type].pop(0)
+        
+        # Log if processing time is unusually high
+        if processing_time > 1.0:  # More than 1 second
+            logger.warning(f"High processing time for {update_type}: {processing_time:.2f}s")
+    
+    def _generate_discovery_insights(self, model_id: str, 
+                                   discovery_result: Dict[str, Any]) -> List[str]:
+        """Generate human-readable insights from discovery results"""
+        insights = []
+        
+        new_relations = discovery_result.get("accepted_relations", 0)
+        if new_relations > 0:
+            insights.append(f"Discovered {new_relations} new causal relationships")
+        
+        validation_score = discovery_result.get("validation", {}).get("score", 0.0)
+        if validation_score > 0.8:
+            insights.append("High confidence in discovered relationships")
+        elif validation_score < 0.5:
+            insights.append("Low confidence - more data may be needed")
+        
+        return insights
     
     async def process_input(self, context: SharedContext) -> Dict[str, Any]:
         """Process input with full context awareness for reasoning"""
@@ -206,6 +730,304 @@ class ContextAwareReasoningCore(ContextAwareModule):
             "coherence_analysis": coherence_analysis,
             "analysis_complete": True
         }
+
+    async def discover_modules(self):
+        """Dynamically discover available modules and update subscriptions"""
+        try:
+            # Get available modules from the integration layer
+            available_modules = await self.integration_layer.get_available_modules()
+            
+            # Build dynamic subscription list based on module capabilities
+            dynamic_subscriptions = []
+            
+            for module_info in available_modules:
+                module_name = module_info.get("name", "")
+                capabilities = module_info.get("capabilities", [])
+                
+                # Map module capabilities to subscription types
+                capability_mappings = {
+                    "emotion": ["emotional_state_update", "emotion_analysis_complete"],
+                    "memory": ["memory_retrieval_complete", "memory_storage_update"],
+                    "goal": ["goal_context_available", "goal_update", "goal_completion"],
+                    "knowledge": ["knowledge_update", "knowledge_query_result"],
+                    "perception": ["perception_input", "sensory_update"],
+                    "multimodal": ["multimodal_integration", "modality_fusion_complete"],
+                    "planning": ["plan_generated", "plan_execution_update"],
+                    "language": ["language_understanding_complete", "generation_ready"],
+                    "attention": ["attention_shift", "focus_update"],
+                    "motor": ["action_execution_update", "motor_feedback"]
+                }
+                
+                # Add subscriptions based on capabilities
+                for capability in capabilities:
+                    if capability in capability_mappings:
+                        dynamic_subscriptions.extend(capability_mappings[capability])
+                
+                # Also subscribe to module-specific reasoning requests
+                dynamic_subscriptions.extend([
+                    f"{module_name}_reasoning_request",
+                    f"{module_name}_inference_request",
+                    f"{module_name}_analysis_request"
+                ])
+            
+            # Add core reasoning subscriptions that should always be present
+            core_subscriptions = [
+                "causal_discovery_request",
+                "conceptual_blend_request", 
+                "intervention_request",
+                "counterfactual_query",
+                "reasoning_request"  # Generic reasoning requests
+            ]
+            
+            # Combine and deduplicate
+            self.context_subscriptions = list(set(dynamic_subscriptions + core_subscriptions))
+            
+            # Update the integration layer with new subscriptions
+            await self.integration_layer.update_subscriptions(self.module_id, self.context_subscriptions)
+            
+            # Log discovered modules
+            logger.info(f"ReasoningCore discovered {len(available_modules)} modules")
+            logger.debug(f"Updated subscriptions: {self.context_subscriptions}")
+            
+            # Store module registry for future reference
+            self.discovered_modules = {
+                module["name"]: module for module in available_modules
+            }
+            
+            return {
+                "modules_discovered": len(available_modules),
+                "subscriptions_updated": len(self.context_subscriptions),
+                "module_names": [m["name"] for m in available_modules]
+            }
+            
+        except Exception as e:
+            logger.error(f"Error during module discovery: {e}")
+            # Fall back to default subscriptions
+            self.context_subscriptions = [
+                "emotional_state_update", "memory_retrieval_complete", 
+                "goal_context_available", "knowledge_update",
+                "perception_input", "multimodal_integration",
+                "causal_discovery_request", "conceptual_blend_request",
+                "intervention_request", "counterfactual_query"
+            ]
+            return {"error": str(e), "fallback": True}
+    
+    async def register_module_capabilities(self, module_name: str, capabilities: List[str]):
+        """Register a new module's capabilities and update subscriptions"""
+        if module_name not in self.discovered_modules:
+            self.discovered_modules[module_name] = {
+                "name": module_name,
+                "capabilities": capabilities,
+                "registered_at": datetime.now().isoformat()
+            }
+            
+            # Trigger re-discovery to update subscriptions
+            await self.discover_modules()
+            
+            logger.info(f"Registered new module: {module_name} with capabilities: {capabilities}")
+    
+    async def is_module_available(self, module_name: str) -> bool:
+        """Check if a specific module is available"""
+        return module_name in self.discovered_modules
+    
+    # ========================================================================================
+    # CONTEXT PERSISTENCE METHODS
+    # ========================================================================================
+    
+    async def save_context_state(self, filepath: str = None) -> Dict[str, Any]:
+        """Save current context state for persistence across sessions"""
+        if filepath is None:
+            filepath = f"reasoning_context_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        
+        try:
+            context_state = {
+                "timestamp": datetime.now().isoformat(),
+                "module_id": self.module_id,
+                "version": "1.0",
+                
+                # Active reasoning state
+                "active_models": list(self.active_models),
+                "active_spaces": list(self.active_spaces),
+                "active_interventions": list(self.active_interventions),
+                "reasoning_context": self.reasoning_context,
+                
+                # Discovered modules and subscriptions
+                "discovered_modules": self.discovered_modules,
+                "context_subscriptions": self.context_subscriptions,
+                
+                # Current context if available
+                "last_context": {
+                    "user_input": getattr(self, '_last_user_input', ""),
+                    "session_id": getattr(self, '_last_session_id', ""),
+                    "emotional_state": getattr(self, '_last_emotional_state', {}),
+                    "goal_context": getattr(self, '_last_goal_context', {}),
+                    "memory_context": getattr(self, '_last_memory_context', {})
+                },
+                
+                # Cross-module message history (last N messages)
+                "recent_messages": self._get_recent_message_history(limit=50),
+                
+                # Performance metrics
+                "performance_metrics": {
+                    "total_contexts_processed": getattr(self, '_contexts_processed', 0),
+                    "total_updates_received": getattr(self, '_updates_received', 0),
+                    "total_updates_sent": getattr(self, '_updates_sent', 0),
+                    "average_processing_time": getattr(self, '_avg_processing_time', 0.0)
+                }
+            }
+            
+            # Save to file
+            import json
+            with open(filepath, 'w') as f:
+                json.dump(context_state, f, indent=2)
+            
+            logger.info(f"Saved reasoning context state to {filepath}")
+            
+            return {
+                "success": True,
+                "filepath": filepath,
+                "state_size": len(json.dumps(context_state)),
+                "timestamp": context_state["timestamp"]
+            }
+            
+        except Exception as e:
+            logger.error(f"Error saving context state: {e}")
+            return {"success": False, "error": str(e)}
+    
+    async def load_context_state(self, filepath: str) -> Dict[str, Any]:
+        """Load context state from a previous session"""
+        try:
+            import json
+            with open(filepath, 'r') as f:
+                context_state = json.load(f)
+            
+            # Validate version compatibility
+            if context_state.get("version") != "1.0":
+                logger.warning(f"Context state version mismatch: {context_state.get('version')}")
+            
+            # Restore active reasoning state
+            self.active_models = set(context_state.get("active_models", []))
+            self.active_spaces = set(context_state.get("active_spaces", []))
+            self.active_interventions = set(context_state.get("active_interventions", []))
+            self.reasoning_context = context_state.get("reasoning_context", {})
+            
+            # Restore discovered modules and subscriptions
+            self.discovered_modules = context_state.get("discovered_modules", {})
+            self.context_subscriptions = context_state.get("context_subscriptions", self.context_subscriptions)
+            
+            # Update integration layer with restored subscriptions
+            await self.integration_layer.update_subscriptions(self.module_id, self.context_subscriptions)
+            
+            # Restore last context information
+            last_context = context_state.get("last_context", {})
+            self._last_user_input = last_context.get("user_input", "")
+            self._last_session_id = last_context.get("session_id", "")
+            self._last_emotional_state = last_context.get("emotional_state", {})
+            self._last_goal_context = last_context.get("goal_context", {})
+            self._last_memory_context = last_context.get("memory_context", {})
+            
+            # Restore performance metrics
+            metrics = context_state.get("performance_metrics", {})
+            self._contexts_processed = metrics.get("total_contexts_processed", 0)
+            self._updates_received = metrics.get("total_updates_received", 0)
+            self._updates_sent = metrics.get("total_updates_sent", 0)
+            self._avg_processing_time = metrics.get("average_processing_time", 0.0)
+            
+            # Validate restored state
+            validation_result = await self._validate_restored_state()
+            
+            logger.info(f"Loaded reasoning context state from {filepath}")
+            
+            return {
+                "success": True,
+                "filepath": filepath,
+                "state_timestamp": context_state.get("timestamp"),
+                "models_restored": len(self.active_models),
+                "spaces_restored": len(self.active_spaces),
+                "modules_discovered": len(self.discovered_modules),
+                "validation": validation_result
+            }
+            
+        except Exception as e:
+            logger.error(f"Error loading context state: {e}")
+            return {"success": False, "error": str(e)}
+    
+    async def _validate_restored_state(self) -> Dict[str, Any]:
+        """Validate restored state and check if referenced models/spaces still exist"""
+        validation = {
+            "valid_models": 0,
+            "invalid_models": [],
+            "valid_spaces": 0,
+            "invalid_spaces": [],
+            "warnings": []
+        }
+        
+        # Check if active models still exist
+        for model_id in list(self.active_models):
+            if model_id in self.original_core.causal_models:
+                validation["valid_models"] += 1
+            else:
+                validation["invalid_models"].append(model_id)
+                self.active_models.discard(model_id)
+                validation["warnings"].append(f"Removed non-existent model: {model_id}")
+        
+        # Check if active spaces still exist
+        for space_id in list(self.active_spaces):
+            if space_id in self.original_core.concept_spaces:
+                validation["valid_spaces"] += 1
+            else:
+                validation["invalid_spaces"].append(space_id)
+                self.active_spaces.discard(space_id)
+                validation["warnings"].append(f"Removed non-existent space: {space_id}")
+        
+        # Re-discover modules to ensure current state
+        discovery_result = await self.discover_modules()
+        if discovery_result.get("error"):
+            validation["warnings"].append("Module re-discovery failed, using restored subscriptions")
+        
+        validation["is_valid"] = len(validation["invalid_models"]) == 0 and len(validation["invalid_spaces"]) == 0
+        
+        return validation
+    
+    def _get_recent_message_history(self, limit: int = 50) -> List[Dict[str, Any]]:
+        """Get recent cross-module message history for persistence"""
+        # This would need to be implemented based on how messages are stored
+        # For now, return empty list as placeholder
+        return []
+    
+    async def auto_save_context(self, interval_minutes: int = 30):
+        """Automatically save context at regular intervals"""
+        import asyncio
+        
+        self._auto_save_enabled = True
+        save_dir = "reasoning_context_autosave"
+        
+        # Create directory if it doesn't exist
+        import os
+        os.makedirs(save_dir, exist_ok=True)
+        
+        while self._auto_save_enabled:
+            try:
+                # Wait for the specified interval
+                await asyncio.sleep(interval_minutes * 60)
+                
+                # Save context
+                filepath = os.path.join(save_dir, f"autosave_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
+                await self.save_context_state(filepath)
+                
+                # Clean up old autosaves (keep only last 10)
+                autosaves = sorted([f for f in os.listdir(save_dir) if f.startswith("autosave_")])
+                if len(autosaves) > 10:
+                    for old_file in autosaves[:-10]:
+                        os.remove(os.path.join(save_dir, old_file))
+                        
+            except Exception as e:
+                logger.error(f"Error during auto-save: {e}")
+    
+    def stop_auto_save(self):
+        """Stop automatic context saving"""
+        self._auto_save_enabled = False
+
     
     async def process_synthesis(self, context: SharedContext) -> Dict[str, Any]:
         """Synthesize reasoning insights for response generation"""
@@ -950,25 +1772,192 @@ class ContextAwareReasoningCore(ContextAwareModule):
         
         return relevance_score > 0.25  # Threshold for relevance
     
-    def _calculate_semantic_similarity(self, text1: str, text2: str) -> float:
-        """Calculate semantic similarity between texts"""
-        # Simplified semantic similarity using concept overlap
-        # In production, would use word embeddings
+
+    def _calculate_semantic_similarity(self, text1: str, text2: str, 
+                                     use_embeddings: bool = True,
+                                     use_structure: bool = True) -> float:
+        """
+        Calculate semantic similarity between texts using multiple approaches.
         
-        words1 = set(text1.split())
-        words2 = set(text2.split())
-        
-        # Remove stop words
-        stop_words = {"the", "is", "at", "which", "on", "a", "an", "and", "or", "but"}
-        words1 = words1 - stop_words
-        words2 = words2 - stop_words
-        
-        if not words1 or not words2:
+        Args:
+            text1: First text to compare
+            text2: Second text to compare
+            use_embeddings: Whether to use transformer embeddings
+            use_structure: Whether to consider syntactic structure
+            
+        Returns:
+            Similarity score between 0 and 1
+        """
+        if not text1 or not text2:
             return 0.0
         
-        # Calculate Jaccard similarity
-        intersection = len(words1.intersection(words2))
-        union = len(words1.union(words2))
+        # Normalize texts
+        text1 = text1.strip().lower()
+        text2 = text2.strip().lower()
+        
+        # Quick exact match check
+        if text1 == text2:
+            return 1.0
+        
+        similarity_scores = []
+        weights = []
+        
+        # 1. Embedding-based similarity (most important)
+        if use_embeddings and hasattr(self, 'semantic_model'):
+            try:
+                # Get embeddings
+                embeddings = self.semantic_model.encode([text1, text2])
+                embedding_similarity = cosine_similarity(
+                    embeddings[0].reshape(1, -1), 
+                    embeddings[1].reshape(1, -1)
+                )[0][0]
+                
+                # Normalize to 0-1 range (cosine similarity can be negative)
+                embedding_similarity = (embedding_similarity + 1) / 2
+                
+                similarity_scores.append(embedding_similarity)
+                weights.append(0.5)  # High weight for embeddings
+            except Exception as e:
+                logger.warning(f"Embedding calculation failed: {e}")
+        
+        # 2. Token-based similarity with TF-IDF weighting
+        token_similarity = self._calculate_token_similarity(text1, text2)
+        similarity_scores.append(token_similarity)
+        weights.append(0.2)
+        
+        # 3. N-gram similarity
+        ngram_similarity = self._calculate_ngram_similarity(text1, text2)
+        similarity_scores.append(ngram_similarity)
+        weights.append(0.15)
+        
+        # 4. Syntactic structure similarity
+        if use_structure and hasattr(self, 'nlp'):
+            try:
+                structure_similarity = self._calculate_structure_similarity(text1, text2)
+                similarity_scores.append(structure_similarity)
+                weights.append(0.15)
+            except Exception as e:
+                logger.warning(f"Structure similarity calculation failed: {e}")
+        
+        # Calculate weighted average
+        if similarity_scores:
+            # Normalize weights
+            total_weight = sum(weights[:len(similarity_scores)])
+            if total_weight > 0:
+                weighted_similarity = sum(
+                    score * weight for score, weight in zip(similarity_scores, weights)
+                ) / total_weight
+                return min(1.0, max(0.0, weighted_similarity))
+        
+        # Fallback to simple Jaccard similarity
+        return self._calculate_token_similarity(text1, text2)
+
+    def _calculate_ngram_similarity(self, text1: str, text2: str, n_range: Tuple[int, int] = (2, 3)) -> float:
+        """Calculate character n-gram similarity"""
+        def get_ngrams(text: str, n: int) -> Set[str]:
+            """Extract character n-grams from text"""
+            return set(text[i:i+n] for i in range(len(text) - n + 1))
+        
+        similarity_scores = []
+        
+        for n in range(n_range[0], n_range[1] + 1):
+            ngrams1 = get_ngrams(text1, n)
+            ngrams2 = get_ngrams(text2, n)
+            
+            if ngrams1 and ngrams2:
+                intersection = len(ngrams1.intersection(ngrams2))
+                union = len(ngrams1.union(ngrams2))
+                similarity = intersection / union if union > 0 else 0.0
+                similarity_scores.append(similarity)
+        
+        return sum(similarity_scores) / len(similarity_scores) if similarity_scores else 0.0
+
+    def _calculate_token_similarity(self, text1: str, text2: str) -> float:
+        """Calculate token-based similarity with TF-IDF-like weighting"""
+        # Get stop words
+        try:
+            stop_words = set(stopwords.words('english'))
+        except:
+            stop_words = {"the", "is", "at", "which", "on", "a", "an", "and", "or", "but",
+                         "in", "with", "to", "for", "of", "as", "by", "that", "this", "it"}
+        
+        # Tokenize and filter
+        tokens1 = set(word for word in text1.split() if word not in stop_words and len(word) > 2)
+        tokens2 = set(word for word in text2.split() if word not in stop_words and len(word) > 2)
+        
+        if not tokens1 or not tokens2:
+            return 0.0
+        
+        # Calculate token frequencies (simple TF)
+        all_tokens = tokens1.union(tokens2)
+        freq1 = {token: text1.count(token) for token in all_tokens}
+        freq2 = {token: text2.count(token) for token in all_tokens}
+        
+        # Calculate weighted Jaccard similarity
+        intersection_weight = sum(min(freq1.get(token, 0), freq2.get(token, 0)) 
+                                for token in all_tokens)
+        union_weight = sum(max(freq1.get(token, 0), freq2.get(token, 0)) 
+                          for token in all_tokens)
+        
+        return intersection_weight / union_weight if union_weight > 0 else 0.0
+
+    def _calculate_structure_similarity(self, text1: str, text2: str) -> float:
+        """Calculate syntactic structure similarity using spaCy"""
+        try:
+            # Parse texts
+            doc1 = self.nlp(text1)
+            doc2 = self.nlp(text2)
+            
+            # Extract POS tag sequences
+            pos1 = [token.pos_ for token in doc1]
+            pos2 = [token.pos_ for token in doc2]
+            
+            # Calculate POS sequence similarity
+            pos_similarity = self._sequence_similarity(pos1, pos2)
+            
+            # Extract dependency patterns
+            dep_patterns1 = [(token.dep_, token.head.pos_) for token in doc1]
+            dep_patterns2 = [(token.dep_, token.head.pos_) for token in doc2]
+            
+            # Calculate dependency pattern similarity
+            dep_similarity = self._pattern_similarity(dep_patterns1, dep_patterns2)
+            
+            # Combine scores
+            return 0.6 * pos_similarity + 0.4 * dep_similarity
+            
+        except Exception as e:
+            logger.error(f"Structure similarity error: {e}")
+            return 0.0
+    
+    def _sequence_similarity(self, seq1: List[str], seq2: List[str]) -> float:
+        """Calculate similarity between two sequences using LCS"""
+        if not seq1 or not seq2:
+            return 0.0
+        
+        # Longest Common Subsequence
+        m, n = len(seq1), len(seq2)
+        dp = [[0] * (n + 1) for _ in range(m + 1)]
+        
+        for i in range(1, m + 1):
+            for j in range(1, n + 1):
+                if seq1[i-1] == seq2[j-1]:
+                    dp[i][j] = dp[i-1][j-1] + 1
+                else:
+                    dp[i][j] = max(dp[i-1][j], dp[i][j-1])
+        
+        lcs_length = dp[m][n]
+        return 2 * lcs_length / (m + n) if (m + n) > 0 else 0.0
+    
+    def _pattern_similarity(self, patterns1: List[Tuple], patterns2: List[Tuple]) -> float:
+        """Calculate similarity between dependency patterns"""
+        if not patterns1 or not patterns2:
+            return 0.0
+        
+        set1 = set(patterns1)
+        set2 = set(patterns2)
+        
+        intersection = len(set1.intersection(set2))
+        union = len(set1.union(set2))
         
         return intersection / union if union > 0 else 0.0
     
@@ -2645,50 +3634,297 @@ class ContextAwareReasoningCore(ContextAwareModule):
         
         return bridges
     
-    def _detect_communities(self, space) -> List[Dict[str, Any]]:
-        """Detect communities using Louvain-like algorithm"""
-        # Simplified community detection
+    def _detect_communities(self, space, resolution: float = 1.0, 
+                           random_state: int = None) -> List[Dict[str, Any]]:
+        """
+        Detect communities using the Louvain algorithm with NetworkX.
+        
+        Args:
+            space: ConceptSpace to analyze
+            resolution: Resolution parameter for community detection (higher = smaller communities)
+            random_state: Random seed for reproducibility
+            
+        Returns:
+            List of community dictionaries with members and metadata
+        """
+        if not space.concepts:
+            return []
+        
+        # Build NetworkX graph from concept space
+        G = nx.Graph()
+        
+        # Add nodes
+        for concept_id, concept in space.concepts.items():
+            G.add_node(concept_id, **concept)
+        
+        # Add edges with weights
+        for relation in space.relations:
+            source = relation.get("source")
+            target = relation.get("target")
+            strength = relation.get("strength", 1.0)
+            
+            if source in G and target in G:
+                G.add_edge(source, target, weight=strength)
+        
+        # Apply Louvain algorithm
+        try:
+            import community as community_louvain
+            
+            # Detect communities
+            partition = community_louvain.best_partition(
+                G, 
+                weight='weight',
+                resolution=resolution,
+                random_state=random_state
+            )
+            
+            # Calculate modularity
+            modularity = community_louvain.modularity(partition, G, weight='weight')
+            
+        except ImportError:
+            # Fallback to NetworkX's built-in method
+            from networkx.algorithms import community as nx_comm
+            
+            communities_generator = nx_comm.louvain_communities(
+                G, 
+                weight='weight', 
+                resolution=resolution,
+                seed=random_state
+            )
+            
+            # Convert to partition format
+            partition = {}
+            for i, community in enumerate(communities_generator):
+                for node in community:
+                    partition[node] = i
+            
+            # Calculate modularity
+            modularity = nx_comm.modularity(
+                G, 
+                [{n for n, c in partition.items() if c == i} 
+                 for i in set(partition.values())],
+                weight='weight'
+            )
+        
+        # Organize communities
+        communities_dict = defaultdict(list)
+        for node, comm_id in partition.items():
+            communities_dict[comm_id].append(node)
+        
+        # Build community objects with metadata
         communities = []
-        assigned = {}
-        community_id = 0
-        
-        # Start with random seeds
-        concepts = list(space.concepts.keys())
-        np.random.shuffle(concepts)
-        
-        for concept in concepts:
-            if concept in assigned:
+        for comm_id, members in communities_dict.items():
+            if not members:
                 continue
-            
-            # Start new community
-            community = {"members": {concept}, "name": f"Community_{community_id}"}
-            assigned[concept] = community_id
-            
-            # Grow community
-            changed = True
-            while changed:
-                changed = False
                 
-                # Check neighbors of community members
-                for member in list(community["members"]):
-                    neighbors = self._get_concept_neighbors(member, space)
-                    
-                    for neighbor in neighbors:
-                        if neighbor not in assigned:
-                            # Calculate modularity gain
-                            gain = self._calculate_modularity_gain(
-                                neighbor, community["members"], space
-                            )
-                            
-                            if gain > 0:
-                                community["members"].add(neighbor)
-                                assigned[neighbor] = community_id
-                                changed = True
+            # Calculate community properties
+            subgraph = G.subgraph(members)
+            
+            # Internal density
+            internal_edges = subgraph.number_of_edges()
+            possible_edges = len(members) * (len(members) - 1) / 2
+            density = internal_edges / possible_edges if possible_edges > 0 else 0
+            
+            # Find central nodes
+            try:
+                centrality = nx.degree_centrality(subgraph)
+                central_nodes = sorted(centrality.items(), key=lambda x: x[1], reverse=True)[:3]
+            except:
+                central_nodes = [(members[0], 1.0)] if members else []
+            
+            # Determine community theme
+            theme = self._determine_community_theme(members, space)
+            
+            # Calculate cohesion
+            cohesion = self._calculate_community_cohesion(members, space, G)
+            
+            community = {
+                "id": f"community_{comm_id}",
+                "members": members,
+                "size": len(members),
+                "density": density,
+                "cohesion": cohesion,
+                "central_nodes": [{"id": node, "centrality": cent} for node, cent in central_nodes],
+                "theme": theme,
+                "name": f"Community {comm_id}: {theme}",
+                "metadata": {
+                    "internal_edges": internal_edges,
+                    "avg_degree": 2 * internal_edges / len(members) if members else 0,
+                    "created_at": datetime.now().isoformat()
+                }
+            }
             
             communities.append(community)
-            community_id += 1
+        
+        # Sort by size and cohesion
+        communities.sort(key=lambda c: (c["size"], c["cohesion"]), reverse=True)
+        
+        # Add quality metrics
+        for community in communities:
+            community["quality_score"] = self._calculate_community_quality(
+                community, G, modularity
+            )
         
         return communities
+    
+    def _calculate_community_cohesion(self, members: List[str], space, graph: nx.Graph) -> float:
+        """Calculate semantic and structural cohesion of a community"""
+        if len(members) < 2:
+            return 1.0
+        
+        cohesion_scores = []
+        
+        # 1. Structural cohesion (clustering coefficient)
+        try:
+            subgraph = graph.subgraph(members)
+            clustering = nx.average_clustering(subgraph, weight='weight')
+            cohesion_scores.append(clustering)
+        except:
+            cohesion_scores.append(0.5)
+        
+        # 2. Semantic cohesion (concept similarity)
+        semantic_similarities = []
+        for i, member1 in enumerate(members):
+            for member2 in members[i+1:]:
+                concept1 = space.concepts.get(member1, {})
+                concept2 = space.concepts.get(member2, {})
+                
+                # Calculate concept name similarity
+                if concept1.get("name") and concept2.get("name"):
+                    similarity = self._calculate_semantic_similarity(
+                        concept1["name"], 
+                        concept2["name"],
+                        use_embeddings=True,
+                        use_structure=False  # Faster for many comparisons
+                    )
+                    semantic_similarities.append(similarity)
+        
+        if semantic_similarities:
+            avg_semantic_similarity = sum(semantic_similarities) / len(semantic_similarities)
+            cohesion_scores.append(avg_semantic_similarity)
+        
+        # 3. Property cohesion
+        property_cohesion = self._calculate_property_cohesion(members, space)
+        cohesion_scores.append(property_cohesion)
+        
+        # Weighted average
+        weights = [0.4, 0.4, 0.2]  # Structural, semantic, property
+        weighted_cohesion = sum(score * weight for score, weight in 
+                              zip(cohesion_scores, weights[:len(cohesion_scores)]))
+        
+        return min(1.0, max(0.0, weighted_cohesion))
+    
+    def _calculate_property_cohesion(self, members: List[str], space) -> float:
+        """Calculate cohesion based on shared properties"""
+        if len(members) < 2:
+            return 1.0
+        
+        # Collect all properties
+        property_sets = []
+        for member in members:
+            concept = space.concepts.get(member, {})
+            props = set(concept.get("properties", {}).keys())
+            if props:
+                property_sets.append(props)
+        
+        if len(property_sets) < 2:
+            return 0.5
+        
+        # Calculate average Jaccard similarity
+        similarities = []
+        for i in range(len(property_sets)):
+            for j in range(i + 1, len(property_sets)):
+                intersection = len(property_sets[i].intersection(property_sets[j]))
+                union = len(property_sets[i].union(property_sets[j]))
+                if union > 0:
+                    similarities.append(intersection / union)
+        
+        return sum(similarities) / len(similarities) if similarities else 0.0
+    
+    def _determine_community_theme(self, members: List[str], space) -> str:
+        """Determine the theme of a community using NLP and statistical analysis"""
+        # Collect text data from community
+        texts = []
+        all_properties = defaultdict(int)
+        
+        for member in members:
+            concept = space.concepts.get(member, {})
+            
+            # Add concept name
+            if concept.get("name"):
+                texts.append(concept["name"])
+            
+            # Count properties
+            for prop_name in concept.get("properties", {}):
+                all_properties[prop_name] += 1
+        
+        # Find most common words across concept names
+        if texts:
+            # Tokenize and count
+            word_freq = defaultdict(int)
+            
+            for text in texts:
+                tokens = text.lower().split()
+                for token in tokens:
+                    if len(token) > 3:  # Skip short words
+                        word_freq[token] += 1
+            
+            # Find most frequent meaningful word
+            if word_freq:
+                # Filter out common words
+                common_words = {"this", "that", "with", "from", "have", "been"}
+                filtered_words = {w: f for w, f in word_freq.items() 
+                                if w not in common_words}
+                
+                if filtered_words:
+                    theme_word = max(filtered_words.items(), key=lambda x: x[1])[0]
+                    
+                    # Check if it's a domain term
+                    if theme_word in ["system", "process", "concept", "model"]:
+                        # Look for second most common
+                        sorted_words = sorted(filtered_words.items(), 
+                                            key=lambda x: x[1], reverse=True)
+                        if len(sorted_words) > 1:
+                            theme_word = sorted_words[1][0]
+                    
+                    return theme_word.capitalize()
+        
+        # Fallback to most common property
+        if all_properties:
+            most_common_prop = max(all_properties.items(), key=lambda x: x[1])[0]
+            return f"{most_common_prop}_focused"
+        
+        return "General"
+    
+    def _calculate_community_quality(self, community: Dict[str, Any], 
+                                   graph: nx.Graph, global_modularity: float) -> float:
+        """Calculate overall quality score for a community"""
+        scores = []
+        weights = []
+        
+        # 1. Size score (normalized by total nodes)
+        size_ratio = community["size"] / graph.number_of_nodes()
+        size_score = 1 - abs(0.15 - size_ratio) / 0.15  # Optimal around 15% of nodes
+        scores.append(max(0, size_score))
+        weights.append(0.2)
+        
+        # 2. Density score
+        scores.append(community["density"])
+        weights.append(0.25)
+        
+        # 3. Cohesion score
+        scores.append(community["cohesion"])
+        weights.append(0.3)
+        
+        # 4. Contribution to modularity
+        modularity_contribution = global_modularity * (community["size"] / graph.number_of_nodes())
+        scores.append(min(1.0, modularity_contribution * 2))  # Scale up
+        weights.append(0.25)
+        
+        # Calculate weighted average
+        quality = sum(s * w for s, w in zip(scores, weights))
+        
+        return min(1.0, max(0.0, quality))
     
     def _calculate_bridge_importance(self, bridge_id: str, connected_communities: set,
                                    communities: List[Dict], space) -> float:
@@ -3933,37 +5169,64 @@ class ContextAwareReasoningCore(ContextAwareModule):
         
         return min(1.0, quality)
     
-    def _calculate_modularity_gain(self, node: str, community: set, space) -> float:
-        """Calculate modularity gain from adding node to community"""
-        # Simplified modularity calculation
-        # Q = (edges_inside_community / total_edges) - (expected_edges / total_edges)²
+    def _calculate_modularity_gain(self, node: str, community: Set[str], 
+                                 space, graph: nx.Graph = None) -> float:
+        """
+        Calculate the modularity gain from adding a node to a community.
+        Uses the standard modularity formula: ΔQ = [Σin + ki,in]/2m - [(Σtot + ki)/2m]²
         
-        # Count edges
-        edges_to_community = 0
-        total_node_edges = 0
+        Args:
+            node: Node to potentially add
+            community: Current community members
+            space: Concept space
+            graph: Pre-built NetworkX graph (optional, for efficiency)
+            
+        Returns:
+            Modularity gain value
+        """
+        # Build graph if not provided
+        if graph is None:
+            graph = nx.Graph()
+            for concept_id in space.concepts:
+                graph.add_node(concept_id)
+            
+            for relation in space.relations:
+                source = relation.get("source")
+                target = relation.get("target")
+                weight = relation.get("strength", 1.0)
+                if source in graph and target in graph:
+                    graph.add_edge(source, target, weight=weight)
         
-        neighbors = self._get_concept_neighbors(node, space)
-        total_node_edges = len(neighbors)
-        
-        for neighbor in neighbors:
-            if neighbor in community:
-                edges_to_community += 1
-        
-        if total_node_edges == 0:
+        # Check if node exists
+        if node not in graph:
             return 0.0
         
-        # Calculate gain
-        current_fraction = edges_to_community / total_node_edges
+        # Calculate key values
+        m = graph.size(weight='weight')  # Total weight of all edges
+        if m == 0:
+            return 0.0
         
-        # Expected fraction (simplified - assumes random connections)
-        community_size = len(community)
-        total_concepts = len(space.concepts)
-        expected_fraction = community_size / total_concepts if total_concepts > 0 else 0
+        # ki: degree of node i
+        ki = graph.degree(node, weight='weight')
         
-        # Modularity gain
-        gain = current_fraction - expected_fraction
+        # ki,in: sum of weights from node to community
+        ki_in = sum(graph[node][neighbor].get('weight', 1.0) 
+                    for neighbor in community 
+                    if neighbor in graph[node])
         
-        return gain
+        # Σin: sum of weights inside community
+        sigma_in = sum(graph[u][v].get('weight', 1.0)
+                       for u in community for v in community
+                       if u < v and u in graph and v in graph[u])
+        
+        # Σtot: sum of degrees of nodes in community
+        sigma_tot = sum(graph.degree(n, weight='weight') for n in community)
+        
+        # Calculate modularity gain
+        # ΔQ = [ki,in - ki * Σtot / 2m] / m
+        delta_q = (ki_in - ki * sigma_tot / (2 * m)) / m
+        
+        return delta_q
     
     def _find_all_short_paths(self, start: str, end: str, space, max_length: int = 5) -> List[List[str]]:
         """Find all short paths between two concepts"""
