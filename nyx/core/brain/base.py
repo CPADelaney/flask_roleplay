@@ -387,6 +387,11 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             from nyx.core.a2a.context_aware_femdom_integration import ContextAwareFemdomIntegration
             from nyx.core.a2a.context_aware_orgasm_control import ContextAwareOrgasmControl
             from nyx.core.a2a.context_aware_persona_manager import ContextAwarePersonaManager
+            from nyx.core.a2a.context_aware_spatial_mapper import ContextAwareSpatialMapper
+            from nyx.core.a2a.context_aware_spatial_memory import ContextAwareSpatialMemoryIntegration
+            from nyx.core.a2a.context_aware_navigator_agent import ContextAwareSpatialNavigatorAgent
+            from nyx.core.a2a.context_aware_nyx_sync_daemon import ContextAwareNyxSyncDaemon
+            from nyx.core.a2a.context_aware_evaluator import ContextAwareAgentEvaluator
     
             from dev_log.storage import get_dev_log_storage
             self.dev_log_storage = get_dev_log_storage()
@@ -792,11 +797,43 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             else:
                 self.imagination_simulator = original_imagination_simulator
             
-            self.spatial_mapper = SpatialMapper(memory_integration=self.memory_core)
-            if hasattr(self.spatial_mapper, "initialize"): await self.spatial_mapper.initialize()
-            self.spatial_memory = SpatialMemoryIntegration(spatial_mapper=self.spatial_mapper, memory_core=self.memory_core)
+            # In Step 5, replace the spatial mapper initialization with:
+            original_spatial_mapper = SpatialMapper(memory_integration=self.memory_core)
+            if hasattr(original_spatial_mapper, "initialize"): 
+                await original_spatial_mapper.initialize()
+            
+            # Wrap with context-aware version if A2A enabled
+            if self.use_a2a_integration:
+                self.spatial_mapper = ContextAwareSpatialMapper(original_spatial_mapper)
+                logger.debug("Enhanced SpatialMapper with A2A context distribution")
+            else:
+                self.spatial_mapper = original_spatial_mapper
+            
+            # Update spatial memory initialization
+            original_spatial_memory = SpatialMemoryIntegration(
+                spatial_mapper=self.spatial_mapper, 
+                memory_core=self.memory_core
+            )
+            
+            # Wrap with context-aware version if A2A enabled
+            if self.use_a2a_integration:
+                self.spatial_memory = ContextAwareSpatialMemoryIntegration(original_spatial_memory)
+                logger.debug("Enhanced SpatialMemoryIntegration with A2A context distribution")
+            else:
+                self.spatial_memory = original_spatial_memory
+            
+            # Keep map visualization as is (no A2A needed)
             self.map_visualization = MapVisualization()
-            self.navigator_agent = SpatialNavigatorAgent(spatial_mapper=self.spatial_mapper)
+            
+            # Update navigator agent initialization
+            original_navigator_agent = SpatialNavigatorAgent(spatial_mapper=self.spatial_mapper)
+            
+            # Wrap with context-aware version if A2A enabled
+            if self.use_a2a_integration:
+                self.navigator_agent = ContextAwareSpatialNavigatorAgent(original_navigator_agent)
+                logger.debug("Enhanced SpatialNavigatorAgent with A2A context distribution")
+            else:
+                self.navigator_agent = original_navigator_agent
     
             # --- Step 6: Specialized Systems (FemDom, Creative, Novelty, etc.) ---
             logger.debug(f"NyxBrain Init Step 6: Specialized Systems for {self.user_id}-{self.conversation_id}")
@@ -1356,8 +1393,24 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
     
             self.integration_manager = create_integration_manager(self)
             await self.integration_manager.initialize()
-            self.sync_daemon = NyxSyncDaemon()
-            self.agent_evaluator = AgentEvaluator()
+            
+            original_sync_daemon = NyxSyncDaemon()
+            
+            # Wrap with context-aware version if A2A enabled
+            if self.use_a2a_integration:
+                self.sync_daemon = ContextAwareNyxSyncDaemon(original_sync_daemon)
+                logger.debug("Enhanced NyxSyncDaemon with A2A context distribution")
+            else:
+                self.sync_daemon = original_sync_daemon
+    
+            original_agent_evaluator = AgentEvaluator()
+            
+            # Wrap with context-aware version if A2A enabled
+            if self.use_a2a_integration:
+                self.agent_evaluator = ContextAwareAgentEvaluator(original_agent_evaluator)
+                logger.debug("Enhanced AgentEvaluator with A2A context distribution")
+            else:
+                self.agent_evaluator = original_agent_evaluator
             
             if self.use_a2a_integration:
                 from nyx.core.a2a.context_aware_parallel import ContextAwareParallelExecutor
@@ -1389,6 +1442,8 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             self.default_active_modules = {
                 "attentional_controller", "emotional_core", "mode_integration", "memory_core",
                 "internal_thoughts", "agentic_action_generator", "relationship_manager",
+                "spatial_mapper", "spatial_memory", "spatial_navigator",  # Add these
+                "sync_daemon", "agent_evaluator"  # Add these if they should be active
             }
             self.default_active_modules = {mod for mod in self.default_active_modules if hasattr(self, mod) and getattr(self, mod)}
     
