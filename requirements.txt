@@ -41,7 +41,6 @@ Flax==0.10.6
 SQLAlchemy==2.0.41
 alembic==1.15.2
 mysqlclient==2.2.7
-pgvector
 
 # Caching
 redis==6.1.0
@@ -118,22 +117,11 @@ langchain-core==0.3.60
 langchain-text-splitters==0.3.8
 langsmith==0.3.42
 
-# NLP and Language Processing
-spacy==3.7.2
-nltk==3.8.1
-
-# Graph Analysis and Community Detection
-networkx==3.2.1
-python-louvain==0.16  # For community detection algorithm
-
-# Optional but recommended for better NLP performance
-scipy==1.15.3  # Some scikit-learn functions need this
-
 # Vector Operations and ML
-numpy==1.26.4
+numpy==2.1.0
 scikit-learn==1.6.1
 torch==2.7.0  # Required by sentence-transformers
-sentence-transformers==2.7.0
+sentence-transformers==2.2.2
 
 tf-keras
 transformers==4.47.0
