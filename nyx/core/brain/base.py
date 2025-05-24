@@ -11,6 +11,9 @@ import json
 from collections import defaultdict # Added
 from enum import Enum, auto
 
+from nyx.core.global_workspace.global_workspace_architecture import NyxEngine
+from nyx.core.global_workspace.memory_module import MemoryModule
+
 from nyx.core.integration.integration_manager import create_integration_manager
 
 from nyx.core.brain.integration_layer import EnhancedNyxBrainMixin
@@ -208,6 +211,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
                 "thinking_time_avg": 0.0
             }
         }
+        self.workspace_engine: NyxEngine | None = None
 
         # --- Error tracking ---
         self.error_registry: Dict[str, Any] = {
@@ -397,6 +401,19 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             from dev_log.storage import get_dev_log_storage
             self.dev_log_storage = get_dev_log_storage()
             await self.dev_log_storage.initialize()
+
+            if self.workspace_engine is None:              # only once per brain
+                gwa_modules = [
+                    MemoryModule(None),       # memory (already wrapped)
+                    # EmotionModule(None),    # wrap & add when ready
+                    # ReasoningModule(None),
+                    # ExpressionModule(None),
+                    # …
+                ]
+                self.workspace_engine = NyxEngine(gwa_modules)
+                await self.workspace_engine.start()        # spins up attention loop
+                logger.info("Global Workspace Engine started with %d modules",
+                            len(gwa_modules))            
             
             has_relationship_manager = False
             RelationshipManager = None
@@ -4072,22 +4089,47 @@ System Prompt End
                     return status
         return "confident"
     
-    async def process_input(self, 
-                           user_input: str, 
-                           context: Dict[str, Any] = None,
-                           # Feature flags
-                           use_thinking: bool = None,
-                           use_conditioning: bool = None,
-                           use_coordination: bool = None,
-                           thinking_level: int = 1,
-                           # Processing options
-                           mode: str = "auto") -> Dict[str, Any]:
+    async def process_input(
+        self,
+        user_input: str,
+        context: Dict[str, Any] | None = None,
+        *,
+        use_thinking: bool | None = None,
+        use_conditioning: bool | None = None,
+        use_coordination: bool | None = None,
+        thinking_level: int = 1,
+        mode: str = "auto",
+    ) -> Dict[str, Any]:
         """
-        Unified input processing method that handles all processing variations.
+        Wrapper that **first** tries the Global‑Workspace engine.
+        Falls back to the legacy ProcessingManager / event‑bus path
+        so nothing else breaks while you migrate modules.
         """
+        #   make sure the brain is ready
         if not self.initialized:
             await self.initialize()
-            
+    
+        #   Fast path: Global Workspace
+        if getattr(self, "workspace_engine", None):
+            gw_result = await self.workspace_engine.process_input(user_input)
+            # normalise into the structure legacy callers expect
+            return {
+                "processing_mode": "global_workspace",
+                "main_message": gw_result,
+                "active_modules_for_input": set(),  # ­populate if you like
+                "internal_thoughts": [],
+                "thinking_applied": False,
+                "conditioning_applied": False,
+                "response_time": 0.0,
+                "features_used": {
+                    "thinking": False,
+                    "conditioning": False,
+                    "coordination": False,
+                },
+            }
+    
+        # 2️⃣  Legacy pipeline (unchanged apart from early‑return above)
+        # ------------------------------------------------------------------
         context = context or {}
         start_time = datetime.datetime.now()
         
@@ -4179,37 +4221,40 @@ System Prompt End
         
         return processing_result
 
-    async def generate_response(self,
-                              user_input: str,
-                              context: Dict[str, Any] = None,
-                              # Feature flags
-                              use_thinking: bool = None,
-                              use_conditioning: bool = None,
-                              use_coordination: bool = None,
-                              use_hierarchical_memory: bool = None,
-                              # Processing options
-                              mode: str = "auto") -> Dict[str, Any]:
+    async def generate_response(
+        self,
+        user_input: str,
+        context: Dict[str, Any] | None = None,
+        *,
+        use_thinking: bool | None = None,
+        use_conditioning: bool | None = None,
+        use_coordination: bool | None = None,
+        use_hierarchical_memory: bool | None = None,
+        mode: str = "auto",
+    ) -> Dict[str, Any]:
         """
-        Unified response generation method that handles all response variations.
-        
-        Args:
-            user_input: User's input text
-            context: Additional context
-            use_thinking: Enable explicit thinking phase (None=auto-detect)
-            use_conditioning: Enable conditioning system (None=auto-detect)
-            use_coordination: Enable context distribution coordination (None=auto-detect)
-            use_hierarchical_memory: Enable hierarchical memory context (None=auto-detect)
-            mode: Processing mode ("auto", "serial", "parallel", "coordinated", "simple")
-            
-        Returns:
-            Response with all requested features applied
+        Same idea as process_input(): let the Global‑Workspace engine
+        produce the reply if it exists, otherwise fall back to the
+        original multi‑phase brain pipeline.
         """
-        if not getattr(self, "initialized", False):
+        if not self.initialized:
             await self.initialize()
-            
+    
+        # 1️⃣  Global‑Workspace path
+        if getattr(self, "workspace_engine", None):
+            decision = await self.workspace_engine.process_input(user_input)
+            return {
+                "message": decision,
+                "epistemic_status": "confident",
+                "processor_metadata": {
+                    "mode": "global_workspace",
+                    "response_type": "standard",
+                },
+            }
+
         context = context or {}
-        start_time = datetime.datetime.now()
-        
+        start_time = datetime.datetime.now()        
+            
         # Auto-detect features if not specified
         if use_hierarchical_memory is None:
             use_hierarchical_memory = (
