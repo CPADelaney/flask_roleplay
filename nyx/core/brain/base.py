@@ -380,6 +380,8 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             from nyx.core.a2a.context_aware_relationship_reflection import ContextAwareRelationshipReflection
             from nyx.core.a2a.context_aware_reward_system import ContextAwareRewardSystem
             from nyx.core.a2a.context_aware_temporal_perception import ContextAwareTemporalPerception
+            from nyx.core.a2a.context_aware_action_generator import ContextAwareAgenticActionGenerator
+            from nyx.core.a2a.context_aware_somatosensory_system import ContextAwareDigitalSomatosensorySystem
     
             from dev_log.storage import get_dev_log_storage
             self.dev_log_storage = get_dev_log_storage()
@@ -660,12 +662,26 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             else:
                 self.reward_system = original_reward_system
             
-            self.digital_somatosensory_system = DigitalSomatosensorySystem(
-                memory_core=self.memory_core, emotional_core=self.emotional_core, reward_system=self.reward_system
+            original_somatosensory_system = DigitalSomatosensorySystem(
+                memory_core=self.memory_core, 
+                emotional_core=self.emotional_core, 
+                reward_system=self.reward_system,
+                hormone_system=self.hormone_system,  # Add this if DSS accepts it
+                needs_system=self.needs_system        # Add this if DSS accepts it
             )
-            await self.digital_somatosensory_system.initialize()
+            await original_somatosensory_system.initialize()
+            
+            # Wrap with context-aware version if A2A enabled
+            if self.use_a2a_integration:
+                self.digital_somatosensory_system = ContextAwareDigitalSomatosensorySystem(original_somatosensory_system)
+                logger.debug("Enhanced DigitalSomatosensorySystem with A2A context distribution")
+            else:
+                self.digital_somatosensory_system = original_somatosensory_system
+            
+            # Keep the existing back-references
             self.reward_system.somatosensory_system = self.digital_somatosensory_system
-            if self.identity_evolution: self.identity_evolution.somatosensory_system = self.digital_somatosensory_system
+            if self.identity_evolution: 
+                self.identity_evolution.somatosensory_system = self.digital_somatosensory_system
     
             # Initialize conditioning configuration
             self.conditioning_config = ConditioningConfiguration()
@@ -939,32 +955,56 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
                 self.meta_core = ContextAwareMetaCore(self.meta_core)
                 logger.debug("Enhanced MetaCore with A2A context distribution")
     
-            self.agentic_action_generator = EnhancedAgenticActionGenerator(
-                emotional_core=self.emotional_core, hormone_system=self.hormone_system,
-                experience_interface=self.experience_interface, imagination_simulator=self.imagination_simulator,
-                meta_core=self.meta_core, memory_core=self.memory_core, goal_system=self.goal_manager,
-                identity_evolution=self.identity_evolution, knowledge_core=self.knowledge_core,
-                input_processor=self.conditioned_input_processor, internal_feedback=self.internal_feedback,
-                attentional_controller=self.attentional_controller, reasoning_core=self.reasoning_core,
-                reflection_engine=None, mood_manager=self.mood_manager, needs_system=self.needs_system,
-                mode_integration=None, multimodal_integrator=self.multimodal_integrator,
-                reward_system=self.reward_system, theory_of_mind=self.theory_of_mind,
-                relationship_manager=self.relationship_manager, temporal_perception=self.temporal_perception,
-                passive_observation_system=None, proactive_communication_engine=None,
-                creative_system=self.creative_system, creative_memory=self.creative_memory,
-                capability_assessor=self.capability_assessor, system_context=self.system_context,
+            original_action_generator = EnhancedAgenticActionGenerator(
+                emotional_core=self.emotional_core, 
+                hormone_system=self.hormone_system,
+                experience_interface=self.experience_interface, 
+                imagination_simulator=self.imagination_simulator,
+                meta_core=self.meta_core, 
+                memory_core=self.memory_core, 
+                goal_system=self.goal_manager,
+                identity_evolution=self.identity_evolution, 
+                knowledge_core=self.knowledge_core,
+                input_processor=self.conditioned_input_processor, 
+                internal_feedback=self.internal_feedback,
+                attentional_controller=self.attentional_controller, 
+                reasoning_core=self.reasoning_core,
+                reflection_engine=None, 
+                mood_manager=self.mood_manager, 
+                needs_system=self.needs_system,
+                mode_integration=None, 
+                multimodal_integrator=self.multimodal_integrator,
+                reward_system=self.reward_system, 
+                theory_of_mind=self.theory_of_mind,
+                relationship_manager=self.relationship_manager, 
+                temporal_perception=self.temporal_perception,
+                passive_observation_system=None, 
+                proactive_communication_engine=None,
+                creative_system=self.creative_system, 
+                creative_memory=self.creative_memory,
+                capability_assessor=self.capability_assessor, 
+                system_context=self.system_context,
                 procedural_memory_manager=self.procedural_memory_manager,
-                prediction_engine=getattr(self, 'prediction_engine', None), # Add other optional systems if AAG uses them
+                prediction_engine=getattr(self, 'prediction_engine', None),
                 autobiographical_narrative=self.autobiographical_narrative,
                 body_image=getattr(self, 'body_image', None),
                 conditioning_system=self.conditioning_system,
                 issue_tracker=getattr(self, 'issue_tracker', None),
                 relationship_reflection=getattr(self, 'relationship_reflection', None)
             )
+            
+            # Wrap with context-aware version if A2A enabled
+            if self.use_a2a_integration:
+                self.agentic_action_generator = ContextAwareAgenticActionGenerator(original_action_generator)
+                logger.debug("Enhanced AgenticActionGenerator with A2A context distribution")
+            else:
+                self.agentic_action_generator = original_action_generator
+            
             logger.debug("AgenticActionGenerator instance created.")
-    
+            
+            # Keep the existing initialization call
             if self.agentic_action_generator and hasattr(self.agentic_action_generator, 'initialize_actions'):
-                 await self.agentic_action_generator.initialize_actions()
+                await self.agentic_action_generator.initialize_actions()
 
             try:
                 from nyx.core.distributed_processing import DistributedProcessingManager
