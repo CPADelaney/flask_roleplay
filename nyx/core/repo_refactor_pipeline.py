@@ -485,6 +485,8 @@ class RepoRefactorPipeline:
             print(f"Unexpected error during draft PR creation: {e}")
             raise # Re-raise
 
+            
+
 # ---------------------------------------------------------------------------
 # CLI helper (non‑interactive)
 # ---------------------------------------------------------------------------
@@ -498,4 +500,53 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     asyncio.run(RepoRefactorPipeline().run(args.goal, open_pr=args.pr))
+
+class ContextAwareRepoRefactorPipeline(ContextAwareModule):
+    """
+    Minimal A2A integration for repo refactoring - mainly for reporting
+    """
+    
+    def __init__(self, original_pipeline):
+        super().__init__("repo_refactor")
+        self.original_pipeline = original_pipeline
+        self.context_subscriptions = [
+            "development_request", "code_analysis_request"
+        ]
+    
+    async def on_context_received(self, context: SharedContext):
+        """Initialize refactor context"""
+        logger.debug("RepoRefactor received context")
+        
+        # This module doesn't process regular user interactions
+        if context.task_purpose != "development":
+            return
+        
+        await self.send_context_update(
+            update_type="refactor_ready",
+            data={"status": "ready", "capabilities": ["analysis", "refactoring"]},
+            priority=ContextPriority.LOW
+        )
+    
+    async def on_context_update(self, update: ContextUpdate):
+        """Handle development-related updates"""
+        if update.update_type == "code_analysis_request":
+            goal = update.data.get("goal", "improve code quality")
+            # This would typically be run separately, not in regular interaction
+            logger.info(f"Refactor request received: {goal}")
+    
+    async def process_input(self, context: SharedContext) -> Dict[str, Any]:
+        """Not used for regular processing"""
+        return {"processed": False, "reason": "development_tool"}
+    
+    async def process_analysis(self, context: SharedContext) -> Dict[str, Any]:
+        """Not used for regular processing"""
+        return {"analyzed": False, "reason": "development_tool"}
+    
+    async def process_synthesis(self, context: SharedContext) -> Dict[str, Any]:
+        """Not used for regular processing"""
+        return {"synthesized": False, "reason": "development_tool"}
+    
+    def __getattr__(self, name):
+        return getattr(self.original_pipeline, name)
 """
+
