@@ -376,6 +376,10 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             from nyx.core.a2a.context_aware_recognition_memory import ContextAwareRecognitionMemory
             from nyx.core.a2a.context_aware_reflection_engine import ContextAwareReflectionEngine
             from nyx.core.a2a.context_aware_reflexive_system import ContextAwareReflexiveSystem
+            from nyx.core.a2a.context_aware_relationship_manager import ContextAwareRelationshipManager
+            from nyx.core.a2a.context_aware_relationship_reflection import ContextAwareRelationshipReflection
+            from nyx.core.a2a.context_aware_reward_system import ContextAwareRewardSystem
+            from nyx.core.a2a.context_aware_temporal_perception import ContextAwareTemporalPerception
     
             from dev_log.storage import get_dev_log_storage
             self.dev_log_storage = get_dev_log_storage()
@@ -584,8 +588,17 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             else:
                 self.cross_user_manager = original_cross_user_manager
             
-            self.temporal_perception = TemporalPerceptionSystem(self.user_id, self.conversation_id)
-            await self.temporal_perception.initialize(brain_context=self, first_interaction_timestamp=None)
+            original_temporal_perception = TemporalPerceptionSystem(self.user_id, self.conversation_id)
+            await original_temporal_perception.initialize(brain_context=self, first_interaction_timestamp=None)
+            
+            # Wrap with context-aware version if A2A enabled
+            if self.use_a2a_integration:
+                from nyx.core.a2a.context_aware_temporal_perception import ContextAwareTemporalPerception
+                self.temporal_perception = ContextAwareTemporalPerception(original_temporal_perception)
+                logger.debug("Enhanced TemporalPerceptionSystem with A2A context distribution")
+            else:
+                self.temporal_perception = original_temporal_perception
+            
             self.procedural_memory_manager = ProceduralMemoryManager()
             self.agent_enhanced_memory = AgentEnhancedMemoryManager(memory_manager=self.procedural_memory_manager)
     
@@ -631,13 +644,21 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
                 self.mood_manager = ContextAwareMoodManager(self.mood_manager)
                 logger.debug("Enhanced MoodManager with A2A context distribution")
             
-            self.reward_system = RewardSignalProcessor(
+            original_reward_system = RewardSignalProcessor(
                 emotional_core=self.emotional_core, 
                 identity_evolution=self.identity_evolution, 
                 somatosensory_system=self.digital_somatosensory_system,
                 mood_manager=self.mood_manager,
-                needs_system=self.needs_system  # Add this line
+                needs_system=self.needs_system
             )
+            
+            # Wrap with context-aware version if A2A enabled
+            if self.use_a2a_integration:
+                from nyx.core.a2a.context_aware_reward_system import ContextAwareRewardSystem
+                self.reward_system = ContextAwareRewardSystem(original_reward_system)
+                logger.debug("Enhanced RewardSignalProcessor with A2A context distribution")
+            else:
+                self.reward_system = original_reward_system
             
             self.digital_somatosensory_system = DigitalSomatosensorySystem(
                 memory_core=self.memory_core, emotional_core=self.emotional_core, reward_system=self.reward_system
@@ -707,12 +728,25 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             # --- Step 5: Higher-Level Cognitive & Interaction Systems (Part 1) ---
             logger.debug(f"NyxBrain Init Step 5: Higher-Level Systems (Part 1) for {self.user_id}-{self.conversation_id}")
             if has_relationship_manager and RelationshipManager:
-                self.relationship_manager = RelationshipManager(memory_orchestrator=self.memory_orchestrator, emotional_core=self.emotional_core)
+                original_relationship_manager = RelationshipManager(
+                    memory_orchestrator=self.memory_orchestrator, 
+                    emotional_core=self.emotional_core
+                )
+                
+                # Wrap with context-aware version if A2A enabled
+                if self.use_a2a_integration:
+                    from nyx.core.a2a.context_aware_relationship_manager import ContextAwareRelationshipManager
+                    self.relationship_manager = ContextAwareRelationshipManager(original_relationship_manager)
+                    logger.debug("Enhanced RelationshipManager with A2A context distribution")
+                else:
+                    self.relationship_manager = original_relationship_manager
+
             self.multimodal_integrator = MultimodalIntegrator(reasoning_core=self.reasoning_core, attentional_controller=self.attentional_controller)
             self.imagination_simulator = ImaginationSimulator(
                 reasoning_core=self.reasoning_core, knowledge_core=self.knowledge_core,
                 emotional_core=self.emotional_core, identity_evolution=self.identity_evolution
             )
+            
             self.spatial_mapper = SpatialMapper(memory_integration=self.memory_core)
             if hasattr(self.spatial_mapper, "initialize"): await self.spatial_mapper.initialize()
             self.spatial_memory = SpatialMemoryIntegration(spatial_mapper=self.spatial_mapper, memory_core=self.memory_core)
@@ -727,6 +761,31 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
                 from nyx.core.a2a.context_aware_theory_of_mind import ContextAwareTheoryOfMind
                 self.theory_of_mind = ContextAwareTheoryOfMind(self.theory_of_mind)
                 logger.debug("Enhanced TheoryOfMind with context distribution")
+
+            # Initialize relationship reflection system if relationship manager exists
+            if hasattr(self, 'relationship_manager') and self.relationship_manager:
+                try:
+                    from nyx.core.relationship_reflection import RelationshipReflectionSystem
+                    
+                    original_relationship_reflection = RelationshipReflectionSystem(
+                        relationship_manager=self.relationship_manager,
+                        theory_of_mind=self.theory_of_mind,
+                        memory_core=self.memory_core,
+                        identity_evolution=self.identity_evolution,
+                        hormone_system=self.hormone_system
+                    )
+                    
+                    # Wrap with context-aware version if A2A enabled
+                    if self.use_a2a_integration:
+                        from nyx.core.a2a.context_aware_relationship_reflection import ContextAwareRelationshipReflection
+                        self.relationship_reflection = ContextAwareRelationshipReflection(original_relationship_reflection)
+                        logger.debug("Enhanced RelationshipReflectionSystem with A2A context distribution")
+                    else:
+                        self.relationship_reflection = original_relationship_reflection
+                        
+                except ImportError:
+                    logger.warning("RelationshipReflectionSystem module not found")
+                    self.relationship_reflection = None
 
             if hasattr(self, 'goal_manager') and self.goal_manager:
                 # Check if there's an interaction goals component
