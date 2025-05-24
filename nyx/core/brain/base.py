@@ -4089,7 +4089,7 @@ System Prompt End
             await self.initialize()
             
         context = context or {}
-        start_time = datetime.now()
+        start_time = datetime.datetime.now()
         
         # Auto-detect features if not specified
         if use_thinking is None:
@@ -4170,7 +4170,7 @@ System Prompt End
         processing_result.update(core_result)
         
         # Phase 5: Post-processing
-        processing_result["response_time"] = (datetime.now() - start_time).total_seconds()
+        processing_result["response_time"] = (datetime.datetime.now() - start_time).total_seconds()
         processing_result["features_used"] = {
             "thinking": use_thinking,
             "conditioning": use_conditioning,
@@ -4208,7 +4208,7 @@ System Prompt End
             await self.initialize()
             
         context = context or {}
-        start_time = datetime.now()
+        start_time = datetime.datetime.now()
         
         # Auto-detect features if not specified
         if use_hierarchical_memory is None:
@@ -4427,7 +4427,7 @@ System Prompt End
             "internal_thoughts_input": internal_thoughts,
             "internal_thoughts_output": [],
             "active_modules_for_response": sorted(list(context.get("active_modules", []))),
-            "response_time": (datetime.now() - start_time).total_seconds(),
+            "response_time": (datetime.datetime.now() - start_time).total_seconds(),
             "harmful_content_intercepted": True,
             "action_taken": None,
             "thinking_applied": False,
@@ -4571,7 +4571,7 @@ System Prompt End
                 logger.error(f"Error during internal thought post-processing: {e}")
         
         # Update performance metrics
-        response_time = (datetime.now() - start_time).total_seconds()
+        response_time = (datetime.datetime.now() - start_time).total_seconds()
         if hasattr(self, 'performance_metrics') and isinstance(self.performance_metrics, dict):
             if 'response_times' in self.performance_metrics:
                 self.performance_metrics["response_times"].append(response_time)
@@ -4649,7 +4649,7 @@ System Prompt End
             "internal_thoughts_input": internal_thoughts,
             "internal_thoughts_output": [],
             "active_modules_for_response": sorted(list(input_result.get("active_modules_for_input", []))),
-            "response_time": (datetime.now() - start_time).total_seconds(),
+            "response_time": (datetime.datetime.now() - start_time).total_seconds(),
             "action_taken": {"name": "challenge_user", "description": "Challenging user claim."},
             "thinking_applied": input_result.get("thinking_applied", False),
             "thinking_result": input_result.get("thinking_result", {}),
