@@ -683,10 +683,10 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             if self.identity_evolution: 
                 self.identity_evolution.somatosensory_system = self.digital_somatosensory_system
     
-            # Initialize conditioning configuration
+            # Initialize conditioning configuration (keep existing)
             self.conditioning_config = ConditioningConfiguration()
             
-            # Initialize base conditioning system
+            # Initialize base conditioning system (keep existing)
             base_conditioning_system = ConditioningSystem(
                 reward_system=self.reward_system, 
                 emotional_core=self.emotional_core,
@@ -697,8 +697,9 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             # Store base system for reference if needed
             self._base_conditioning_system = base_conditioning_system
             
-            # Wrap with context-aware version if A2A enabled
+            # ENHANCED: Wrap with context-aware version if A2A enabled
             if self.use_a2a_integration:
+                from nyx.core.a2a.context_aware_conditioning import ContextAwareConditioningSystem
                 self.conditioning_system = ContextAwareConditioningSystem(base_conditioning_system)
                 logger.debug("Enhanced ConditioningSystem with A2A context distribution")
             else:
@@ -757,11 +758,34 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
                 else:
                     self.relationship_manager = original_relationship_manager
 
-            self.multimodal_integrator = MultimodalIntegrator(reasoning_core=self.reasoning_core, attentional_controller=self.attentional_controller)
-            self.imagination_simulator = ImaginationSimulator(
-                reasoning_core=self.reasoning_core, knowledge_core=self.knowledge_core,
-                emotional_core=self.emotional_core, identity_evolution=self.identity_evolution
+            # Create original multimodal integrator (keep existing creation)
+            original_multimodal_integrator = MultimodalIntegrator(
+                reasoning_core=self.reasoning_core, 
+                attentional_controller=self.attentional_controller
             )
+            
+            # NEW: Wrap with context-aware version if A2A enabled
+            if self.use_a2a_integration:
+                from nyx.core.a2a.context_aware_multimodal_integrator import ContextAwareMultimodalIntegrator
+                self.multimodal_integrator = ContextAwareMultimodalIntegrator(original_multimodal_integrator)
+                logger.debug("Enhanced MultimodalIntegrator with A2A context distribution")
+            else:
+                self.multimodal_integrator = original_multimodal_integrator
+            
+            original_imagination_simulator = ImaginationSimulator(
+                reasoning_core=self.reasoning_core, 
+                knowledge_core=self.knowledge_core,
+                emotional_core=self.emotional_core, 
+                identity_evolution=self.identity_evolution
+            )
+            
+            # NEW: Wrap with context-aware version if A2A enabled
+            if self.use_a2a_integration:
+                from nyx.core.a2a.context_aware_imagination_simulator import ContextAwareImaginationSimulator
+                self.imagination_simulator = ContextAwareImaginationSimulator(original_imagination_simulator)
+                logger.debug("Enhanced ImaginationSimulator with A2A context distribution")
+            else:
+                self.imagination_simulator = original_imagination_simulator
             
             self.spatial_mapper = SpatialMapper(memory_integration=self.memory_core)
             if hasattr(self.spatial_mapper, "initialize"): await self.spatial_mapper.initialize()
@@ -1039,14 +1063,34 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
                 # Re-start the wrapped system
                 await self.passive_observation_system.start()
     
-            self.proactive_communication_engine = ProactiveCommunicationEngine(
-                action_generator=self.agentic_action_generator, emotional_core=self.emotional_core,
-                memory_core=self.memory_core, relationship_manager=self.relationship_manager,
-                temporal_perception=self.temporal_perception, reasoning_core=self.reasoning_core,
-                reflection_engine=None, mood_manager=self.mood_manager, needs_system=self.needs_system,
+            # Create original proactive communication engine (keep existing creation)
+            original_proactive_communication = ProactiveCommunicationEngine(
+                action_generator=self.agentic_action_generator, 
+                emotional_core=self.emotional_core,
+                memory_core=self.memory_core, 
+                relationship_manager=self.relationship_manager,
+                temporal_perception=self.temporal_perception, 
+                reasoning_core=self.reasoning_core,
+                reflection_engine=None,  # Set later
+                mood_manager=self.mood_manager, 
+                needs_system=self.needs_system,
                 identity_evolution=self.identity_evolution
             )
-            await self.proactive_communication_engine.start()
+            await original_proactive_communication.start()
+            
+            # NEW: Wrap with context-aware version if A2A enabled
+            if self.use_a2a_integration:
+                from nyx.core.a2a.context_aware_proactive_communication import ContextAwareProactiveCommunication
+                # Stop original first if needed
+                await original_proactive_communication.stop()
+                
+                self.proactive_communication_engine = ContextAwareProactiveCommunication(original_proactive_communication)
+                logger.debug("Enhanced ProactiveCommunicationEngine with A2A context distribution")
+                
+                # Start the enhanced version
+                await self.proactive_communication_engine.start()
+            else:
+                self.proactive_communication_engine = original_proactive_communication
     
             from nyx.core.reflection_engine import ReflectionEngine
             original_reflection_engine = ReflectionEngine(
