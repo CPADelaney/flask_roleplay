@@ -373,6 +373,9 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             from nyx.core.a2a.context_aware_parallel import ContextAwareParallelExecutor  
             from nyx.core.a2a.context_aware_passive_observation import ContextAwarePassiveObservation
             from nyx.core.a2a.context_aware_prediction_engine import ContextAwarePredictionEngine
+            from nyx.core.a2a.context_aware_recognition_memory import ContextAwareRecognitionMemory
+            from nyx.core.a2a.context_aware_reflection_engine import ContextAwareReflectionEngine
+            from nyx.core.a2a.context_aware_reflexive_system import ContextAwareReflexiveSystem
     
             from dev_log.storage import get_dev_log_storage
             self.dev_log_storage = get_dev_log_storage()
@@ -789,8 +792,21 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             else:
                 self.novelty_engine = original_novelty_engine
             
-            self.recognition_memory = RecognitionMemorySystem(memory_core=self.memory_core, context_awareness=self.context_system)
-            await self.recognition_memory.initialize()
+            # Create original recognition memory system
+            original_recognition_memory = RecognitionMemorySystem(
+                memory_core=self.memory_core, 
+                context_awareness=self.context_system,
+                reasoning_core=self.reasoning_core  # Add if your RecognitionMemorySystem accepts it
+            )
+            await original_recognition_memory.initialize()
+            
+            # Wrap with context-aware version if A2A enabled
+            if self.use_a2a_integration:
+                from nyx.core.a2a.context_aware_recognition_memory import ContextAwareRecognitionMemory
+                self.recognition_memory = ContextAwareRecognitionMemory(original_recognition_memory)
+                logger.debug("Enhanced RecognitionMemorySystem with A2A context distribution")
+            else:
+                self.recognition_memory = original_recognition_memory
             
             # Create original creative memory integration
             original_creative_memory = CreativeMemoryIntegration(
@@ -1032,9 +1048,23 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
     
             try:
                 from nyx.core.reflexive_system import ReflexiveSystem
-                self.reflexive_system = ReflexiveSystem(agent_enhanced_memory=self.agent_enhanced_memory)
-                if hasattr(self.reflexive_system, "initialize"): await self.reflexive_system.initialize()
-            except ImportError: logger.info("Reflexive system module not found.")
+                
+                # Create original reflexive system
+                original_reflexive_system = ReflexiveSystem(agent_enhanced_memory=self.agent_enhanced_memory)
+                if hasattr(original_reflexive_system, "initialize"): 
+                    await original_reflexive_system.initialize()
+                
+                # Wrap with context-aware version if A2A enabled
+                if self.use_a2a_integration:
+                    from nyx.core.a2a.context_aware_reflexive_system import ContextAwareReflexiveSystem
+                    self.reflexive_system = ContextAwareReflexiveSystem(original_reflexive_system)
+                    logger.debug("Enhanced ReflexiveSystem with A2A context distribution")
+                else:
+                    self.reflexive_system = original_reflexive_system
+                    
+            except ImportError: 
+                logger.info("Reflexive system module not found.")
+                self.reflexive_system = None
     
             self.brain_agent = self._create_brain_agent()
     
