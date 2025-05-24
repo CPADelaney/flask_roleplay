@@ -130,7 +130,7 @@ python-louvain==0.16  # For community detection algorithm
 scipy==1.15.3  # Some scikit-learn functions need this
 
 # Vector Operations and ML
-numpy==2.1.0
+numpy==1.26.4
 scikit-learn==1.6.1
 torch==2.7.0  # Required by sentence-transformers
 sentence-transformers==2.7.0
