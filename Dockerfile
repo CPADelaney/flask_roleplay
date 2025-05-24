@@ -56,15 +56,11 @@ COPY . .
 RUN chmod +x entrypoint.sh
 
 # Run a quick test to ensure all models load correctly
-RUN python -c "
-import spacy
-import nltk
-from sentence_transformers import SentenceTransformer
-print('spaCy:', spacy.load('en_core_web_sm'))
-print('NLTK stopwords:', 'stopwords' in nltk.data.find('corpora/stopwords').path)
-print('Sentence transformer: OK')
-print('All models verified!')
-"
+RUN python -c "import spacy; import nltk; from sentence_transformers import SentenceTransformer; \
+print('spaCy:', spacy.load('en_core_web_sm')); \
+print('NLTK stopwords:', 'stopwords' in nltk.data.find('corpora/stopwords').path); \
+print('Sentence transformer: OK'); \
+print('All models verified!')"
 
 # Expose the port
 EXPOSE 8080
