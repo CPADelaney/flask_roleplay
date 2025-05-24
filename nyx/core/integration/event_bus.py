@@ -196,116 +196,153 @@ class UserModelEvent(Event):
 
 class EventBus:
     """
-    Central event distribution system for inter-module communication.
-    Provides pub-sub mechanism for modules to communicate without direct dependencies.
+    Advanced event bus for Nyx—supports targeted delivery, async request/response,
+    and dynamic subscriber management, with backward compatibility.
     """
     def __init__(self):
-        self.subscribers = defaultdict(list)
+        self.subscribers = defaultdict(list)  # event_type -> list of (callback, subscriber_id)
         self.event_history = []
         self.max_history = 1000
-        self._lock = asyncio.Lock()  # For thread safety
+        self._lock = asyncio.Lock()
         self.event_stats = defaultdict(int)
+        self.pending_responses: Dict[str, asyncio.Future] = {}
         logger.info("EventBus initialized")
-    
-    async def publish(self, event: Event) -> None:
+
+    def subscribe(self, event_type: str, callback: Callable, subscriber_id: Optional[str] = None) -> None:
         """
-        Publish an event to all subscribers.
-        
-        Args:
-            event: The event to publish
+        Subscribe a callback to an event type, optionally with a subscriber_id (for targeted delivery).
+        """
+        self.subscribers[event_type].append((callback, subscriber_id))
+        logger.debug(f"Added subscriber ({subscriber_id or callback}) for event type: {event_type}")
+
+    def unsubscribe(self, event_type: str, callback: Callable, subscriber_id: Optional[str] = None) -> bool:
+        """
+        Unsubscribe a callback (and optional id) from an event type.
+        """
+        before = len(self.subscribers[event_type])
+        self.subscribers[event_type] = [
+            (cb, sid) for cb, sid in self.subscribers[event_type]
+            if cb != callback or (subscriber_id and sid != subscriber_id)
+        ]
+        logger.debug(f"Unsubscribed ({subscriber_id or callback}) from event type: {event_type}")
+        return len(self.subscribers[event_type]) < before
+
+    async def publish(
+        self,
+        event: Event,
+        target: Optional[str] = None,
+        target_group: Optional[List[str]] = None,
+        respond_to: Optional[str] = None,
+    ) -> None:
+        """
+        Publish an event to all or a targeted set of subscribers.
+        - target: single subscriber_id (module name)
+        - target_group: list of subscriber_ids
+        - respond_to: used for request/response, to signal a specific return event_type
         """
         async with self._lock:
-            # Log the event
-            logger.debug(f"Publishing event: {event}")
-            
-            # Add to history
+            # Store event
             self.event_history.append(event)
             self.event_stats[event.event_type] += 1
-            
-            # Trim history if needed
             if len(self.event_history) > self.max_history:
                 self.event_history = self.event_history[-self.max_history:]
         
-        # Notify subscribers
-        for callback in self.subscribers[event.event_type]:
-            try:
-                await callback(event)
-            except Exception as e:
-                logger.error(f"Error in event subscriber callback: {e}")
-        
-        # Also notify wildcard subscribers
-        for callback in self.subscribers["*"]:  # Wildcard subscribers get all events
-            try:
-                await callback(event)
-            except Exception as e:
-                logger.error(f"Error in wildcard event subscriber callback: {e}")
-    
-    def subscribe(self, event_type: str, callback: Callable) -> None:
+        # Build the target filter
+        callbacks = self.subscribers[event.event_type] + self.subscribers["*"]
+        for callback, subscriber_id in callbacks:
+            deliver = False
+            if target:
+                deliver = (subscriber_id == target)
+            elif target_group:
+                deliver = (subscriber_id in target_group)
+            else:
+                deliver = True  # global/wildcard
+            if deliver:
+                try:
+                    await callback(event)
+                    logger.debug(
+                        f"Delivered {event.event_type} to {subscriber_id or callback} at {event.timestamp.isoformat()}"
+                    )
+                except Exception as e:
+                    logger.error(f"Error in event subscriber callback: {e}")
+
+    # --------- Request/Response Pattern ---------
+    async def request(
+        self,
+        event: Event,
+        target: str,
+        timeout: float = 5.0,
+    ) -> Any:
         """
-        Subscribe to an event type.
-        
-        Args:
-            event_type: Type of event to subscribe to, or "*" for all events
-            callback: Async function to call when event occurs
+        Publish a request event, await a response from the target subscriber_id.
+        The target should reply via respond_to/correlation_id.
         """
-        self.subscribers[event_type].append(callback)
-        logger.debug(f"Added subscriber for event type: {event_type}")
-    
-    def unsubscribe(self, event_type: str, callback: Callable) -> bool:
+        correlation_id = event.id
+        response_event_type = f"{event.event_type}_response_{correlation_id}"
+        fut = asyncio.get_event_loop().create_future()
+        self.pending_responses[response_event_type] = fut
+
+        # Setup a temporary responder on the response event
+        async def _on_response(resp_event):
+            if not fut.done():
+                fut.set_result(resp_event)
+            self.unsubscribe(response_event_type, _on_response)
+
+        self.subscribe(response_event_type, _on_response, subscriber_id="__requester__")
+
+        # Attach response event type/correlation to event data for the responder
+        if not hasattr(event, "data") or not isinstance(event.data, dict):
+            event.data = {}
+        event.data["respond_to"] = response_event_type
+        event.data["correlation_id"] = correlation_id
+
+        await self.publish(event, target=target)
+        try:
+            resp_event = await asyncio.wait_for(fut, timeout)
+            return resp_event
+        except asyncio.TimeoutError:
+            logger.warning(f"Request for {event.event_type} timed out (target={target})")
+            return None
+        finally:
+            self.unsubscribe(response_event_type, _on_response)
+            self.pending_responses.pop(response_event_type, None)
+
+    async def respond(self, event: Event, response_data: Any) -> None:
         """
-        Unsubscribe from an event type.
-        
-        Args:
-            event_type: Type of event to unsubscribe from
-            callback: Callback function to remove
-            
-        Returns:
-            True if successfully unsubscribed, False otherwise
+        Send a response to a request (using event's respond_to and correlation_id fields).
         """
-        if event_type in self.subscribers and callback in self.subscribers[event_type]:
-            self.subscribers[event_type].remove(callback)
-            logger.debug(f"Removed subscriber for event type: {event_type}")
-            return True
-        return False
-    
+        if not hasattr(event, "data") or "respond_to" not in event.data:
+            raise ValueError("Event missing 'respond_to' for response pattern.")
+        response_event_type = event.data["respond_to"]
+        correlation_id = event.data.get("correlation_id")
+        response_event = Event(
+            event_type=response_event_type,
+            source="event_bus",
+            data={"correlation_id": correlation_id, "response": response_data},
+        )
+        await self.publish(response_event, target=None)
+
+    # --------- History/Stats Intact ---------
     async def get_recent_events(self, event_type: Optional[str] = None, limit: int = 10) -> List[Event]:
-        """
-        Get recent events, optionally filtered by type.
-        
-        Args:
-            event_type: Optional type of events to return
-            limit: Maximum number of events to return
-            
-        Returns:
-            List of recent events
-        """
         async with self._lock:
             if event_type:
                 filtered = [e for e in self.event_history if e.event_type == event_type]
                 return filtered[-limit:]
             else:
                 return self.event_history[-limit:]
-    
+
     def get_event_stats(self) -> Dict[str, int]:
-        """
-        Get statistics on events processed.
-        
-        Returns:
-            Dictionary of event counts by type
-        """
         return dict(self.event_stats)
-    
+
     async def clear_history(self) -> None:
-        """Clear event history."""
         async with self._lock:
             self.event_history = []
             logger.info("Event history cleared")
 
-# Singleton instance
+# Singleton instance remains the same
 _instance = None
 
 def get_event_bus() -> EventBus:
-    """Get the singleton event bus instance."""
     global _instance
     if _instance is None:
         _instance = EventBus()
