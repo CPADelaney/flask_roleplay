@@ -125,3 +125,4 @@ sentence-transformers==2.2.2
 
 tf-keras
 transformers==4.47.0
+pgvector
