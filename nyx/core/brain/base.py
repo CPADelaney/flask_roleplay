@@ -382,6 +382,11 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             from nyx.core.a2a.context_aware_temporal_perception import ContextAwareTemporalPerception
             from nyx.core.a2a.context_aware_action_generator import ContextAwareAgenticActionGenerator
             from nyx.core.a2a.context_aware_somatosensory_system import ContextAwareDigitalSomatosensorySystem
+            from nyx.core.a2a.context_aware_body_service import ContextAwareBodyService
+            from nyx.core.a2a.context_aware_femdom_coordinator import ContextAwareFemdomCoordinator
+            from nyx.core.a2a.context_aware_femdom_integration import ContextAwareFemdomIntegration
+            from nyx.core.a2a.context_aware_orgasm_control import ContextAwareOrgasmControl
+            from nyx.core.a2a.context_aware_persona_manager import ContextAwarePersonaManager
     
             from dev_log.storage import get_dev_log_storage
             self.dev_log_storage = get_dev_log_storage()
@@ -842,20 +847,148 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
                             self.interaction_goals = ContextAwareInteractionGoals(original_interaction_goals)
                         logger.debug("Enhanced InteractionGoals with A2A context distribution")
                 
-            self.protocol_enforcement = ProtocolEnforcement(reward_system=self.reward_system, memory_core=self.memory_core, relationship_manager=self.relationship_manager)
-            self.body_service_system = BodyServiceSystem(reward_system=self.reward_system, memory_core=self.memory_core, relationship_manager=self.relationship_manager)
-            self.psychological_dominance = PsychologicalDominance(theory_of_mind=self.theory_of_mind, reward_system=self.reward_system, relationship_manager=self.relationship_manager, memory_core=self.memory_core)
-            self.orgasm_control_system = OrgasmControlSystem(reward_system=self.reward_system, memory_core=self.memory_core, relationship_manager=self.relationship_manager, somatosensory_system=self.digital_somatosensory_system)
-            self.dominance_persona_manager = DominancePersonaManager(relationship_manager=self.relationship_manager, reward_system=self.reward_system, memory_core=self.memory_core, emotional_core=self.emotional_core)
-            self.sadistic_response_system = SadisticResponseSystem(theory_of_mind=self.theory_of_mind, protocol_enforcement=self.protocol_enforcement, reward_system=self.reward_system, relationship_manager=self.relationship_manager, memory_core=self.memory_core)
-            self.femdom_coordinator = FemdomCoordinator(self)
-            await self.femdom_coordinator.initialize()
+# Initialize femdom components
+            # Initialize ProtocolEnforcement
+            original_protocol_enforcement = ProtocolEnforcement(
+                reward_system=self.reward_system, 
+                memory_core=self.memory_core, 
+                relationship_manager=self.relationship_manager
+            )
+            if self.use_a2a_integration:
+                from nyx.core.a2a.context_aware_protocol_enforcement import ContextAwareProtocolEnforcement
+                self.protocol_enforcement = ContextAwareProtocolEnforcement(original_protocol_enforcement)
+                logger.debug("Enhanced ProtocolEnforcement with A2A context distribution")
+            else:
+                self.protocol_enforcement = original_protocol_enforcement
             
-            self.dominance_system = self.femdom_coordinator # Assign after init
+            # Initialize BodyServiceSystem
+            original_body_service = BodyServiceSystem(
+                reward_system=self.reward_system, 
+                memory_core=self.memory_core, 
+                relationship_manager=self.relationship_manager
+            )
+            if self.use_a2a_integration:
+                from nyx.core.a2a.context_aware_body_service import ContextAwareBodyService
+                self.body_service_system = ContextAwareBodyService(original_body_service)
+                logger.debug("Enhanced BodyServiceSystem with A2A context distribution")
+            else:
+                self.body_service_system = original_body_service
+            
+            # Initialize PsychologicalDominance
+            original_psychological_dominance = PsychologicalDominance(
+                theory_of_mind=self.theory_of_mind, 
+                reward_system=self.reward_system, 
+                relationship_manager=self.relationship_manager, 
+                memory_core=self.memory_core
+            )
+            if self.use_a2a_integration:
+                from nyx.core.a2a.context_aware_psychological_dominance import ContextAwarePsychologicalDominance
+                self.psychological_dominance = ContextAwarePsychologicalDominance(original_psychological_dominance)
+                logger.debug("Enhanced PsychologicalDominance with A2A context distribution")
+            else:
+                self.psychological_dominance = original_psychological_dominance
+            
+            # Initialize OrgasmControlSystem
+            original_orgasm_control = OrgasmControlSystem(
+                reward_system=self.reward_system, 
+                memory_core=self.memory_core, 
+                relationship_manager=self.relationship_manager, 
+                somatosensory_system=self.digital_somatosensory_system
+            )
+            if self.use_a2a_integration:
+                from nyx.core.a2a.context_aware_orgasm_control import ContextAwareOrgasmControl
+                self.orgasm_control_system = ContextAwareOrgasmControl(original_orgasm_control)
+                logger.debug("Enhanced OrgasmControlSystem with A2A context distribution")
+            else:
+                self.orgasm_control_system = original_orgasm_control
+            
+            # Initialize DominancePersonaManager
+            original_persona_manager = DominancePersonaManager(
+                relationship_manager=self.relationship_manager, 
+                reward_system=self.reward_system, 
+                memory_core=self.memory_core, 
+                emotional_core=self.emotional_core
+            )
+            if self.use_a2a_integration:
+                from nyx.core.a2a.context_aware_persona_manager import ContextAwarePersonaManager
+                self.dominance_persona_manager = ContextAwarePersonaManager(original_persona_manager)
+                logger.debug("Enhanced DominancePersonaManager with A2A context distribution")
+            else:
+                self.dominance_persona_manager = original_persona_manager
+            
+            # Initialize SadisticResponseSystem
+            original_sadistic_response_system = SadisticResponseSystem(
+                theory_of_mind=self.theory_of_mind, 
+                protocol_enforcement=self.protocol_enforcement,  # Note: this will use the A2A version if enabled
+                reward_system=self.reward_system, 
+                relationship_manager=self.relationship_manager, 
+                memory_core=self.memory_core
+            )
+            if self.use_a2a_integration:
+                from nyx.core.a2a.context_aware_sadistic_responses import ContextAwareSadisticResponses
+                self.sadistic_response_system = ContextAwareSadisticResponses(original_sadistic_response_system)
+                logger.debug("Enhanced SadisticResponseSystem with A2A context distribution")
+            else:
+                self.sadistic_response_system = original_sadistic_response_system
+            
+            # Initialize SubmissionProgression
+            original_submission_progression = SubmissionProgression(
+                reward_system=self.reward_system,
+                memory_core=self.memory_core,
+                relationship_manager=self.relationship_manager
+            )
+            if self.use_a2a_integration:
+                from nyx.core.a2a.context_aware_submission_progression import ContextAwareSubmissionProgression
+                self.submission_progression = ContextAwareSubmissionProgression(original_submission_progression)
+                logger.debug("Enhanced SubmissionProgression with A2A context distribution")
+            else:
+                self.submission_progression = original_submission_progression
+            
+            # Initialize TaskAssignmentSystem
+            original_task_assignment = TaskAssignmentSystem(
+                reward_system=self.reward_system,
+                memory_core=self.memory_core,
+                relationship_manager=self.relationship_manager,
+                submission_progression=self.submission_progression,  # Note: this will use the A2A version if enabled
+                dominance_system=None,  # Will be set after FemdomCoordinator init
+                psychological_dominance=self.psychological_dominance,  # Note: this will use the A2A version if enabled
+                protocol_enforcement=self.protocol_enforcement,  # Note: this will use the A2A version if enabled
+                sadistic_responses=self.sadistic_response_system  # Note: this will use the A2A version if enabled
+            )
+            if self.use_a2a_integration:
+                from nyx.core.a2a.context_aware_task_assignment import ContextAwareTaskAssignment
+                self.task_assignment_system = ContextAwareTaskAssignment(original_task_assignment)
+                logger.debug("Enhanced TaskAssignmentSystem with A2A context distribution")
+            else:
+                self.task_assignment_system = original_task_assignment
+            
+            # Initialize FemdomCoordinator
+            original_femdom_coordinator = FemdomCoordinator(self)
+            await original_femdom_coordinator.initialize()
+            
+            if self.use_a2a_integration:
+                from nyx.core.a2a.context_aware_femdom_coordinator import ContextAwareFemdomCoordinator
+                self.femdom_coordinator = ContextAwareFemdomCoordinator(original_femdom_coordinator)
+                logger.debug("Enhanced FemdomCoordinator with A2A context distribution")
+            else:
+                self.femdom_coordinator = original_femdom_coordinator
+            
+            # Assign dominance_system after femdom_coordinator init
+            self.dominance_system = self.femdom_coordinator
             if self.use_a2a_integration and self.dominance_system:
+                from nyx.core.a2a.context_aware_dominance_system import ContextAwareDominanceSystem
                 self.dominance_system = ContextAwareDominanceSystem(self.dominance_system)
                 logger.debug("Enhanced DominanceSystem with A2A context distribution")
             
+            # Update TaskAssignmentSystem with dominance_system reference
+            if hasattr(self.task_assignment_system, 'original_system'):
+                # If A2A wrapped, update the original system
+                self.task_assignment_system.original_system.dominance_system = self.dominance_system
+            else:
+                # If not wrapped, update directly
+                self.task_assignment_system.dominance_system = self.dominance_system
+            
+            # Prepare components for FemdomIntegrationManager
             femdom_components_for_manager = {
                 "protocol_enforcement": self.protocol_enforcement,
                 "body_service": self.body_service_system,
@@ -864,19 +997,29 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
                 "memory_core": self.memory_core,
                 "relationship_manager": self.relationship_manager,
                 "theory_of_mind": self.theory_of_mind,
-                "orgasm_control_system": self.orgasm_control_system,
-                "dominance_persona_manager": self.dominance_persona_manager,
-                "sadistic_response_system": self.sadistic_response_system
-                # Add any other components it actually manages
+                "orgasm_control": self.orgasm_control_system,  # Note: renamed from orgasm_control_system
+                "persona_manager": self.dominance_persona_manager,  # Note: renamed from dominance_persona_manager
+                "sadistic_responses": self.sadistic_response_system,  # Note: renamed from sadistic_response_system
+                "dominance_system": self.dominance_system,  # Add the dominance system
+                "submission_progression": self.submission_progression,  # Add submission progression
+                "task_assignment_system": self.task_assignment_system  # Add task assignment system
             }
-            # --- CORRECTED CALL ---
-            self.femdom_integration_manager = FemdomIntegrationManager(
-                self,  # Pass NyxBrain instance as the first positional argument (for 'nyx_brain')
+            
+            # Initialize FemdomIntegrationManager
+            original_integration_manager = FemdomIntegrationManager(
+                self,  # Pass NyxBrain instance
                 components=femdom_components_for_manager
             )
-            # --- END CORRECTION ---
-            await self.femdom_integration_manager.initialize()
-            logger.debug("Femdom integration manager initialized")
+            await original_integration_manager.initialize()
+            
+            if self.use_a2a_integration:
+                from nyx.core.a2a.context_aware_femdom_integration import ContextAwareFemdomIntegration
+                self.femdom_integration_manager = ContextAwareFemdomIntegration(original_integration_manager)
+                logger.debug("Enhanced FemdomIntegrationManager with A2A context distribution")
+            else:
+                self.femdom_integration_manager = original_integration_manager
+            
+            logger.debug("Femdom integration manager initialized with A2A support")
     
             original_novelty_engine = NoveltyEngine(
                 imagination_simulator=self.imagination_simulator, 
