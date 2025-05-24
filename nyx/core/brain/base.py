@@ -1451,6 +1451,221 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             except Exception as e:
                 logger.error(f"Failed to initialize creative/tool systems: {e}", exc_info=True)
                 # Continue initialization even if creative systems fail
+
+            # --- Initialize Streaming and Game Analysis Systems ---
+            logger.debug(f"NyxBrain Init: Streaming and Game Analysis Systems for {self.user_id}-{self.conversation_id}")
+            
+            # Initialize Cross-Game Knowledge System
+            try:
+                from nyx.streamer.cross_game_knowledge import CrossGameKnowledgeSystem
+                from nyx.core.a2a.context_aware_cross_game_knowledge import ContextAwareCrossGameKnowledge
+                
+                # Create original cross-game knowledge system
+                original_cross_game_knowledge = CrossGameKnowledgeSystem(data_dir=f"cross_game_data_{self.user_id}")
+                
+                # Seed with initial knowledge if needed
+                if not original_cross_game_knowledge.games:
+                    original_cross_game_knowledge.seed_initial_knowledge()
+                
+                # Wrap with context-aware version if A2A enabled
+                if self.use_a2a_integration:
+                    self.cross_game_knowledge = ContextAwareCrossGameKnowledge(original_cross_game_knowledge)
+                    logger.debug("Enhanced CrossGameKnowledgeSystem with A2A context distribution")
+                else:
+                    self.cross_game_knowledge = original_cross_game_knowledge
+                    
+            except ImportError as e:
+                logger.warning(f"CrossGameKnowledgeSystem module not found: {e}")
+                self.cross_game_knowledge = None
+            
+            # Initialize Enhanced Game Vision System
+            try:
+                from nyx.streamer.enhanced_game_vision import (
+                    EnhancedGameRecognitionSystem, GameKnowledgeBase,
+                    EnhancedSpatialMemory, SceneGraphAnalyzer, GameActionRecognition,
+                    RealTimeGameProcessor
+                )
+                from nyx.core.a2a.context_aware_game_vision import ContextAwareGameVision
+                
+                # Create game knowledge base
+                game_knowledge_base = GameKnowledgeBase(data_dir=f"game_data_{self.user_id}")
+                
+                # Create original game recognition system
+                original_game_vision = EnhancedGameRecognitionSystem(knowledge_base=game_knowledge_base)
+                
+                # Seed with initial knowledge if needed
+                if not game_knowledge_base.games:
+                    original_game_vision.seed_initial_knowledge()
+                
+                # Wrap with context-aware version if A2A enabled
+                if self.use_a2a_integration:
+                    self.game_vision = ContextAwareGameVision(original_game_vision)
+                    logger.debug("Enhanced GameVisionSystem with A2A context distribution")
+                else:
+                    self.game_vision = original_game_vision
+                
+                # Initialize the real-time processor if needed
+                self.game_processor = RealTimeGameProcessor(
+                    game_system=self.game_vision,
+                    input_source=0,  # Default camera/video source
+                    processing_fps=30
+                )
+                
+            except ImportError as e:
+                logger.warning(f"EnhancedGameVisionSystem module not found: {e}")
+                self.game_vision = None
+                self.game_processor = None
+            
+            # Initialize Gamer Girl Streaming System
+            try:
+                from nyx.streamer.gamer_girl import (
+                    GameState, HormoneSystem as StreamerHormoneSystem,
+                    SpeechRecognitionSystem, CrossGameKnowledgeSystem as StreamerCrossGame,
+                    GameSessionLearningManager, EnhancedAudienceInteraction,
+                    EnhancedMultiModalIntegrator
+                )
+                from nyx.core.a2a.context_aware_gamer_girl import ContextAwareGamerGirl
+                
+                # Create game state
+                self.game_state = GameState()
+                
+                # Create speech recognition system
+                self.speech_recognition = SpeechRecognitionSystem(model_size="base", language="en")
+                
+                # Create learning manager
+                self.game_learning_manager = GameSessionLearningManager(
+                    brain=self,
+                    streaming_core=None  # Will be set when streaming core is created
+                )
+                
+                # Create multi-modal integrator
+                self.game_multimodal_integrator = EnhancedMultiModalIntegrator(self.game_state)
+                
+                # Create audience interaction system
+                self.audience_interaction = EnhancedAudienceInteraction(self.game_state)
+                
+                # Create the main streaming system (placeholder structure)
+                # You'll need to adapt this based on your actual GamerGirl class structure
+                original_gamer_girl = type('GamerGirl', (), {
+                    'game_state': self.game_state,
+                    'speech_recognition': self.speech_recognition,
+                    'learning_manager': self.game_learning_manager,
+                    'multimodal_integrator': self.game_multimodal_integrator,
+                    'audience_interaction': self.audience_interaction,
+                    'cross_game_knowledge': self.cross_game_knowledge,
+                    'game_vision': self.game_vision,
+                    'hormone_system': self.hormone_system  # Use existing hormone system
+                })()
+                
+                # Wrap with context-aware version if A2A enabled
+                if self.use_a2a_integration:
+                    self.gamer_girl = ContextAwareGamerGirl(original_gamer_girl)
+                    logger.debug("Enhanced GamerGirl streaming system with A2A context distribution")
+                else:
+                    self.gamer_girl = original_gamer_girl
+                
+            except ImportError as e:
+                logger.warning(f"GamerGirl streaming system module not found: {e}")
+                self.gamer_girl = None
+            
+            # Initialize Integrated Streaming Core System
+            try:
+                from nyx.streamer.nyx_streaming_core import StreamingCore, OptimizedStreamingCore
+                from nyx.streamer.streaming_hormone_system import StreamingHormoneSystem
+                from nyx.streamer.streaming_reflection import StreamingReflectionEngine, EnhancedStreamingReflectionEngine
+                from nyx.core.a2a.context_aware_streaming_core import ContextAwareStreamingCore
+                from nyx.core.a2a.context_aware_streaming_hormone_system import ContextAwareStreamingHormoneSystem
+                from nyx.core.a2a.context_aware_streaming_reflection import ContextAwareStreamingReflectionEngine
+                from nyx.core.a2a.context_aware_streaming_integration import ContextAwareStreamingIntegration
+                
+                # Determine video and audio sources
+                video_source = int(os.environ.get("STREAMING_VIDEO_SOURCE", "0"))
+                audio_source = os.environ.get("STREAMING_AUDIO_SOURCE", None)
+                
+                if self.use_a2a_integration:
+                    # Use the integrated context-aware streaming system
+                    self.streaming_integration = await ContextAwareStreamingIntegration.create_integrated_streaming(
+                        brain=self,
+                        video_source=video_source,
+                        audio_source=audio_source
+                    )
+                    
+                    # Extract components from integration
+                    self.streaming_core = self.streaming_integration.streaming_core
+                    self.streaming_hormone_system = self.streaming_integration.hormone_system
+                    self.streaming_reflection_engine = self.streaming_integration.reflection_engine
+                    
+                    # Update learning manager reference
+                    if self.game_learning_manager:
+                        self.game_learning_manager.streaming_core = self.streaming_core
+                    
+                    logger.debug("Initialized integrated context-aware streaming system with A2A")
+                else:
+                    # Create original streaming components
+                    # Use OptimizedStreamingCore for better performance
+                    self.streaming_core = OptimizedStreamingCore(
+                        brain=self,
+                        video_source=video_source,
+                        audio_source=audio_source
+                    )
+                    
+                    # Create hormone system
+                    self.streaming_hormone_system = StreamingHormoneSystem(brain=self)
+                    
+                    # Create enhanced reflection engine
+                    self.streaming_reflection_engine = EnhancedStreamingReflectionEngine(
+                        brain=self,
+                        streaming_core=self.streaming_core
+                    )
+                    
+                    # Connect components
+                    self.streaming_core.hormone_system = self.streaming_hormone_system
+                    self.streaming_core.reflection_engine = self.streaming_reflection_engine
+                    
+                    # Update learning manager reference
+                    if self.game_learning_manager:
+                        self.game_learning_manager.streaming_core = self.streaming_core
+                    
+                    # No integration wrapper in non-A2A mode
+                    self.streaming_integration = None
+                    
+                    logger.debug("Initialized standard streaming system without A2A")
+                
+                # Register streaming functions with brain
+                self._register_streaming_functions()
+                
+            except ImportError as e:
+                logger.warning(f"Streaming integration modules not found: {e}")
+                self.streaming_core = None
+                self.streaming_hormone_system = None
+                self.streaming_reflection_engine = None
+                self.streaming_integration = None
+            except Exception as e:
+                logger.error(f"Error initializing streaming system: {e}")
+                self.streaming_core = None
+                self.streaming_hormone_system = None
+                self.streaming_reflection_engine = None
+                self.streaming_integration = None
+            
+            # Add to default active modules if streaming is enabled
+            if os.environ.get("ENABLE_STREAMING", "false").lower() == "true":
+                if self.cross_game_knowledge:
+                    self.default_active_modules.add("cross_game_knowledge")
+                if self.game_vision:
+                    self.default_active_modules.add("game_vision")
+                if self.gamer_girl:
+                    self.default_active_modules.add("gamer_girl")
+                if self.streaming_integration and self.use_a2a_integration:
+                    self.default_active_modules.add("streaming_integration")
+                    self.default_active_modules.add("streaming_core")
+                    self.default_active_modules.add("streaming_hormone_system")
+                    self.default_active_modules.add("streaming_reflection_engine")
+                elif self.streaming_core:
+                    self.default_active_modules.add("streaming_core")
+                    if self.streaming_hormone_system:
+                        self.default_active_modules.add("streaming_hormone_system")
+                    if self.streaming_reflection_engine:
+                        self.default_active_modules.add("streaming_reflection_engine")
     
             # Initialize the A2A context distribution system if enabled
             if self.use_a2a_integration:
@@ -1471,7 +1686,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             if os.environ.get("ENABLE_AGENT", "true").lower() == "true": await self.initialize_agent_capabilities()
             if os.environ.get("ENABLE_STREAMING", "false").lower() == "true": await self.initialize_streaming()
     
-            # --- Step 9: Finalization ---
+            # --- Step 10: Finalization ---
             self.initialized = True
             logger.critical(f"NyxBrain.initialize() COMPLETED SUCCESSFULLY for {self.user_id}-{self.conversation_id}. self.initialized set to True.")
     
@@ -1480,6 +1695,90 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             self.initialized = False
         finally:
             self._initializing_flag = False
+
+
+    def _register_streaming_functions(self):
+            """Register streaming functions with the brain for easy access"""
+            if not self.streaming_core:
+                return
+            
+            # Basic streaming functions
+            self.stream = self.streaming_core.start_streaming
+            self.stop_stream = self.streaming_core.stop_streaming
+            self.add_stream_question = self.streaming_core.add_audience_question
+            self.get_stream_stats = self.streaming_core.get_streaming_stats
+            
+            # Enhanced processing functions
+            if hasattr(self.streaming_core, 'process_frame_optimized'):
+                self.process_stream_frame = self.streaming_core.process_frame_optimized
+                self.get_stream_performance = self.streaming_core.get_performance_metrics
+            
+            # Memory and experience functions
+            if hasattr(self.streaming_core, 'recall_streaming_experience'):
+                self.retrieve_streaming_experience = self.streaming_core.recall_streaming_experience
+            
+            if hasattr(self.streaming_core, 'memory_mapper'):
+                self.create_streaming_memory = self.streaming_core.memory_mapper.store_gameplay_memory
+                self.create_streaming_reflection = self.streaming_core.memory_mapper.create_streaming_reflection
+            
+            # Hormone system functions
+            if self.streaming_hormone_system:
+                self.get_streaming_emotional_state = self.streaming_hormone_system.get_emotional_state
+                self.update_streaming_hormones = self.streaming_hormone_system.update_from_event
+                self.get_streaming_hormone_influence = self.streaming_hormone_system.get_commentary_influence
+                self.reset_streaming_hormones = self.streaming_hormone_system.reset_to_baseline
+            
+            # Reflection engine functions
+            if self.streaming_reflection_engine:
+                if hasattr(self.streaming_reflection_engine, 'generate_deep_reflection'):
+                    self.generate_streaming_reflection = self.streaming_reflection_engine.generate_deep_reflection
+                if hasattr(self.streaming_reflection_engine, 'generate_comparative_reflection'):
+                    self.generate_comparative_streaming_reflection = self.streaming_reflection_engine.generate_comparative_reflection
+                if hasattr(self.streaming_reflection_engine, 'consolidate_streaming_experiences'):
+                    self.consolidate_streaming_experiences = self.streaming_reflection_engine.consolidate_streaming_experiences
+                
+                # For enhanced version
+                if hasattr(self.streaming_reflection_engine, 'enhanced_consolidate_streaming_experiences'):
+                    self.enhanced_consolidate_streaming = self.streaming_reflection_engine.enhanced_consolidate_streaming_experiences
+            
+            # Cross-game knowledge functions
+            if self.cross_game_knowledge:
+                if hasattr(self.cross_game_knowledge, 'get_applicable_insights'):
+                    self.get_cross_game_insights = self.cross_game_knowledge.get_applicable_insights
+                if hasattr(self.cross_game_knowledge, 'generate_insight'):
+                    self.generate_game_insight = self.cross_game_knowledge.generate_insight
+                if hasattr(self.cross_game_knowledge, 'discover_patterns'):
+                    self.discover_game_patterns = self.cross_game_knowledge.discover_patterns
+            
+            # Learning manager functions  
+            if self.game_learning_manager:
+                if hasattr(self.game_learning_manager, 'analyze_session_learnings'):
+                    self.analyze_streaming_learnings = self.game_learning_manager.analyze_session_learnings
+                if hasattr(self.game_learning_manager, 'generate_learning_summary'):
+                    self.summarize_streaming_learnings = self.game_learning_manager.generate_learning_summary
+            
+            # Audience interaction functions
+            if self.audience_interaction:
+                if hasattr(self.audience_interaction, 'get_audience_stats'):
+                    self.get_audience_stats = self.audience_interaction.get_audience_stats
+                if hasattr(self.audience_interaction, 'get_popular_topics'):
+                    self.get_popular_topics = self.audience_interaction.get_popular_topics
+                if hasattr(self.audience_interaction, 'get_user_personalization'):
+                    self.get_user_personalization = self.audience_interaction.get_user_personalization
+            
+            # Integration functions (only in A2A mode)
+            if self.streaming_integration and self.use_a2a_integration:
+                # Performance adjustment
+                if hasattr(self.streaming_integration, '_adjust_performance_settings'):
+                    async def set_streaming_performance(mode="balanced"):
+                        return await self.streaming_integration._adjust_performance_settings({"mode": mode})
+                    self.set_streaming_performance = set_streaming_performance
+                
+                # Component health check
+                if hasattr(self.streaming_integration, '_analyze_component_health'):
+                    self.check_streaming_health = self.streaming_integration._analyze_component_health
+            
+            logger.debug(f"Registered streaming functions with brain")
             
     @staticmethod
     @function_tool
