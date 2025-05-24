@@ -133,7 +133,7 @@ scipy==1.15.3  # Some scikit-learn functions need this
 numpy==2.1.0
 scikit-learn==1.6.1
 torch==2.7.0  # Required by sentence-transformers
-sentence-transformers==2.2.2
+sentence-transformers==2.7.0
 
 tf-keras
 transformers==4.47.0
