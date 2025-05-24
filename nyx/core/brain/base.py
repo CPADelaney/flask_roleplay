@@ -392,6 +392,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             from nyx.core.a2a.context_aware_navigator_agent import ContextAwareSpatialNavigatorAgent
             from nyx.core.a2a.context_aware_nyx_sync_daemon import ContextAwareNyxSyncDaemon
             from nyx.core.a2a.context_aware_evaluator import ContextAwareAgentEvaluator
+            from nyx.core.a2a.context_aware_setup import setup_context_aware_creative_modules, integrate_creative_modules_with_brain
     
             from dev_log.storage import get_dev_log_storage
             self.dev_log_storage = get_dev_log_storage()
@@ -1430,6 +1431,26 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
     
             self.processing_manager = ProcessingManager(self)
             await self.processing_manager.initialize()
+
+            logger.debug(f"NyxBrain Init Step 9: Creative and Tool Systems for {self.user_id}-{self.conversation_id}")
+            
+            try:
+                # Import the setup function
+                from nyx.core.a2a.context_aware_setup import setup_context_aware_creative_modules
+                
+                # Initialize all creative and tool modules
+                creative_modules = await setup_context_aware_creative_modules(nyx_brain=self)
+                
+                # The setup function already handles integration, but ensure they're accessible
+                for module_name, module in creative_modules.items():
+                    if not hasattr(self, module_name):
+                        setattr(self, module_name, module)
+                
+                logger.info("✓ Creative and tool systems initialized and integrated")
+                
+            except Exception as e:
+                logger.error(f"Failed to initialize creative/tool systems: {e}", exc_info=True)
+                # Continue initialization even if creative systems fail
     
             # Initialize the A2A context distribution system if enabled
             if self.use_a2a_integration:
