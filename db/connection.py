@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager
 from quart import Quart 
 from typing import Optional
 import pgvector.asyncpg as pgvector_asyncpg
+import pgvector
 
 # Configure logging
 logger = logging.getLogger(__name__)
