@@ -410,7 +410,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
 
             if self.workspace_engine is None:              # only once per brain
                 gwa_modules = build_gw_modules(self)
-                self.workspace_engine = NyxEngineV3(gwa_modules)
+                self.workspace_engine = NyxEngineV3(gwa_modules, enable_unconscious=True)
                 await self.workspace_engine.start()        # spins up attention loop
                 logger.info("Global Workspace Engine started with %d modules",
                             len(gwa_modules))            
