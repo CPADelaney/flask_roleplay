@@ -11,8 +11,12 @@ import json
 from collections import defaultdict # Added
 from enum import Enum, auto
 
-from nyx.core.brain.global_workspace.global_workspace_architecture import NyxEngine
 from nyx.core.brain.global_workspace.memory_module import MemoryModule
+from nyx.core.global_workspace.engine_v2 import NyxEngineV2
+from nyx.core.global_workspace.adapters import (
+    MemoryGateway, EmotionGateway, ReasoningGateway,
+    ExpressionGateway, MultimodalGateway
+)
 
 from nyx.core.integration.integration_manager import create_integration_manager
 
@@ -799,6 +803,27 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
                 logger.debug("Enhanced MultimodalIntegrator with A2A context distribution")
             else:
                 self.multimodal_integrator = original_multimodal_integrator
+
+            if self.workspace_engine is None:                     # first‑time only
+                gw_modules = [
+                    MemoryGateway(self.memory_core),              # episodic / semantic
+                    EmotionGateway(self.emotional_core,
+                                   self.hormone_system,           # lets dopamine etc. modulate attention
+                                   self.mood_manager),
+                    ReasoningGateway(self.reasoning_core),
+                    ExpressionGateway(self.agentic_action_generator),   # turns drafts into Nyx style
+                    MultimodalGateway(self.multimodal_integrator),      # binds vision / audio / touch
+                    # ↓ add extras whenever you implement them
+                    # FoundationModelGateway(self),               # OpenAI / local FM calls
+                    # ContinualLearnerGateway(self.capability_assessor)
+                ]
+                self.workspace_engine = NyxEngineV2(
+                    gw_modules,
+                    hz=10.0,                                      # cognitive cycle ≈ 100 ms
+                    persist_bias=f"gw_bias_{self.user_id}.json"
+                )
+                await self.workspace_engine.start()
+                logger.info("Global Workspace V2 started with %d modules", len(gw_modules))
             
             original_imagination_simulator = ImaginationSimulator(
                 reasoning_core=self.reasoning_core, 
@@ -1712,6 +1737,14 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             self.initialized = False
         finally:
             self._initializing_flag = False
+            
+    async def _gw(self, content, salience=0.5, tag="general"):
+        """Quick helper: push a signal into the workspace."""
+        if self.workspace_engine:
+            from nyx.core.global_workspace.types import Proposal
+            await self.workspace_engine.ws.submit(
+                Proposal("NyxBrain", content, salience, context_tag=tag)
+            )
 
 
     def _register_streaming_functions(self):
@@ -4101,32 +4134,34 @@ System Prompt End
         mode: str = "auto",
     ) -> Dict[str, Any]:
         """
-        Wrapper that **first** tries the Global‑Workspace engine.
-        Falls back to the legacy ProcessingManager / event‑bus path
-        so nothing else breaks while you migrate modules.
+        • First try the Global‑Workspace engine.
+        • If it returns a *complete* answer (confident flag) we short‑circuit.
+        • Otherwise the workspace’s draft is copied into `context["workspace_draft"]`
+          and the legacy pipeline continues exactly as before.
         """
-        #   make sure the brain is ready
+    
         if not self.initialized:
             await self.initialize()
     
-        #   Fast path: Global Workspace
-        if getattr(self, "workspace_engine", None):
-            gw_result = await self.workspace_engine.process_input(user_input)
-            # normalise into the structure legacy callers expect
-            return {
-                "processing_mode": "global_workspace",
-                "main_message": gw_result,
-                "active_modules_for_input": set(),  # ­populate if you like
-                "internal_thoughts": [],
-                "thinking_applied": False,
-                "conditioning_applied": False,
-                "response_time": 0.0,
-                "features_used": {
-                    "thinking": False,
-                    "conditioning": False,
-                    "coordination": False,
-                },
-            }
+        context = context or {}
+    
+        # ── 1️⃣ fast‑path through the workspace ──────────────────────────────
+        if self.workspace_engine:
+            gw_reply = await self.workspace_engine.process_input(user_input)
+    
+            # The engine writes its last decision into ws.state
+            confident = gw_reply not in ("…", "", None)
+            if confident:
+                return {
+                    "processing_mode": "global_workspace",
+                    "main_message": gw_reply,
+                    "response_time": 0.0,
+                    "features_used": {"thinking": False, "conditioning": False, "coordination": False},
+                }
+    
+            # No decisive reply – pass it down as a *hint* for the big pipeline
+            context["workspace_draft"] = gw_reply
+
     
         # 2️⃣  Legacy pipeline (unchanged apart from early‑return above)
         # ------------------------------------------------------------------
@@ -4232,45 +4267,31 @@ System Prompt End
         use_hierarchical_memory: bool | None = None,
         mode: str = "auto",
     ) -> Dict[str, Any]:
-        """
-        Same idea as process_input(): let the Global‑Workspace engine
-        produce the reply if it exists, otherwise fall back to the
-        original multi‑phase brain pipeline.
-        """
+    
         if not self.initialized:
             await self.initialize()
     
-        # 1️⃣  Global‑Workspace path
-        if getattr(self, "workspace_engine", None):
-            decision = await self.workspace_engine.process_input(user_input)
-            return {
-                "message": decision,
-                "epistemic_status": "confident",
-                "processor_metadata": {
-                    "mode": "global_workspace",
-                    "response_type": "standard",
-                },
-            }
-
-        context = context or {}
-        start_time = datetime.datetime.now()        
-            
-        # Auto-detect features if not specified
-        if use_hierarchical_memory is None:
-            use_hierarchical_memory = (
-                hasattr(self, "memory_core") and 
-                self.memory_core is not None
-            )
-        
-        # Process input first (with all features)
-        input_result = await self.process_input(
-            user_input, 
+        # ── 1️⃣ try workspace for a ready‑made answer ────────────────────────
+        if self.workspace_engine:
+            gw_reply = await self.workspace_engine.process_input(user_input)
+            if gw_reply not in ("…", "", None):
+                return {
+                    "message": gw_reply,
+                    "epistemic_status": "confident",
+                    "processor_metadata": {"mode": "global_workspace"},
+                }
+    
+        # ── 2️⃣ otherwise call process_input() which now embeds workspace hints
+        input_res = await self.process_input(
+            user_input,
             context,
             use_thinking=use_thinking,
             use_conditioning=use_conditioning,
             use_coordination=use_coordination,
-            mode=mode
+            thinking_level=1,
+            mode=mode,
         )
+
         
         # Extract key information from input processing
         active_modules = set(input_result.get("active_modules_for_input", self.default_active_modules))
