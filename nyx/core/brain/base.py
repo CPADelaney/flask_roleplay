@@ -17,6 +17,8 @@ from nyx.core.brain.global_workspace.adapters import (
     MemoryGateway, EmotionGateway, ReasoningGateway,
     ExpressionGateway, MultimodalGateway
 )
+from nyx.core.brain.workspace_v3 import NyxEngineV3   
+from nyx.core.brain.global_workspace_adapters import build_gw_modules
 
 from nyx.core.integration.integration_manager import create_integration_manager
 
@@ -407,14 +409,8 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             await self.dev_log_storage.initialize()
 
             if self.workspace_engine is None:              # only once per brain
-                gwa_modules = [
-                    MemoryModule(None),       # memory (already wrapped)
-                    # EmotionModule(None),    # wrap & add when ready
-                    # ReasoningModule(None),
-                    # ExpressionModule(None),
-                    # …
-                ]
-                self.workspace_engine = NyxEngine(gwa_modules)
+                gwa_modules = build_gw_modules(self)
+                self.workspace_engine = NyxEngineV3(gwa_modules)
                 await self.workspace_engine.start()        # spins up attention loop
                 logger.info("Global Workspace Engine started with %d modules",
                             len(gwa_modules))            
@@ -817,7 +813,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
                     # FoundationModelGateway(self),               # OpenAI / local FM calls
                     # ContinualLearnerGateway(self.capability_assessor)
                 ]
-                self.workspace_engine = NyxEngineV2(
+                self.workspace_engine = NyxEngineV3(
                     gw_modules,
                     hz=10.0,                                      # cognitive cycle ≈ 100 ms
                     persist_bias=f"gw_bias_{self.user_id}.json"
