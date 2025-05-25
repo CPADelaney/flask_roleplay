@@ -4,7 +4,7 @@ import re
 import time
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Iterable
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 from enum import Enum
 
 
@@ -20,6 +20,11 @@ from nyx.core.brain.global_workspace.global_workspace_architecture import (
     NyxEngineV2,            # conscious engine
 )
 
+async def maybe_async(fn: Callable, *args, **kw):
+    res = fn(*args, **kw)
+    if asyncio.iscoroutine(res) or isinstance(res, asyncio.Future):
+        return await res
+    return res
 
 # ---------------------------------------------------------------------------
 # UNCONSCIOUS PROCESSING EXTENSION (v2 — with stability + perf fixes)
@@ -75,12 +80,6 @@ class UnconsciousLayer:
     # ------------------------------------------------------------------
     # Registration helpers
     # ------------------------------------------------------------------
-
-    async def maybe_async(fn: Callable, *args, **kw):
-        res = fn(*args, **kw)
-        if asyncio.iscoroutine(res) or isinstance(res, asyncio.Future):
-            return await res
-        return res
 
     async def register_process(self, name: str, fn: Callable,
                                 *, level: ProcessingLevel = ProcessingLevel.SUBLIMINAL,
