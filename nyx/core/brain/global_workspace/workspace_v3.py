@@ -290,7 +290,7 @@ class NyxEngineV3(NyxEngineV2):
         if self.enable_unconscious and self.unconscious:
             # register all detectors declared by modules
             for m in self.modules:
-                if isinstance(m, EnhancedWorkspaceModule):
+                if getattr(m, "_pending_unconscious", None):
                     for name, fn, thr in m._pending_unconscious:
                         await self.unconscious.register_process(name, fn, threshold=thr)
             await self.unconscious.start()
