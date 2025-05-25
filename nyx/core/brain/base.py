@@ -12,13 +12,15 @@ from collections import defaultdict # Added
 from enum import Enum, auto
 
 from nyx.core.brain.global_workspace.memory_module import MemoryModule
-from nyx.core.brain.global_workspace.global_workspace_architecture.py import NyxEngineV2
 from nyx.core.brain.global_workspace.adapters import (
     MemoryGateway, EmotionGateway, ReasoningGateway,
     ExpressionGateway, MultimodalGateway
 )
-from nyx.core.brain.workspace_v3 import NyxEngineV3   
-from nyx.core.brain.global_workspace_adapters import build_gw_modules
+
+from nyx.core.brain.global_workspace.workspace_v3 import (
+    NyxEngineV3, Proposal, EnhancedWorkspaceModule
+)
+from nyx.core.brain.global_workspace.adapters import build_gw_modules
 
 from nyx.core.integration.integration_manager import create_integration_manager
 
@@ -408,12 +410,18 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             self.dev_log_storage = get_dev_log_storage()
             await self.dev_log_storage.initialize()
 
-            if self.workspace_engine is None:              # only once per brain
-                gwa_modules = build_gw_modules(self)
-                self.workspace_engine = NyxEngineV3(gwa_modules, enable_unconscious=True)
-                await self.workspace_engine.start()        # spins up attention loop
-                logger.info("Global Workspace Engine started with %d modules",
-                            len(gwa_modules))            
+            # Initialize Global Workspace Architecture
+            if self.workspace_engine is None:
+                logger.debug("Initializing Global Workspace Architecture")
+                gw_modules = build_gw_modules(self)
+                self.workspace_engine = NyxEngineV3(
+                    gw_modules,
+                    hz=10.0,  # 10Hz cognitive cycle
+                    persist_bias=Path(f"gw_bias_{self.user_id}_{self.conversation_id}.json"),
+                    enable_unconscious=True
+                )
+                await self.workspace_engine.start()
+                logger.info(f"Global Workspace Engine started with {len(gw_modules)} modules")      
             
             has_relationship_manager = False
             RelationshipManager = None
@@ -799,27 +807,6 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
                 logger.debug("Enhanced MultimodalIntegrator with A2A context distribution")
             else:
                 self.multimodal_integrator = original_multimodal_integrator
-
-            if self.workspace_engine is None:                     # first‑time only
-                gw_modules = [
-                    MemoryGateway(self.memory_core),              # episodic / semantic
-                    EmotionGateway(self.emotional_core,
-                                   self.hormone_system,           # lets dopamine etc. modulate attention
-                                   self.mood_manager),
-                    ReasoningGateway(self.reasoning_core),
-                    ExpressionGateway(self.agentic_action_generator),   # turns drafts into Nyx style
-                    MultimodalGateway(self.multimodal_integrator),      # binds vision / audio / touch
-                    # ↓ add extras whenever you implement them
-                    # FoundationModelGateway(self),               # OpenAI / local FM calls
-                    # ContinualLearnerGateway(self.capability_assessor)
-                ]
-                self.workspace_engine = NyxEngineV3(
-                    gw_modules,
-                    hz=10.0,                                      # cognitive cycle ≈ 100 ms
-                    persist_bias=f"gw_bias_{self.user_id}.json"
-                )
-                await self.workspace_engine.start()
-                logger.info("Global Workspace V2 started with %d modules", len(gw_modules))
             
             original_imagination_simulator = ImaginationSimulator(
                 reasoning_core=self.reasoning_core, 
@@ -1736,8 +1723,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             
     async def _gw(self, content, salience=0.5, tag="general"):
         """Quick helper: push a signal into the workspace."""
-        if self.workspace_engine:
-            from nyx.core.global_workspace.types import Proposal
+        if self.workspace_engine and self.workspace_engine.ws:
             await self.workspace_engine.ws.submit(
                 Proposal("NyxBrain", content, salience, context_tag=tag)
             )
