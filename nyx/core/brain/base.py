@@ -11,8 +11,8 @@ import json
 from collections import defaultdict # Added
 from enum import Enum, auto
 
-from nyx.core.global_workspace.global_workspace_architecture import NyxEngine
-from nyx.core.global_workspace.memory_module import MemoryModule
+from nyx.core.brain.global_workspace.global_workspace_architecture import NyxEngine
+from nyx.core.brain.global_workspace.memory_module import MemoryModule
 
 from nyx.core.integration.integration_manager import create_integration_manager
 
