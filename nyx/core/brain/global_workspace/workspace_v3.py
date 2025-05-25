@@ -374,22 +374,3 @@ class MemoryWithDreams(EnhancedWorkspaceModule):
             return len(sa & sb) / max(len(sa), len(sb))
         return 0.0
 
-
-# ---------------------------------------------------------------------------
-# QUICK DEMO  (unchanged public API)
-# ---------------------------------------------------------------------------
-
-async def _demo():
-    emotion = EmotionalCoreWithUnconscious()
-    memory = MemoryWithDreams()
-    engine = NyxEngineV3([emotion, memory], hz=10)
-    await engine.start()
-    engine.unconscious.register_reflex("BOO", lambda _: "!!! *jumps* You startled me!")
-    print(await engine.process_input("BOO!"))
-    print(await engine.process_input("I feel happy today"))
-    await asyncio.sleep(2)
-    print(engine.ws.state.get("last_decision"))
-    await engine.stop()
-
-if __name__ == "__main__":
-    asyncio.run(_demo())
