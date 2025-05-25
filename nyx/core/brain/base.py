@@ -11,12 +11,6 @@ import json
 from collections import defaultdict # Added
 from enum import Enum, auto
 
-from nyx.core.brain.global_workspace.memory_module import MemoryModule
-from nyx.core.brain.global_workspace.adapters import (
-    MemoryGateway, EmotionGateway, ReasoningGateway,
-    ExpressionGateway, MultimodalGateway
-)
-
 from nyx.core.brain.global_workspace.workspace_v3 import (
     NyxEngineV3, Proposal, EnhancedWorkspaceModule
 )
