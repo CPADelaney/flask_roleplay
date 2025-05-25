@@ -121,7 +121,8 @@ langsmith==0.3.42
 numpy==2.1.0
 scikit-learn==1.6.1
 torch==2.7.0  # Required by sentence-transformers
-sentence-transformers==2.2.2
+sentence-transformers==2.3.1 
+huggingface-hub==0.20
 
 tf-keras
 transformers==4.47.0
