@@ -15,7 +15,7 @@ import asyncio
 import logging
 from typing import Any, List
 
-from global_workspace_architecture import WorkspaceModule, Proposal  # noqa: relative import ok
+from nyx.core.brain.global_workspace.global_workspace_architecture import WorkspaceModule, Proposal  # noqa: relative import ok
 from nyx.core.memory_core import MemoryCoreAgents  # adjust path if needed
 
 logger = logging.getLogger(__name__)
