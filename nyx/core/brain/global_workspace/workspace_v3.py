@@ -7,7 +7,18 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Iterable
 from enum import Enum
 
-from nyx.core.brain.global_workspace.global_workspace_architecture import WorkspaceModule
+
+from nyx.core.brain.global_workspace.global_workspace_architecture import (
+    Proposal,               # data class
+    WorkspaceModule,        # base class that adapters subclass
+    GlobalContextWorkspace, # shared buffer
+    AttentionMechanism,     # salience / focus
+    CycleClock,             # timing
+    NeuromodulatorState,    # dopamine, etc.
+    PredictionMatrix,       # expectations
+    Coordinator,            # reply compositor
+    NyxEngineV2,            # conscious engine
+)
 
 
 # ---------------------------------------------------------------------------
