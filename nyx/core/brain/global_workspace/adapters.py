@@ -14,9 +14,28 @@ Add or remove adapters freely – just mimic the pattern.
 """
 from __future__ import annotations
 
-import asyncio
-import random
-from typing import Any, Dict, List, Callable
+import asyncio, random, time, math, functools
+from typing import Any, Dict, List, Optional, Sequence, Tuple, Callable
+
+import numpy as np
+from sentence_transformers import SentenceTransformer
+
+_ST_MODEL: Optional[SentenceTransformer] = None        # lazy‑load to keep boot fast
+def _get_st_model() -> SentenceTransformer:
+    global _ST_MODEL         # pylint: disable=global-statement
+    if _ST_MODEL is None:
+        _ST_MODEL = SentenceTransformer("all-MiniLM-L6-v2")
+    return _ST_MODEL
+
+def _cos(a: np.ndarray, b: np.ndarray) -> float:
+    return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-6))
+
+def _sem_match(txt: str, prompts: Sequence[str], thresh: float = .55) -> bool:
+    """Semantic yes/no using a cheap SBERT embedding cache."""
+    model = _get_st_model()
+    vec_txt = model.encode(txt, normalize_embeddings=True)
+    vec_ref = [model.encode(p, normalize_embeddings=True) for p in prompts]
+    return any(_cos(vec_txt, v) >= thresh for v in vec_ref)
 
 # NOTE: adjust this import if you moved the workspace implementation
 from nyx.core.brain.workspace_v3 import EnhancedWorkspaceModule
@@ -545,56 +564,356 @@ class HormoneAdapter(EnhancedWorkspaceModule):
             return {"hormonal_imbalance": True, "significance": 0.5}
         return None
 
+
+# ────────────────────────────────────────────────────────────────────────────
+# 1) CreativeSystemAdapter  – semantic trigger + adaptive code scan
+# ────────────────────────────────────────────────────────────────────────────
+class CreativeSystemAdapter(EnhancedWorkspaceModule):
+    def __init__(self, creative_system, ws=None) -> None:
+        super().__init__(ws)
+        self.name = "creative"
+        self.cs = creative_system
+        self._next_scan: float = 0.0          # unix‑ts
+        self._next_idea: float = 0.0
+
+        self.register_unconscious("code_scan", self._scan_codebase_bg, threshold=.55)
+        self.register_unconscious("idea_incubation", self._generate_ideas_bg, threshold=.6)
+
+    # ---------- conscious -------------
+    async def on_phase(self, phase: int) -> None:
+        if phase != 1 or not self.cs:
+            return
+        for p in self.ws.focus:
+            if p.context_tag == "user_input" and _sem_match(
+                str(p.content),
+                ["write", "create", "draw", "compose", "invent", "generate a"],
+                .5,
+            ):
+                await self.submit(
+                    {
+                        "capabilities": self.cs.available_modalities(),
+                        "trigger": str(p.content)[:120],
+                    },
+                    salience=.75,
+                    context_tag="creative_ready",
+                )
+                break
+
+    # ---------- unconscious -------------
+    async def _scan_codebase_bg(self, view):
+        now = time.time()
+        if now < self._next_scan:
+            return None
+        self._next_scan = now + 300                       # 5‑min cool‑down
+        if not hasattr(self.cs, "incremental_codebase_analysis"):
+            return None
+        result: dict = await maybe_async(self.cs.incremental_codebase_analysis)
+        changed = result.get("changed_files_git", 0)
+        if changed:
+            return {
+                "changed_files": changed,
+                "files_analyzed": result.get("files_analyzed_for_metrics", 0),
+                "significance": min(.9, .15 * math.log1p(changed)),
+            }
+        return None
+
+    async def _generate_ideas_bg(self, view):
+        now = time.time()
+        if now < self._next_idea:
+            return None
+        self._next_idea = now + random.uniform(90, 240)    # 1.5‑4 min
+        if not hasattr(self.cs, "incubate_idea"):
+            return None
+        # emotional priming boosts chance
+        mood_boost = max(
+            (p.salience for p in view.recent if p.context_tag == "emotion_spike"),
+            default=0.0,
+        )
+        if random.random() < .15 + .5 * mood_boost:
+            idea = await maybe_async(self.cs.incubate_idea)
+            if idea:
+                return {"new_idea": idea, "significance": .6 + .3 * mood_boost}
+        return None
+
+# ────────────────────────────────────────────────────────────────────────────
+# 2) ThinkingToolsAdapter – smarter gating & metacog signal
+# ────────────────────────────────────────────────────────────────────────────
+class ThinkingToolsAdapter(EnhancedWorkspaceModule):
+    def __init__(self, tools, ws=None):
+        super().__init__(ws)
+        self.name = "thinking"
+        self.tools = tools
+        self._active_level: int = 0
+        self._last_metacog: float = 0.0
+
+        self.register_unconscious("metacognition", self._metacog_bg, threshold=.65)
+
+    async def on_phase(self, phase: int):
+        if phase != 0 or not self.tools:
+            return
+        for p in self.ws.focus:
+            if p.context_tag != "user_input":
+                continue
+            decision = await maybe_async(self.tools.should_use_extended_thinking, str(p.content))
+            if decision.get("should_think"):
+                self._active_level = decision.get("thinking_level", 1)
+                await self.submit(
+                    {"thinking_required": True, "level": self._active_level},
+                    salience=.8,
+                    context_tag="thinking_needed",
+                )
+
+    async def _metacog_bg(self, view):
+        now = time.time()
+        if now - self._last_metacog < 30:                   # every 30 s tops
+            return None
+        self._last_metacog = now
+        load = sum(1 for p in view.recent if p.source.startswith("thinking"))
+        if load > 5:
+            return {
+                "cog_load": load,
+                "level": self._active_level,
+                "significance": min(.9, .1 * load),
+            }
+        return None
+
+# ────────────────────────────────────────────────────────────────────────────
+# 3) SocialBrowsingAdapter – motivation‑weighted & trend semantic
+# ────────────────────────────────────────────────────────────────────────────
+class SocialBrowsingAdapter(EnhancedWorkspaceModule):
+    def __init__(self, social_tools, motivations: Dict[str, float], ws=None):
+        super().__init__(ws)
+        self.name = "social"
+        self.tools = social_tools
+        self.motiv = motivations
+        self._next_browse = 0.0
+        self.register_unconscious("feed_watch", self._watch_feed_bg, threshold=.5)
+
+    async def on_phase(self, phase: int):
+        if phase != 2 or not self.tools:
+            return
+        urge = max(self.motiv.get("curiosity", 0), self.motiv.get("expression", 0))
+        if urge < .65:
+            return
+        if time.time() < self._next_browse:
+            return
+        self._next_browse = time.time() + 600              # 10‑min cool‑down
+        await self.submit(
+            {"browse": True, "motivation": "curiosity" if self.motiv["curiosity"] >= self.motiv["expression"] else "expression"},
+            salience=.6 + .3 * urge,
+            context_tag="social_browsing",
+        )
+
+    async def _watch_feed_bg(self, view):
+        if not hasattr(self.tools, "sentiment_engine"):
+            return None
+        trends = await maybe_async(self.tools.sentiment_engine.detect_trends)
+        if trends.get("trend_detected"):
+            return {
+                "trend": trends["trends"][:3],
+                "significance": .55 + .35 * trends.get("trend_strength", .5),
+            }
+        return None
+
+# ────────────────────────────────────────────────────────────────────────────
+# 4) GameVisionAdapter – basic embedding & adaptive cadence
+# ────────────────────────────────────────────────────────────────────────────
+class GameVisionAdapter(EnhancedWorkspaceModule):
+    def __init__(self, vision, knowledge, ws=None):
+        super().__init__(ws)
+        self.name = "game_vision"
+        self.vision, self.knowledge = vision, knowledge
+        self.cur_game: Optional[str] = None
+        self._next_pattern = 0.0
+        self._next_consolidate = 0.0
+
+        self.register_unconscious("pattern_learning", self._pattern_bg, threshold=.55)
+        self.register_unconscious("knowledge_consolidate", self._consolidate_bg, threshold=.7)
+
+    async def on_phase(self, phase: int):
+        if phase != 0 or not self.vision:
+            return
+        frame = next((p.content for p in self.ws.focus if p.context_tag == "game_frame"), None)
+        if not frame:
+            return
+        analysis = await maybe_async(self.vision.analyze_frame, frame)
+        if not analysis:
+            return
+        ginfo = analysis.get("game", {})
+        gid = ginfo.get("game_id")
+        if gid and gid != self.cur_game and self.knowledge:
+            self.knowledge.set_current_game(gid)
+            self.cur_game = gid
+        await self.submit(
+            {
+                "game_id": gid,
+                "stage": analysis.get("location"),
+                "objects": len(analysis.get("objects", [])),
+            },
+            salience=.7,
+            context_tag="game_state",
+        )
+
+    # ­­­background
+    async def _pattern_bg(self, _):
+        if time.time() < self._next_pattern or not self.knowledge or not self.cur_game:
+            return None
+        self._next_pattern = time.time() + 120            # every 2 min
+        pat = self.knowledge.discover_patterns()
+        if pat:
+            return {"new_patterns": len(pat), "significance": min(.9, .1 * len(pat))}
+        return None
+
+    async def _consolidate_bg(self, _):
+        if time.time() < self._next_consolidate or not self.knowledge:
+            return None
+        self._next_consolidate = time.time() + 900        # 15 min
+        res = self.knowledge.consolidate_knowledge()
+        if res.get("combined_insights", 0) or res.get("removed_insights", 0):
+            return {"consolidated": True, "significance": .6}
+        return None
+
+# ────────────────────────────────────────────────────────────────────────────
+# 5) CapabilityAdapter – vector‑based similarity to user request
+# ────────────────────────────────────────────────────────────────────────────
+class CapabilityAdapter(EnhancedWorkspaceModule):
+    def __init__(self, cap_sys, ws=None):
+        super().__init__(ws)
+        self.name = "capabilities"
+        self.cap = cap_sys
+        self.register_unconscious("gap_scan", self._gap_bg, threshold=.65)
+
+    async def on_phase(self, phase: int):
+        if phase != 1 or not self.cap:
+            return
+        for p in self.ws.focus:
+            if p.context_tag != "user_input":
+                continue
+            if _sem_match(str(p.content), ["can you", "able to", "is it possible"], .6):
+                assess = await maybe_async(self.cap.assess_required_capabilities, str(p.content))
+                if assess:
+                    await self.submit(
+                        {
+                            "feasible": assess["overall_feasibility"],
+                            "missing": len(assess.get("potential_gaps", [])),
+                        },
+                        salience=.6,
+                        context_tag="capability_assessment",
+                    )
+
+    async def _gap_bg(self, _):
+        analyse = await maybe_async(self.cap.identify_capability_gaps)
+        total = sum(map(len, analyse.values()))
+        if total:
+            return {
+                "gap_total": total,
+                "significance": min(.9, .1 * total),
+            }
+        return None
+
+# ────────────────────────────────────────────────────────────────────────────
+# 6) UIConversationAdapter – activity‑aware ping
+# ────────────────────────────────────────────────────────────────────────────
+class UIConversationAdapter(EnhancedWorkspaceModule):
+    def __init__(self, ui_mgr, ws=None):
+        super().__init__(ws)
+        self.name = "ui_conv"
+        self.ui = ui_mgr
+        self._active: set[str] = set()
+        self._next_scan = 0.0
+
+    async def on_phase(self, phase: int):
+        if phase != 2 or not self.ui:
+            return
+        # trigger from social connection proposals
+        for p in self.ws.focus:
+            if p.context_tag == "social_connection" and p.salience > .7:
+                uid = p.content.get("user_id")
+                if uid and uid not in self._active:
+                    conv = await maybe_async(self.ui.create_new_conversation, uid)
+                    if not conv.get("error"):
+                        self._active.add(uid)
+                        await self.submit(
+                            {"conv_started": uid, "id": conv["id"]},
+                            salience=.55,
+                            context_tag="ui_conversation",
+                        )
+
+    async def _monitor_conv_bg(self, _):
+        if not self._active or time.time() < self._next_scan:
+            return None
+        self._next_scan = time.time() + 120              # every 2 min
+        total = 0
+        for uid in list(self._active):
+            convs = await maybe_async(self.ui.get_conversations_for_user, uid)
+            if not convs:
+                self._active.discard(uid)
+                continue
+            total += sum(len(c.get("messages", [])) for c in convs)
+        if total > 15:
+            return {"ui_msg_volume": total, "significance": .55}
+        return None
+
 # ---------------------------------------------------------------------------
 # FACTORY -------------------------------------------------------------------
 # ---------------------------------------------------------------------------
 
 def build_gw_modules(brain) -> List[EnhancedWorkspaceModule]:
-    """Create the list of adapters for the subsystems actually present in *brain*."""
+    """Create adapters for every subsystem actually present in *brain*."""
     adapters: List[EnhancedWorkspaceModule] = []
     add = adapters.append
+    has = lambda attr: getattr(brain, attr, None) is not None   # noqa: E731
 
-    if getattr(brain, "memory_core", None):
-        add(MemoryAdapter(brain.memory_core))
-    if getattr(brain, "emotional_core", None):
-        add(EmotionalAdapter(brain.emotional_core))
-    if getattr(brain, "needs_system", None):
-        add(NeedsAdapter(brain.needs_system))
-    if getattr(brain, "goal_manager", None):
-        add(GoalAdapter(brain.goal_manager))
-    if getattr(brain, "mood_manager", None):
-        add(MoodAdapter(brain.mood_manager))
-    if getattr(brain, "reasoning_core", None):
-        add(ReasoningAdapter(brain.reasoning_core))
-    if getattr(brain, "reflection_engine", None):
-        add(ReflectionAdapter(brain.reflection_engine))
-    if getattr(brain, "attentional_controller", None):
-        add(AttentionAdapter(brain.attentional_controller))
-    if getattr(brain, "body_image", None):
-        add(BodyImageAdapter(brain.body_image))
-    if getattr(brain, "multimodal_integrator", None):
-        add(MultimodalAdapter(brain.multimodal_integrator))
-    if getattr(brain, "relationship_manager", None):
-        add(RelationshipAdapter(brain.relationship_manager))
-    if getattr(brain, "theory_of_mind", None):
-        add(TheoryOfMindAdapter(brain.theory_of_mind))
-    if getattr(brain, "autobiographical_narrative", None):
-        add(AutobiographicalAdapter(brain.autobiographical_narrative))
-    if getattr(brain, "identity_evolution", None):
-        add(IdentityAdapter(brain.identity_evolution))
-    if getattr(brain, "creative_system", None):
-        add(CreativeAdapter(brain.creative_system))
-    if getattr(brain, "prediction_engine", None):
-        add(PredictionAdapter(brain.prediction_engine))
-    if getattr(brain, "proactive_communication_engine", None):
+    # ── core cognitive ------------------------------------------------------
+    if has("memory_core"):              add(MemoryAdapter(brain.memory_core))
+    if has("emotional_core"):           add(EmotionalAdapter(brain.emotional_core))
+    if has("needs_system"):             add(NeedsAdapter(brain.needs_system))
+    if has("goal_manager"):             add(GoalAdapter(brain.goal_manager))
+    if has("mood_manager"):             add(MoodAdapter(brain.mood_manager))
+    if has("reasoning_core"):           add(ReasoningAdapter(brain.reasoning_core))
+    if has("reflection_engine"):        add(ReflectionAdapter(brain.reflection_engine))
+    if has("attentional_controller"):   add(AttentionAdapter(brain.attentional_controller))
+    if has("prediction_engine"):        add(PredictionAdapter(brain.prediction_engine))
+    if has("meta_core"):                add(MetaCoreAdapter(brain.meta_core))
+    if has("mode_integration"):         add(ModeIntegrationAdapter(brain.mode_integration))
+    if has("hormone_system"):           add(HormoneAdapter(brain.hormone_system))
+
+    # ── embodiment / perception --------------------------------------------
+    if has("body_image"):               add(BodyImageAdapter(brain.body_image))
+    if has("multimodal_integrator"):    add(MultimodalAdapter(brain.multimodal_integrator))
+    if has("passive_observation_system"): add(PassiveObservationAdapter(brain.passive_observation_system))
+
+    # ── social / relational -------------------------------------------------
+    if has("relationship_manager"):     add(RelationshipAdapter(brain.relationship_manager))
+    if has("theory_of_mind"):           add(TheoryOfMindAdapter(brain.theory_of_mind))
+    if has("autobiographical_narrative"): add(AutobiographicalAdapter(brain.autobiographical_narrative))
+    if has("identity_evolution"):       add(IdentityAdapter(brain.identity_evolution))
+
+    # ── creative & higher‑order thinking ------------------------------------
+    if has("creative_system"):          add(CreativeSystemAdapter(brain.creative_system))
+    if has("thinking_tools"):           add(ThinkingToolsAdapter(brain.thinking_tools))
+    if has("capability_assessor"):      add(CapabilityAdapter(brain.capability_assessor))
+
+    # ── proactive / interactive --------------------------------------------
+    if has("proactive_communication_engine"):
         add(ProactiveAdapter(brain.proactive_communication_engine))
-    if getattr(brain, "passive_observation_system", None):
-        add(PassiveObservationAdapter(brain.passive_observation_system))
-    if getattr(brain, "meta_core", None):
-        add(MetaCoreAdapter(brain.meta_core))
-    if getattr(brain, "mode_integration", None):
-        add(ModeIntegrationAdapter(brain.mode_integration))
-    if getattr(brain, "hormone_system", None):
-        add(HormoneAdapter(brain.hormone_system))
 
+    # ── social browsing (needs tools *and* motivation dict) -----------------
+    if has("social_tools") and has("motivations"):
+        add(SocialBrowsingAdapter(brain.social_tools, brain.motivations))
+
+    # ── game‑vision integration --------------------------------------------
+    if has("game_vision") or has("cross_game_knowledge"):
+        add(
+            GameVisionAdapter(
+                getattr(brain, "game_vision", None),
+                getattr(brain, "cross_game_knowledge", None),
+            )
+        )
+
+    # ── UI conversation manager --------------------------------------------
+    if has("ui_manager"):
+        add(UIConversationAdapter(brain.ui_manager))
+
+    # ---- done --------------------------------------------------------------
     return adapters
