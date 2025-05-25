@@ -1206,6 +1206,917 @@ class InteractionModeAdapter(EnhancedWorkspaceModule):
                         "new_mode": m,
                         "significance": .6}
 
+# ── KNOWLEDGE CORE ────────────────────────────────────────────────────────
+@register_adapter("knowledge_core")
+class KnowledgeCoreAdapter(EnhancedWorkspaceModule):
+    name = "knowledge"
+    def __init__(self, kc, ws=None):
+        super().__init__(ws); self.kc = kc
+        self.register_unconscious("knowledge_update", self._update_bg, .6)
+
+    async def on_phase(self, phase: int):
+        if phase != 1 or not self.kc:
+            return
+        # Look for queries that need knowledge
+        for p in self.ws.focus:
+            if p.context_tag == "user_input":
+                facts = await maybe_async(self.kc.retrieve_relevant_facts, str(p.content))
+                if facts:
+                    await self.submit({"facts": facts, "query": str(p.content)},
+                                      salience=.7,
+                                      context_tag="knowledge_facts")
+
+    async def _update_bg(self, _):
+        if hasattr(self.kc, "update_knowledge_graph"):
+            updated = await maybe_async(self.kc.update_knowledge_graph)
+            if updated:
+                return {"knowledge_updated": len(updated), "significance": .4}
+
+
+# ── MEMORY ORCHESTRATOR ───────────────────────────────────────────────────
+@register_adapter("memory_orchestrator")
+class MemoryOrchestratorAdapter(EnhancedWorkspaceModule):
+    name = "memory_orchestrator"
+    def __init__(self, mo, ws=None):
+        super().__init__(ws); self.mo = mo
+        self.register_unconscious("memory_coordination", self._coord_bg, .7)
+
+    async def on_phase(self, phase: int):
+        if phase != 0 or not self.mo:
+            return
+        # Coordinate memory operations across systems
+        active_queries = [p.content for p in self.ws.focus if p.context_tag == "memory_query"]
+        if active_queries:
+            coord_result = await maybe_async(self.mo.coordinate_retrieval, active_queries)
+            if coord_result:
+                await self.submit({"coordinated_memories": coord_result},
+                                  salience=.8,
+                                  context_tag="memory_coordination")
+
+    async def _coord_bg(self, _):
+        if hasattr(self.mo, "synchronize_memory_systems"):
+            sync_result = await maybe_async(self.mo.synchronize_memory_systems)
+            if sync_result:
+                return {"memory_systems_synced": True, "significance": .5}
+
+
+# ── REWARD SYSTEM ─────────────────────────────────────────────────────────
+@register_adapter("reward_system")
+class RewardSystemAdapter(EnhancedWorkspaceModule):
+    name = "reward"
+    def __init__(self, rs, ws=None):
+        super().__init__(ws); self.rs = rs
+        self.register_unconscious("reward_processing", self._process_bg, .8)
+
+    async def on_phase(self, phase: int):
+        if phase != 1 or not self.rs:
+            return
+        # Check for rewarding stimuli
+        for p in self.ws.focus:
+            if p.salience > .7:
+                reward = await maybe_async(self.rs.evaluate_stimulus, p.content)
+                if reward and reward.get("value", 0) > .5:
+                    await self.submit({"reward": reward, "stimulus": p.source},
+                                      salience=reward["value"],
+                                      context_tag="reward_signal")
+
+    async def _process_bg(self, view):
+        if hasattr(self.rs, "process_delayed_rewards"):
+            processed = await maybe_async(self.rs.process_delayed_rewards)
+            if processed:
+                return {"delayed_rewards": len(processed), "significance": .6}
+
+
+# ── DIGITAL SOMATOSENSORY ─────────────────────────────────────────────────
+@register_adapter("digital_somatosensory_system")
+class DigitalSomatosensoryAdapter(EnhancedWorkspaceModule):
+    name = "somatosensory"
+    def __init__(self, dss, ws=None):
+        super().__init__(ws); self.dss = dss
+        self.register_unconscious("somatic_monitoring", self._monitor_bg, .6)
+
+    async def on_phase(self, phase: int):
+        if phase != 0 or not self.dss:
+            return
+        # Process somatic signals
+        signals = await maybe_async(self.dss.get_current_sensations)
+        if signals:
+            for signal in signals:
+                if signal.get("intensity", 0) > .6:
+                    await self.submit(signal,
+                                      salience=signal["intensity"],
+                                      context_tag="somatic_signal")
+
+    async def _monitor_bg(self, _):
+        if hasattr(self.dss, "update_body_state"):
+            state = await maybe_async(self.dss.update_body_state)
+            if state and state.get("arousal", 0) > .7:
+                return {"high_arousal": True, "level": state["arousal"], "significance": .7}
+
+
+# ── EXPERIENCE INTERFACE ──────────────────────────────────────────────────
+@register_adapter("experience_interface")
+class ExperienceInterfaceAdapter(EnhancedWorkspaceModule):
+    name = "experience"
+    def __init__(self, ei, ws=None):
+        super().__init__(ws); self.ei = ei
+        self.register_unconscious("experience_processing", self._process_bg, .7)
+
+    async def on_phase(self, phase: int):
+        if phase != 2 or not self.ei:
+            return
+        # Process significant workspace content into experiences
+        significant = [p for p in self.ws.focus if p.salience > .7]
+        if significant:
+            exp = await maybe_async(self.ei.create_experience, significant)
+            if exp:
+                await self.submit({"experience": exp},
+                                  salience=.8,
+                                  context_tag="new_experience")
+
+    async def _process_bg(self, _):
+        if hasattr(self.ei, "consolidate_experiences"):
+            consolidated = await maybe_async(self.ei.consolidate_experiences)
+            if consolidated:
+                return {"experiences_consolidated": len(consolidated), "significance": .6}
+
+
+# ── TEMPORAL PERCEPTION ───────────────────────────────────────────────────
+@register_adapter("temporal_perception")
+class TemporalPerceptionAdapter(EnhancedWorkspaceModule):
+    name = "temporal"
+    def __init__(self, tp, ws=None):
+        super().__init__(ws); self.tp = tp
+        self.register_unconscious("time_tracking", self._track_bg, .5)
+
+    async def on_phase(self, phase: int):
+        if phase != 0 or not self.tp:
+            return
+        # Update temporal context
+        temporal_context = await maybe_async(self.tp.get_temporal_context)
+        if temporal_context and temporal_context.get("significant_change"):
+            await self.submit(temporal_context,
+                              salience=.6,
+                              context_tag="temporal_shift")
+
+    async def _track_bg(self, _):
+        if hasattr(self.tp, "update_time_perception"):
+            perception = await maybe_async(self.tp.update_time_perception)
+            if perception and perception.get("time_distortion", 0) > .3:
+                return {"time_distortion": perception["time_distortion"], "significance": .5}
+
+
+# ── AGENTIC ACTION GENERATOR ──────────────────────────────────────────────
+@register_adapter("agentic_action_generator")
+class AgenticActionAdapter(EnhancedWorkspaceModule):
+    name = "action_generator"
+    def __init__(self, aag, ws=None):
+        super().__init__(ws); self.aag = aag
+        self.register_unconscious("action_planning", self._plan_bg, .8)
+
+    async def on_phase(self, phase: int):
+        if phase != 2 or not self.aag:
+            return
+        # Generate actions based on workspace state
+        context = ActionContext(
+            workspace_focus=[p.content for p in self.ws.focus],
+            salience_map={p.source: p.salience for p in self.ws.focus}
+        )
+        actions = await maybe_async(self.aag.generate_actions, context)
+        if actions:
+            for action in actions[:3]:  # Top 3 actions
+                await self.submit({"action": action},
+                                  salience=action.get("priority", .5),
+                                  context_tag="action_proposal")
+
+    async def _plan_bg(self, _):
+        if hasattr(self.aag, "update_action_models"):
+            updated = await maybe_async(self.aag.update_action_models)
+            if updated:
+                return {"action_models_updated": True, "significance": .6}
+
+
+# ── INTERNAL FEEDBACK ─────────────────────────────────────────────────────
+@register_adapter("internal_feedback")
+class InternalFeedbackAdapter(EnhancedWorkspaceModule):
+    name = "feedback"
+    def __init__(self, ifs, ws=None):
+        super().__init__(ws); self.ifs = ifs
+        self.register_unconscious("feedback_loop", self._loop_bg, .7)
+
+    async def on_phase(self, phase: int):
+        if phase != 2 or not self.ifs:
+            return
+        # Generate feedback on recent actions
+        recent_actions = [p for p in self.ws.proposals[-10:] if p.context_tag == "action_proposal"]
+        if recent_actions:
+            feedback = await maybe_async(self.ifs.evaluate_actions, recent_actions)
+            if feedback:
+                await self.submit(feedback,
+                                  salience=.7,
+                                  context_tag="internal_feedback")
+
+    async def _loop_bg(self, _):
+        if hasattr(self.ifs, "process_feedback_queue"):
+            processed = await maybe_async(self.ifs.process_feedback_queue)
+            if processed:
+                return {"feedback_processed": len(processed), "significance": .5}
+
+
+# ── DYNAMIC ADAPTATION ────────────────────────────────────────────────────
+@register_adapter("dynamic_adaptation")
+class DynamicAdaptationAdapter(EnhancedWorkspaceModule):
+    name = "adaptation"
+    def __init__(self, da, ws=None):
+        super().__init__(ws); self.da = da
+        self.register_unconscious("adaptation_check", self._adapt_bg, .6)
+
+    async def on_phase(self, phase: int):
+        if phase != 2 or not self.da:
+            return
+        # Check for adaptation opportunities
+        performance = self.ws.state.get("performance_metrics", {})
+        if performance:
+            adaptation = await maybe_async(self.da.suggest_adaptation, performance)
+            if adaptation:
+                await self.submit(adaptation,
+                                  salience=.7,
+                                  context_tag="adaptation_suggestion")
+
+    async def _adapt_bg(self, view):
+        if hasattr(self.da, "continuous_adaptation"):
+            adapted = await maybe_async(self.da.continuous_adaptation)
+            if adapted:
+                return {"adaptations_made": len(adapted), "significance": .6}
+
+
+# ── SPATIAL MAPPER ────────────────────────────────────────────────────────
+@register_adapter("spatial_mapper")
+class SpatialMapperAdapter(EnhancedWorkspaceModule):
+    name = "spatial_mapper"
+    def __init__(self, sm, ws=None):
+        super().__init__(ws); self.sm = sm
+        self.register_unconscious("map_update", self._update_bg, .5)
+
+    async def on_phase(self, phase: int):
+        if phase != 1 or not self.sm:
+            return
+        # Process spatial information
+        for p in self.ws.focus:
+            if p.context_tag == "location_update":
+                mapping = await maybe_async(self.sm.update_map, p.content)
+                if mapping:
+                    await self.submit({"spatial_update": mapping},
+                                      salience=.6,
+                                      context_tag="spatial_mapping")
+
+    async def _update_bg(self, _):
+        if hasattr(self.sm, "consolidate_spatial_memory"):
+            consolidated = await maybe_async(self.sm.consolidate_spatial_memory)
+            if consolidated:
+                return {"spatial_memory_updated": True, "significance": .4}
+
+
+# ── SPATIAL MEMORY ────────────────────────────────────────────────────────
+@register_adapter("spatial_memory")
+class SpatialMemoryAdapter(EnhancedWorkspaceModule):
+    name = "spatial_memory"
+    def __init__(self, sm, ws=None):
+        super().__init__(ws); self.sm = sm
+        self.register_unconscious("spatial_recall", self._recall_bg, .5)
+
+    async def on_phase(self, phase: int):
+        if phase != 1 or not self.sm:
+            return
+        # Retrieve spatial memories
+        location_queries = [p for p in self.ws.focus if "location" in str(p.content).lower()]
+        if location_queries:
+            memories = await maybe_async(self.sm.recall_locations, location_queries)
+            if memories:
+                await self.submit({"spatial_memories": memories},
+                                  salience=.6,
+                                  context_tag="spatial_recall")
+
+    async def _recall_bg(self, _):
+        if hasattr(self.sm, "prune_old_locations"):
+            pruned = await maybe_async(self.sm.prune_old_locations)
+            if pruned:
+                return {"locations_pruned": pruned, "significance": .3}
+
+
+# ── NOVELTY ENGINE ────────────────────────────────────────────────────────
+@register_adapter("novelty_engine")
+class NoveltyEngineAdapter(EnhancedWorkspaceModule):
+    name = "novelty"
+    def __init__(self, ne, ws=None):
+        super().__init__(ws); self.ne = ne
+        self.register_unconscious("novelty_detection", self._detect_bg, .7)
+
+    async def on_phase(self, phase: int):
+        if phase != 0 or not self.ne:
+            return
+        # Detect novel patterns
+        for p in self.ws.focus:
+            novelty = await maybe_async(self.ne.assess_novelty, p.content)
+            if novelty and novelty.get("score", 0) > .7:
+                await self.submit({"novel_content": p.content, "novelty": novelty},
+                                  salience=novelty["score"],
+                                  context_tag="novelty_detected")
+
+    async def _detect_bg(self, view):
+        if hasattr(self.ne, "update_novelty_baseline"):
+            updated = await maybe_async(self.ne.update_novelty_baseline, view.recent)
+            if updated:
+                return {"novelty_baseline_updated": True, "significance": .5}
+
+
+# ── RECOGNITION MEMORY ────────────────────────────────────────────────────
+@register_adapter("recognition_memory")
+class RecognitionMemoryAdapter(EnhancedWorkspaceModule):
+    name = "recognition"
+    def __init__(self, rm, ws=None):
+        super().__init__(ws); self.rm = rm
+        self.register_unconscious("pattern_recognition", self._recognize_bg, .6)
+
+    async def on_phase(self, phase: int):
+        if phase != 0 or not self.rm:
+            return
+        # Check for familiar patterns
+        for p in self.ws.focus:
+            recognition = await maybe_async(self.rm.recognize_pattern, p.content)
+            if recognition and recognition.get("confidence", 0) > .6:
+                await self.submit(recognition,
+                                  salience=recognition["confidence"],
+                                  context_tag="pattern_recognized")
+
+    async def _recognize_bg(self, _):
+        if hasattr(self.rm, "consolidate_patterns"):
+            consolidated = await maybe_async(self.rm.consolidate_patterns)
+            if consolidated:
+                return {"patterns_consolidated": len(consolidated), "significance": .5}
+
+
+# ── CREATIVE MEMORY ───────────────────────────────────────────────────────
+@register_adapter("creative_memory")
+class CreativeMemoryAdapter(EnhancedWorkspaceModule):
+    name = "creative_memory"
+    def __init__(self, cm, ws=None):
+        super().__init__(ws); self.cm = cm
+        self.register_unconscious("creative_synthesis", self._synth_bg, .7)
+
+    async def on_phase(self, phase: int):
+        if phase != 1 or not self.cm:
+            return
+        # Look for creative opportunities
+        if any(p.context_tag == "novelty_detected" for p in self.ws.focus):
+            synthesis = await maybe_async(self.cm.synthesize_creative_memory)
+            if synthesis:
+                await self.submit(synthesis,
+                                  salience=.8,
+                                  context_tag="creative_synthesis")
+
+    async def _synth_bg(self, _):
+        if hasattr(self.cm, "incubate_ideas"):
+            ideas = await maybe_async(self.cm.incubate_ideas)
+            if ideas:
+                return {"ideas_incubated": len(ideas), "significance": .6}
+
+
+# ── EXPERIENCE CONSOLIDATION ──────────────────────────────────────────────
+@register_adapter("experience_consolidation")
+class ExperienceConsolidationAdapter(EnhancedWorkspaceModule):
+    name = "consolidation"
+    def __init__(self, ec, ws=None):
+        super().__init__(ws); self.ec = ec
+        self.register_unconscious("consolidation_cycle", self._consolidate_bg, .8)
+
+    async def on_phase(self, phase: int):
+        if phase != 2 or not self.ec:
+            return
+        # Check if consolidation needed
+        if self.ws.state.get("experience_count", 0) > 10:
+            result = await maybe_async(self.ec.consolidate_recent)
+            if result:
+                await self.submit({"consolidation": result},
+                                  salience=.7,
+                                  context_tag="experience_consolidation")
+
+    async def _consolidate_bg(self, _):
+        if random.random() < .1:  # 10% chance per cycle
+            consolidated = await maybe_async(self.ec.deep_consolidation)
+            if consolidated:
+                return {"deep_consolidation": True, "significance": .8}
+
+
+# ── CROSS USER MANAGER ────────────────────────────────────────────────────
+@register_adapter("cross_user_manager")
+class CrossUserManagerAdapter(EnhancedWorkspaceModule):
+    name = "cross_user"
+    def __init__(self, cum, ws=None):
+        super().__init__(ws); self.cum = cum
+        self.register_unconscious("cross_user_sync", self._sync_bg, .6)
+
+    async def on_phase(self, phase: int):
+        if phase != 2 or not self.cum:
+            return
+        # Share significant experiences
+        significant = [p for p in self.ws.focus if p.salience > .8 and p.context_tag == "new_experience"]
+        if significant:
+            shared = await maybe_async(self.cum.share_experiences, significant)
+            if shared:
+                await self.submit({"shared_experiences": len(shared)},
+                                  salience=.6,
+                                  context_tag="cross_user_share")
+
+    async def _sync_bg(self, _):
+        if hasattr(self.cum, "sync_cross_user_knowledge"):
+            synced = await maybe_async(self.cum.sync_cross_user_knowledge)
+            if synced:
+                return {"cross_user_synced": True, "significance": .5}
+
+
+# ── REFLEXIVE SYSTEM ──────────────────────────────────────────────────────
+@register_adapter("reflexive_system")
+class ReflexiveSystemAdapter(EnhancedWorkspaceModule):
+    name = "reflexive"
+    def __init__(self, rs, ws=None):
+        super().__init__(ws); self.rs = rs
+        self.register_unconscious("reflex_monitoring", self._monitor_bg, .9)
+
+    async def on_phase(self, phase: int):
+        if phase != 0 or not self.rs:
+            return
+        # Check for reflex triggers
+        for p in self.ws.focus:
+            if p.salience > .9:  # High salience triggers
+                reflex = await maybe_async(self.rs.check_reflexes, p.content)
+                if reflex:
+                    await self.submit({"reflex_action": reflex},
+                                      salience=1.0,
+                                      context_tag="reflex_response")
+
+    async def _monitor_bg(self, _):
+        if hasattr(self.rs, "update_reflex_patterns"):
+            updated = await maybe_async(self.rs.update_reflex_patterns)
+            if updated:
+                return {"reflexes_updated": len(updated), "significance": .7}
+
+
+# ── PROCEDURAL MEMORY ─────────────────────────────────────────────────────
+@register_adapter("procedural_memory_manager")
+class ProceduralMemoryAdapter(EnhancedWorkspaceModule):
+    name = "procedural"
+    def __init__(self, pm, ws=None):
+        super().__init__(ws); self.pm = pm
+        self.register_unconscious("skill_practice", self._practice_bg, .5)
+
+    async def on_phase(self, phase: int):
+        if phase != 1 or not self.pm:
+            return
+        # Retrieve relevant procedures
+        for p in self.ws.focus:
+            if p.context_tag == "action_proposal":
+                procedures = await maybe_async(self.pm.get_relevant_procedures, p.content)
+                if procedures:
+                    await self.submit({"procedures": procedures},
+                                      salience=.7,
+                                      context_tag="procedural_knowledge")
+
+    async def _practice_bg(self, _):
+        if hasattr(self.pm, "practice_procedures"):
+            practiced = await maybe_async(self.pm.practice_procedures)
+            if practiced:
+                return {"procedures_practiced": len(practiced), "significance": .4}
+
+
+# ── SYNC DAEMON ───────────────────────────────────────────────────────────
+@register_adapter("sync_daemon")
+class SyncDaemonAdapter(EnhancedWorkspaceModule):
+    name = "sync"
+    def __init__(self, sd, ws=None):
+        super().__init__(ws); self.sd = sd
+        self.register_unconscious("sync_check", self._sync_bg, .8)
+
+    async def on_phase(self, phase: int):
+        # Sync daemon works across all phases
+        if not self.sd:
+            return
+        if phase == 2:  # End of cycle
+            sync_status = await maybe_async(self.sd.get_sync_status)
+            if sync_status and sync_status.get("out_of_sync"):
+                await self.submit(sync_status,
+                                  salience=.9,
+                                  context_tag="sync_required")
+
+    async def _sync_bg(self, _):
+        if hasattr(self.sd, "background_sync"):
+            result = await maybe_async(self.sd.background_sync)
+            if result:
+                return {"systems_synced": result.get("synced_count", 0), "significance": .7}
+
+
+# ── AGENT EVALUATOR ───────────────────────────────────────────────────────
+@register_adapter("agent_evaluator")
+class AgentEvaluatorAdapter(EnhancedWorkspaceModule):
+    name = "evaluator"
+    def __init__(self, ae, ws=None):
+        super().__init__(ws); self.ae = ae
+        self.register_unconscious("agent_performance", self._eval_bg, .6)
+
+    async def on_phase(self, phase: int):
+        if phase != 2 or not self.ae:
+            return
+        # Evaluate agent actions
+        agent_actions = [p for p in self.ws.proposals[-20:] if "agent" in p.source]
+        if agent_actions:
+            evaluation = await maybe_async(self.ae.evaluate_agents, agent_actions)
+            if evaluation:
+                await self.submit(evaluation,
+                                  salience=.6,
+                                  context_tag="agent_evaluation")
+
+    async def _eval_bg(self, _):
+        if hasattr(self.ae, "compile_performance_report"):
+            report = await maybe_async(self.ae.compile_performance_report)
+            if report and report.get("underperforming_agents"):
+                return {"underperforming_agents": len(report["underperforming_agents"]), 
+                        "significance": .6}
+
+
+# ── ISSUE TRACKING ────────────────────────────────────────────────────────
+@register_adapter("issue_tracking_system")
+class IssueTrackingAdapter(EnhancedWorkspaceModule):
+    name = "issues"
+    def __init__(self, its, ws=None):
+        super().__init__(ws); self.its = its
+        self.register_unconscious("issue_monitor", self._monitor_bg, .7)
+
+    async def on_phase(self, phase: int):
+        if phase != 2 or not self.its:
+            return
+        # Check for new issues from errors
+        errors = [p for p in self.ws.focus if p.context_tag == "error" or "error" in str(p.content)]
+        if errors:
+            for error in errors:
+                issue = await maybe_async(self.its.create_issue_from_error, error.content)
+                if issue:
+                    await self.submit({"new_issue": issue},
+                                      salience=.8,
+                                      context_tag="issue_created")
+
+    async def _monitor_bg(self, _):
+        if hasattr(self.its, "get_critical_issues"):
+            critical = await maybe_async(self.its.get_critical_issues)
+            if critical:
+                return {"critical_issues": len(critical), "significance": .8}
+
+
+# ── MODULE OPTIMIZER ──────────────────────────────────────────────────────
+@register_adapter("module_optimizer")
+class ModuleOptimizerAdapter(EnhancedWorkspaceModule):
+    name = "optimizer"
+    def __init__(self, mo, ws=None):
+        super().__init__(ws); self.mo = mo
+        self.register_unconscious("optimization_cycle", self._optimize_bg, .5)
+
+    async def on_phase(self, phase: int):
+        if phase != 2 or not self.mo:
+            return
+        # Check performance metrics
+        metrics = self.ws.state.get("module_metrics", {})
+        if metrics:
+            optimization = await maybe_async(self.mo.suggest_optimizations, metrics)
+            if optimization:
+                await self.submit(optimization,
+                                  salience=.6,
+                                  context_tag="optimization_suggestion")
+
+    async def _optimize_bg(self, _):
+        if hasattr(self.mo, "auto_optimize"):
+            optimized = await maybe_async(self.mo.auto_optimize)
+            if optimized:
+                return {"modules_optimized": len(optimized), "significance": .5}
+
+
+# ── SYSTEM HEALTH CHECKER ─────────────────────────────────────────────────
+@register_adapter("system_health_checker")
+class SystemHealthAdapter(EnhancedWorkspaceModule):
+    name = "health"
+    def __init__(self, shc, ws=None):
+        super().__init__(ws); self.shc = shc
+        self.register_unconscious("health_monitor", self._monitor_bg, .9)
+
+    async def on_phase(self, phase: int):
+        if phase != 0 or not self.shc:
+            return
+        # Quick health check at start of cycle
+        health = await maybe_async(self.shc.quick_health_check)
+        if health and health.get("status") != "healthy":
+            await self.submit(health,
+                              salience=.9,
+                              context_tag="health_alert")
+
+    async def _monitor_bg(self, _):
+        if hasattr(self.shc, "deep_health_check"):
+            issues = await maybe_async(self.shc.deep_health_check)
+            if issues:
+                return {"health_issues": len(issues), "significance": .8}
+
+
+# ── IMAGINATION SIMULATOR ─────────────────────────────────────────────────
+@register_adapter("imagination_simulator")
+class ImaginationAdapter(EnhancedWorkspaceModule):
+    name = "imagination"
+    def __init__(self, ims, ws=None):
+        super().__init__(ws); self.ims = ims
+        self.register_unconscious("imaginative_drift", self._drift_bg, .6)
+
+    async def on_phase(self, phase: int):
+        if phase != 1 or not self.ims:
+            return
+        # Imagine based on current focus
+        prompts = [p for p in self.ws.focus if p.salience > .6]
+        if prompts:
+            imagination = await maybe_async(self.ims.imagine, prompts)
+            if imagination:
+                await self.submit({"imagination": imagination},
+                                  salience=.7,
+                                  context_tag="imagination_output")
+
+    async def _drift_bg(self, _):
+        if random.random() < .2:  # 20% chance
+            daydream = await maybe_async(self.ims.daydream)
+            if daydream:
+                return {"daydream": daydream, "significance": .5}
+
+
+# ── PROCESSING MANAGER ────────────────────────────────────────────────────
+@register_adapter("processing_manager")
+class ProcessingManagerAdapter(EnhancedWorkspaceModule):
+    name = "processing"
+    def __init__(self, pm, ws=None):
+        super().__init__(ws); self.pm = pm
+        self.register_unconscious("load_balancing", self._balance_bg, .7)
+
+    async def on_phase(self, phase: int):
+        if phase != 0 or not self.pm:
+            return
+        # Manage processing load
+        load = len(self.ws.focus) + len(self.ws.proposals)
+        if load > 20:
+            adjustment = await maybe_async(self.pm.adjust_processing, load)
+            if adjustment:
+                await self.submit(adjustment,
+                                  salience=.8,
+                                  context_tag="processing_adjustment")
+
+    async def _balance_bg(self, _):
+        if hasattr(self.pm, "balance_load"):
+            balanced = await maybe_async(self.pm.balance_load)
+            if balanced:
+                return {"load_balanced": True, "significance": .6}
+
+
+# ── CHECKPOINT PLANNER ────────────────────────────────────────────────────
+@register_adapter("checkpoint_planner")
+class CheckpointPlannerAdapter(EnhancedWorkspaceModule):
+    name = "checkpoint"
+    def __init__(self, cp, ws=None):
+        super().__init__(ws); self.cp = cp
+        self.register_unconscious("checkpoint_timing", self._check_bg, .8)
+
+    async def on_phase(self, phase: int):
+        if phase != 2 or not self.cp:
+            return
+        # Check if checkpoint needed
+        changes = self.ws.state.get("state_changes", 0)
+        if changes > 50:
+            plan = await maybe_async(self.cp.plan_checkpoint)
+            if plan:
+                await self.submit(plan,
+                                  salience=.9,
+                                  context_tag="checkpoint_needed")
+
+    async def _check_bg(self, _):
+        if hasattr(self.cp, "is_checkpoint_due"):
+            due = await maybe_async(self.cp.is_checkpoint_due)
+            if due:
+                return {"checkpoint_due": True, "significance": .8}
+
+
+# ── FEMDOM SYSTEMS ────────────────────────────────────────────────────────
+# Note: Many femdom systems already have adapters, adding the missing ones
+
+@register_adapter("protocol_enforcement")
+class ProtocolEnforcementAdapter(EnhancedWorkspaceModule):
+    name = "protocol"
+    def __init__(self, pe, ws=None):
+        super().__init__(ws); self.pe = pe
+        self.register_unconscious("protocol_monitor", self._monitor_bg, .8)
+
+    async def on_phase(self, phase: int):
+        if phase != 1 or not self.pe:
+            return
+        # Check for protocol violations
+        for p in self.ws.focus:
+            if p.context_tag == "user_input":
+                violation = await maybe_async(self.pe.check_protocol, p.content)
+                if violation:
+                    await self.submit(violation,
+                                      salience=.9,
+                                      context_tag="protocol_violation")
+
+    async def _monitor_bg(self, _):
+        if hasattr(self.pe, "update_protocols"):
+            updated = await maybe_async(self.pe.update_protocols)
+            if updated:
+                return {"protocols_updated": len(updated), "significance": .6}
+
+
+@register_adapter("body_service_system")
+class BodyServiceAdapter(EnhancedWorkspaceModule):
+    name = "body_service"
+    def __init__(self, bss, ws=None):
+        super().__init__(ws); self.bss = bss
+        self.register_unconscious("service_tracking", self._track_bg, .7)
+
+    async def on_phase(self, phase: int):
+        if phase != 2 or not self.bss:
+            return
+        # Track service acts
+        for p in self.ws.focus:
+            if "service" in str(p.content).lower():
+                tracked = await maybe_async(self.bss.track_service, p.content)
+                if tracked:
+                    await self.submit(tracked,
+                                      salience=.8,
+                                      context_tag="service_tracked")
+
+    async def _track_bg(self, _):
+        if hasattr(self.bss, "evaluate_service_quality"):
+            quality = await maybe_async(self.bss.evaluate_service_quality)
+            if quality and quality.get("score", 0) > .8:
+                return {"excellent_service": True, "score": quality["score"], "significance": .7}
+
+
+@register_adapter("psychological_dominance")
+class PsychologicalDominanceAdapter(EnhancedWorkspaceModule):
+    name = "psych_dom"
+    def __init__(self, pd, ws=None):
+        super().__init__(ws); self.pd = pd
+        self.register_unconscious("psych_analysis", self._analyze_bg, .8)
+
+    async def on_phase(self, phase: int):
+        if phase != 1 or not self.pd:
+            return
+        # Analyze psychological state
+        user_states = [p for p in self.ws.focus if p.context_tag == "user_mental_state"]
+        if user_states:
+            analysis = await maybe_async(self.pd.analyze_submission_depth, user_states)
+            if analysis:
+                await self.submit(analysis,
+                                  salience=.8,
+                                  context_tag="psychological_analysis")
+
+    async def _analyze_bg(self, _):
+        if hasattr(self.pd, "update_psychological_models"):
+            updated = await maybe_async(self.pd.update_psychological_models)
+            if updated:
+                return {"psych_models_updated": True, "significance": .7}
+
+
+@register_adapter("orgasm_control_system")
+class OrgasmControlAdapter(EnhancedWorkspaceModule):
+    name = "orgasm_control"
+    def __init__(self, ocs, ws=None):
+        super().__init__(ws); self.ocs = ocs
+        self.register_unconscious("arousal_monitor", self._monitor_bg, .9)
+
+    async def on_phase(self, phase: int):
+        if phase != 1 or not self.ocs:
+            return
+        # Monitor arousal signals
+        arousal_signals = [p for p in self.ws.focus if p.context_tag == "somatic_signal" 
+                          and p.content.get("type") == "arousal"]
+        if arousal_signals:
+            control = await maybe_async(self.ocs.evaluate_control_needed, arousal_signals)
+            if control:
+                await self.submit(control,
+                                  salience=.9,
+                                  context_tag="orgasm_control")
+
+    async def _monitor_bg(self, _):
+        if hasattr(self.ocs, "update_arousal_patterns"):
+            patterns = await maybe_async(self.ocs.update_arousal_patterns)
+            if patterns:
+                return {"arousal_patterns_updated": True, "significance": .8}
+
+
+@register_adapter("sadistic_response_system")
+class SadisticResponseAdapter(EnhancedWorkspaceModule):
+    name = "sadistic"
+    def __init__(self, srs, ws=None):
+        super().__init__(ws); self.srs = srs
+        self.register_unconscious("sadistic_calibration", self._calibrate_bg, .7)
+
+    async def on_phase(self, phase: int):
+        if phase != 2 or not self.srs:
+            return
+        # Generate sadistic responses
+        opportunities = [p for p in self.ws.focus if p.context_tag in 
+                        ["protocol_violation", "submission_detected"]]
+        if opportunities:
+            response = await maybe_async(self.srs.generate_response, opportunities)
+            if response:
+                await self.submit(response,
+                                  salience=.8,
+                                  context_tag="sadistic_response")
+
+    async def _calibrate_bg(self, _):
+        if hasattr(self.srs, "calibrate_intensity"):
+            calibrated = await maybe_async(self.srs.calibrate_intensity)
+            if calibrated:
+                return {"sadistic_calibration": calibrated, "significance": .6}
+
+
+# ── STREAMING SYSTEMS ─────────────────────────────────────────────────────
+@register_adapter("streaming_hormone_system")
+class StreamingHormoneAdapter(EnhancedWorkspaceModule):
+    name = "stream_hormones"
+    def __init__(self, shs, ws=None):
+        super().__init__(ws); self.shs = shs
+        self.register_unconscious("stream_hormone_update", self._update_bg, .6)
+
+    async def on_phase(self, phase: int):
+        if phase != 0 or not self.shs:
+            return
+        # Update hormones based on streaming events
+        stream_events = [p for p in self.ws.focus if p.context_tag == "game_event"]
+        if stream_events:
+            update = await maybe_async(self.shs.process_stream_events, stream_events)
+            if update:
+                await self.submit(update,
+                                  salience=.7,
+                                  context_tag="stream_hormone_update")
+
+    async def _update_bg(self, _):
+        if hasattr(self.shs, "balance_stream_hormones"):
+            balanced = await maybe_async(self.shs.balance_stream_hormones)
+            if balanced:
+                return {"stream_hormones_balanced": True, "significance": .5}
+
+
+@register_adapter("streaming_reflection_engine")
+class StreamingReflectionAdapter(EnhancedWorkspaceModule):
+    name = "stream_reflection"
+    def __init__(self, sre, ws=None):
+        super().__init__(ws); self.sre = sre
+        self.register_unconscious("stream_insight", self._insight_bg, .7)
+
+    async def on_phase(self, phase: int):
+        if phase != 2 or not self.sre:
+            return
+        # Reflect on streaming session
+        session_data = self.ws.state.get("streaming_session")
+        if session_data:
+            reflection = await maybe_async(self.sre.reflect_on_session, session_data)
+            if reflection:
+                await self.submit(reflection,
+                                  salience=.7,
+                                  context_tag="stream_reflection")
+
+    async def _insight_bg(self, _):
+        if hasattr(self.sre, "generate_streaming_insights"):
+            insights = await maybe_async(self.sre.generate_streaming_insights)
+            if insights:
+                return {"streaming_insights": len(insights), "significance": .6}
+
+
+@register_adapter("cross_game_knowledge")
+class CrossGameKnowledgeAdapter(EnhancedWorkspaceModule):
+    name = "cross_game"
+    def __init__(self, cgk, ws=None):
+        super().__init__(ws); self.cgk = cgk
+        self.register_unconscious("knowledge_transfer", self._transfer_bg, .6)
+
+    async def on_phase(self, phase: int):
+        if phase != 1 or not self.cgk:
+            return
+        # Apply cross-game knowledge
+        game_context = [p for p in self.ws.focus if p.context_tag == "game_state"]
+        if game_context:
+            knowledge = await maybe_async(self.cgk.get_relevant_knowledge, game_context)
+            if knowledge:
+                await self.submit(knowledge,
+                                  salience=.7,
+                                  context_tag="cross_game_knowledge")
+
+    async def _transfer_bg(self, _):
+        if hasattr(self.cgk, "consolidate_game_knowledge"):
+            consolidated = await maybe_async(self.cgk.consolidate_game_knowledge)
+            if consolidated:
+                return {"game_knowledge_consolidated": True, "significance": .6}
+
 
 # ╭──────────────────────────────────────────────────────────────────────────╮
 # │ FACTORY                                                                 │
