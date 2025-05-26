@@ -349,7 +349,7 @@ class ContextAwareReasoningCore(ContextAwareModule):
         logger.info("Caches cleared")
 
     async def send_context_update(self, update_type: str, data: Dict[str, Any], 
-                                  priority: ContextPriority = ContextPriority.MEDIUM,
+                                  priority: ContextPriority = ContextPriority.NORMAL,
                                   target_modules: List[str] = None,
                                   scope: ContextScope = ContextScope.LOCAL) -> bool:
         """
