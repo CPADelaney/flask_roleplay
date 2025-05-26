@@ -5754,7 +5754,7 @@ class ContextAwareReasoningCore(ContextAwareModule):
             else:
                 return "moderate_gradient"
         
-        elif smoothness > 0.7 but monotonicity < 0.3:
+        elif smoothness > 0.7 and monotonicity < 0.3:
             return "oscillating_gradient"
         
         elif coherence < 0.4:
