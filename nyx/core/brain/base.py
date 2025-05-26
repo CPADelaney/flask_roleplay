@@ -4258,7 +4258,7 @@ System Prompt End
                 }
     
         # ── 2️⃣ otherwise call process_input() which now embeds workspace hints
-        input_res = await self.process_input(
+        input_result = await self.process_input(
             user_input,
             context,
             use_thinking=use_thinking,
