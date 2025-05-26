@@ -22,6 +22,7 @@ class ContextPriority(Enum):
     CRITICAL = auto()    # Must be processed immediately
     HIGH = auto()        # High priority processing
     NORMAL = auto()      # Standard priority
+    MEDIUM = NORMAL
     LOW = auto()         # Can be deferred
 
 @dataclass
