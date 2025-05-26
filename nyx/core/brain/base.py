@@ -536,11 +536,6 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
                     logger.debug("Enhanced AttentionalController with A2A context distribution")
                 else:
                     self.attentional_controller = original_attentional_controller
-
-            if self.use_a2a_integration:
-                self.context_system = ContextAwareContextSystem(base_attention_system)
-            else:
-                self.context_system = base_attention_system
             
             from nyx.core.reasoning_core import ReasoningCore
             
