@@ -1,5 +1,8 @@
 # nyx/core/a2a/context_aware_relationship_reflection.py
 
+from nyx.core.brain.integration_layer import ContextAwareModule
+
+
 class ContextAwareRelationshipReflection(ContextAwareModule):
     """
     Enhanced RelationshipReflectionSystem with context distribution
@@ -13,6 +16,8 @@ class ContextAwareRelationshipReflection(ContextAwareModule):
             "emotional_state_update", "memory_retrieval_complete",
             "temporal_milestone", "identity_update", "goal_completion"
         ]
+
+    
     
     async def on_context_received(self, context: SharedContext):
         """Initialize reflection processing for this context"""
