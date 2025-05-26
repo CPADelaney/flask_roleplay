@@ -39,13 +39,21 @@ from nyx.core.brain.global_workspace.global_workspace_architecture import (
     Proposal,
     WorkspaceModule,
 )
-from nyx.core.brain.workspace_v3 import EnhancedWorkspaceModule
+from nyx.core.brain.global_workspace.workspace_v3 import EnhancedWorkspaceModule
+
+from nyx.core.agentic_action_generator import ActionContext
 
 logger = logging.getLogger(__name__)
 
 # ╭──────────────────────────────────────────────────────────────────────────╮
 # │ helpers                                                                 │
 # ╰──────────────────────────────────────────────────────────────────────────╯
+
+# clamp salience to [0, 1] in one place
+def _clamp(val: float) -> float:
+    if val < 0:
+        return 0.0
+    return 1.0 if val > 1 else val
 async def maybe_async(fn: Callable, *args, **kw):
     res = fn(*args, **kw)
     if asyncio.iscoroutine(res) or isinstance(res, asyncio.Future):
@@ -1265,13 +1273,16 @@ class MemoryOrchestratorAdapter(EnhancedWorkspaceModule):
 class RewardSystemAdapter(EnhancedWorkspaceModule):
     name = "reward"
     def __init__(self, rs, ws=None):
-        super().__init__(ws); self.rs = rs
+        super().__init__(ws); self.rs = rs; self._next = 0.0
         self.register_unconscious("reward_processing", self._process_bg, .8)
 
     async def on_phase(self, phase: int):
         if phase != 1 or not self.rs:
             return
         # Check for rewarding stimuli
+        if time.time() < self._next:
+            return
+        self._next = time.time() + 1.0     # 1 s cooldown
         for p in self.ws.focus:
             if p.salience > .7:
                 reward = await maybe_async(self.rs.evaluate_stimulus, p.content)
@@ -1326,7 +1337,7 @@ class ExperienceInterfaceAdapter(EnhancedWorkspaceModule):
         if phase != 2 or not self.ei:
             return
         # Process significant workspace content into experiences
-        significant = [p for p in self.ws.focus if p.salience > .7]
+        significant = [p.content for p in self.ws.focus if p.salience > .7]
         if significant:
             exp = await maybe_async(self.ei.create_experience, significant)
             if exp:
@@ -1428,13 +1439,16 @@ class InternalFeedbackAdapter(EnhancedWorkspaceModule):
 class DynamicAdaptationAdapter(EnhancedWorkspaceModule):
     name = "adaptation"
     def __init__(self, da, ws=None):
-        super().__init__(ws); self.da = da
+        super().__init__(ws); self.da = da; self._next = 0.0
         self.register_unconscious("adaptation_check", self._adapt_bg, .6)
 
     async def on_phase(self, phase: int):
         if phase != 2 or not self.da:
             return
         # Check for adaptation opportunities
+        if time.time() < self._next:
+            return
+        self._next = time.time() + 2.0      # 2 s cooldown
         performance = self.ws.state.get("performance_metrics", {})
         if performance:
             adaptation = await maybe_async(self.da.suggest_adaptation, performance)
@@ -1489,9 +1503,11 @@ class SpatialMemoryAdapter(EnhancedWorkspaceModule):
         if phase != 1 or not self.sm:
             return
         # Retrieve spatial memories
-        location_queries = [p for p in self.ws.focus if "location" in str(p.content).lower()]
-        if location_queries:
-            memories = await maybe_async(self.sm.recall_locations, location_queries)
+        # pass raw **content** (list[str|dict]) to recall_locations
+        queries = [p.content for p in self.ws.focus
+                   if "location" in str(p.content).lower()]
+        if queries:
+            memories = await maybe_async(self.sm.recall_locations, queries)
             if memories:
                 await self.submit({"spatial_memories": memories},
                                   salience=.6,
@@ -1519,8 +1535,9 @@ class NoveltyEngineAdapter(EnhancedWorkspaceModule):
         for p in self.ws.focus:
             novelty = await maybe_async(self.ne.assess_novelty, p.content)
             if novelty and novelty.get("score", 0) > .7:
-                await self.submit({"novel_content": p.content, "novelty": novelty},
-                                  salience=novelty["score"],
+                await self.submit({"novel_content": p.content,
+                                   "novelty": novelty},
+                                  salience=_clamp(novelty["score"]),
                                   context_tag="novelty_detected")
 
     async def _detect_bg(self, view):
@@ -1602,8 +1619,9 @@ class ExperienceConsolidationAdapter(EnhancedWorkspaceModule):
                                   context_tag="experience_consolidation")
 
     async def _consolidate_bg(self, _):
-        if random.random() < .1:  # 10% chance per cycle
-            consolidated = await maybe_async(self.ec.deep_consolidation)
+        if random.random() < .1:  # 10 % chance per cycle
+            loop = asyncio.get_running_loop()
+            consolidated = await loop.run_in_executor(None, self.ec.deep_consolidation)
             if consolidated:
                 return {"deep_consolidation": True, "significance": .8}
 
@@ -1620,7 +1638,9 @@ class CrossUserManagerAdapter(EnhancedWorkspaceModule):
         if phase != 2 or not self.cum:
             return
         # Share significant experiences
-        significant = [p for p in self.ws.focus if p.salience > .8 and p.context_tag == "new_experience"]
+        # send only the payload, not whole Proposal objects
+        significant = [p.content for p in self.ws.focus
+                       if p.salience > .8 and p.context_tag == "new_experience"]
         if significant:
             shared = await maybe_async(self.cum.share_experiences, significant)
             if shared:
@@ -2051,9 +2071,10 @@ class StreamingHormoneAdapter(EnhancedWorkspaceModule):
         if phase != 0 or not self.shs:
             return
         # Update hormones based on streaming events
-        stream_events = [p for p in self.ws.focus if p.context_tag == "game_event"]
-        if stream_events:
-            update = await maybe_async(self.shs.process_stream_events, stream_events)
+        events = [p.content for p in self.ws.focus
+                  if p.context_tag == "game_event"]
+        if events:
+            update = await maybe_async(self.shs.process_stream_events, events)
             if update:
                 await self.submit(update,
                                   salience=.7,
@@ -2126,7 +2147,7 @@ def _log_missing(brain):
     have = {k for k, v in vars(brain).items() if v is not None}
     miss = want - have
     if miss:
-        logger.warning("GW‑adapters skipped (attr None on NyxBrain): %s",
+        logger.info("GW‑adapters skipped (attr None on NyxBrain): %s",
                        sorted(miss))
 
 
@@ -2145,9 +2166,6 @@ def build_gw_modules(brain) -> List[EnhancedWorkspaceModule]:
         if attr == "social_tools":
             modules.append(SocialBrowsingAdapter(obj, motiv=getattr(brain, "motivations", {})))
             continue
-
-        if attr == "streaming_core" and hasattr(obj, "learning_manager"):
-            modules.append(LearningAnalysisAdapter(obj.learning_manager))
 
         modules.append(cls(obj))
 
