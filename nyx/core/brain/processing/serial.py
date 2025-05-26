@@ -32,7 +32,7 @@ class SerialProcessor(BaseProcessor):
             
             # Process temporal effects if available
             temporal_effects = None
-            if hasattr(self.brain, "temporal_perception"):
+            if hasattr(self.brain, "temporal_perception") and self.brain.temporal_perception:
                 temporal_effects = await self.brain.temporal_perception.on_interaction_start()
             
             # Initialize context if needed
