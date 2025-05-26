@@ -2,7 +2,7 @@
 
 from nyx.core.brain.integration_layer import ContextAwareModule
 from nyx.core.brain.context_distribution import SharedContext, ContextUpdate, ContextScope, ContextPriority
-from typing import Dict, Any, Optional
+from typing import Dict, List, Any, Optional, Union
 
 
 class ContextAwareRelationshipReflection(ContextAwareModule):
