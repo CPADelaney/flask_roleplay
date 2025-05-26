@@ -1,5 +1,9 @@
 # nyx/core/a2a/context_aware_temporal_perception.py
 
+from nyx.core.brain.integration_layer import ContextAwareModule
+from nyx.core.brain.context_distribution import SharedContext, ContextUpdate, ContextScope, ContextPriority
+from typing import Dict, List, Any, Optional, Union
+
 class ContextAwareTemporalPerception(ContextAwareModule):
     """
     Enhanced TemporalPerceptionSystem with context distribution
