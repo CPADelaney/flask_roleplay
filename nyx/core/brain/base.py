@@ -4256,6 +4256,8 @@ System Prompt End
                     "epistemic_status": "confident",
                     "processor_metadata": {"mode": "global_workspace"},
                 }
+
+        start_time = datetime.datetime.now()
     
         # ── 2️⃣ otherwise call process_input() which now embeds workspace hints
         input_result = await self.process_input(
