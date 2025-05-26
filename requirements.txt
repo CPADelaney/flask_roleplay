@@ -127,3 +127,4 @@ huggingface-hub==0.31.2
 tf-keras
 transformers==4.47.0
 pgvector
+spacy
