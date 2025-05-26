@@ -897,6 +897,20 @@ class IdentityEvolutionSystem:
         
         logger.info("Enhanced Identity Evolution System initialized with OpenAI Agent SDK")
 
+    async def initialize(self):
+        """Initialize the identity evolution system"""
+        try:
+            # Initialize any async components if needed
+            logger.info("Identity Evolution System initialized")
+            
+            # If you need to do any async initialization of the agents, do it here
+            # For now, the agents are already initialized in __init__, so we just log
+            
+            return True
+        except Exception as e:
+            logger.error(f"Error initializing Identity Evolution System: {str(e)}")
+            raise
+
     def update_activity_stats(self, activity, reward):
         activities = self.identity_profile["preferences"]["activities"]
         a = activities.setdefault(activity, {
