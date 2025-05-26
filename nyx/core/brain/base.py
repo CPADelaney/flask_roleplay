@@ -537,6 +537,9 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
                 else:
                     self.attentional_controller = original_attentional_controller
 
+
+            original_temporal_perception = TemporalPerceptionSystem(self.user_id, self.conversation_id)
+            await original_temporal_perception.initialize(brain_context=self, first_interaction_timestamp=None)            
             # Wrap with context-aware version if A2A enabled
             if self.use_a2a_integration:
                 from nyx.core.a2a.context_aware_temporal_perception import ContextAwareTemporalPerception
@@ -630,8 +633,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             else:
                 self.cross_user_manager = original_cross_user_manager
             
-            original_temporal_perception = TemporalPerceptionSystem(self.user_id, self.conversation_id)
-            await original_temporal_perception.initialize(brain_context=self, first_interaction_timestamp=None)
+
             
             self.procedural_memory_manager = ProceduralMemoryManager()
             self.agent_enhanced_memory = AgentEnhancedMemoryManager(memory_manager=self.procedural_memory_manager)
