@@ -44,7 +44,7 @@ class BrainConfig:
     
     # === Identity & Self-Model ===
     identity_evolution: ComponentConfig = field(default_factory=lambda: ComponentConfig(enabled=True))
-    body_image: ComponentConfig = field(default_factory=lambda: ComponentConfig(enabled=False))  # Often disabled
+    body_image: ComponentConfig = field(default_factory=lambda: ComponentConfig(enabled=True))  # Often disabled
     autobiographical_narrative: ComponentConfig = field(default_factory=lambda: ComponentConfig(enabled=True))
     
     # === Needs & Goals ===
