@@ -15,6 +15,9 @@ from enum import Enum, auto
 from nyx.core.brain.global_workspace.workspace_v3 import (
     NyxEngineV3, Proposal, EnhancedWorkspaceModule
 )
+
+from nyx.core.brain.config import BrainConfig
+
 from nyx.core.brain.global_workspace.adapters import build_gw_modules
 
 from nyx.core.integration.integration_manager import create_integration_manager
@@ -400,7 +403,10 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             from nyx.core.a2a.context_aware_nyx_sync_daemon import ContextAwareNyxSyncDaemon
             from nyx.core.a2a.context_aware_evaluator import ContextAwareAgentEvaluator
             from nyx.core.a2a.context_aware_setup import setup_context_aware_creative_modules, integrate_creative_modules_with_brain
-    
+
+
+            self.config = BrainConfig.default()
+
             from dev_log.storage import get_dev_log_storage
             self.dev_log_storage = get_dev_log_storage()
             await self.dev_log_storage.initialize()
