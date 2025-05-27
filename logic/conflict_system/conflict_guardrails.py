@@ -38,7 +38,7 @@ class ConflictExistsResult(BaseModel):
     reason: Optional[str] = None
 
 # Authorization guardrail
-@input_guardrail
+@InputGuardrail()
 async def authorize_user_guardrail(
     ctx: RunContextWrapper,
     agent: Any,
@@ -70,7 +70,7 @@ async def authorize_user_guardrail(
     )
 
 # Conflict existence guardrail
-@input_guardrail
+@InputGuardrail()
 async def conflict_exists_guardrail(
     ctx: RunContextWrapper,
     agent: Any,
@@ -141,7 +141,7 @@ class ContentModerationResult(BaseModel):
     is_appropriate: bool
     reason: Optional[str] = None
 
-@input_guardrail
+@InputGuardrail()
 async def content_moderation_guardrail(
     ctx: RunContextWrapper,
     agent: Any,
@@ -180,7 +180,7 @@ class OutputValidationResult(BaseModel):
     is_valid: bool
     reason: Optional[str] = None
 
-@output_guardrail
+@OutputGuardrail
 async def output_validation_guardrail(
     ctx: RunContextWrapper,
     agent: Any,
