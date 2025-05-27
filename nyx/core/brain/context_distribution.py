@@ -129,6 +129,12 @@ class ContextDistributionSystem:
             
             logger.debug(f"Initialized context session with {len(active_modules)} active modules")
             return self.current_context
+
+    def get_available_modules(self) -> List[str]:
+        """Get list of available modules"""
+        if hasattr(self.brain, '_module_registry'):
+            return list(self.brain._module_registry.keys())
+        return []
     
     async def _broadcast_context_initialization(self):
         """Broadcast the initial context to all active modules"""
