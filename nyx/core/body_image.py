@@ -110,9 +110,6 @@ class BodyImage:
         
         # Create main integration agent with handoffs
         self.body_integration_agent = self._create_body_integration_agent()
-        
-        # Create input validation guardrail
-        self.percept_validation_guardrail = self._create_percept_validation_guardrail()
 
     def _create_visual_perception_agent(self) -> Agent[BodyImageContext]:
         """Create agent for processing visual perception of Nyx's form"""
@@ -140,7 +137,7 @@ class BodyImage:
                        tool_description_override="Analyze visual details in perception data")
             ],
             input_guardrails=[
-                InputGuardrail(guardrail_function=self.percept_validation_guardrail)
+                InputGuardrail(guardrail_function=self._percept_validation_guardrail)
             ],
             output_type=VisualPerceptionOutput,
             model_settings=ModelSettings(
