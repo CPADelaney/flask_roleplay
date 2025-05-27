@@ -352,7 +352,7 @@ class ContextAwareInputProcessor(ContextAwareModule):
         """Adjust pattern detection sensitivity based on emotional state"""
         emotion_intensity = 0.0
         dominant_emotion = emotional_data.get("dominant_emotion")
-        try
+        try:
             if isinstance(dominant_emotion, tuple) and len(dominant_emotion) >= 2:
                 emotion_name, emotion_intensity = dominant_emotion[0], dominant_emotion[1]
             elif isinstance(dominant_emotion, dict):
