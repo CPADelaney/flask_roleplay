@@ -326,9 +326,25 @@ async def calculate_time_effects_impl(time_category: str,
     
     return effects
 
-@function_tool(name_override="calculate_time_effects")
-async def calculate_time_effects(time_category: str,
-                                 user_relationship_data: Dict[str, Any]) -> List[Dict[str, Any]]:
+@function_tool
+async def calculate_time_effects(
+    time_category: str,
+    user_relationship_data: Optional[Dict[str, Any]] = None
+) -> List[Dict[str, Any]]:
+    """
+    Calculate temporal effects based on time category and relationship data
+    
+    Args:
+        time_category: Category of time elapsed (e.g., 'very_short', 'short', 'medium', etc.)
+        user_relationship_data: Optional data about user relationship history
+        
+    Returns:
+        List of time drift effects
+    """
+    # Handle optional parameter
+    if user_relationship_data is None:
+        user_relationship_data = {}
+    
     return await calculate_time_effects_impl(time_category, user_relationship_data)
 
 
