@@ -100,11 +100,13 @@ class BodyImage:
 
     def _initialize_agents(self):
         """Initialize the agent system"""
-        # Create specialized agents
-        self.visual_perception_agent = self._create_visual_perception_agent()
-        self.somatic_correlation_agent = self._create_somatic_correlation_agent()
+        # Create feature agents first (they are referenced by other agents)
         self.visual_features_agent = self._create_visual_features_agent()
         self.somatic_features_agent = self._create_somatic_features_agent()
+        
+        # Create specialized agents that use the feature agents
+        self.visual_perception_agent = self._create_visual_perception_agent()
+        self.somatic_correlation_agent = self._create_somatic_correlation_agent()
         
         # Create main integration agent with handoffs
         self.body_integration_agent = self._create_body_integration_agent()
