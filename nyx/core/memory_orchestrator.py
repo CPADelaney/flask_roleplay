@@ -76,10 +76,11 @@ class MemoryOrchestrator:
             Use the provided tools to effectively search for and retrieve memories based on the
             user's query parameters. Return the most relevant memories with appropriate formatting.""",
             tools=[
-                function_tool(self.memory_core.retrieve_memories),
-                function_tool(get_memory),
-                function_tool(retrieve_memories_with_formatting),
-                function_tool(retrieve_relevant_experiences)
+                # Don't double-wrap functions that are already decorated with @function_tool
+                retrieve_memories,  # Already has @function_tool
+                get_memory,  # Already has @function_tool
+                retrieve_memories_with_formatting,  # Already has @function_tool
+                retrieve_relevant_experiences  # Already has @function_tool
             ],
             output_type=Dict[str, Any]
         )
@@ -93,9 +94,9 @@ class MemoryOrchestrator:
             appropriate metadata, tags, and significance levels. Ensure the memory is properly
             categorized and indexed.""",
             tools=[
-                function_tool(add_memory),
-                function_tool(update_memory),
-                function_tool(delete_memory)
+                add_memory,  # Already has @function_tool
+                update_memory,  # Already has @function_tool
+                delete_memory  # Already has @function_tool
             ],
             output_type=Dict[str, Any]
         )
@@ -108,9 +109,9 @@ class MemoryOrchestrator:
             from Nyx's memories. Your role is to analyze memories, find patterns, and create
             higher-level insights that connect individual experiences.""",
             tools=[
-                function_tool(create_reflection_from_memories),
-                function_tool(create_abstraction_from_memories),
-                function_tool(retrieve_memories)
+                create_reflection_from_memories,  # Already has @function_tool
+                create_abstraction_from_memories,  # Already has @function_tool
+                retrieve_memories  # Already has @function_tool
             ],
             output_type=Dict[str, Any]
         )
@@ -123,9 +124,9 @@ class MemoryOrchestrator:
             Your role is to retrieve relevant experiences, generate natural conversational
             recalls, and construct coherent narratives from memories.""",
             tools=[
-                function_tool(retrieve_relevant_experiences),
-                function_tool(generate_conversational_recall),
-                function_tool(construct_narrative_from_memories)
+                retrieve_relevant_experiences,  # Already has @function_tool
+                generate_conversational_recall,  # Already has @function_tool
+                construct_narrative_from_memories  # Already has @function_tool
             ],
             output_type=Dict[str, Any]
         )
@@ -138,9 +139,10 @@ class MemoryOrchestrator:
             Nyx's memory system. Your role is to apply memory decay, consolidate similar
             memories, archive old memories, and ensure the overall system stays optimized.""",
             tools=[
+                # For methods on self.memory_core, we need to wrap them
                 function_tool(self.memory_core.run_maintenance),
-                function_tool(apply_memory_decay),
-                function_tool(consolidate_memory_clusters),
+                apply_memory_decay,  # Already has @function_tool
+                consolidate_memory_clusters,  # Already has @function_tool
                 function_tool(self.memory_core.get_memory_stats)
             ],
             output_type=Dict[str, Any]
