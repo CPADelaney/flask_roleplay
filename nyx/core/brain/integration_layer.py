@@ -166,6 +166,31 @@ class EnhancedNyxBrainMixin:
                 # Set context system reference
                 if hasattr(module, 'set_context_system'):
                     module.set_context_system(self.context_distribution)
+
+    def get_available_modules(self) -> Dict[str, Any]:
+        """
+        Get available modules for discovery by context-aware components
+        
+        Returns:
+            Dictionary of available modules
+        """
+        available = {}
+        
+        # Return modules from the internal registry if available
+        if hasattr(self, 'internal_module_registry'):
+            available.update(self.internal_module_registry)
+        
+        # Also include modules from the context-aware registry
+        if hasattr(self, '_module_registry'):
+            for name, module in self._module_registry.items():
+                if name not in available:
+                    available[name] = {
+                        "module": module,
+                        "capabilities": getattr(module, 'capabilities', []),
+                        "purposes": getattr(module, 'purposes', [])
+                    }
+        
+        return available
     
     def _wrap_module_for_context(self, module, module_name: str) -> ContextAwareModule:
         """Wrap an existing module to make it context-aware"""
