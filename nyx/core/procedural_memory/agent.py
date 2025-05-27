@@ -531,7 +531,7 @@ class ProceduralMemoryAgents:
         )
     
     # Guardrail for checking if a procedure exists
-    @input_guardrail()
+    @input_guardrail
     async def procedure_exists_guardrail(self, ctx, agent, input_data):
         """Guardrail to check if a procedure exists before operating on it"""
         # Extract procedure name from input
