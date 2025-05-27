@@ -7,7 +7,7 @@ import math
 from typing import Dict, List, Any, Optional, Set, Tuple
 from pydantic import BaseModel, Field
 
-from agents import Agent, Runner, handoff, function_tool, input_guardrail, GuardrailFunctionOutput, trace
+from agents import Agent, Runner, handoff, function_tool, input_guardrail, GuardrailFunctionOutput, trace, InputGuardrail, OutputGuardrail
 from agents import ModelSettings
 
 logger = logging.getLogger(__name__)
@@ -589,7 +589,7 @@ class SubmissionProgression:
             output_type=SensitiveContentCheck
         )
         
-        @input_guardrail
+        @InputGuardrail()
         async def sensitive_content_guardrail(ctx, agent, input_data):
             result = await Runner.run(self.sensitive_content_agent, input_data, context=ctx.context)
             return GuardrailFunctionOutput(
