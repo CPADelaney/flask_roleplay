@@ -363,8 +363,6 @@ class AttentionalController:
             
             return self.current_foci
 
-    @staticmethod
-    @function_tool
     async def _recover_attentional_resources(ctx: RunContextWrapper[AttentionContext]) -> Dict[str, float]:
         """
         Recover attentional resources over time
@@ -398,8 +396,7 @@ class AttentionalController:
         self.control_requests.append(signal)
         return True
 
-    @staticmethod
-    @function_tool
+
     async def _focus_attention(ctx: RunContextWrapper[AttentionContext],
                             target: str, 
                             strength: float, 
@@ -495,8 +492,7 @@ class AttentionalController:
                 "strength": strength
             }
 
-    @staticmethod
-    @function_tool
+
     async def _inhibit_attention(ctx: RunContextWrapper[AttentionContext], 
                               target: str, 
                               duration_ms: int) -> Dict[str, Any]:
@@ -528,8 +524,7 @@ class AttentionalController:
             "inhibited_until": expiry_time
         }
 
-    @staticmethod
-    @function_tool
+
     async def _maintain_attention(ctx: RunContextWrapper[AttentionContext], 
                                target: str, 
                                duration_ms: int) -> Dict[str, Any]:
@@ -593,8 +588,7 @@ class AttentionalController:
         for target in to_remove:
             del self.inhibited_targets[target]
 
-    @staticmethod
-    @function_tool
+
     async def _calculate_saliency(ctx: RunContextWrapper[AttentionContext], 
                                item: Dict[str, Any]) -> float:
         """
@@ -652,8 +646,7 @@ class AttentionalController:
     
     # New helper functions to support specialized agents
 
-    @staticmethod
-    @function_tool
+
     async def _calculate_emotional_impact(ctx: RunContextWrapper[AttentionContext], 
                                       item: Dict[str, Any]) -> float:
         """
@@ -692,8 +685,7 @@ class AttentionalController:
         # Ensure result is in valid range
         return max(0.0, min(1.0, impact))
 
-    @staticmethod
-    @function_tool
+
     async def _calculate_goal_relevance(ctx: RunContextWrapper[AttentionContext], 
                                     item: Dict[str, Any]) -> float:
         """
@@ -738,8 +730,7 @@ class AttentionalController:
         self.control_requests.append(control)
         return True
 
-    @staticmethod
-    @function_tool
+
     async def _calculate_attention_weight(ctx: RunContextWrapper[AttentionContext],
                                      item: Any, 
                                      modality: str = None) -> float:
@@ -798,8 +789,7 @@ class AttentionalController:
         
         self.attention_biases[target] = new_bias
 
-    @staticmethod
-    @function_tool
+
     async def _get_current_attentional_state(ctx: RunContextWrapper[AttentionContext]) -> Dict[str, Any]:
         """
         Get the current attentional state
