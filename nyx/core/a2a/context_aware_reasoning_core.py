@@ -92,6 +92,7 @@ class ContextAwareReasoningCore(ContextAwareModule):
         """
         super().__init__("reasoning_core")
         self.original_core = original_reasoning_core
+        self.integration_layer = None             
         
         # ========================================================================
         # A2A INTEGRATION SETUP
