@@ -4,9 +4,24 @@ import asyncio
 import datetime
 from typing import Dict, List, Any, Optional
 
-from agents import trace
+try:
+    from agents import trace, RunContextWrapper
+except ImportError:
+    # If RunContextWrapper is not available, create a simple wrapper
+    class RunContextWrapper:
+        def __init__(self, context):
+            self.context = context
+    
+    # If trace is not available, create a no-op decorator
+    def trace(*args, **kwargs):
+        if args and callable(args[0]):
+            return args[0]
+        def decorator(func):
+            return func
+        return decorator
 
 logger = logging.getLogger(__name__)
+    
 
 class BaseProcessor:
     def __init__(self, brain):
