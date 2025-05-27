@@ -236,7 +236,7 @@ async def format_duration(seconds: float, granularity: int = 2) -> str:
     return await format_duration_impl(seconds, granularity)
 
 async def calculate_time_effects_impl(time_category: str,
-                                      user_relationship_data: dict[str, any]) -> list[dict[str, any]]:
+                                      user_relationship_data: Dict[str, Any]) -> List[Dict[str, Any]]:
     """
     Calculate temporal effects based on time category and relationship data
     
@@ -328,11 +328,11 @@ async def calculate_time_effects_impl(time_category: str,
 
 @function_tool(name_override="calculate_time_effects")
 async def calculate_time_effects(time_category: str,
-                                 user_relationship_data: dict[str, any]) -> list[dict[str, any]]:
+                                 user_relationship_data: Dict[str, Any]) -> List[Dict[str, Any]]:
     return await calculate_time_effects_impl(time_category, user_relationship_data)
 
 
-async def determine_temporal_context_impl() -> dict[str, any]:
+async def determine_temporal_context_impl() -> Dict[str, Any]:
     """
     Determine the current temporal context (time of day, day of week, etc.)
     
@@ -378,7 +378,7 @@ async def determine_temporal_context_impl() -> dict[str, any]:
     }
 
 @function_tool(name_override="determine_temporal_context")
-async def determine_temporal_context() -> dict[str, any]:
+async def determine_temporal_context() -> Dict[str, Any]:
     return await determine_temporal_context_impl()
 
 @function_tool
@@ -450,7 +450,7 @@ async def generate_time_reflection(idle_duration: float, emotional_state: Dict[s
     
     return reflection
 
-async def generate_time_expression_impl(state: dict[str, any]) -> dict[str, any]:
+async def generate_time_expression_impl(state: Dict[str, Any]) -> Dict[str, Any]:
     """
     Generate a natural expression about time perception
     
@@ -573,7 +573,7 @@ async def generate_time_expression_impl(state: dict[str, any]) -> dict[str, any]
     }
 
 @function_tool(name_override="generate_time_expression")
-async def generate_time_expression(state: dict[str, any]) -> dict[str, any]:
+async def generate_time_expression(state: Dict[str, Any]) -> dict[str, Any]:
     return await generate_time_expression_impl(state)
 
 @function_tool
@@ -750,9 +750,9 @@ async def _detect_time_scale_transition_impl(
 
 @function_tool(name_override="detect_time_scale_transition")
 async def detect_time_scale_transition(
-    previous_state: Optional[dict] = None,
-    current_state: dict = None
-) -> Optional[dict]:
+    previous_state: Optional[Dict] = None,
+    current_state: Dict = None
+) -> Optional[Dict]:
     """
     Detects boundary transitions between coarse time scales.
     
