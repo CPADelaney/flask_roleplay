@@ -156,7 +156,7 @@ class NPCCreationHandler:
     
     def __init__(self):
         # Initialize input validation guardrail
-        @InputGuardrail
+        @InputGuardrail()
         async def environment_guardrail(ctx, agent, input_str):
             """Validate that the environment description is appropriate for NPC creation"""
             try:
