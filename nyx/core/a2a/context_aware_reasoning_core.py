@@ -274,6 +274,10 @@ class ContextAwareReasoningCore(ContextAwareModule):
                 self.nlp = None
         
         self._models_loaded = True
+
+    def set_integration_layer(self, integration_layer):
+        """Set the integration layer reference"""
+        self.integration_layer = integration_layer
     
     def _ensure_models_loaded(self):
         """Ensure models are loaded (for lazy loading)"""
