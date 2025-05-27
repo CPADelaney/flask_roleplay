@@ -141,8 +141,7 @@ class BodyImage:
             ],
             output_type=VisualPerceptionOutput,
             model_settings=ModelSettings(
-                temperature=0.2,
-                response_format={"type": "json_object"}
+                temperature=0.2
             )
         )
     
@@ -173,8 +172,7 @@ class BodyImage:
             ],
             output_type=SomaticCorrelationOutput,
             model_settings=ModelSettings(
-                temperature=0.3,
-                response_format={"type": "json_object"}
+                temperature=0.3
             )
         )
     
