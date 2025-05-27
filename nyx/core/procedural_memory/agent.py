@@ -10,7 +10,7 @@ import uuid
 # OpenAI Agents SDK imports
 from agents import (
     Agent, Runner, ModelSettings, RunConfig, WebSearchTool,
-    handoff, function_tool, custom_span, trace, RunHooks,
+    handoff, function_tool, custom_span, trace, RunHooks, InputGuardrail, OutputGuardrail,
     input_guardrail, output_guardrail, GuardrailFunctionOutput, RunContextWrapper, FunctionTool
 )
 from agents.exceptions import UserError, MaxTurnsExceeded, ModelBehaviorError
@@ -531,7 +531,7 @@ class ProceduralMemoryAgents:
         )
     
     # Guardrail for checking if a procedure exists
-    @input_guardrail
+    @InputGuardrail()
     async def procedure_exists_guardrail(self, ctx, agent, input_data):
         """Guardrail to check if a procedure exists before operating on it"""
         # Extract procedure name from input
