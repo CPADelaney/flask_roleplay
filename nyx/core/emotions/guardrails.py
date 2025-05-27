@@ -168,7 +168,7 @@ class EmotionalGuardrails:
                 )
     
     @staticmethod
-    @OutputGuardrail()
+    @output_guardrail()
     async def validate_emotional_output(ctx: RunContextWrapper[EmotionalContext],
                                       agent: Agent,
                                       output: EmotionalResponseOutput) -> GuardrailFunctionOutput:
