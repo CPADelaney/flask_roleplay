@@ -589,7 +589,7 @@ class SubmissionProgression:
             output_type=SensitiveContentCheck
         )
         
-        @InputGuardrail()
+        @input_guardrail()
         async def sensitive_content_guardrail(ctx, agent, input_data):
             result = await Runner.run(self.sensitive_content_agent, input_data, context=ctx.context)
             return GuardrailFunctionOutput(
