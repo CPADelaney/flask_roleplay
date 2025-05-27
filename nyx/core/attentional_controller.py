@@ -48,8 +48,13 @@ class InvalidInputGuardrailOutput(BaseModel):
 
 # Define an AttentionContext for strong typing
 class AttentionContext:
-    """Context for the attention controller system"""
-    def __init__(self, emotional_core=None):
+    """
+    Context object shared across attention‑related agents/tools.
+    """
+    def __init__(self,
+                 controller: "AttentionalController",
+                 emotional_core=None):
+        self.controller = controller
         self.emotional_core = emotional_core
         self.trace_id = f"attention_{time.time()}"
 
@@ -91,7 +96,10 @@ class AttentionalController:
         self.logger = logging.getLogger(__name__)
         
         # Create shared context for the agents
-        self.attention_context = AttentionContext(emotional_core=emotional_core)
+        self.attention_context = AttentionContext(
+            controller=self,
+            emotional_core=emotional_core
+        )
         
         # Initialize agent system
         self._initialize_agents()
@@ -363,31 +371,25 @@ class AttentionalController:
             
             return self.current_foci
 
-    async def _recover_attentional_resources(ctx: RunContextWrapper[AttentionContext]) -> Dict[str, float]:
-        """
-        Recover attentional resources over time
-        
-        Returns:
-            Updated attentional resources
-        """
-        current_time = time.time()
-        elapsed_seconds = current_time - self.last_recovery_time
-        
-        if elapsed_seconds > 0:
-            # Calculate recovery
-            recovery_amount = self.resource_recovery_rate * elapsed_seconds
-            
-            # Update resources (capped at max capacity)
-            self.attentional_resources = min(self.total_attentional_capacity, 
-                                          self.attentional_resources + recovery_amount)
-            
-            # Update last recovery time
-            self.last_recovery_time = current_time
-        
+    @staticmethod
+    async def _recover_attentional_resources(
+            ctx: RunContextWrapper[AttentionContext]
+    ) -> dict:
+        ctl = ctx.context.controller              # ← grab the controller
+        now = time.time()
+        elapsed = now - ctl.last_recovery_time
+
+        if elapsed > 0:
+            ctl.attentional_resources = min(
+                ctl.total_attentional_capacity,
+                ctl.attentional_resources + elapsed * ctl.resource_recovery_rate
+            )
+            ctl.last_recovery_time = now
+
         return {
-            "current_resources": self.attentional_resources,
-            "total_capacity": self.total_attentional_capacity,
-            "recovery_rate": self.resource_recovery_rate
+            "current_resources": ctl.attentional_resources,
+            "total_capacity": ctl.total_attentional_capacity,
+            "recovery_rate": ctl.resource_recovery_rate,
         }
     
     async def _process_control_signal(self, signal: AttentionalControl) -> bool:
@@ -397,27 +399,20 @@ class AttentionalController:
         return True
 
 
-    async def _focus_attention(ctx: RunContextWrapper[AttentionContext],
-                            target: str, 
-                            strength: float, 
-                            duration_ms: int,
-                            source: str) -> Dict[str, Any]:
-        """
-        Focus attention on a specific target
-        
-        Args:
-            target: Target to attend to
-            strength: Strength of attention (0.0-1.0)
-            duration_ms: Duration in milliseconds
-            source: Source requesting attention
-            
-        Returns:
-            Result of focus operation
-        """
-        # Check if already focused
-        for focus in self.current_foci:
+    @staticmethod
+    async def _focus_attention(
+        ctx: "RunContextWrapper[AttentionContext]",
+        target: str,
+        strength: float,
+        duration_ms: int,
+        source: str,
+    ) -> dict:
+        """Create or update an attentional focus on *target*."""
+        ctl = ctx.context.controller
+
+        # If already focused, just update/extend.
+        for focus in ctl.current_foci:
             if focus.target == target:
-                # Update existing focus
                 focus.strength = max(focus.strength, strength)
                 focus.duration_ms = max(focus.duration_ms, duration_ms)
                 focus.source = f"{focus.source}, {source}"
@@ -425,139 +420,88 @@ class AttentionalController:
                     "success": True,
                     "message": "Updated existing focus",
                     "target": target,
-                    "strength": focus.strength
+                    "strength": focus.strength,
                 }
-        
-        # Check if we have capacity for new focus
-        if len(self.current_foci) >= self.max_foci:
-            # Remove weakest focus if needed
-            self.current_foci.sort(key=lambda x: x.strength)
-            if self.current_foci[0].strength < strength:
-                removed = self.current_foci.pop(0)
-                self.shift_count += 1
-                
-                # Create new focus
-                new_focus = AttentionalFocus(
-                    target=target,
-                    strength=strength,
-                    duration_ms=duration_ms,
-                    source=source,
-                    timestamp=str(time.time())
-                )
-                
-                # Add to current foci
-                self.current_foci.append(new_focus)
-                
-                # Consume attentional resources
-                self.attentional_resources -= strength * 0.2  # Scale resource consumption
-                self.attentional_resources = max(0, self.attentional_resources)  # Ensure non-negative
-                
-                return {
-                    "success": True,
-                    "message": "Replaced weaker focus",
-                    "replaced": removed.target,
-                    "target": target,
-                    "strength": strength
-                }
+
+        # Need a new focus – check capacity.
+        if len(ctl.current_foci) >= ctl.max_foci:
+            ctl.current_foci.sort(key=lambda x: x.strength)
+            if ctl.current_foci[0].strength < strength:
+                removed = ctl.current_foci.pop(0)
+                ctl.shift_count += 1
             else:
-                # Can't focus on this target - attention miss
-                self.miss_count += 1
+                ctl.miss_count += 1
                 return {
                     "success": False,
-                    "message": "Insufficient capacity, target too weak compared to current foci",
+                    "message": "Insufficient capacity – target weaker than current foci",
                     "target": target,
-                    "strength": strength
+                    "strength": strength,
                 }
-        else:
-            # Create new focus
-            new_focus = AttentionalFocus(
-                target=target,
-                strength=strength,
-                duration_ms=duration_ms,
-                source=source,
-                timestamp=str(time.time())
-            )
-            
-            # Add to current foci
-            self.current_foci.append(new_focus)
-            
-            # Consume attentional resources
-            self.attentional_resources -= strength * 0.2  # Scale resource consumption
-            self.attentional_resources = max(0, self.attentional_resources)  # Ensure non-negative
-            
-            return {
-                "success": True,
-                "message": "Created new focus",
-                "target": target,
-                "strength": strength
-            }
-
-
-    async def _inhibit_attention(ctx: RunContextWrapper[AttentionContext], 
-                              target: str, 
-                              duration_ms: int) -> Dict[str, Any]:
-        """
-        Inhibit attention to a specific target for a duration
-        
-        Args:
-            target: Target to inhibit
-            duration_ms: Duration of inhibition in milliseconds
-            
-        Returns:
-            Result of inhibit operation
-        """
-        # Remove any current focus on this target
-        removed = False
-        for focus in list(self.current_foci):
-            if focus.target == target:
-                self.current_foci.remove(focus)
-                removed = True
-        
-        # Add to inhibited targets
-        expiry_time = time.time() + (duration_ms / 1000)
-        self.inhibited_targets[target] = expiry_time
-        
+        # Create and insert new focus
+        new_focus = AttentionalFocus(
+            target=target,
+            strength=strength,
+            duration_ms=duration_ms,
+            source=source,
+            timestamp=str(time.time()),
+        )
+        ctl.current_foci.append(new_focus)
+        ctl.attentional_resources = max(0, ctl.attentional_resources - strength * 0.2)
         return {
-            "success": True, 
+            "success": True,
+            "message": "Created new focus",
             "target": target,
-            "focus_removed": removed,
-            "inhibited_until": expiry_time
+            "strength": strength,
         }
 
 
-    async def _maintain_attention(ctx: RunContextWrapper[AttentionContext], 
-                               target: str, 
-                               duration_ms: int) -> Dict[str, Any]:
-        """
-        Maintain attention on a currently focused target
-        
-        Args:
-            target: Target to maintain focus on
-            duration_ms: Additional duration in milliseconds
-            
-        Returns:
-            Result of maintain operation
-        """
-        maintained = False
-        for focus in self.current_foci:
+    @staticmethod
+    async def _inhibit_attention(
+        ctx: "RunContextWrapper[AttentionContext]",
+        target: str,
+        duration_ms: int,
+    ) -> dict:
+        """Temporarily inhibit attention on *target*."""
+        ctl = ctx.context.controller
+
+        # Remove existing focus if present.
+        removed = False
+        for focus in list(ctl.current_foci):
             if focus.target == target:
-                # Extend duration
+                ctl.current_foci.remove(focus)
+                removed = True
+
+        ctl.inhibited_targets[target] = time.time() + duration_ms / 1000
+        return {
+            "success": True,
+            "target": target,
+            "focus_removed": removed,
+            "inhibited_until": ctl.inhibited_targets[target],
+        }
+
+
+    @staticmethod
+    async def _maintain_attention(
+        ctx: "RunContextWrapper[AttentionContext]",
+        target: str,
+        duration_ms: int,
+    ) -> dict:
+        """Extend the lifetime of an existing focus."""
+        ctl = ctx.context.controller
+        for focus in ctl.current_foci:
+            if focus.target == target:
                 focus.duration_ms += duration_ms
-                maintained = True
-                
                 return {
                     "success": True,
                     "target": target,
-                    "new_duration_ms": focus.duration_ms
+                    "new_duration_ms": focus.duration_ms,
                 }
+        return {
+            "success": False,
+            "message": "Target not currently in focus",
+            "target": target,
+        }
         
-        if not maintained:
-            return {
-                "success": False,
-                "message": "Target not currently in focus",
-                "target": target
-            }
-    
     async def _expire_old_foci(self):
         """Remove expired attentional foci and inhibitions"""
         current_time = time.time()
@@ -573,7 +517,10 @@ class AttentionalController:
                 active_foci.append(focus)
             else:
                 # Expired - free up resources
-                self.attentional_resources += focus.strength * 0.1  # Partial resource recovery
+                self.attentional_resources = min(
+                    self.total_attentional_capacity,
+                    self.attentional_resources + focus.strength * 0.1
+                )
         
         # Update current foci
         self.current_foci = active_foci
@@ -589,126 +536,74 @@ class AttentionalController:
             del self.inhibited_targets[target]
 
 
-    async def _calculate_saliency(ctx: RunContextWrapper[AttentionContext], 
-                               item: Dict[str, Any]) -> float:
-        """
-        Calculate saliency score for an item
-        
-        Args:
-            item: Item to evaluate saliency for
-            
-        Returns:
-            Saliency score (0.0-1.0)
-        """
-        # Extract features
+    @staticmethod
+    async def _calculate_saliency(
+        ctx: "RunContextWrapper[AttentionContext]",
+        item: dict,
+    ) -> float:
+        ctl = ctx.context.controller
         novelty = item.get("novelty", 0.5)
         intensity = item.get("intensity", 0.5)
         emotional_impact = item.get("emotional_impact", 0.5)
         goal_relevance = item.get("goal_relevance", 0.5)
-        
-        # Get attentional bias for this target
         target = item.get("target", item.get("id", "unknown"))
-        bias = self.attention_biases[target]
-        
-        # Calculate weighted saliency
-        config = self.saliency_config
+        bias = ctl.attention_biases[target]
+        cfg = ctl.saliency_config
         saliency = (
-            novelty * config.novelty_weight +
-            intensity * config.intensity_weight +
-            emotional_impact * config.emotional_weight +
-            goal_relevance * config.goal_weight +
-            bias  # Add bias directly
+            novelty * cfg.novelty_weight
+            + intensity * cfg.intensity_weight
+            + emotional_impact * cfg.emotional_weight
+            + goal_relevance * cfg.goal_weight
+            + bias
         )
-        
-        # Check emotional core for additional affective influence
         if ctx.context.emotional_core:
             try:
-                emotional_state = ctx.context.emotional_core.get_emotional_state()
                 arousal = ctx.context.emotional_core.get_emotional_arousal()
-                
-                # High arousal amplifies saliency
-                if arousal > 0.6:
-                    saliency *= 1.2
-                elif arousal < 0.3:
-                    saliency *= 0.8
-                    
-                # Check valence influence if strong emotion is present
-                strongest_emotion, strength = ctx.context.emotional_core.get_dominant_emotion()
-                if strength > 0.6:
-                    # Check if emotion matches item
-                    if "emotion" in item and item["emotion"] == strongest_emotion:
-                        saliency *= 1.3  # Boost for emotional congruence
+                saliency *= 1.2 if arousal > 0.6 else 0.8 if arousal < 0.3 else 1.0
+                strongest, strength = ctx.context.emotional_core.get_dominant_emotion()
+                if strength > 0.6 and item.get("emotion") == strongest:
+                    saliency *= 1.3
             except Exception as e:
-                self.logger.error(f"Error applying emotional influence to saliency: {e}")
-        
-        # Normalize saliency to 0-1 range
+                ctl.logger.error(f"Emotional influence error: {e}")
         return max(0.0, min(1.0, saliency))
+
     
     # New helper functions to support specialized agents
 
 
-    async def _calculate_emotional_impact(ctx: RunContextWrapper[AttentionContext], 
-                                      item: Dict[str, Any]) -> float:
-        """
-        Calculate emotional impact of an item
-        
-        Args:
-            item: Item to evaluate
-            
-        Returns:
-            Emotional impact score (0.0-1.0)
-        """
-        # Default emotional impact
+    @staticmethod
+    async def _calculate_emotional_impact(
+        ctx: "RunContextWrapper[AttentionContext]",
+        item: dict,
+    ) -> float:
+        ctl = ctx.context.controller
         impact = item.get("emotional_impact", 0.5)
-        
-        # If emotional core is available, do more sophisticated calculation
         if ctx.context.emotional_core:
             try:
-                # Get current emotional state
-                emotional_state = ctx.context.emotional_core.get_emotional_state()
-                
-                # Check for emotion matching
-                if "emotion" in item:
-                    item_emotion = item["emotion"]
-                    for emotion, level in emotional_state.items():
-                        if emotion.lower() == item_emotion.lower():
-                            # Boost impact for matching emotions
-                            impact = max(impact, level * 1.2)
-                
-                # Adjust based on overall arousal
+                state = ctx.context.emotional_core.get_emotional_state()
+                if (em := item.get("emotion")):
+                    impact = max(impact, state.get(em.lower(), 0) * 1.2)
                 arousal = ctx.context.emotional_core.get_emotional_arousal()
-                impact *= 0.7 + (arousal * 0.6)  # Scale impact with arousal
-                
+                impact *= 0.7 + arousal * 0.6
             except Exception as e:
-                self.logger.error(f"Error calculating emotional impact: {e}")
-        
-        # Ensure result is in valid range
+                ctl.logger.error(f"Emotional impact calculation error: {e}")
         return max(0.0, min(1.0, impact))
 
 
-    async def _calculate_goal_relevance(ctx: RunContextWrapper[AttentionContext], 
-                                    item: Dict[str, Any]) -> float:
-        """
-        Calculate goal relevance of an item
-        
-        Args:
-            item: Item to evaluate
-            
-        Returns:
-            Goal relevance score (0.0-1.0)
-        """
-        # Default relevance from item
+
+    @staticmethod
+    async def _calculate_goal_relevance(
+        ctx: "RunContextWrapper[AttentionContext]",
+        item: dict,
+    ) -> float:
+        ctl = ctx.context.controller
         relevance = item.get("goal_relevance", 0.5)
-        
-        # If item relates to a current focus, increase relevance
         target = item.get("target", item.get("id", "unknown"))
-        for focus in self.current_foci:
+        for focus in ctl.current_foci:
             if focus.target == target or target.startswith(focus.target):
-                # Item relates to current focus, increase relevance
                 relevance = max(relevance, focus.strength * 1.1)
-        
-        # Ensure result is in valid range
         return max(0.0, min(1.0, relevance))
+        
     
     def _update_history(self):
         """Update attentional history with current focus"""
@@ -731,20 +626,14 @@ class AttentionalController:
         return True
 
 
-    async def _calculate_attention_weight(ctx: RunContextWrapper[AttentionContext],
-                                     item: Any, 
-                                     modality: str = None) -> float:
-        """
-        Calculate attention weight for an item based on current attentional focus
-        
-        Args:
-            item: Item to calculate attention for
-            modality: Optional modality of the item
-            
-        Returns:
-            Attention weight (0.0-1.0)
-        """
-        # Get target identifier
+    @staticmethod
+    async def _calculate_attention_weight(
+        ctx: "RunContextWrapper[AttentionContext]",
+        item: "Any",
+        modality: str | None = None,
+    ) -> float:
+        ctl = ctx.context.controller
+        # Determine target identifier
         if hasattr(item, "id"):
             target = item.id
         elif hasattr(item, "target"):
@@ -757,27 +646,22 @@ class AttentionalController:
             target = modality
         else:
             target = "unknown"
-        
-        # Check if target is currently inhibited
-        if target in self.inhibited_targets:
-            return 0.1  # Minimal attention to inhibited targets
-        
-        # Check if target is currently in focus
-        for focus in self.current_foci:
+
+        # Inhibited?
+        if target in ctl.inhibited_targets:
+            return 0.1
+        # Focused?
+        for focus in ctl.current_foci:
             if focus.target == target or (modality and focus.target == modality):
-                return focus.strength  # Full attention weight
-        
-        # If not focused but modality is in focus, give partial attention
+                return focus.strength
+        # Modality partially focused?
         if modality:
-            for focus in self.current_foci:
+            for focus in ctl.current_foci:
                 if focus.target == modality:
-                    return focus.strength * 0.7  # Partial attention weight
-        
-        # Default moderate attention if not inhibited and resources available
-        if self.attentional_resources > 0.5:
-            return 0.5
-        else:
-            return 0.3  # Reduced attention when resources are low
+                    return focus.strength * 0.7
+        # Default weight depends on resources
+        return 0.5 if ctl.attentional_resources > 0.5 else 0.3
+
     
     async def update_attention_bias(self, target: str, adjustment: float):
         """Update attention bias for a target based on learning"""
@@ -790,38 +674,34 @@ class AttentionalController:
         self.attention_biases[target] = new_bias
 
 
-    async def _get_current_attentional_state(ctx: RunContextWrapper[AttentionContext]) -> Dict[str, Any]:
-        """
-        Get the current attentional state
-        
-        Returns:
-            Current attentional state information
-        """
-        current_foci = []
-        for focus in self.current_foci:
-            current_foci.append({
-                "target": focus.target,
-                "strength": focus.strength,
-                "duration_ms": focus.duration_ms,
-                "source": focus.source,
-                "timestamp": focus.timestamp
-            })
-        
-        inhibited = []
-        for target, expiry_time in self.inhibited_targets.items():
-            inhibited.append({
-                "target": target,
-                "expires_at": expiry_time
-            })
-        
+    @staticmethod
+    async def _get_current_attentional_state(
+        ctx: "RunContextWrapper[AttentionContext]",
+    ) -> dict:
+        ctl = ctx.context.controller
+        foci = [
+            {
+                "target": f.target,
+                "strength": f.strength,
+                "duration_ms": f.duration_ms,
+                "source": f.source,
+                "timestamp": f.timestamp,
+            }
+            for f in ctl.current_foci
+        ]
+        inhibited = [
+            {"target": t, "expires_at": exp}
+            for t, exp in ctl.inhibited_targets.items()
+        ]
         return {
-            "current_foci": current_foci,
+            "current_foci": foci,
             "inhibited_targets": inhibited,
-            "attentional_resources": self.attentional_resources,
-            "total_capacity": self.total_attentional_capacity,
-            "shift_count": self.shift_count,
-            "miss_count": self.miss_count
+            "attentional_resources": ctl.attentional_resources,
+            "total_capacity": ctl.total_attentional_capacity,
+            "shift_count": ctl.shift_count,
+            "miss_count": ctl.miss_count,
         }
+
     
     async def get_attention_statistics(self) -> Dict[str, Any]:
         """Get statistics about attentional system performance"""
