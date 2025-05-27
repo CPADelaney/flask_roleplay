@@ -14,7 +14,7 @@ import datetime
 from typing import Dict, Any, Optional, Set, Union, List
 
 from agents import (
-    input_guardrail, output_guardrail, OutputGuardrail, RunContextWrapper, 
+    input_guardrail, output_guardrail, OutputGuardrail, InputGuardrail, RunContextWrapper, 
     GuardrailFunctionOutput, function_span, custom_span,
     Agent
 )
@@ -48,7 +48,7 @@ class EmotionalGuardrails:
     }
     
     @staticmethod
-    @input_guardrail
+    @InputGuardrail()
     async def validate_emotional_input(ctx: RunContextWrapper[EmotionalContext], 
                                      agent: Agent, 
                                      input_data: str) -> GuardrailFunctionOutput:
@@ -300,7 +300,7 @@ class EmotionalGuardrails:
                 )
     
     @staticmethod
-    @input_guardrail
+    @InputGuardrail()
     async def validate_streaming_input(ctx: RunContextWrapper[EmotionalContext],
                                      agent: Agent,
                                      input_data: str) -> GuardrailFunctionOutput:
