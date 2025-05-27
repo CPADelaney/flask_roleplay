@@ -188,92 +188,81 @@ class ProcessingManager:
                 }
     
     async def _determine_processing_mode(self, user_input: str, context: Dict[str, Any]) -> str:
-            """Legacy method to determine optimal processing mode (used as fallback)"""
-            # Quick decision tree:
-            if "urgent" in task_types and task_types["urgent"] > 0.7:
-                return "reflexive"  # Use reflexive for urgent needs
-            
-            elif complexity_score < 0.3 and not requires_reasoning:
-                return "reflexive"  # Simple patterns can use reflexive
-            
-            elif agent_score > 0.8:
-                return "integrated"  # Roleplay/narrative needs agent
-            
-            elif complexity_score > 0.8 or "multi_step" in task_types:
-                return "distributed"  # Complex queries need distributed
-            
-            elif complexity_score > 0.5:
-                return "parallel"  # Medium complexity benefits from parallelism
-            
-            else:
-                return "serial"  # Default comprehensive processing
-                
-            # Define thresholds
-            input_length_threshold = 100  # Characters
-            
-            # Calculate complexity score based on input and context
-            complexity_score = 0.0
-            
-            # 1. Input length
-            input_length_factor = min(1.0, len(user_input) / 500.0)  # Normalize to [0,1]
-            complexity_score += input_length_factor * 0.3  # 30% weight
-            
-            # 2. Content complexity
-            words = user_input.lower().split()
-            unique_words = len(set(words))
-            word_complexity = min(1.0, unique_words / 50.0)  # Normalize to [0,1]
-            
-            punctuation_count = sum(1 for c in user_input if c in "?!.,;:()[]{}\"'")
-            punctuation_complexity = min(1.0, punctuation_count / 20.0)  # Normalize to [0,1]
-            
-            content_complexity = (word_complexity * 0.7 + punctuation_complexity * 0.3)
-            complexity_score += content_complexity * 0.3  # 30% weight
-            
-            # 3. Context complexity
-            context_complexity = 0.0
-            if context:
-                context_complexity = min(1.0, len(str(context)) / 1000.0)
-            complexity_score += context_complexity * 0.2  # 20% weight
-            
-            # 4. History/state complexity
-            history_complexity = min(1.0, self.brain.interaction_count / 50.0)
-            complexity_score += history_complexity * 0.2  # 20% weight
-            
-            # Check for agent indicators first
-            agent_indicators = [
-                "roleplay", "role play", "acting", "pretend", "scenario",
-                "imagine", "fantasy", "act as", "play as", "in-character",
-                "story", "scene", "setting", "character", "plot",
-                "describe", "tell me about", "what happens",
-                "picture", "image", "draw", "show me", "visualize"
-            ]
-            
-            if any(indicator in user_input.lower() for indicator in agent_indicators):
-                logger.info(f"Detected agent indicator in input, using agent mode")
-                if "integrated" in self.processors:
-                    return "integrated"
-                return "agent"
-            
-            # Check reflexive first, regardless of mode
-            if hasattr(self.brain, "reflexive_system") and self.brain.reflexive_system:
-                should_use_reflex, confidence = self.brain.reflexive_system.decision_system.should_use_reflex(
-                    {"text": user_input}, context, None
-                )
-                
-                if should_use_reflex and confidence > 0.7:
-                    logger.info(f"Detected reflex pattern, using reflexive mode (confidence: {confidence:.2f})")
-                    return "reflexive"
-            
-            # Select mode based on complexity score
-            if complexity_score < self.complexity_threshold["parallel"]:
-                # Low complexity, use serial processing
-                return "serial"
-            elif complexity_score < self.complexity_threshold["distributed"]:
-                # Medium complexity, use parallel processing
-                return "parallel"
-            else:
-                # High complexity, use distributed processing
-                return "distributed"
+        """Legacy method to determine optimal processing mode (used as fallback)"""
+        # Calculate complexity score first
+        complexity_score = 0.0
+        
+        # Input length factor
+        input_length_factor = min(1.0, len(user_input) / 500.0)
+        complexity_score += input_length_factor * 0.3
+        
+        # Content complexity
+        words = user_input.lower().split()
+        unique_words = len(set(words))
+        word_complexity = min(1.0, unique_words / 50.0)
+        
+        punctuation_count = sum(1 for c in user_input if c in "?!.,;:()[]{}\"'")
+        punctuation_complexity = min(1.0, punctuation_count / 20.0)
+        
+        content_complexity = (word_complexity * 0.7 + punctuation_complexity * 0.3)
+        complexity_score += content_complexity * 0.3
+        
+        # Context complexity
+        context_complexity = 0.0
+        if context:
+            context_complexity = min(1.0, len(str(context)) / 1000.0)
+        complexity_score += context_complexity * 0.2
+        
+        # History/state complexity
+        history_complexity = min(1.0, getattr(self.brain, 'interaction_count', 0) / 50.0)
+        complexity_score += history_complexity * 0.2
+        
+        # Check for agent indicators
+        agent_indicators = [
+            "roleplay", "role play", "acting", "pretend", "scenario",
+            "imagine", "fantasy", "act as", "play as", "in-character",
+            "story", "scene", "setting", "character", "plot",
+            "describe", "tell me about", "what happens",
+            "picture", "image", "draw", "show me", "visualize"
+        ]
+        
+        agent_score = 0.0
+        if any(indicator in user_input.lower() for indicator in agent_indicators):
+            agent_score = 0.9
+        
+        # Check for reasoning indicators
+        requires_reasoning = any(kw in user_input.lower() for kw in 
+            ["why", "explain", "analyze", "reason", "think through"])
+        
+        # Initialize task_types
+        task_types = {}
+        
+        # Check for urgent tasks
+        if any(word in user_input.lower() for word in ["urgent", "immediately", "asap", "now"]):
+            task_types["urgent"] = 0.8
+        
+        # Check for multi-step tasks
+        if any(word in user_input.lower() for word in ["first", "then", "next", "finally", "steps"]):
+            task_types["multi_step"] = 0.7
+        
+        # Quick decision tree:
+        if "urgent" in task_types and task_types["urgent"] > 0.7:
+            return "reflexive"  # Use reflexive for urgent needs
+        
+        elif complexity_score < 0.3 and not requires_reasoning:
+            return "reflexive"  # Simple patterns can use reflexive
+        
+        elif agent_score > 0.8:
+            return "integrated"  # Roleplay/narrative needs agent
+        
+        elif complexity_score > 0.8 or "multi_step" in task_types:
+            return "distributed"  # Complex queries need distributed
+        
+        elif complexity_score > 0.5:
+            return "parallel"  # Medium complexity benefits from parallelism
+        
+        else:
+            return "serial"  # Default comprehensive processing
     
     async def generate_response(self, user_input: str, processing_result: Dict[str, Any], context: Dict[str, Any] = None) -> Dict[str, Any]:
         """Generate a response using the appropriate processor"""
