@@ -143,17 +143,17 @@ class MoodManager:
 
     # Function tools for the agent
 
-    async def update_mood(self) -> MoodState: # Return MoodState object
+    async def update_mood(self) -> MoodState:
         """
         Updates the current mood based on various system states. Service method.
-
+    
         Returns:
             The updated MoodState object.
         """
         async with self._lock:
             now = datetime.datetime.now()
             if (now - self.last_update_time).total_seconds() < self.update_interval_seconds:
-                return self.current_mood # Return the object
+                return self.current_mood
     
             # Calculate elapsed time factor (adjusts influence strength)
             elapsed = (now - self.last_update_time).total_seconds()
@@ -193,11 +193,19 @@ class MoodManager:
                 except Exception as e:
                     logger.error(f"Error getting emotional influence: {e}")
     
+
             # 2. Influence from Hormones
             if self.hormone_system:
                 try:
-                    # Add await here to properly get hormone levels
-                    hormone_levels = await self.hormone_system.get_hormone_levels()
+                    # Fix: Ensure get_hormone_levels is properly awaited
+                    if hasattr(self.hormone_system, 'get_hormone_levels'):
+                        if asyncio.iscoroutinefunction(self.hormone_system.get_hormone_levels):
+                            hormone_levels = await self.hormone_system.get_hormone_levels()
+                        else:
+                            hormone_levels = self.hormone_system.get_hormone_levels()
+                    else:
+                        hormone_levels = {}
+                        
                     hormone_influence_valence = 0.0
                     hormone_influence_arousal = 0.0
                     hormone_influence_control = 0.0
