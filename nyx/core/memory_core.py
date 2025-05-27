@@ -654,7 +654,7 @@ async def _check_for_patterns(ctx: RunContextWrapper[MemoryCoreContext], tags: L
     # Check each tag for potential patterns
     for tag in tags:
         # Get memories with this tag
-        tagged_memories = await retrieve_memories.python_function(
+        tagged_memories = await retrieve_memories(
             ctx,
             query="",
             memory_types=["observation", "experience"],
@@ -1154,7 +1154,7 @@ async def archive_memory(
     Returns:
         True if successful, False if memory not found
     """
-    return await update_memory.python_function(
+    return await update_memory(
         ctx, params=MemoryUpdateParams(
             memory_id=memory_id,
             updates={"is_archived": True}
@@ -1175,7 +1175,7 @@ async def unarchive_memory(
     Returns:
         True if successful, False if memory not found
     """
-    return await update_memory.python_function(
+    return await update_memory(
         ctx, params=MemoryUpdateParams(
             memory_id=memory_id,
             updates={"is_archived": False}
@@ -1191,7 +1191,7 @@ async def mark_as_consolidated(
     """
     Mark a memory as consolidated into another memory.
     """
-    return await update_memory.python_function(
+    return await update_memory(
         ctx,
         params=MemoryUpdateParams(
             memory_id=memory_id,
@@ -1235,7 +1235,7 @@ async def retrieve_memories_with_formatting(
     actual_memory_types = memory_types or ["observation", "reflection", "abstraction", "experience", "semantic"]
     
     with custom_span("retrieve_memories_with_formatting", {"query": query, "limit": actual_limit}):
-        memories = await retrieve_memories.python_function(
+        memories = await retrieve_memories(
             ctx,
             query=query,
             memory_types=actual_memory_types,
@@ -1269,7 +1269,7 @@ async def create_reflection_from_memories(
     Generate a reflection & store it as a memory.
     """
     query = topic if topic else "important memories"
-    memories = await retrieve_memories.python_function(
+    memories = await retrieve_memories(
         ctx,
         query=query,
         memory_types=["observation", "experience"],
@@ -1906,7 +1906,7 @@ async def construct_narrative_from_memories(
     """
     with custom_span("construct_narrative", {"topic": topic, "chronological": chronological}):
         # Retrieve memories for the topic
-        memories = await retrieve_memories.python_function(
+        memories = await retrieve_memories(
             ctx,
             query=topic,
             memory_types=["observation", "experience"],
@@ -1997,7 +1997,7 @@ async def retrieve_relevant_experiences(
         }
         
         # Retrieve experiences using the memory system
-        experiences = await retrieve_memories.python_function(
+        experiences = await retrieve_memories(
             ctx,
             query=query,
             memory_types=["experience"],
@@ -2057,7 +2057,7 @@ async def generate_conversational_recall(
         Conversational recall with reflection
     """
     memory_core = ctx.context
-    with custom_span("generate_conversational_recall.python_function"):
+    with custom_span("generate_conversational_recall"):
         # Extract experience data
         content = experience.get("content", experience.get("memory_text", ""))
         emotional_context = experience.get("emotional_context", {})
@@ -2164,7 +2164,7 @@ async def detect_schema_from_memories(
     memory_core = ctx.context
     
     # Retrieve relevant memories
-    memories = await retrieve_memories.python_function(
+    memories = await retrieve_memories(
         ctx,
         query=topic if topic else "important memory",
         limit=10
@@ -2203,7 +2203,7 @@ async def detect_schema_from_memories(
         memory_core.schema_index[schema_id].add(memory_id)
         
         # Update memory metadata
-        memory = await get_memory.python_function(ctx, memory_id)
+        memory = await get_memory(ctx, memory_id)
         if memory:
             metadata = memory.get("metadata", {})
             if "schemas" not in metadata:
@@ -2214,7 +2214,7 @@ async def detect_schema_from_memories(
                 "relevance": 1.0  # High relevance for examples
             })
             
-            await update_memory.python_function(
+            await update_memory(
                 ctx, memory_id, {"metadata": metadata}
             )
     
@@ -2336,7 +2336,7 @@ async def assess_memory_importance(
         importance_factors["identity_relevance"] = 0.8
     
     # Assess information value (unique/rare information)
-    similar_memories = await retrieve_memories.python_function(ctx, query=content, limit=3)
+    similar_memories = await retrieve_memories(ctx, query=content, limit=3)
     if len(similar_memories) <= 1 or all(m["id"] == memory_id for m in similar_memories):
         importance_factors["uniqueness"] = 0.7
     
@@ -2380,14 +2380,14 @@ async def reflect_on_memories(
         # Get memories from the last 24 hours
         yesterday = datetime.datetime.now() - datetime.timedelta(days=1)
         query = "timestamp:>" + yesterday.isoformat()
-        memories = await retrieve_memories.python_function(
+        memories = await retrieve_memories(
             ctx,
             query=query,
             limit=limit
         )
     else:
         # Get memories that haven't been reflected on yet
-        memories = await retrieve_memories.python_function(
+        memories = await retrieve_memories(
             ctx,
             query="importance:unassessed",
             limit=limit
