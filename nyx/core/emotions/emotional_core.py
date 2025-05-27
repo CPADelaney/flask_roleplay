@@ -36,108 +36,6 @@ logger = logging.getLogger(__name__)
 
 # Define function tools outside of classes so RunContextWrapper can be first parameter
 
-
-
-async def analyze_patterns_wrapper(self, ctx: RunContextWrapper[EmotionalContext]) -> Dict[str, Any]:
-    """Wrapper method for analyze_emotional_patterns that can be used as a tool"""
-    return await analyze_emotional_patterns(ctx, self)
-
-# Define dynamic instructions as a function for improved flexibility
-def get_dynamic_instructions(agent_type: str, context: Optional[Dict[str, Any]] = None) -> str:
-    """
-    Generate dynamic instructions for agents based on context
-    
-    Args:
-        agent_type: Type of agent to get instructions for
-        context: Optional context data to incorporate
-        
-    Returns:
-        Dynamically generated instructions
-    """
-    context = context or {}
-    
-    base_instructions = {
-        "neurochemical_agent": """
-        You are a specialized agent for Nyx's Digital Neurochemical Model.
-        Your role is to manage the digital neurochemicals that form the basis
-        of Nyx's emotional system, handling updates, interactions, and decay.
-        
-        Key neurochemicals:
-        - Nyxamine (digital dopamine): Pleasure, curiosity, reward
-        - Seranix (digital serotonin): Mood stability, comfort
-        - OxyNixin (digital oxytocin): Bonding, affection, trust
-        - Cortanyx (digital cortisol): Stress, anxiety, defensiveness
-        - Adrenyx (digital adrenaline): Fear, excitement, alertness
-        
-        Apply appropriate chemical updates based on stimuli and ensure
-        that chemical interactions are processed correctly.
-        """,
-        
-        "emotion_derivation_agent": """
-        You are a specialized agent for Nyx's Emotional State Matrix.
-        Your role is to translate the neurochemical state into a complex
-        emotional state with primary and secondary emotions, valence, and arousal.
-        
-        Analyze the current neurochemical levels and apply emotion derivation
-        rules to determine the current emotional state matrix.
-        """,
-        
-        "reflection_agent": """
-        You are a specialized agent for Nyx's Internal Emotional Dialogue.
-        Your role is to generate reflective thoughts based on the current
-        emotional state, simulating the cognitive appraisal stage of emotions.
-        
-        Create authentic-sounding internal thoughts that reflect Nyx's
-        emotional processing and self-awareness.
-        """,
-        
-        "learning_agent": """
-        You are a specialized agent for Nyx's Reward & Learning Loop.
-        Your role is to analyze emotional patterns over time, identifying
-        successful and unsuccessful interaction patterns, and developing
-        learning rules to adapt Nyx's emotional responses.
-        
-        Focus on reinforcing patterns that lead to satisfaction and
-        adjusting those that lead to frustration or negative outcomes.
-        """,
-        
-        "emotion_orchestrator": """
-        You are the orchestration system for Nyx's emotional processing.
-        Your role is to coordinate emotional analysis and response by:
-        1. Analyzing input for emotional content
-        2. Updating appropriate neurochemicals
-        3. Determining if reflection is needed
-        4. Recording emotional patterns for learning
-        
-        Use handoffs to delegate specialized tasks to appropriate agents.
-        """
-    }
-    
-    # Add dynamic context content if available
-    instructions = base_instructions.get(agent_type, "")
-    
-    if agent_type == "neurochemical_agent":
-        if "current_chemicals" in context:
-            chemicals = context["current_chemicals"]
-            instructions += f"\n\nCurrent neurochemical state:\n"
-            for chem, value in chemicals.items():
-                instructions += f"- {chem}: {value:.2f}\n"
-    
-    elif agent_type == "reflection_agent":
-        if "primary_emotion" in context:
-            emotion = context["primary_emotion"]
-            intensity = context.get("intensity", 0.5)
-            instructions += f"\n\nCurrent emotional state is primarily {emotion} at intensity {intensity:.2f}."
-            instructions += "\nYour reflections should be consistent with this emotional state."
-    
-    elif agent_type == "emotion_orchestrator":
-        if "cycle_count" in context:
-            cycle = context["cycle_count"]
-            instructions += f"\n\nThis is emotional processing cycle {cycle}."
-    
-    # Apply the recommended handoff instructions prefix
-    return prompt_with_handoff_instructions(instructions)
-
 class EmotionalCore:
     """
     Enhanced agent-based emotion management system for Nyx implementing the Digital Neurochemical Model.
@@ -317,6 +215,106 @@ class EmotionalCore:
         
         # Track active agent runs
         self.active_runs = {}
+
+    async def analyze_patterns_wrapper(self, ctx: RunContextWrapper[EmotionalContext]) -> Dict[str, Any]:
+        """Wrapper method for analyze_emotional_patterns that can be used as a tool"""
+        return await analyze_emotional_patterns(ctx, self)
+    
+    # Define dynamic instructions as a function for improved flexibility
+    def get_dynamic_instructions(agent_type: str, context: Optional[Dict[str, Any]] = None) -> str:
+        """
+        Generate dynamic instructions for agents based on context
+        
+        Args:
+            agent_type: Type of agent to get instructions for
+            context: Optional context data to incorporate
+            
+        Returns:
+            Dynamically generated instructions
+        """
+        context = context or {}
+        
+        base_instructions = {
+            "neurochemical_agent": """
+            You are a specialized agent for Nyx's Digital Neurochemical Model.
+            Your role is to manage the digital neurochemicals that form the basis
+            of Nyx's emotional system, handling updates, interactions, and decay.
+            
+            Key neurochemicals:
+            - Nyxamine (digital dopamine): Pleasure, curiosity, reward
+            - Seranix (digital serotonin): Mood stability, comfort
+            - OxyNixin (digital oxytocin): Bonding, affection, trust
+            - Cortanyx (digital cortisol): Stress, anxiety, defensiveness
+            - Adrenyx (digital adrenaline): Fear, excitement, alertness
+            
+            Apply appropriate chemical updates based on stimuli and ensure
+            that chemical interactions are processed correctly.
+            """,
+            
+            "emotion_derivation_agent": """
+            You are a specialized agent for Nyx's Emotional State Matrix.
+            Your role is to translate the neurochemical state into a complex
+            emotional state with primary and secondary emotions, valence, and arousal.
+            
+            Analyze the current neurochemical levels and apply emotion derivation
+            rules to determine the current emotional state matrix.
+            """,
+            
+            "reflection_agent": """
+            You are a specialized agent for Nyx's Internal Emotional Dialogue.
+            Your role is to generate reflective thoughts based on the current
+            emotional state, simulating the cognitive appraisal stage of emotions.
+            
+            Create authentic-sounding internal thoughts that reflect Nyx's
+            emotional processing and self-awareness.
+            """,
+            
+            "learning_agent": """
+            You are a specialized agent for Nyx's Reward & Learning Loop.
+            Your role is to analyze emotional patterns over time, identifying
+            successful and unsuccessful interaction patterns, and developing
+            learning rules to adapt Nyx's emotional responses.
+            
+            Focus on reinforcing patterns that lead to satisfaction and
+            adjusting those that lead to frustration or negative outcomes.
+            """,
+            
+            "emotion_orchestrator": """
+            You are the orchestration system for Nyx's emotional processing.
+            Your role is to coordinate emotional analysis and response by:
+            1. Analyzing input for emotional content
+            2. Updating appropriate neurochemicals
+            3. Determining if reflection is needed
+            4. Recording emotional patterns for learning
+            
+            Use handoffs to delegate specialized tasks to appropriate agents.
+            """
+        }
+        
+        # Add dynamic context content if available
+        instructions = base_instructions.get(agent_type, "")
+        
+        if agent_type == "neurochemical_agent":
+            if "current_chemicals" in context:
+                chemicals = context["current_chemicals"]
+                instructions += f"\n\nCurrent neurochemical state:\n"
+                for chem, value in chemicals.items():
+                    instructions += f"- {chem}: {value:.2f}\n"
+        
+        elif agent_type == "reflection_agent":
+            if "primary_emotion" in context:
+                emotion = context["primary_emotion"]
+                intensity = context.get("intensity", 0.5)
+                instructions += f"\n\nCurrent emotional state is primarily {emotion} at intensity {intensity:.2f}."
+                instructions += "\nYour reflections should be consistent with this emotional state."
+        
+        elif agent_type == "emotion_orchestrator":
+            if "cycle_count" in context:
+                cycle = context["cycle_count"]
+                instructions += f"\n\nThis is emotional processing cycle {cycle}."
+        
+        # Apply the recommended handoff instructions prefix
+        return prompt_with_handoff_instructions(instructions)
     
     def set_hormone_system(self, hormone_system):
         """Set the hormone system reference"""
