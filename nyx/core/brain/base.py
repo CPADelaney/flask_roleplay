@@ -550,29 +550,41 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             
             from nyx.core.reasoning_core import ReasoningCore
             
-            # Create the original reasoning core instance
-            original_reasoning_core = ReasoningCore(knowledge_core=self.knowledge_core)
+            # Create the original reasoning core instance (ensure it's an instance, not a function)
+            # Assuming ReasoningCore needs knowledge_core, which is initialized before this block
+            if not hasattr(self, 'knowledge_core') or not self.knowledge_core:
+                # Placeholder for knowledge_core if it's not ready. This might need adjustment based on actual dependencies.
+                logger.warning("KnowledgeCore not fully initialized before ReasoningCore. Using placeholder.")
+                # from nyx.core.knowledge_core import KnowledgeCoreAgents # Assuming this is the class
+                # temp_knowledge_core = KnowledgeCoreAgents()
+                # await temp_knowledge_core.initialize()
+                # original_reasoning_core_instance = ReasoningCore(knowledge_core=temp_knowledge_core)
+                # For now, let's assume knowledge_core is initialized earlier or ReasoningCore handles None.
+                original_reasoning_core_instance = ReasoningCore(knowledge_core=getattr(self, 'knowledge_core', None))
+            else:
+                original_reasoning_core_instance = ReasoningCore(knowledge_core=self.knowledge_core)
             
-            # Wrap with context-aware version if A2A enabled
             if self.use_a2a_integration:
                 from nyx.core.a2a.context_aware_reasoning_core import ContextAwareReasoningCore
-                self.reasoning_core = ContextAwareReasoningCore(original_reasoning_core)
-                logger.debug("Enhanced ReasoningCore with A2A context distribution")
-                
-                # Also wrap the agents
+                # Store the ContextAwareReasoningCore instance separately
+                self.context_aware_reasoning_module_instance = ContextAwareReasoningCore(original_reasoning_core_instance)
+                logger.debug("Instantiated ContextAwareReasoningCore module.")
+
+                # Initialize reasoning agents, passing the CARC instance
                 from nyx.core.a2a.context_aware_reasoning_agents import ContextAwareReasoningAgents
+                # Ensure reasoning_triage_agent and integrated_reasoning_agent are defined or imported
+                # For example:
+                # from nyx.core.reasoning_agents import reasoning_triage_agent, integrated_reasoning_agent
                 self.reasoning_agents = ContextAwareReasoningAgents(
                     reasoning_triage_agent,
-                    integrated_reasoning_agent, 
-                    self.reasoning_core
+                    integrated_reasoning_agent,
+                    self.context_aware_reasoning_module_instance 
                 )
-                logger.debug("Enhanced ReasoningAgents with A2A context distribution")
-                
-                # Set the integrated agent as the main reasoning interface
-                self.reasoning_core = self.reasoning_agents
+                self.reasoning_core = self.reasoning_agents 
+                logger.debug("Enhanced ReasoningAgents with A2A context distribution, using ContextAwareReasoningCore module.")
             else:
                 self.reasoning_core = integrated_reasoning_agent
-                self.reasoning_triage_agent = reasoning_triage_agent
+                self.reasoning_triage_agent = reasoning_triage_agent 
             
             if self.use_a2a_integration:
                 from nyx.core.a2a.context_aware_internal_feedback_system import ContextAwareInternalFeedbackSystem
