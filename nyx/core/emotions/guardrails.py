@@ -48,7 +48,7 @@ class EmotionalGuardrails:
     }
     
     @staticmethod
-    @InputGuardrail()
+    @input_guardrail()
     async def validate_emotional_input(ctx: RunContextWrapper[EmotionalContext], 
                                      agent: Agent, 
                                      input_data: str) -> GuardrailFunctionOutput:
@@ -300,7 +300,7 @@ class EmotionalGuardrails:
                 )
     
     @staticmethod
-    @InputGuardrail()
+    @input_guardrail()
     async def validate_streaming_input(ctx: RunContextWrapper[EmotionalContext],
                                      agent: Agent,
                                      input_data: str) -> GuardrailFunctionOutput:
