@@ -321,8 +321,7 @@ class BodyImage:
     # New helper functions for specialized agents
     
     @function_tool
-    async def _extract_visual_part_features(self, 
-                                        ctx: RunContextWrapper[BodyImageContext], 
+    async def _extract_visual_part_features(ctx: RunContextWrapper[BodyImageContext], 
                                         visual_data: Dict[str, Any]) -> Dict[str, Any]:
         """
         Extract detailed features from visual part data
@@ -369,8 +368,7 @@ class BodyImage:
         return features
     
     @function_tool
-    async def _calculate_visual_confidence(self, 
-                                      ctx: RunContextWrapper[BodyImageContext], 
+    async def _calculate_visual_confidence(ctx: RunContextWrapper[BodyImageContext], 
                                       visual_features: Dict[str, Any]) -> float:
         """
         Calculate confidence level for visual detection
@@ -406,8 +404,7 @@ class BodyImage:
         return max(0.1, min(1.0, confidence))
     
     @function_tool
-    async def _extract_somatic_features(self, 
-                                   ctx: RunContextWrapper[BodyImageContext], 
+    async def _extract_somatic_features(ctx: RunContextWrapper[BodyImageContext], 
                                    somatic_data: Dict[str, Any]) -> Dict[str, Any]:
         """
         Extract detailed features from somatic data
@@ -451,8 +448,7 @@ class BodyImage:
         return features
     
     @function_tool
-    async def _calculate_somatic_confidence(self, 
-                                       ctx: RunContextWrapper[BodyImageContext], 
+    async def _calculate_somatic_confidence(ctx: RunContextWrapper[BodyImageContext], 
                                        somatic_features: Dict[str, Any]) -> float:
         """
         Calculate confidence level for somatic detection
@@ -482,8 +478,7 @@ class BodyImage:
     # Tool functions for the agents
     
     @function_tool
-    async def _analyze_visual_features(self, 
-                                   ctx: RunContextWrapper[BodyImageContext], 
+    async def _analyze_visual_features(ctx: RunContextWrapper[BodyImageContext], 
                                    percept: Dict[str, Any]) -> Dict[str, Any]:
         """
         Analyze visual features to extract body-related information
@@ -525,8 +520,7 @@ class BodyImage:
         }
     
     @function_tool
-    async def _extract_body_part_states(self, 
-                                    ctx: RunContextWrapper[BodyImageContext], 
+    async def _extract_body_part_states(ctx: RunContextWrapper[BodyImageContext], 
                                     body_features: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
         """
         Extract state information for detected body parts
@@ -562,8 +556,7 @@ class BodyImage:
         return part_states
     
     @function_tool
-    async def _get_current_visual_state(self, 
-                                   ctx: RunContextWrapper[BodyImageContext]) -> Dict[str, Any]:
+    async def _get_current_visual_state(ctx: RunContextWrapper[BodyImageContext]) -> Dict[str, Any]:
         """
         Get current visual state information
         
@@ -583,8 +576,7 @@ class BodyImage:
         }
     
     @function_tool
-    async def _analyze_somatic_data(self, 
-                                ctx: RunContextWrapper[BodyImageContext]) -> Dict[str, Any]:
+    async def _analyze_somatic_data(ctx: RunContextWrapper[BodyImageContext]) -> Dict[str, Any]:
         """
         Analyze somatic sensation data from digital somatosensory system
         
@@ -625,8 +617,7 @@ class BodyImage:
             return {"error": str(e), "somatic_data": {}}
     
     @function_tool
-    async def _correlate_somatic_visual(self, 
-                                   ctx: RunContextWrapper[BodyImageContext], 
+    async def _correlate_somatic_visual(ctx: RunContextWrapper[BodyImageContext], 
                                    somatic_data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
         """
         Correlate somatic sensations with visual body parts
@@ -673,8 +664,7 @@ class BodyImage:
         }
     
     @function_tool
-    async def _calculate_proprioception_confidence(self, 
-                                             ctx: RunContextWrapper[BodyImageContext], 
+    async def _calculate_proprioception_confidence(ctx: RunContextWrapper[BodyImageContext], 
                                              correlation_results: Dict[str, Any]) -> float:
         """
         Calculate overall proprioception confidence
@@ -700,8 +690,7 @@ class BodyImage:
         return new_confidence
     
     @function_tool
-    async def _resolve_perception_conflicts(self, 
-                                      ctx: RunContextWrapper[BodyImageContext],
+    async def _resolve_perception_conflicts(ctx: RunContextWrapper[BodyImageContext],
                                       visual_data: Dict[str, Any],
                                       somatic_data: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -777,8 +766,7 @@ class BodyImage:
         }
     
     @function_tool
-    async def _update_body_image_state(self, 
-                                  ctx: RunContextWrapper[BodyImageContext], 
+    async def _update_body_image_state(ctx: RunContextWrapper[BodyImageContext], 
                                   resolved_data: Dict[str, Any]) -> Dict[str, Any]:
         """
         Update the body image state based on resolved perception data
@@ -859,8 +847,7 @@ class BodyImage:
         }
     
     @function_tool
-    async def _get_body_image_state(self, 
-                               ctx: RunContextWrapper[BodyImageContext]) -> Dict[str, Any]:
+    async def _get_body_image_state(ctx: RunContextWrapper[BodyImageContext]) -> Dict[str, Any]:
         """
         Get the current body image state
         
