@@ -18,6 +18,7 @@ COPY requirements.txt .
 
 # Install Python dependencies globally (don't use --user flag with root)
 RUN pip install --no-cache-dir -r requirements.txt
+RUN python -m spacy download en_core_web_sm
 
 # Copy the application code
 COPY . .
