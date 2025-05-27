@@ -9,6 +9,9 @@ from nyx.nyx_agent_sdk import add_memory
 from nyx.user_model_sdk import UserModelManager
 from memory.memory_nyx_integration import MemoryNyxBridge
 
+from nyx.core.memory_core import MemoryCreateParams, add_memory
+import datetime
+
 logger = logging.getLogger(__name__)
 
 DB_DSN = "postgresql://nyx_user:your_password@localhost/nyx_db"
@@ -54,28 +57,63 @@ class NyxSyncDaemon:
             await conn.close()
 
     async def inject_strategy(self, strategy_row, conn):
-        strategy_id = strategy_row['id']
-        strategy_type = strategy_row['strategy_type']
-        payload = strategy_row['payload']
-        strategy_name = strategy_row['strategy_name']
-
-        user_ids = await conn.fetch("SELECT DISTINCT user_id FROM user_model_states")
-
+        """
+        Persist a strategy update as an abstraction‑level memory
+        for every active user, and log the event.
+        """
+        strategy_id   = strategy_row["id"]
+        strategy_type = strategy_row["strategy_type"]          # e.g. “rlhf‑policy”
+        payload       = strategy_row["payload"] or {}
+        strategy_name = strategy_row["strategy_name"]
+    
+        # pull every user that has a model‑state
+        user_ids = await conn.fetch(
+            "SELECT DISTINCT user_id FROM user_model_states"
+        )
+    
         for user in user_ids:
-            user_id = user['user_id']
-            logger.info(f"Injecting strategy '{strategy_name}' to user {user_id}")
-
-            memory_text = f"Nyx's strategic layer updated: {strategy_type.upper()} - {strategy_name}\n{payload.get('description', '')}"
-
-            # Inject memory
-            ctx = await self._get_context(user_id)
-            await add_memory(ctx, memory_text, memory_type="abstraction", significance=7)
-
-            # Log the event
-            await conn.execute("""
-                INSERT INTO nyx1_strategy_logs (strategy_id, user_id, event_type, message_snippet, kink_profile)
+            user_id = user["user_id"]
+            logger.info("Injecting strategy '%s' to user %s", strategy_name, user_id)
+    
+            # -------- build memory text --------
+            memory_text = (
+                f"Nyx's strategic layer updated: "
+                f"{strategy_type.upper()} - {strategy_name}\n"
+                f"{payload.get('description', '')}"
+            )
+    
+            # -------- insert memory --------
+            ctx = await self._get_context(user_id)   # returns RunContextWrapper
+    
+            params = MemoryCreateParams(
+                memory_text  = memory_text,
+                memory_type  = "abstraction",
+                memory_scope = "game",
+                memory_level = "abstraction",
+                significance = 7,
+                tags         = ["strategy", strategy_type],
+                metadata     = {
+                    "strategy_id"   : strategy_id,
+                    "strategy_name" : strategy_name,
+                    "timestamp"     : datetime.datetime.now().isoformat(),
+                    "fidelity"      : 0.95,
+                },
+            )
+            await add_memory(ctx, params)
+    
+            # -------- log in DB --------
+            await conn.execute(
+                """
+                INSERT INTO nyx1_strategy_logs
+                       (strategy_id, user_id, event_type,
+                        message_snippet, kink_profile)
                 VALUES ($1, $2, 'triggered', $3, $4)
-            """, strategy_id, user_id, memory_text[:250], await self._get_kink_profile(user_id))
+                """,
+                strategy_id,
+                user_id,
+                memory_text[:250],
+                await self._get_kink_profile(user_id),
+            )
 
     async def inject_scene(self, scene_row, conn):
         prompt_template = scene_row['prompt_template']
