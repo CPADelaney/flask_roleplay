@@ -14,15 +14,14 @@ class ContextAwareInputProcessor(ContextAwareModule):
     Enhanced BlendedInputProcessor with full context distribution capabilities
     """
     
-    def __init__(self, original_input_processor):
+    async def __init__(self, original_input_processor):
         super().__init__("input_processor")
         self.original_processor = original_input_processor
         
         # Add configuration support
         from nyx.core.input_processing_config import InputProcessingConfig
         self.config = InputProcessingConfig()
-        super().__init__("input_processor")
-        self.original_processor = original_input_processor
+        
         self.context_subscriptions = [
             "mode_distribution_update", "emotional_state_update", "relationship_state_change",
             "conditioning_trigger", "user_behavior_pattern", "dominance_context_active",
@@ -33,6 +32,9 @@ class ContextAwareInputProcessor(ContextAwareModule):
         self.pattern_detection_cache = {}
         self.behavior_evaluation_cache = {}
         self.mode_blending_history = []
+        
+        # Initialize current_shared_context
+        self.current_shared_context = None
     
     async def on_context_received(self, context: SharedContext):
         """Initialize input processing for this context"""
