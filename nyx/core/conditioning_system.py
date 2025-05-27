@@ -68,11 +68,28 @@ class TraitConditioningOutput(BaseModel):
     identity_impact: str = Field(..., description="Description of impact on identity")
     conditioning_strategy: str = Field(..., description="Strategy used for conditioning")
 
-# Context object for conditioning system
-class ConditioningContext:
-    """Context object for conditioning operations"""
-    
+    # Context object for conditioning system
+    class ConditioningContext:
+        """Context object for conditioning operations"""
+        
     def __init__(self, reward_system=None, emotional_core=None, memory_core=None, somatosensory_system=None):
+        # Initialize context
+        self.context = ConditioningContext(
+            reward_system=reward_system, 
+            emotional_core=emotional_core,
+            memory_core=memory_core,
+            somatosensory_system=somatosensory_system
+        )
+    
+        # Create agents
+        self.classical_conditioning_agent = self._create_classical_conditioning_agent()
+        self.operant_conditioning_agent = self._create_operant_conditioning_agent()
+        self.behavior_evaluation_agent = self._create_behavior_evaluation_agent()
+        self.personality_development_agent = self._create_personality_development_agent()
+        self.conditioning_orchestrator = self._create_conditioning_orchestrator()
+        
+        logger.info("Conditioning system initialized with Agents SDK integration")
+        
         self.reward_system = reward_system
         self.emotional_core = emotional_core
         self.memory_core = memory_core
@@ -165,6 +182,12 @@ class ConditioningSystem:
     
     def _create_operant_conditioning_agent(self) -> Agent:
         """Create agent for operant conditioning"""
+        # Create the reward signal tool with proper registration
+        reward_signal_tool = function_tool(
+            self._generate_reward_signal_logic,
+            name_override="generate_reward_signal",
+            description_override="Generate a reward signal for the reward system"
+        )
         return Agent(
             name="Operant_Conditioning_Agent",
             instructions="""
@@ -192,7 +215,7 @@ class ConditioningSystem:
                 self._get_association,
                 self._create_or_update_operant_association,
                 self._calculate_valence_and_reward,
-                self._generate_reward_signal_tool
+                reward_signal_tool  # Use the properly created tool
             ],
             output_type=OperantConditioningOutput
         )
@@ -406,8 +429,8 @@ class ConditioningSystem:
                 "valence": association.valence
             }
 
-    @staticmethod
     async def _generate_reward_signal_logic(
+        self,
         ctx: RunContextWrapper,
         behavior: str,
         consequence_type: str,
@@ -425,17 +448,15 @@ class ConditioningSystem:
         if not hasattr(ctx.context, 'reward_system') or ctx.context.reward_system is None:
             logger.error("reward_system attribute missing or None on ctx.context in _generate_reward_signal_logic.")
             return False
-
+    
         reward_system_instance = ctx.context.reward_system
-        # <<< ADD THIS LOGGING >>>
         logger.info(f"Inside _generate_reward_signal_logic: Type of reward_system_instance = {type(reward_system_instance)}")
         logger.info(f"Inside _generate_reward_signal_logic: Does reward_system_instance have process_reward_signal? {hasattr(reward_system_instance, 'process_reward_signal')}")
-        # <<< END ADDED LOGGING >>>
-
+    
         if not reward_system_instance:
              logger.error("Reward system instance is None, cannot generate reward signal.")
              return False
-
+    
         try:
             reward_signal = RewardSignal(
                 value=reward_value,
@@ -451,11 +472,11 @@ class ConditioningSystem:
             await reward_system_instance.process_reward_signal(reward_signal)
             logger.debug("Reward signal dispatched successfully.")
             return True
-
+    
         except Exception as e:
             logger.error(f"Error during reward signal generation/dispatch for behavior '{behavior}': {e}", exc_info=True)
             return False
-    
+        
 
     @staticmethod
     @function_tool
