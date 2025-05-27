@@ -656,7 +656,7 @@ async def check_observation_patterns(
     # No pattern detected
     return None
 
-@InputGuardrail()
+@input_guardrail()
 async def validate_observation_content(
     ctx: RunContextWrapper[Any],
     agent: Agent,
