@@ -200,6 +200,7 @@ class ContextAwareReasoningCore(ContextAwareModule):
         # Auto-save flag
         self._auto_save_enabled = False
         self._background_tasks = []
+        self._discovery_completed = False
         
         # ========================================================================
         # STARTUP TASKS
@@ -276,9 +277,15 @@ class ContextAwareReasoningCore(ContextAwareModule):
         self._models_loaded = True
 
     def set_integration_layer(self, integration_layer):
-        """Set the integration layer reference"""
+        """Set the integration layer reference and trigger discovery"""
         self.integration_layer = integration_layer
-    
+        
+        # Now trigger discovery after integration layer is set
+        if not self._discovery_completed:
+            discovery_task = asyncio.create_task(self.discover_modules())
+            self._background_tasks.append(discovery_task)
+            self._discovery_completed = True
+        
     def _ensure_models_loaded(self):
         """Ensure models are loaded (for lazy loading)"""
         if not self._models_loaded:
