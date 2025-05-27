@@ -351,7 +351,7 @@ class ContextAwareReasoningCore(ContextAwareModule):
     async def send_context_update(self, update_type: str, data: Dict[str, Any], 
                                   priority: ContextPriority = ContextPriority.NORMAL,
                                   target_modules: List[str] = None,
-                                  scope: ContextScope = ContextScope.LOCAL) -> bool:
+                                  scope: ContextScope = ContextScope.GLOBAL) -> bool:
         """
         Send context update to other modules through the integration layer.
         
