@@ -466,7 +466,7 @@ async def generate_time_reflection(idle_duration: float, emotional_state: Dict[s
     
     return reflection
 
-async def generate_time_expression_impl(state: Dict[str, Any]) -> Dict[str, Any]:
+async def generate_time_expression_impl(time_perception_state: Dict[str, Any]) -> Dict[str, Any]:
     """
     Generate a natural expression about time perception
     
@@ -530,7 +530,7 @@ async def generate_time_expression_impl(state: Dict[str, Any]) -> Dict[str, Any]
     elif reference_type == "scale":
         # Expression about awareness of different time scales
         temporal_context = time_perception_state.get("current_temporal_context", {})
-        time_of_day = temporal_context.get("time_of_day", "")
+        time_of_day = temporal_context.get("time_of_day", "") if isinstance(temporal_context, dict) else ""
         
         if time_scale == "seconds":
             expression = "I'm conscious of each second passing between our exchanges."
@@ -588,9 +588,18 @@ async def generate_time_expression_impl(state: Dict[str, Any]) -> Dict[str, Any]
         "time_reference": time_reference
     }
 
-@function_tool(name_override="generate_time_expression")
-async def generate_time_expression(state: Dict[str, Any]) -> dict[str, Any]:
-    return await generate_time_expression_impl(state)
+@function_tool
+async def generate_time_expression(time_perception_state: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Generate a natural expression about time perception
+    
+    Args:
+        time_perception_state: Current temporal perception state
+        
+    Returns:
+        Time expression output
+    """
+    return await generate_time_expression_impl(time_perception_state)
 
 @function_tool
 async def process_temporal_awareness(days_elapsed: float, total_interactions: int) -> Dict[str, Any]:
