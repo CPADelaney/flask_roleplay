@@ -149,7 +149,7 @@ class TimePerceptionState(BaseModel):
     time_since_last_interaction: float = Field(0.0, description="Time since last interaction in seconds")
     subjective_time_dilation: float = Field(1.0, description="Subjective time dilation factor (1.0 = normal)")
     current_time_category: str = Field("none", description="Current time category")
-    current_time_effects: List[Dict[str, Any]] = Field(default_factory=list)
+    current_time_effects: List[Dict[str, Any]] | None = None
     lifetime_total_interactions: int = Field(0, description="Total lifetime interactions")
     lifetime_total_duration: float = Field(0.0, description="Total lifetime interaction duration")
     relationship_age_days: float = Field(0.0, description="Age of relationship in days")
@@ -506,7 +506,7 @@ async def generate_time_reflection(idle_duration: float, emotional_state: Dict[s
     
     return reflection
 
-async def generate_time_expression_impl(time_perception_state: Dict[str, Any]) -> Dict[str, Any]:
+async def generate_time_expression_impl(state: Dict[str, Any]) -> Dict[str, Any]:
     """
     Generate a natural expression about time perception
     
@@ -516,10 +516,10 @@ async def generate_time_expression_impl(time_perception_state: Dict[str, Any]) -
     Returns:
         Time expression output
     """
-    last_interaction = time_perception_state.get("last_interaction")
-    time_since_last = time_perception_state.get("time_since_last_interaction", 0)
-    time_category = time_perception_state.get("current_time_category", "none")
-    relationship_age = time_perception_state.get("relationship_age_days", 0)
+    last_interaction = state.get("last_interaction")
+    time_since_last = state.get("time_since_last_interaction", 0)
+    time_category = state.get("current_time_category", "none")
+    relationship_age = state.get("relationship_age_days", 0)
     
     # Choose what type of time reference to make
     reference_types = ["interval", "scale", "rhythm", "context"]
@@ -569,7 +569,7 @@ async def generate_time_expression_impl(time_perception_state: Dict[str, Any]) -
     
     elif reference_type == "scale":
         # Expression about awareness of different time scales
-        temporal_context = time_perception_state.get("current_temporal_context", {})
+        temporal_context = state.get("current_temporal_context", {})
         time_of_day = temporal_context.get("time_of_day", "") if isinstance(temporal_context, dict) else ""
         
         if time_scale == "seconds":
