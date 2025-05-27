@@ -111,6 +111,10 @@ async def analyze_emotional_patterns(ctx: RunContextWrapper[EmotionalContext], e
                 "analysis_time": datetime.datetime.now().isoformat()
             }
 
+async def analyze_patterns_wrapper(self, ctx: RunContextWrapper[EmotionalContext]) -> Dict[str, Any]:
+    """Wrapper method for analyze_emotional_patterns that can be used as a tool"""
+    return await analyze_emotional_patterns(ctx, self)
+
 # Define dynamic instructions as a function for improved flexibility
 def get_dynamic_instructions(agent_type: str, context: Optional[Dict[str, Any]] = None) -> str:
     """
@@ -458,7 +462,7 @@ class EmotionalCore:
                 function_tool(self.emotion_tools.get_emotional_state_matrix),
                 function_tool(self.reflection_tools.generate_internal_thought),
                 # Use the standalone function with partial application to pass self reference
-                lambda ctx: analyze_emotional_patterns(ctx, self)
+                function_tool(self.analyze_patterns_wrapper)
             ],
             model_settings=ModelSettings(temperature=0.7),  # Higher temperature for creative reflection
             output_type=InternalThoughtOutput
