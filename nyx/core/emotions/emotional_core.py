@@ -36,80 +36,7 @@ logger = logging.getLogger(__name__)
 
 # Define function tools outside of classes so RunContextWrapper can be first parameter
 
-@function_tool
-async def analyze_emotional_patterns(ctx: RunContextWrapper[EmotionalContext], emotional_core) -> Dict[str, Any]:
-    """
-    Analyze patterns in emotional state history
-    
-    Args:
-        ctx: Run context wrapper
-        emotional_core: Reference to the emotional core system
-        
-    Returns:
-        Analysis of emotional patterns
-    """
-    with trace(
-        workflow_name="Emotional_Pattern_Analysis", 
-        trace_id=gen_trace_id(),
-        metadata={"cycle": ctx.context.cycle_count}
-    ):
-        if len(emotional_core.emotional_state_history) < 2:
-            return {
-                "message": "Not enough emotional state history for pattern analysis",
-                "patterns": {}
-            }
-        
-        patterns = {}
-        
-        # Track emotion changes over time using an efficient approach
-        emotion_trends = defaultdict(list)
-        
-        # Use a sliding window for more efficient analysis
-        analysis_window = emotional_core.emotional_state_history[-min(20, len(emotional_core.emotional_state_history)):]
-        
-        for state in analysis_window:
-            if "primary_emotion" in state:
-                emotion = state["primary_emotion"].get("name", "Neutral")
-                intensity = state["primary_emotion"].get("intensity", 0.5)
-                emotion_trends[emotion].append(intensity)
-        
-        # Analyze trends for each emotion
-        for emotion, intensities in emotion_trends.items():
-            if len(intensities) > 1:
-                # Calculate trend
-                start = intensities[0]
-                end = intensities[-1]
-                change = end - start
-                
-                trend = "stable" if abs(change) < 0.1 else ("increasing" if change > 0 else "decreasing")
-                
-                # Calculate volatility
-                volatility = sum(abs(intensities[i] - intensities[i-1]) for i in range(1, len(intensities))) / (len(intensities) - 1)
-                
-                patterns[emotion] = {
-                    "trend": trend,
-                    "volatility": volatility,
-                    "start_intensity": start,
-                    "current_intensity": end,
-                    "change": change,
-                    "occurrences": len(intensities)
-                }
-        
-        # Create a custom span for the pattern analysis
-        with custom_span(
-            "emotional_pattern_analysis",
-            data={
-                "patterns_detected": list(patterns.keys()),
-                "emotion_sequence": [state.get("primary_emotion", {}).get("name", "Unknown") 
-                                    for state in analysis_window[-5:]],  # Last 5 emotions
-                "analysis_window_size": len(analysis_window)
-            }
-        ):
-            return {
-                "patterns": patterns,
-                "history_size": len(emotional_core.emotional_state_history),
-                "analysis_time": datetime.datetime.now().isoformat()
-            }
+
 
 async def analyze_patterns_wrapper(self, ctx: RunContextWrapper[EmotionalContext]) -> Dict[str, Any]:
     """Wrapper method for analyze_emotional_patterns that can be used as a tool"""
@@ -524,6 +451,81 @@ class EmotionalCore:
             )
         ]
 
+    @function_tool
+    async def analyze_emotional_patterns(ctx: RunContextWrapper[EmotionalContext], emotional_core) -> Dict[str, Any]:
+        """
+        Analyze patterns in emotional state history
+        
+        Args:
+            ctx: Run context wrapper
+            emotional_core: Reference to the emotional core system
+            
+        Returns:
+            Analysis of emotional patterns
+        """
+        with trace(
+            workflow_name="Emotional_Pattern_Analysis", 
+            trace_id=gen_trace_id(),
+            metadata={"cycle": ctx.context.cycle_count}
+        ):
+            if len(emotional_core.emotional_state_history) < 2:
+                return {
+                    "message": "Not enough emotional state history for pattern analysis",
+                    "patterns": {}
+                }
+            
+            patterns = {}
+            
+            # Track emotion changes over time using an efficient approach
+            emotion_trends = defaultdict(list)
+            
+            # Use a sliding window for more efficient analysis
+            analysis_window = emotional_core.emotional_state_history[-min(20, len(emotional_core.emotional_state_history)):]
+            
+            for state in analysis_window:
+                if "primary_emotion" in state:
+                    emotion = state["primary_emotion"].get("name", "Neutral")
+                    intensity = state["primary_emotion"].get("intensity", 0.5)
+                    emotion_trends[emotion].append(intensity)
+            
+            # Analyze trends for each emotion
+            for emotion, intensities in emotion_trends.items():
+                if len(intensities) > 1:
+                    # Calculate trend
+                    start = intensities[0]
+                    end = intensities[-1]
+                    change = end - start
+                    
+                    trend = "stable" if abs(change) < 0.1 else ("increasing" if change > 0 else "decreasing")
+                    
+                    # Calculate volatility
+                    volatility = sum(abs(intensities[i] - intensities[i-1]) for i in range(1, len(intensities))) / (len(intensities) - 1)
+                    
+                    patterns[emotion] = {
+                        "trend": trend,
+                        "volatility": volatility,
+                        "start_intensity": start,
+                        "current_intensity": end,
+                        "change": change,
+                        "occurrences": len(intensities)
+                    }
+            
+            # Create a custom span for the pattern analysis
+            with custom_span(
+                "emotional_pattern_analysis",
+                data={
+                    "patterns_detected": list(patterns.keys()),
+                    "emotion_sequence": [state.get("primary_emotion", {}).get("name", "Unknown") 
+                                        for state in analysis_window[-5:]],  # Last 5 emotions
+                    "analysis_window_size": len(analysis_window)
+                }
+            ):
+                return {
+                    "patterns": patterns,
+                    "history_size": len(emotional_core.emotional_state_history),
+                    "analysis_time": datetime.datetime.now().isoformat()
+                }
+    
     async def update_neurochemical(self, chemical: str, value: float, source: str = "system") -> Dict[str, Any]:
         """
         Wrapper method to update a neurochemical via neurochemical_tools
