@@ -4,6 +4,7 @@ import asyncio
 import datetime
 import json
 import logging
+import math
 import random
 import uuid
 from typing import Dict, List, Any, Optional, Tuple, Set, Union, Literal
@@ -279,9 +280,14 @@ def _cosine_similarity(vec1: List[float], vec2: List[float]) -> float:
         
     return dot_product / (norm1 * norm2)
 
-def _calculate_emotional_relevance(memory_emotion: Dict[str, Any], current_emotion: Dict[str, Any]) -> float:
-    """Calculate emotional relevance boost based on emotional context"""
-    # Get primary emotions
+def _calculate_emotional_relevance(
+    memory_emotion: Union[Dict[str, Any], EmotionalMemoryContext],
+    current_emotion: Dict[str, Any]
+) -> float:
+    """Calculate emotional relevance boost based on emotional context."""
+    # ✨ accept Pydantic model transparently
+    if isinstance(memory_emotion, EmotionalMemoryContext):
+        memory_emotion = memory_emotion.model_dump()
     memory_primary = memory_emotion.get("primary_emotion", "neutral")
     current_primary = current_emotion.get("primary_emotion", "neutral")
     
@@ -435,14 +441,19 @@ def _calculate_text_similarity(text1: str, text2: str) -> float:
     
     return intersection / union
 
-async def _update_memory_recall(ctx: RunContextWrapper[MemoryCoreContext], memory_id: str):
-    """Update recall count and timestamp for a memory"""
-    memory_core = ctx.context
-    if memory_id in memory_core.memories:
-        memory = memory_core.memories[memory_id]
-        memory["times_recalled"] = memory.get("times_recalled", 0) + 1
-        memory["metadata"] = memory.get("metadata", {})
-        memory["metadata"]["last_recalled"] = datetime.datetime.now().isoformat()
+async def _update_memory_recall(
+    ctx: RunContextWrapper[MemoryCoreContext],
+    memory_id: str,
+) -> None:
+    """Increment `times_recalled` & set `last_recalled`."""
+    mc = ctx.context
+    mem = mc.memories.get(memory_id)
+    if not mem:
+        return
+
+    mem.times_recalled += 1
+    mem.metadata.last_recalled = datetime.datetime.now().isoformat()
+
 
 async def _generate_abstraction(ctx: RunContextWrapper[MemoryCoreContext], memories: List[Dict[str, Any]], abstraction_type: str) -> Optional[str]:
     """Generate an abstraction from a set of memories"""
@@ -471,80 +482,92 @@ async def _generate_consolidated_text(ctx: RunContextWrapper[MemoryCoreContext],
         
         return f"I've observed a pattern in several memories: {combined}"
 
-async def _apply_reconsolidation(ctx: RunContextWrapper[MemoryCoreContext], memory: Dict[str, Any]) -> Dict[str, Any]:
-    """Apply reconsolidation to a memory (simulate memory alteration on recall)"""
-    memory_core = ctx.context
-    memory_id = memory["id"]
-    memory_text = memory["memory_text"]
-    metadata = memory.get("metadata", {})
-    
-    # Skip recent memories
-    timestamp_str = metadata.get("timestamp", datetime.datetime.now().isoformat())
-    timestamp = datetime.datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
-    if (datetime.datetime.now() - timestamp).days < 7:
+# ───────────────────────────────────────────────────────────
+# 1. _apply_reconsolidation  (drop‑in replacement)
+# ───────────────────────────────────────────────────────────
+async def _apply_reconsolidation(
+    ctx: RunContextWrapper[MemoryCoreContext],
+    memory: Memory,
+) -> Memory:
+    """
+    Mutate `memory` in‑place to simulate reconsolidation and
+    persist the change via `update_memory`.
+    """
+    mc = ctx.context
+
+    # Skip very recent memories
+    if (datetime.datetime.now()
+        - datetime.datetime.fromisoformat(memory.metadata.timestamp.replace("Z", "+00:00"))
+       ).days < 7:
         return memory
-    
-    # Get original form
-    original_form = metadata.get("original_form", memory_text)
-    
-    # Initialize reconsolidation history if needed
-    if "reconsolidation_history" not in metadata:
-        metadata["reconsolidation_history"] = []
-    
-    # Add current version to history
-    metadata["reconsolidation_history"].append({
-        "previous_text": memory_text,
-        "timestamp": datetime.datetime.now().isoformat()
-    })
-    
-    # Keep only last 3 versions to avoid metadata bloat
-    if len(metadata["reconsolidation_history"]) > 3:
-        metadata["reconsolidation_history"] = metadata["reconsolidation_history"][-3:]
-    
-    # Generate altered text
-    altered_text = _alter_memory_text(
-        memory_text,
-        original_form,
-        memory_core.reconsolidation_strength
-    )
-    
-    # Update memory fidelity
-    current_fidelity = metadata.get("fidelity", 1.0)
-    new_fidelity = max(0.3, current_fidelity - (memory_core.reconsolidation_strength * 0.1))
-    metadata["fidelity"] = new_fidelity
-    
-    # Update memory
-    await update_memory(
-        ctx,
-        memory_id,
+
+    # Ensure we have a mutable history list
+    history: List[Dict[str, Any]] = list(memory.metadata.reconsolidation_history or [])
+    history.append(
         {
-            "memory_text": altered_text,
-            "metadata": metadata
+            "previous_text": memory.memory_text,
+            "timestamp": datetime.datetime.now().isoformat(),
         }
     )
-    
-    # Return updated memory
-    memory["memory_text"] = altered_text
-    memory["metadata"] = metadata
-    
+    memory.metadata.reconsolidation_history = history[-3:]      # keep last 3
+
+    # Alter the text & reduce fidelity a bit
+    altered_text = _alter_memory_text(
+        memory.memory_text,
+        memory.metadata.original_form or memory.memory_text,
+        mc.reconsolidation_strength,
+    )
+    memory.metadata.fidelity = max(
+        0.3, memory.metadata.fidelity - (mc.reconsolidation_strength * 0.1)
+    )
+
+    # Persist to the core (updates indices, embeddings, etc.)
+    await update_memory(
+        ctx,
+        MemoryUpdateParams(
+            memory_id=memory.id,
+            updates={
+                "memory_text": altered_text,
+                "metadata": memory.metadata.model_dump(),
+            },
+        ),
+    )
+
+    # Keep the in‑memory object in sync for this call‑site
+    memory.memory_text = altered_text
     return memory
 
-async def _apply_reconsolidation_to_results(ctx: RunContextWrapper[MemoryCoreContext], memories: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Apply reconsolidation to retrieved memories"""
-    memory_core = ctx.context
-    
-    # Check each memory for potential reconsolidation
-    for i, memory in enumerate(memories):
-        # Skip memory types that shouldn't reconsolidate
-        if memory["memory_type"] in ["semantic", "consolidated"]:
+
+
+# ───────────────────────────────────────────────────────────
+# 3. _apply_reconsolidation_to_results  (drop‑in replacement)
+#    – only used when you decide to post‑process bulk lists
+# ───────────────────────────────────────────────────────────
+async def _apply_reconsolidation_to_results(
+    ctx: RunContextWrapper[MemoryCoreContext],
+    memories: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """
+    Safely apply reconsolidation to dict payloads coming out of
+    `retrieve_memories` while delegating the heavy‑lifting to the
+    model‑level `_apply_reconsolidation`.
+    """
+    out: List[Dict[str, Any]] = []
+    mc = ctx.context
+
+    for mem_dict in memories:
+        model = mc.memories.get(mem_dict["id"])
+        if (not model                                     # already gone
+                or model.memory_type in ("semantic", "consolidated")):
+            out.append(mem_dict)
             continue
-            
-        # Apply reconsolidation with probability
-        if random.random() < memory_core.reconsolidation_probability:
-            memory = await _apply_reconsolidation(ctx, memory)
-            memories[i] = memory
-    
-    return memories
+
+        if random.random() < mc.reconsolidation_probability:
+            model = await _apply_reconsolidation(ctx, model)
+        out.append(model.model_dump())
+
+    return out
+
 
 async def _detect_memory_pattern(ctx: RunContextWrapper[MemoryCoreContext], memories: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     """Detect a pattern in a set of memories"""
@@ -631,7 +654,7 @@ async def _check_for_patterns(ctx: RunContextWrapper[MemoryCoreContext], tags: L
     # Check each tag for potential patterns
     for tag in tags:
         # Get memories with this tag
-        tagged_memories = await ries(
+        tagged_memories = await retrieve_memories.python_function(
             ctx,
             query="",
             memory_types=["observation", "experience"],
@@ -913,36 +936,33 @@ async def get_memory(
 async def get_memory_details(
     ctx: RunContextWrapper[MemoryCoreContext],
     memory_ids: List[str],
-    min_fidelity: Optional[float] = None  
+    min_fidelity: Optional[float] = None,
 ) -> List[Dict[str, Any]]:
     """
-    Retrieve full details for a specific list of memory IDs ('zoom-in').
-    Filters for 'detail' level memories and minimum fidelity.
+    Zoom‑in on detail‑level memories, enforcing `min_fidelity` if given.
     """
-    with custom_span("get_memory_details", {"num_ids": len(memory_ids), "min_fidelity": min_fidelity}):
-        memory_core = ctx.context
-        if not memory_core.initialized: memory_core.initialize()
+    min_fidelity = min_fidelity or 0.0  # ← guard
+    mc = ctx.context
+    if not mc.initialized:
+        mc.initialize()
 
-        detailed_memories = []
-        for mem_id in memory_ids:
-            memory = memory_core.memories.get(mem_id)
-            if memory:
-                 # Ensure it's a detail memory and meets fidelity
-                 if memory.metadata.memory_level == 'detail' and memory.metadata.fidelity >= min_fidelity:
-                     # Apply reconsolidation *before* returning details? Decision point.
-                     # Let's assume zoom-in implies trying to get the *current* state including reconsolidation effects.
-                     memory_copy = memory.model_copy(deep=True) # Work on a copy
-                     if random.random() < memory_core.reconsolidation_probability:
-                         memory_copy = await _apply_reconsolidation(ctx, memory_copy)
-                         # If _apply_reconsolidation saved changes, fine. If not, we return the altered copy.
+    out: List[Dict[str, Any]] = []
+    for mid in memory_ids:
+        mem = mc.memories.get(mid)
+        if not mem:
+            continue
+        if mem.metadata.memory_level != "detail" or mem.metadata.fidelity < min_fidelity:
+            continue
 
-                     mem_dict = memory_copy.model_dump()
-                     mem_dict["relevance"] = 1.0 # Assume high relevance when directly requested
-                     detailed_memories.append(mem_dict)
-                     await _update_memory_recall(ctx, mem_id) # Mark original ID as recalled
+        # reconsolidation probability
+        if random.random() < mc.reconsolidation_probability:
+            mem = await _apply_reconsolidation(ctx, mem)
 
-        logger.debug(f"Retrieved details for {len(detailed_memories)} out of {len(memory_ids)} requested IDs.")
-        return detailed_memories
+        out.append(mem.model_dump() | {"relevance": 1.0})
+        await _update_memory_recall(ctx, mid)
+
+    return out
+
 
 @function_tool
 async def update_memory(
@@ -1134,7 +1154,12 @@ async def archive_memory(
     Returns:
         True if successful, False if memory not found
     """
-    return await update_memory(ctx, memory_id, {"is_archived": True})
+    return await update_memory.python_function(
+        ctx, params=MemoryUpdateParams(
+            memory_id=memory_id,
+            updates={"is_archived": True}
+        )
+    )
 
 @function_tool
 async def unarchive_memory(
@@ -1150,31 +1175,36 @@ async def unarchive_memory(
     Returns:
         True if successful, False if memory not found
     """
-    return await update_memory(ctx, memory_id, {"is_archived": False})
+    return await update_memory.python_function(
+        ctx, params=MemoryUpdateParams(
+            memory_id=memory_id,
+            updates={"is_archived": False}
+        )
+    )
 
 @function_tool
 async def mark_as_consolidated(
     ctx: RunContextWrapper[MemoryCoreContext],
-    memory_id: str, 
+    memory_id: str,
     consolidated_into: str
 ) -> bool:
     """
-    Mark a memory as consolidated into another memory
-    
-    Args:
-        memory_id: ID of the memory to mark
-        consolidated_into: ID of the memory it was consolidated into
-        
-    Returns:
-        True if successful, False if memory not found
+    Mark a memory as consolidated into another memory.
     """
-    return await update_memory(ctx, memory_id, {
-        "is_consolidated": True,
-        "metadata": {
-            "consolidated_into": consolidated_into,
-            "consolidation_date": datetime.datetime.now().isoformat()
-        }
-    })
+    return await update_memory.python_function(
+        ctx,
+        params=MemoryUpdateParams(
+            memory_id=memory_id,
+            updates={
+                "is_consolidated": True,
+                "metadata": {
+                    "consolidated_into": consolidated_into,
+                    "consolidation_date": datetime.datetime.now().isoformat(),
+                },
+            },
+        ),
+    )
+
 
 @function_tool
 async def retrieve_memories_with_formatting(
@@ -1205,7 +1235,7 @@ async def retrieve_memories_with_formatting(
     actual_memory_types = memory_types or ["observation", "reflection", "abstraction", "experience", "semantic"]
     
     with custom_span("retrieve_memories_with_formatting", {"query": query, "limit": actual_limit}):
-        memories = await retrieve_memories(
+        memories = await retrieve_memories.python_function(
             ctx,
             query=query,
             memory_types=actual_memory_types,
@@ -1233,34 +1263,26 @@ async def retrieve_memories_with_formatting(
 @function_tool
 async def create_reflection_from_memories(
     ctx: RunContextWrapper[MemoryCoreContext],
-    topic: Optional[str] = None
+    topic: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
-    Create a reflection on a specific topic using memories
-    
-    Args:
-        topic: Optional topic to reflect on
-    
-    Returns:
-        Reflection result dictionary
+    Generate a reflection & store it as a memory.
     """
-    with custom_span("create_reflection", {"topic": topic or "general"}):
-        # Get relevant memories for reflection
-        query = topic if topic else "important memories"
-        memories = await retrieve_memories(
-            ctx,
-            query=query,
-            memory_types=["observation", "experience"],
-            limit=5
-        )
-        
-        if not memories:
-            return {
-                "reflection": "I don't have enough memories to form a meaningful reflection yet.",
-                "confidence": 0.3,
-                "topic": topic,
-                "reflection_id": None
-            }
+    query = topic if topic else "important memories"
+    memories = await retrieve_memories.python_function(
+        ctx,
+        query=query,
+        memory_types=["observation", "experience"],
+        limit=5,
+    )
+    if not memories:
+        return {
+            "reflection": "I don't have enough memories to form a meaningful reflection yet.",
+            "confidence": 0.3,
+            "topic": topic,
+            "reflection_id": None,
+        }
+
         
         # Generate reflection text using agent
         reflection_agent = Agent(
@@ -1286,24 +1308,26 @@ async def create_reflection_from_memories(
         # Store reflection as a memory
         reflection_id = await add_memory(
             ctx,
-            memory_text=reflection_text,
-            memory_type="reflection",
-            memory_scope="game",
-            significance=6,
-            tags=["reflection"] + ([topic] if topic else []),
-            metadata={
-                "confidence": confidence,
-                "source_memory_ids": [m["id"] for m in memories],
-                "timestamp": datetime.datetime.now().isoformat(),
-                "fidelity": 0.8  # Reflections have slightly reduced fidelity
-            }
+            MemoryCreateParams(
+                memory_text=reflection_text,
+                memory_type="reflection",
+                memory_scope="game",
+                significance=6,
+                tags=["reflection"] + ([topic] if topic else []),
+                metadata={
+                    "confidence": confidence,
+                    "source_memory_ids": [m["id"] for m in memories],
+                    "timestamp": datetime.datetime.now().isoformat(),
+                    "fidelity": 0.8,
+                },
+            ),
         )
-        
+    
         return {
             "reflection": reflection_text,
             "confidence": min(1.0, confidence),
             "topic": topic,
-            "reflection_id": reflection_id
+            "reflection_id": reflection_id,
         }
 
 @function_tool
@@ -1504,103 +1528,74 @@ async def create_semantic_memory(
     logger.info(f"Created semantic memory {created_memory_id} of type '{actual_abstraction_type}' from {len(source_memories)} sources.")
     return created_memory_id
 
+# ───────────────────────────────────────────────────────────
+# 2. apply_memory_decay  (drop‑in replacement)
+# ───────────────────────────────────────────────────────────
 @function_tool
 async def apply_memory_decay(
-    ctx: RunContextWrapper[MemoryCoreContext]
+    ctx: RunContextWrapper[MemoryCoreContext],
 ) -> Dict[str, Any]:
     """
-    Apply decay to memories based on age, significance, and recall frequency
-    
-    Returns:
-        Dictionary with decay statistics
+    Decay episodic memories’ significance / fidelity and optionally archive them.
     """
-    with custom_span("apply_memory_decay"):
-        memory_core = ctx.context
-        if not memory_core.initialized:
-            memory_core.initialize()
-        
-        decayed_count = 0
-        archived_count = 0
-        
-        for memory_id, memory in memory_core.memories.items():
-            # Skip non-episodic memories
-            if memory["memory_type"] != "observation":
-                continue
-            
-            # Skip already archived memories
-            if memory_id in memory_core.archived_memories:
-                continue
+    mc = ctx.context
+    if not mc.initialized:
+        mc.initialize()
 
-            # Check for crystallized memories
-            metadata = memory.get("metadata", {})
-            if metadata.get("is_crystallized", False):
-                decay_resistance = metadata.get("decay_resistance", 5.0)  # Default high resistance
-                # Still apply minimal decay but at greatly reduced rate
-                decay_amount = memory_core.decay_rate / decay_resistance
-                # Also maintain higher minimum fidelity
-                min_fidelity = 0.85  # Crystallized memories stay vivid
-            else:
-                decay_amount = memory_core.decay_rate
-                min_fidelity = 0.3  # Regular memories can fade more
-            
-            significance = memory["significance"]
-            times_recalled = memory.get("times_recalled", 0)
-            
-            # Calculate age
-            timestamp_str = memory.get("metadata", {}).get("timestamp", memory_core.init_time.isoformat())
-            timestamp = datetime.datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
-            days_old = (datetime.datetime.now() - timestamp).days
-            
-            # Calculate decay factors
-            age_factor = min(1.0, days_old / 30.0)  # Older memories decay more
-            recall_factor = max(0.0, 1.0 - (times_recalled / 10.0))  # Frequently recalled memories decay less
-            
-            # Calculate decay amount
-            decay_amount = decay_amount * age_factor * recall_factor
-            
-            # Apply extra decay to memories never recalled
-            if times_recalled == 0 and days_old > 7:
-                decay_amount *= 1.5
-            
-            # Skip if decay is negligible
-            if decay_amount < 0.05:
-                continue
-            
-            # Store original significance if this is first decay
-            if "original_significance" not in memory.get("metadata", {}):
-                memory["metadata"]["original_significance"] = significance
-            
-            # Apply decay with minimum of 1
-            new_significance = max(1, significance - decay_amount)
-            
-            # Apply decay to fidelity if present
-            metadata = memory.get("metadata", {})
-            if "fidelity" in metadata:
-                fidelity = metadata["fidelity"]
-                fidelity_decay = decay_amount * 0.2  # Fidelity decays more slowly
-                metadata["fidelity"] = max(min_fidelity, fidelity - fidelity_decay)
-            
-            # Only update if change is significant
-            if abs(new_significance - significance) >= 0.5:
-                await update_memory(ctx, memory_id, {
-                    "significance": new_significance,
-                    "metadata": {
-                        **memory.get("metadata", {}),
-                        "last_decay": datetime.datetime.now().isoformat(),
-                        "decay_amount": decay_amount
-                    }
-                })
-                decayed_count += 1
-            
-            # Archive if significance is very low and memory is old
-            if new_significance < 2 and days_old > 30:
-                await archive_memory(ctx, memory_id)
-                archived_count += 1
-        
-        return {
-            "memories_decayed": decayed_count,
-            "memories_archived": archived_count
-        }
+    decayed = archived = 0
+    now = datetime.datetime.now()
+
+    for mid, mem in list(mc.memories.items()):
+        # work only on active episodic memories
+        if mem.memory_type != "observation" or mem.is_archived:
+            continue
+
+        md = mem.metadata
+        days_old = (now - datetime.datetime.fromisoformat(md.timestamp.replace("Z", "+00:00"))).days
+
+        # --- decay parameters --------------------------------------------------
+        base_rate      = mc.decay_rate
+        decay_rate     = base_rate / md.decay_resistance if md.is_crystallized else base_rate
+        min_fidelity   = 0.85 if md.is_crystallized else 0.30
+        age_factor     = min(1.0, days_old / 30.0)
+        recall_factor  = max(0.0, 1.0 - (mem.times_recalled / 10.0))
+
+        decay_amount   = decay_rate * age_factor * recall_factor
+        if mem.times_recalled == 0 and days_old > 7:
+            decay_amount *= 1.5
+
+        if decay_amount < 0.05:        # negligible → skip
+            continue
+
+        new_significance = max(1, mem.significance - decay_amount)
+        new_fidelity     = max(min_fidelity, md.fidelity - (decay_amount * 0.2))
+
+        # --- persist if something really changed ------------------------------
+        if (abs(new_significance - mem.significance) >= 0.5
+                or abs(new_fidelity - md.fidelity) >= 0.01):
+            md.last_decay      = now.isoformat()
+            md.decay_amount    = decay_amount
+            md.original_significance = md.original_significance or mem.significance
+            md.fidelity        = new_fidelity
+
+            await update_memory(
+                ctx,
+                MemoryUpdateParams(
+                    memory_id=mid,
+                    updates={
+                        "significance": new_significance,
+                        "metadata": md.model_dump(),
+                    },
+                ),
+            )
+            decayed += 1
+
+        # --- auto‑archive very faded memories ---------------------------------
+        if new_significance < 2 and days_old > 30 and not mem.is_archived:
+            await archive_memory(ctx, mid)
+            archived += 1
+
+    return {"memories_decayed": decayed, "memories_archived": archived}
 
 @function_tool
 async def find_memory_clusters(
@@ -1713,16 +1708,18 @@ async def consolidate_memory_clusters(
                 # Create consolidated memory
                 consolidated_id = await add_memory(
                     ctx,
-                    memory_text=consolidated_text,
-                    memory_type="consolidated",
-                    memory_scope="game",
-                    significance=min(10, int(avg_significance) + 1),  # Slightly higher significance than average
-                    tags=list(all_tags) + ["consolidated"],
-                    metadata={
-                        "source_memory_ids": cluster,
-                        "consolidation_date": datetime.datetime.now().isoformat(),
-                        "fidelity": 0.9  # High but not perfect fidelity for consolidated memories
-                    }
+                    MemoryCreateParams(
+                        memory_text=consolidated_text,
+                        memory_type="consolidated",
+                        memory_scope="game",
+                        significance=min(10, int(avg_significance) + 1),
+                        tags=list(all_tags) + ["consolidated"],
+                        metadata={
+                            "source_memory_ids": cluster,
+                            "consolidation_date": datetime.datetime.now().isoformat(),
+                            "fidelity": 0.9,
+                        },
+                    ),
                 )
                 
                 # Mark original memories as consolidated
@@ -1909,7 +1906,7 @@ async def construct_narrative_from_memories(
     """
     with custom_span("construct_narrative", {"topic": topic, "chronological": chronological}):
         # Retrieve memories for the topic
-        memories = await retrieve_memories(
+        memories = await retrieve_memories.python_function(
             ctx,
             query=topic,
             memory_types=["observation", "experience"],
@@ -2000,7 +1997,7 @@ async def retrieve_relevant_experiences(
         }
         
         # Retrieve experiences using the memory system
-        experiences = await retrieve_memories(
+        experiences = await retrieve_memories.python_function(
             ctx,
             query=query,
             memory_types=["experience"],
@@ -2060,7 +2057,7 @@ async def generate_conversational_recall(
         Conversational recall with reflection
     """
     memory_core = ctx.context
-    with custom_span("generate_conversational_recall"):
+    with custom_span("generate_conversational_recall.python_function"):
         # Extract experience data
         content = experience.get("content", experience.get("memory_text", ""))
         emotional_context = experience.get("emotional_context", {})
@@ -2167,7 +2164,7 @@ async def detect_schema_from_memories(
     memory_core = ctx.context
     
     # Retrieve relevant memories
-    memories = await retrieve_memories(
+    memories = await retrieve_memories.python_function(
         ctx,
         query=topic if topic else "important memory",
         limit=10
@@ -2206,7 +2203,7 @@ async def detect_schema_from_memories(
         memory_core.schema_index[schema_id].add(memory_id)
         
         # Update memory metadata
-        memory = await get_memory(ctx, memory_id)
+        memory = await get_memory.python_function(ctx, memory_id)
         if memory:
             metadata = memory.get("metadata", {})
             if "schemas" not in metadata:
@@ -2217,7 +2214,7 @@ async def detect_schema_from_memories(
                 "relevance": 1.0  # High relevance for examples
             })
             
-            await update_memory(
+            await update_memory.python_function(
                 ctx, memory_id, {"metadata": metadata}
             )
     
@@ -2339,7 +2336,7 @@ async def assess_memory_importance(
         importance_factors["identity_relevance"] = 0.8
     
     # Assess information value (unique/rare information)
-    similar_memories = await retrieve_memories(ctx, query=content, limit=3)
+    similar_memories = await retrieve_memories.python_function(ctx, query=content, limit=3)
     if len(similar_memories) <= 1 or all(m["id"] == memory_id for m in similar_memories):
         importance_factors["uniqueness"] = 0.7
     
@@ -2383,14 +2380,14 @@ async def reflect_on_memories(
         # Get memories from the last 24 hours
         yesterday = datetime.datetime.now() - datetime.timedelta(days=1)
         query = "timestamp:>" + yesterday.isoformat()
-        memories = await retrieve_memories(
+        memories = await retrieve_memories.python_function(
             ctx,
             query=query,
             limit=limit
         )
     else:
         # Get memories that haven't been reflected on yet
-        memories = await retrieve_memories(
+        memories = await retrieve_memories.python_function(
             ctx,
             query="importance:unassessed",
             limit=limit
