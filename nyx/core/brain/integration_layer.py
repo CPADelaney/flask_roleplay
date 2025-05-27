@@ -138,62 +138,34 @@ class EnhancedNyxBrainMixin:
             await self._register_context_aware_modules()
             
             logger.info("Context distribution system initialized")
-            
+    
     async def _register_context_aware_modules(self):
         """Register modules that support context distribution"""
-        # Store list of modules that should be registered when created
-        self._pending_modules = [
+        module_names = [
             'emotional_core', 'memory_core', 'reflection_engine', 'reasoning_core',
             'knowledge_core', 'goal_manager', 'agentic_action_generator', 
             'identity_evolution', 'needs_system', 'mood_manager', 'mode_integration',
             'passive_observation_system', 'proactive_communication_engine',
             'imagination_simulator', 'attentional_controller', 'relationship_manager',
             'theory_of_mind', 'digital_somatosensory_system', 'femdom_coordinator',
-            'multimodal_integrator', 'spatial_mapper', 'agent_enhanced_memory',
-            'hormone_system', 'reward_system', 'temporal_perception',
-            'procedural_memory_manager', 'reflexive_system', 'meta_core'
+            'multimodal_integrator', 'spatial_mapper', 'agent_enhanced_memory'
         ]
         
-        # Try to register any modules that already exist (unlikely at early init)
-        for module_name in self._pending_modules[:]:  # Use slice to avoid modifying during iteration
-            if hasattr(self, module_name) and getattr(self, module_name) is not None:
+        for module_name in module_names:
+            if hasattr(self, module_name):
                 module = getattr(self, module_name)
-                await self.register_module_with_context_system(module_name, module)
-                self._pending_modules.remove(module_name)
-        
-        logger.info(f"Context distribution system initialized. {len(self._pending_modules)} modules pending registration")
-    
-    async def register_module_with_context_system(self, module_name: str, module: Any) -> Any:
-        """Register a module with the context system after it's created"""
-        if not self.context_distribution:
-            logger.warning(f"Cannot register {module_name} - context distribution not initialized")
-            return module
-            
-        if not module:
-            logger.warning(f"Cannot register {module_name} - module is None")
-            return module
-        
-        # Remove from pending list if present
-        if hasattr(self, '_pending_modules') and module_name in self._pending_modules:
-            self._pending_modules.remove(module_name)
-        
-        # Check if already registered
-        if module_name in self._module_registry:
-            logger.debug(f"Module {module_name} already registered")
-            return self._module_registry[module_name]
-        
-        # Wrap or register the module
-        if not isinstance(module, ContextAwareModule):
-            wrapped_module = self._wrap_module_for_context(module, module_name)
-            self._module_registry[module_name] = wrapped_module
-            logger.debug(f"Wrapped and registered module: {module_name}")
-            return wrapped_module
-        else:
-            self._module_registry[module_name] = module
-            if hasattr(module, 'set_context_system'):
-                module.set_context_system(self.context_distribution)
-            logger.debug(f"Registered context-aware module: {module_name}")
-            return module
+                
+                # Wrap existing module if not already context-aware
+                if not isinstance(module, ContextAwareModule):
+                    wrapped_module = self._wrap_module_for_context(module, module_name)
+                    setattr(self, module_name, wrapped_module)
+                    self._module_registry[module_name] = wrapped_module
+                else:
+                    self._module_registry[module_name] = module
+                
+                # Set context system reference
+                if hasattr(module, 'set_context_system'):
+                    module.set_context_system(self.context_distribution)
 
     def get_available_modules(self) -> Dict[str, Any]:
         """
