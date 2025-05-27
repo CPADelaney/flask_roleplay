@@ -109,8 +109,33 @@ class ContextAwareInputProcessor(ContextAwareModule):
             identity_data = update.data
             await self._update_processing_preferences(identity_data)
     
-    async def process_input(self, context: SharedContext) -> Dict[str, Any]:
-        """Process input with full context awareness"""
+
+    async def process_input(self, *args, **kwargs) -> Dict[str, Any]:
+        """
+        Unified process_input method that handles both SharedContext and standard parameters.
+        
+        Can be called as:
+        - process_input(context: SharedContext)
+        - process_input(text: str, user_id: str = "default", context: Dict[str, Any] = None)
+        """
+        # Check if first argument is a SharedContext
+        if args and isinstance(args[0], SharedContext):
+            # Call the context-aware version
+            return await self._process_input_with_context(args[0])
+        
+        # Otherwise, handle standard parameters
+        text = kwargs.get('text') or (args[0] if args else None)
+        if text is None:
+            raise ValueError("Either SharedContext or text parameter is required")
+        
+        user_id = kwargs.get('user_id', args[1] if len(args) > 1 else "default")
+        context = kwargs.get('context', args[2] if len(args) > 2 else None)
+        
+        # Call the standard version
+        return await self.process_input_standard(text, user_id, context)
+
+    async def _process_input_with_context(self, context: SharedContext) -> Dict[str, Any]:
+        """Process input with full context awareness (renamed from process_input)"""
         # Get cross-module messages
         messages = await self.get_cross_module_messages()
         
@@ -152,6 +177,8 @@ class ContextAwareInputProcessor(ContextAwareModule):
             "mode_processing": mode_processing,
             "context_integrated": True
         }
+
+
     
     # ADD THIS: Wrapper method for compatibility with standard interface
     async def process_input_standard(self, text: str, user_id: str = "default", context: Dict[str, Any] = None) -> Dict[str, Any]:
@@ -1695,21 +1722,6 @@ class ContextAwareInputProcessor(ContextAwareModule):
         
         return spec
     
-    # Delegate all other methods to the original processor
     def __getattr__(self, name):
         """Delegate any missing methods to the original processor"""
-        # Special handling for process_input to support both interfaces
-        if name == "process_input":
-            # Check if caller expects SharedContext or standard parameters
-            import inspect
-            frame = inspect.currentframe()
-            if frame and frame.f_back:
-                # Try to detect which signature is expected
-                # This is a bit hacky but helps with compatibility
-                args_info = inspect.getargvalues(frame.f_back)
-                if 'context' in args_info.locals and isinstance(args_info.locals.get('context'), SharedContext):
-                    return self.process_input
-                else:
-                    return self.process_input_standard
-        
         return getattr(self.original_processor, name)
