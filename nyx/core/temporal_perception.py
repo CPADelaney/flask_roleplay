@@ -15,7 +15,6 @@ from agents import (
     function_tool, 
     handoff, 
     GuardrailFunctionOutput, 
-    InputGuardrail,
     trace,
     RunConfig,
     FunctionTool,
@@ -225,11 +224,11 @@ class TimeExpressionState(BaseModel):
         description="Nyx’s current awareness levels for each time scale"
     )
 
-    model_config = {"json_schema_extra": {"required": [
-        "last_interaction",
-        "time_since_last_interaction",
-        "current_time_category"
-    ]}}
+    model_config = {
+        "json_schema_extra": {
+            "required": []
+        }
+    }
 
 # =============== Function Tools ===============
 
