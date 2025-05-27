@@ -191,6 +191,46 @@ class TimeScaleTransition(BaseModel):
     description: str = Field(..., description="Description of the transition")
     perception_shift: Dict[str, Any] = Field(..., description="How perception shifts with this transition")
 
+class TimeExpressionState(BaseModel):
+    """
+    Schema for the input expected by generate_time_expression().
+    All keys accessed inside generate_time_expression_impl are represented
+    here.  You can mark rarely‑used ones as Optional.
+    """
+    # ‑‑ core timing info (always used) ‑‑
+    last_interaction: datetime.datetime | str = Field(
+        ...,
+        description="ISO timestamp of the last user↔Nyx interaction"
+    )
+    time_since_last_interaction: float = Field(
+        ...,
+        ge=0,
+        description="Seconds elapsed since last interaction"
+    )
+    current_time_category: str = Field(
+        ...,
+        description="Bucketed category returned by categorize_time_elapsed"
+    )
+
+    # ‑‑ frequently helpful but not strictly required ‑‑
+    relationship_age_days: float | None = Field(
+        None, description="Total days since first interaction"
+    )
+    current_temporal_context: Dict[str, Any] | None = Field(
+        None,
+        description="Output of determine_temporal_context() (time_of_day, day_type …)"
+    )
+    time_scales_active: Dict[str, float] | None = Field(
+        None,
+        description="Nyx’s current awareness levels for each time scale"
+    )
+
+    model_config = {"json_schema_extra": {"required": [
+        "last_interaction",
+        "time_since_last_interaction",
+        "current_time_category"
+    ]}}
+
 # =============== Function Tools ===============
 
 async def categorize_time_elapsed_impl(seconds: float) -> str:
@@ -589,17 +629,23 @@ async def generate_time_expression_impl(time_perception_state: Dict[str, Any]) -
     }
 
 @function_tool
-async def generate_time_expression(time_perception_state: Dict[str, Any]) -> Dict[str, Any]:
+async def generate_time_expression(
+    time_perception_state: TimeExpressionState
+) -> Dict[str, Any]:
     """
-    Generate a natural expression about time perception
-    
+    Generate a natural expression about Nyx’s current perception of time.
+
     Args:
-        time_perception_state: Current temporal perception state
-        
+        time_perception_state: Structured state describing the timing context.
+
     Returns:
-        Time expression output
+        A dictionary with keys: expression, time_scale, intensity, reference_type,
+        time_reference.
     """
-    return await generate_time_expression_impl(time_perception_state)
+    # Convert to a plain dict for the existing helper
+    return await generate_time_expression_impl(
+        time_perception_state.model_dump()
+    )
 
 @function_tool
 async def process_temporal_awareness(days_elapsed: float, total_interactions: int) -> Dict[str, Any]:
