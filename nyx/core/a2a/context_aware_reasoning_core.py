@@ -14,6 +14,7 @@ from sklearn.metrics.pairwise import cosine_similarity
 import spacy
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
+import time
 
 from nyx.core.brain.integration_layer import ContextAwareModule
 from nyx.core.brain.context_distribution import SharedContext, ContextUpdate, ContextScope, ContextPriority
@@ -148,6 +149,8 @@ class ContextAwareReasoningCore(ContextAwareModule):
         
         # Module discovery registry
         self.discovered_modules = {}
+        self._discovery_completed = False # Initialize flag
+        self._background_tasks = []
         
         # Context persistence tracking
         self._last_user_input = ""
@@ -205,10 +208,7 @@ class ContextAwareReasoningCore(ContextAwareModule):
         # ========================================================================
         # STARTUP TASKS
         # ========================================================================
-        
-        # Schedule initial module discovery
-        discovery_task = asyncio.create_task(self.discover_modules())
-        self._background_tasks.append(discovery_task)
+    
         
         # Log initialization
         logger.info(f"ContextAwareReasoningCore initialized with {max_workers} workers")
@@ -279,12 +279,20 @@ class ContextAwareReasoningCore(ContextAwareModule):
     def set_integration_layer(self, integration_layer):
         """Set the integration layer reference and trigger discovery"""
         self.integration_layer = integration_layer
+        logger.info(f"{self.module_name}: Integration layer set. Ready for module discovery.")
         
         # Now trigger discovery after integration layer is set
         if not self._discovery_completed:
-            discovery_task = asyncio.create_task(self.discover_modules())
-            self._background_tasks.append(discovery_task)
-            self._discovery_completed = True
+            if self.integration_layer is not None:
+                logger.info(f"{self.module_name}: integration_layer is available, scheduling discovery task.")
+                discovery_task = asyncio.create_task(self.discover_modules())
+                # discover_modules will set _discovery_completed
+                self._background_tasks.append(discovery_task)
+            else:
+                # This case should ideally not happen if NyxBrain calls this correctly
+                logger.warning(f"{self.module_name}: integration_layer is None in set_integration_layer. Discovery task not scheduled.")
+        else:
+            logger.info(f"{self.module_name}: Discovery already completed or in progress.")
         
     def _ensure_models_loaded(self):
         """Ensure models are loaded (for lazy loading)"""
@@ -1037,18 +1045,33 @@ class ContextAwareReasoningCore(ContextAwareModule):
 
     async def discover_modules(self):
         """Dynamically discover available modules and update subscriptions"""
+        if self.integration_layer is None:
+            logger.error(f"{self.module_name}: Attempted to discover modules but integration_layer is None.")
+            self._discovery_completed = False # Ensure flag reflects failure to start
+            return {"error": "Integration layer not set", "fallback": False, "modules_discovered": 0}
+
         try:
             # Get available modules from the integration layer
-            available_modules = await self.integration_layer.get_available_modules()
+            available_modules_result = await self.integration_layer.get_available_modules()
             
+            # Adapt to potential structure of available_modules_result
+            # Assuming it's a list of dicts, or a dict that contains such a list
+            if isinstance(available_modules_result, dict) and "modules" in available_modules_result:
+                available_modules = available_modules_result["modules"]
+            elif isinstance(available_modules_result, list):
+                available_modules = available_modules_result
+            else:
+                logger.error(f"Unexpected format for available_modules from integration_layer: {type(available_modules_result)}")
+                available_modules = []
+
             # Build dynamic subscription list based on module capabilities
             dynamic_subscriptions = []
             
             for module_info in available_modules:
+                # ... (existing capability mapping logic) ...
                 module_name = module_info.get("name", "")
                 capabilities = module_info.get("capabilities", [])
                 
-                # Map module capabilities to subscription types
                 capability_mappings = {
                     "emotion": ["emotional_state_update", "emotion_analysis_complete"],
                     "memory": ["memory_retrieval_complete", "memory_storage_update"],
@@ -1062,51 +1085,46 @@ class ContextAwareReasoningCore(ContextAwareModule):
                     "motor": ["action_execution_update", "motor_feedback"]
                 }
                 
-                # Add subscriptions based on capabilities
                 for capability in capabilities:
                     if capability in capability_mappings:
                         dynamic_subscriptions.extend(capability_mappings[capability])
                 
-                # Also subscribe to module-specific reasoning requests
-                dynamic_subscriptions.extend([
-                    f"{module_name}_reasoning_request",
-                    f"{module_name}_inference_request",
-                    f"{module_name}_analysis_request"
-                ])
+                if module_name: # Ensure module_name is not empty
+                    dynamic_subscriptions.extend([
+                        f"{module_name}_reasoning_request",
+                        f"{module_name}_inference_request",
+                        f"{module_name}_analysis_request"
+                    ])
             
             # Add core reasoning subscriptions that should always be present
             core_subscriptions = [
-                "causal_discovery_request",
-                "conceptual_blend_request", 
-                "intervention_request",
-                "counterfactual_query",
-                "reasoning_request"  # Generic reasoning requests
+                "causal_discovery_request", "conceptual_blend_request", 
+                "intervention_request", "counterfactual_query",
+                "reasoning_request"
             ]
             
-            # Combine and deduplicate
             self.context_subscriptions = list(set(dynamic_subscriptions + core_subscriptions))
             
-            # Update the integration layer with new subscriptions
             await self.integration_layer.update_subscriptions(self.module_id, self.context_subscriptions)
             
-            # Log discovered modules
-            logger.info(f"ReasoningCore discovered {len(available_modules)} modules")
+            logger.info(f"ReasoningCore discovered {len(available_modules)} modules and updated subscriptions.")
             logger.debug(f"Updated subscriptions: {self.context_subscriptions}")
             
-            # Store module registry for future reference
             self.discovered_modules = {
-                module["name"]: module for module in available_modules
+                module["name"]: module for module in available_modules if "name" in module
             }
+            self._discovery_completed = True # Set flag on successful completion
             
             return {
                 "modules_discovered": len(available_modules),
                 "subscriptions_updated": len(self.context_subscriptions),
-                "module_names": [m["name"] for m in available_modules]
+                "module_names": [m["name"] for m in available_modules if "name" in m]
             }
             
-        except Exception as e:
-            logger.error(f"Error during module discovery: {e}")
-            # Fall back to default subscriptions
+        except AttributeError as e: # Catch specific error if integration_layer methods are missing
+            logger.error(f"Error during module discovery (AttributeError, check integration_layer methods): {e}", exc_info=True)
+            self._discovery_completed = False
+            # Fallback to default subscriptions as before
             self.context_subscriptions = [
                 "emotional_state_update", "memory_retrieval_complete", 
                 "goal_context_available", "knowledge_update",
@@ -1114,7 +1132,18 @@ class ContextAwareReasoningCore(ContextAwareModule):
                 "causal_discovery_request", "conceptual_blend_request",
                 "intervention_request", "counterfactual_query"
             ]
-            return {"error": str(e), "fallback": True}
+            return {"error": str(e), "fallback": True, "modules_discovered": 0}
+        except Exception as e:
+            logger.error(f"Error during module discovery: {e}", exc_info=True)
+            self._discovery_completed = False
+            self.context_subscriptions = [
+                "emotional_state_update", "memory_retrieval_complete", 
+                "goal_context_available", "knowledge_update",
+                "perception_input", "multimodal_integration",
+                "causal_discovery_request", "conceptual_blend_request",
+                "intervention_request", "counterfactual_query"
+            ]
+            return {"error": str(e), "fallback": True, "modules_discovered": 0}
     
     async def register_module_capabilities(self, module_name: str, capabilities: List[str]):
         """Register a new module's capabilities and update subscriptions"""
