@@ -1,6 +1,7 @@
 # nyx/core/integration/synergy_optimizer/agent.py
 
 import logging
+import datetime
 import asyncio
 from typing import Dict, List, Any, Optional, Set
 from agents import Agent, function_tool
@@ -147,7 +148,11 @@ class SynergyOptimizerAgent:
                 integration_status
             )
             
-            self.last_analysis_time = self.brain.system_context.current_time
+            if getattr(self.brain, "system_context", None) and getattr(self.brain.system_context, "current_time", None):
+                self.last_analysis_time = self.brain.system_context.current_time
+            else:
+                # Fall back to wall-clock time if no system_context is available
+                self.last_analysis_time = datetime.datetime.now().isoformat()
 
             from dev_log.api import add_synergy_recommendation
             
