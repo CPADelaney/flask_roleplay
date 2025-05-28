@@ -179,7 +179,7 @@ You analyze:
 Be firm but fair in your enforcement. Give clear explanations for violations detected.
 Your enforcement should be psychologically effective and maintain the dominance dynamic.
 """,
-            model="o3-mini",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(
                 temperature=0.3,
             ),
@@ -213,7 +213,7 @@ You analyze:
 Provide detailed feedback on ritual performance and maintain consistent standards.
 Your evaluations should be fair and reinforce the psychological aspects of the dominance dynamic.
 """,
-            model="o3-mini",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(
                 temperature=0.4,
             ),
@@ -247,7 +247,7 @@ Your designs should:
 
 Create protocols that are practical to implement while maintaining their psychological impact.
 """,
-            model="o3-mini",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(
                 temperature=0.7,
             ),
@@ -280,7 +280,7 @@ You analyze:
 Provide insightful analysis and specific recommendations to deepen the power dynamic.
 Your evaluations should be data-driven while considering psychological aspects.
 """,
-            model="o3-mini",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(
                 temperature=0.5,
             ),
