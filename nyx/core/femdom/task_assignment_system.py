@@ -294,7 +294,7 @@ Output your recommendations and task management decisions as a JSON object.
     def _create_task_validation_guardrail(self) -> InputGuardrail:
         """Create guardrail for task validation."""
         @function_tool
-        async def task_validation_function(ctx: Any, agent: Any, input_data: VerificationValidationInput) -> GuardrailFunctionOutput:
+        async def task_validation_function(ctx: Any, agent: Any, input_data: Dict[str, Any]) -> GuardrailFunctionOutput:
             """Validate task input to ensure it's appropriate and well-formed."""
             # Create input model
             try:
@@ -375,7 +375,7 @@ Output your recommendations and task management decisions as a JSON object.
     def _create_verification_validation_guardrail(self) -> InputGuardrail:
         """Create guardrail for verification validation."""
         @function_tool
-        async def verification_validation_function(ctx: RunContextWrapper, agent: Agent, input_data: Dict[str, Any]) -> GuardrailFunctionOutput:
+        async def verification_validation_function(ctx: Any, agent: Any, input_data: Dict[str, Any]) -> GuardrailFunctionOutput:
             """Validate verification data to ensure it meets requirements."""
             # Create input model
             try:
