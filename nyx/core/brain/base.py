@@ -7686,70 +7686,83 @@ System Prompt End
         return final_active_modules
 
     def _classify_task_purpose(self, context: Dict[str, Any], user_input: Optional[str]) -> TaskPurpose:
-        """Simplified internal task classification based on context/input."""
-        input_lower = (user_input or "").lower()
-        purpose_scores = defaultdict(float)
-
-        # Score based on keywords
-        keyword_map_purpose = {
-             TaskPurpose.ANALYZE: ("analyze", "evaluate", "understand", "reason", "logic", "explain", "why", "how does", "figure out"),
-             TaskPurpose.WRITE: ("write", "create", "compose", "generate", "story", "poem", "journal"),
-             TaskPurpose.DEPLOY: ("deploy", "publish", "release", "launch"), # Less likely for Nyx?
-             TaskPurpose.SEARCH: ("search", "find", "look up", "locate", "what is", "who is", "information", "database"),
-             TaskPurpose.COMMUNICATE: ("talk", "discuss", "ask", "tell", "say", "respond", "message", "chat"),
-             TaskPurpose.DATABASE: ("database", "query", "sql", "record", "store", "fetch", "memory", "knowledge"),
-             TaskPurpose.FILE_MANIPULATION: ("file", "save", "read", "upload", "download", "directory"), # If Nyx interacts with files
-             TaskPurpose.CODE: ("code", "script", "program", "function", "develop", "implement", "debug"),
-             TaskPurpose.VISUALIZATION: ("visualize", "chart", "graph", "plot", "see", "picture", "image"), # For multimodal
-             # Add more specific purposes maybe?
-             "DOMINANCE": ("dominate", "control", "submit", "serve", "mistress", "punish", "reward", "protocol", "train"),
-             "INTIMACY": ("intimacy", "connect", "bond", "closer", "personal", "attraction", "desire"),
-             "REFLECTION": ("reflect", "think about", "consider", "meaning", "insight", "ponder"),
-             "LEARNING": ("learn", "teach me", "skill", "procedure", "how to"),
+        """
+        Classify the user’s input into a high-level TaskPurpose, using:
+          1. Direct keyword matching
+          2. “Custom” categories (e.g. dominance/intimacy) mapped back onto core purposes
+          3. Active goal descriptions
+          4. Current interaction mode
+          5. Simple fallbacks
+    
+        Returns:
+            TaskPurpose: the best-guess purpose for handling this turn
+        """
+        text = (user_input or "").strip().lower()
+        scores: Dict[TaskPurpose, float] = defaultdict(float)
+    
+        # 1) Primary keyword → direct TaskPurpose mapping
+        keyword_map = {
+            TaskPurpose.ANALYZE:     ("analyze", "evaluate", "explain", "why", "how", "reason"),
+            TaskPurpose.WRITE:       ("write", "create", "compose", "generate", "poem", "story"),
+            TaskPurpose.SEARCH:      ("search", "find", "what is", "who is", "info", "lookup"),
+            TaskPurpose.COMMUNICATE: ("talk", "discuss", "chat", "ask", "message", "respond"),
+            TaskPurpose.DATABASE:    ("database", "query", "sql", "record", "fetch", "store"),
+            TaskPurpose.FILE_MANIPULATION: ("file", "save", "read", "upload", "download", "dir"),
+            TaskPurpose.CODE:        ("code", "script", "program", "debug", "implement"),
+            TaskPurpose.VISUALIZATION:  ("visualize", "chart", "graph", "plot", "image", "picture"),
         }
-
-        for purpose, keywords in keyword_map_purpose.items():
-             if any(kw in input_lower for kw in keywords):
-                 # Map custom purposes back to enum or handle separately
-                 purpose_enum = TaskPurpose(purpose) if isinstance(purpose, str) and purpose in TaskPurpose.__members__ else TaskPurpose.OTHER
-                 if purpose_enum != TaskPurpose.OTHER:
-                     purpose_scores[purpose_enum] += 1.0
-                 elif isinstance(purpose, str): # Handle custom purposes like DOMINANCE
-                     # You might map these to a primary enum purpose + context
-                     if purpose == "DOMINANCE": purpose_scores[TaskPurpose.OTHER] += 1.5 # Example weighting
-                     elif purpose == "INTIMACY": purpose_scores[TaskPurpose.COMMUNICATE] += 1.2
-                     elif purpose == "REFLECTION": purpose_scores[TaskPurpose.ANALYZE] += 1.0
-                     elif purpose == "LEARNING": purpose_scores[TaskPurpose.CODE] += 1.0 # Or ANALYZE
-
-        # Score based on active goal
-        if context.get("active_goals"):
-             goal_desc = context["active_goals"][0].get("description", "").lower()
-             # Simple check for purpose keywords in goal
-             for purpose, keywords in keyword_map_purpose.items():
-                 if any(kw in goal_desc for kw in keywords):
-                     purpose_enum = TaskPurpose(purpose) if isinstance(purpose, str) and purpose in TaskPurpose.__members__ else TaskPurpose.OTHER
-                     if purpose_enum != TaskPurpose.OTHER:
-                         purpose_scores[purpose_enum] += 0.5 # Lower weight than direct input
-
-        # Score based on mode
-        current_mode = context.get("interaction_mode")
-        mode_purpose_map = {
-            "INTELLECTUAL": TaskPurpose.ANALYZE, "CREATIVE": TaskPurpose.WRITE,
-            "PROFESSIONAL": TaskPurpose.COMMUNICATE, # Or analyze?
-            # ... map modes to likely purposes ...
+    
+        for purpose, kws in keyword_map.items():
+            for kw in kws:
+                if kw in text:
+                    scores[purpose] += 1.0
+    
+        # 2) “Custom” categories (mapped back onto core purposes with weights)
+        custom_map = {
+            # raw keyword → (mapped TaskPurpose, weight)
+            "dominance":    (TaskPurpose.OTHER,            1.5),
+            "control":      (TaskPurpose.OTHER,            1.2),
+            "submit":       (TaskPurpose.COMMUNICATE,      1.0),
+            "intimacy":     (TaskPurpose.COMMUNICATE,      1.3),
+            "reflect":      (TaskPurpose.ANALYZE,          1.0),
+            "ponder":       (TaskPurpose.ANALYZE,          0.8),
+            "learn":        (TaskPurpose.ANALYZE,          1.2),
+            "teach me":     (TaskPurpose.ANALYZE,          1.5),
         }
-        if current_mode and current_mode in mode_purpose_map:
-            purpose_scores[mode_purpose_map[current_mode]] += 0.3 # Lower weight
-
-        # Determine highest scoring purpose
-        if purpose_scores:
-            best_purpose = max(purpose_scores, key=purpose_scores.get)
-            return best_purpose
-        else:
-            # Default logic if no strong signals
-            if "?" in input_lower: return TaskPurpose.SEARCH # Or ANALYZE?
-            if input_text: return TaskPurpose.COMMUNICATE # Default to responding
+        for raw, (mapped, weight) in custom_map.items():
+            if raw in text:
+                scores[mapped] += weight
+    
+        # 3) Active goal gives a mild boost
+        goals = context.get("active_goals") or []
+        if goals and isinstance(goals[0], dict):
+            desc = goals[0].get("description", "").lower()
+            for purpose, kws in keyword_map.items():
+                if any(kw in desc for kw in kws):
+                    scores[purpose] += 0.5
+    
+        # 4) Interaction mode hint
+        mode_map = {
+            "INTELLECTUAL": TaskPurpose.ANALYZE,
+            "CREATIVE":     TaskPurpose.WRITE,
+            "PROFESSIONAL": TaskPurpose.COMMUNICATE,
+            "EXPLORATORY":  TaskPurpose.SEARCH,
+        }
+        mode = context.get("interaction_mode")
+        if mode in mode_map:
+            scores[mode_map[mode]] += 0.3
+    
+        # 5) Fallbacks
+        if not scores:
+            if "?" in text:
+                return TaskPurpose.SEARCH
+            if text:
+                return TaskPurpose.COMMUNICATE
             return TaskPurpose.OTHER
+    
+        # Pick the highest-scoring purpose
+        best = max(scores.items(), key=lambda kv: kv[1])[0]
+        return best
 
     async def _gather_action_context(self, context: Dict[str, Any]) -> ActionContext:
         """
