@@ -212,7 +212,7 @@ class HormoneSystem:
         self.hormone_agent = Agent[EmotionalContext](
             name="Hormone System Agent",
             instructions=hormone_instructions,
-            model="o3-mini",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.3),  # Lower temperature for stability
             tools=[
                 self._wrap_method_as_tool(self.update_hormone),
