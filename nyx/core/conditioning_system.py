@@ -174,6 +174,16 @@ class ConditioningSystem:
         self.conditioning_orchestrator = self._create_conditioning_orchestrator()
         
         logger.info("Conditioning system initialized with Agents SDK integration")
+
+    @staticmethod
+    def _force_str_list(obj) -> List[str]:
+        if obj is None:
+            return []
+        if isinstance(obj, (list, tuple, set)):
+            return [str(x) for x in obj]
+        if isinstance(obj, dict):
+            return [str(k) for k in obj.keys()]
+        return [str(obj)]
     
     def _create_classical_conditioning_agent(self) -> Agent:
         """Create agent for classical conditioning"""
@@ -389,6 +399,8 @@ class ConditioningSystem:
             The updated or created association
         """
         # Create a unique key for this association
+        context_keys = ConditioningSystem._force_str_list(context_keys)
+                                          
         association_key = f"{conditioned_stimulus}→{response}"
         
         # Check if this association already exists
@@ -524,6 +536,7 @@ class ConditioningSystem:
             The updated or created association
         """
         # Create a unique key for this association
+        context_keys = ConditioningSystem._force_str_list(context_keys)                                      
         association_key = f"{behavior}→{consequence_type}"
         
         # Determine if this is reinforcement or punishment
@@ -1242,13 +1255,15 @@ class ConditioningSystem:
         Process a classical conditioning event where an unconditioned stimulus 
         is paired with a conditioned stimulus to create an association.
         """
-        # Only pass the scalar inputs
         data = {
             "unconditioned_stimulus": unconditioned_stimulus,
             "conditioned_stimulus": conditioned_stimulus,
             "response": response,
             "intensity": intensity
         }
+        data["context_keys"] = ConditioningSystem._force_str_list(
+            context.get("context_keys") if context else []
+        )
 
         try:
             result = await Runner.run(
@@ -1297,12 +1312,14 @@ class ConditioningSystem:
         Process an operant conditioning event where a behavior 
         is reinforced or punished based on its consequences.
         """
-        # Only pass the scalar inputs
         data = {
             "behavior": behavior,
             "consequence_type": consequence_type,
             "intensity": intensity
         }
+        data["context_keys"] = ConditioningSystem._force_str_list(
+            context.get("context_keys") if context else []
+        )
 
         try:
             result = await Runner.run(
