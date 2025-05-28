@@ -48,7 +48,7 @@ class ReligionManager(BaseLoreManager):
         self.theme_guardrail_agent = Agent(
             name="MatriarchalThemeAgent",
             instructions="You verify that all religious content maintains matriarchal themes. You identify elements that might contradict a female-dominant religious structure.",
-            model="o3-mini",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.2),
             output_type=MatriarchalThemeGuardrail
         )
@@ -811,7 +811,7 @@ class ReligionManager(BaseLoreManager):
         pantheon_agent = Agent(
             name="PantheonGenerationAgent",
             instructions="You create religious pantheons for matriarchal fantasy worlds. Focus on feminine divine power structures.",
-            model="o3-mini",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.8),
             # Add input guardrail to ensure matriarchal themes
             input_guardrails=[
@@ -998,7 +998,7 @@ class ReligionManager(BaseLoreManager):
         practice_agent = Agent(
             name="ReligiousPracticeAgent",
             instructions="You create religious practices for fantasy pantheons.",
-            model="o3-mini"
+            model="gpt-4.1-nano"
         )
 
         run_config = RunConfig(workflow_name="PracticeGeneration")
@@ -1107,7 +1107,7 @@ class ReligionManager(BaseLoreManager):
         site_agent = Agent(
             name="HolySiteAgent",
             instructions="You create holy sites for fantasy pantheons.",
-            model="o3-mini"
+            model="gpt-4.1-nano"
         )
 
         run_config = RunConfig(workflow_name="HolySiteGeneration")
@@ -1251,7 +1251,7 @@ class ReligionManager(BaseLoreManager):
         text_agent = Agent(
             name="ReligiousTextAgent",
             instructions="You create religious texts for fantasy pantheons.",
-            model="o3-mini"
+            model="gpt-4.1-nano"
         )
 
         run_config = RunConfig(workflow_name="TextGeneration")
@@ -1361,7 +1361,7 @@ class ReligionManager(BaseLoreManager):
         order_agent = Agent(
             name="ReligiousOrderAgent",
             instructions="You create religious orders for fantasy pantheons.",
-            model="o3-mini"
+            model="gpt-4.1-nano"
         )
 
         run_config = RunConfig(workflow_name="OrderGeneration")
@@ -1465,7 +1465,7 @@ class ReligionManager(BaseLoreManager):
         conflict_agent = Agent(
             name="ReligiousConflictAgent",
             instructions="You create religious conflicts for fantasy pantheons.",
-            model="o3-mini"
+            model="gpt-4.1-nano"
         )
 
         run_config = RunConfig(workflow_name="ReligiousConflictGeneration")
@@ -1537,7 +1537,7 @@ class ReligionManager(BaseLoreManager):
         distribution_agent = Agent(
             name="ReligiousDistributionAgent",
             instructions="You distribute religious pantheons across nations in a matriarchal world.",
-            model="o3-mini",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.8)
         )
 
@@ -1650,7 +1650,7 @@ class ReligionManager(BaseLoreManager):
         reg_practice_agent = Agent(
             name="RegionalPracticeAgent",
             instructions="You create regional practice variations for matriarchal societies.",
-            model="o3-mini"
+            model="gpt-4.1-nano"
         )
 
         for pr in practice_data:
@@ -1763,7 +1763,7 @@ class ReligionManager(BaseLoreManager):
             agent = Agent(
                 name=f"{position['name']}Agent",
                 instructions=f"You represent {position['name']}, holding this theological position: {position['core_belief']}. Defend your interpretation using scripture and tradition.",
-                model="o3-mini",
+                model="gpt-4.1-nano",
                 model_settings=ModelSettings(temperature=0.9)
             )
             debate_agents.append({"agent": agent, "position": position})
@@ -1772,7 +1772,7 @@ class ReligionManager(BaseLoreManager):
         arbiter_agent = Agent(
             name="TheologicalArbiterAgent",
             instructions=f"You are a senior religious authority in the pantheon of {pantheon_data['name']}. Your role is to evaluate theological arguments and determine their validity within tradition.",
-            model="o3-mini",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.7)
         )
         
@@ -1839,7 +1839,7 @@ class ReligionManager(BaseLoreManager):
         evolution_agent = Agent(
             name="ReligiousEvolutionAgent",
             instructions="You simulate how religion evolves through cultural influence over decades or centuries. Maintain matriarchal themes.",
-            model="o3-mini",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.9)
         )
         
@@ -1922,21 +1922,21 @@ class ReligionManager(BaseLoreManager):
         orthodox_agent = Agent(
             name="OrthodoxSectAgent",
             instructions=f"You represent the orthodox tradition of {pantheon_data['name']}. You value tradition, established hierarchy, and literal interpretation of sacred texts. Strongly matriarchal.",
-            model="o3-mini",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.9)
         )
         
         reformist_agent = Agent(
             name="ReformistSectAgent",
             instructions=f"You represent a reformist movement within {pantheon_data['name']}. You seek to adapt traditions while maintaining core beliefs. Still matriarchal but more flexible.",
-            model="o3-mini",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.9)
         )
         
         mystic_agent = Agent(
             name="MysticSectAgent",
             instructions=f"You represent a mystic tradition within {pantheon_data['name']}. You focus on direct divine experience over dogma. Strongly feminine-focused spirituality.",
-            model="o3-mini",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.9)
         )
         
@@ -2181,7 +2181,7 @@ class CompleteRitual(BaseModel):
         ritual_agent = Agent(
             name="RitualGenerationAgent",
             instructions="You create detailed religious rituals for matriarchal fantasy religions. Focus on symbolism, required components, and theological significance.",
-            model="o3-mini",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.9),
             output_type=CompleteRitual
         )
