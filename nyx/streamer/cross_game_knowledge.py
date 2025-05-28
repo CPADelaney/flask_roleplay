@@ -290,7 +290,7 @@ class GameLearningPattern:
         
         return pattern
 
-class EnhancedCrossGameKnowledgeSystem:
+class CrossGameKnowledgeSystem:
     """
     Enhanced system for maintaining and transferring knowledge between games,
     with improved learning, memory consolidation, and efficient knowledge transfer.
@@ -340,7 +340,7 @@ class EnhancedCrossGameKnowledgeSystem:
         if self.auto_save_enabled:
             self._start_auto_save_thread()
         
-        logger.info(f"EnhancedCrossGameKnowledgeSystem initialized with {len(self.games)} games, "
+        logger.info(f"CrossGameKnowledgeSystem initialized with {len(self.games)} games, "
                    f"{len(self.mechanics)} mechanics, {len(self.insights)} insights")
     
     def _load_data(self):
