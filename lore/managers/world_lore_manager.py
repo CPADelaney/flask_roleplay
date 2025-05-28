@@ -43,7 +43,7 @@ RESOURCE_OPS_AGENT = Agent(
         "Your tool methods allow for retrieving, setting, invalidating data in a cache, "
         "and checking resource usage. Keep everything thread-safe and consistent."
     ),
-    model="o3-mini"
+    model="gpt-4.1-nano"
 )
 
 class WorldLoreManager(BaseLoreManager):
@@ -70,7 +70,7 @@ class WorldLoreManager(BaseLoreManager):
         self.inconsistency_resolution_agent = Agent(
             name="InconsistencyResolutionAgent",
             instructions="Analyze and resolve any inconsistencies in world lore elements.",
-            model="o3-mini",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.7),
             output_type=InconsistencyResolutionAgent
         )
@@ -78,7 +78,7 @@ class WorldLoreManager(BaseLoreManager):
         self.world_documentation_agent = Agent(
             name="WorldDocumentationAgent",
             instructions="Generate readable summaries of world history and current state.",
-            model="o3-mini",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.7),
             output_type=WorldDocumentationAgent
         )    
@@ -86,7 +86,7 @@ class WorldLoreManager(BaseLoreManager):
         self.world_query_agent = Agent(
             name="WorldQueryAgent",
             instructions="Process queries related to the world state and provide relevant information.",
-            model="o3-mini",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.7),
             output_type=WorldQueryAgent
         )
@@ -824,7 +824,7 @@ class MasterCoordinationAgent:
             4. Resolve conflicts between generated content
             5. Maintain matriarchal theming throughout
             """,
-            model="o3-mini",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.7)
         )
         self.trace_id = None
@@ -1144,7 +1144,7 @@ class ContentValidationTool:
             Check for contradictions with existing lore, missing required elements,
             and alignment with the matriarchal theme.
             """,
-            model="o3-mini",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.7)
         )
     
@@ -1307,7 +1307,7 @@ class LoreRelationshipMapper:
             These could be causal relationships, thematic connections, contradictions, or influences.
             Create a network of relationships that shows how lore elements interact.
             """,
-            model="o3-mini",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.7)
         )
     
