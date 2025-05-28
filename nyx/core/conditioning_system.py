@@ -1385,56 +1385,44 @@ class ConditioningSystem:
                 "error": str(e)
             }
     
-    async def condition_personality_trait(self,
-                                      trait: str,
-                                      value: float,
-                                      behaviors: List[str] = None,
-                                      context: Dict[str, Any] = None) -> Dict[str, Any]:
+    async def condition_personality_trait(
+        self,
+        trait: str,
+        value: float,
+        behaviors: List[str] = None,
+        context: Dict[str, Any] = None
+    ) -> Dict[str, Any]:
         """
         Condition a personality trait through reinforcement of related behaviors
-        
-        Args:
-            trait: The personality trait to condition
-            value: The target value for the trait (-1.0 to 1.0)
-            behaviors: List of behaviors associated with this trait
-            context: Additional contextual information
-            
-        Returns:
-            Conditioning results
         """
-        # Prepare data for personality development agent
+        # Only pass the scalar inputs
         data = {
             "trait": trait,
             "target_value": value
         }
-        
+    
         try:
-            # Run the personality development agent
             result = await Runner.run(
-                self.personality_development_agent, # This agent now uses the correctly named tool
+                self.personality_development_agent,
                 data,
                 context=RunContextWrapper(context=self.context)
             )
-            
-            conditioning_output = result.final_output
-            
-            # Structure the response
+            co = result.final_output
+    
             return {
                 "success": True,
-                "trait": conditioning_output.trait,
-                "target_value": conditioning_output.target_value,
-                "actual_value": conditioning_output.actual_value,
-                "conditioned_behaviors": conditioning_output.conditioned_behaviors,
-                "identity_impact": conditioning_output.identity_impact,
-                "conditioning_strategy": conditioning_output.conditioning_strategy
+                "trait": co.trait,
+                "target_value": co.target_value,
+                "actual_value": co.actual_value,
+                "conditioned_behaviors": co.conditioned_behaviors,
+                "identity_impact": co.identity_impact,
+                "conditioning_strategy": co.conditioning_strategy
             }
-        
+    
         except Exception as e:
             logger.error(f"Error conditioning personality trait: {e}")
-            return {
-                "success": False,
-                "error": str(e)
-            }
+            return {"success": False, "error": str(e)}
+
     
     async def condition_preference(self, 
                                 stimulus: str, 
