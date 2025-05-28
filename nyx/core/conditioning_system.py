@@ -1264,7 +1264,7 @@ class ConditioningSystem:
             # Run the classical conditioning agent
             result = await Runner.run(
                 self.classical_conditioning_agent,
-                json.dumps(data),
+                data,
                 context=self.context
             )
             
@@ -1331,7 +1331,7 @@ class ConditioningSystem:
             # Run the operant conditioning agent
             result = await Runner.run(
                 self.operant_conditioning_agent,
-                json.dumps(data),
+                data,
                 context=self.context
             )
             
@@ -1393,7 +1393,7 @@ class ConditioningSystem:
             # Run the behavior evaluation agent
             result = await Runner.run(
                 self.behavior_evaluation_agent,
-                json.dumps(data),
+                data,
                 context=self.context
             )
             
@@ -1446,7 +1446,7 @@ class ConditioningSystem:
             # Run the personality development agent
             result = await Runner.run(
                 self.personality_development_agent, # This agent now uses the correctly named tool
-                json.dumps(data),
+                data,
                 context=self.context
             )
             
