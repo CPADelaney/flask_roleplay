@@ -68,56 +68,44 @@ class TraitConditioningOutput(BaseModel):
     identity_impact: str = Field(..., description="Description of impact on identity")
     conditioning_strategy: str = Field(..., description="Strategy used for conditioning")
 
-    # Context object for conditioning system
-    class ConditioningContext:
-        """Context object for conditioning operations"""
-        
-    def __init__(self, reward_system=None, emotional_core=None, memory_core=None, somatosensory_system=None):
-        # Initialize context
-        self.context = ConditioningContext(
-            reward_system=reward_system, 
-            emotional_core=emotional_core,
-            memory_core=memory_core,
-            somatosensory_system=somatosensory_system
-        )
-    
-        # Create agents
-        self.classical_conditioning_agent = self._create_classical_conditioning_agent()
-        self.operant_conditioning_agent = self._create_operant_conditioning_agent()
-        self.behavior_evaluation_agent = self._create_behavior_evaluation_agent()
-        self.personality_development_agent = self._create_personality_development_agent()
-        self.conditioning_orchestrator = self._create_conditioning_orchestrator()
-        
-        logger.info("Conditioning system initialized with Agents SDK integration")
-        
-        self.reward_system = reward_system
-        self.emotional_core = emotional_core
-        self.memory_core = memory_core
+class ConditioningContext:
+    """
+    Lightweight container every function‑tool receives through
+    RunContextWrapper.  It holds references to external cores plus
+    the mutable conditioning state.
+    """
+    def __init__(
+        self,
+        reward_system=None,
+        emotional_core=None,
+        memory_core=None,
+        somatosensory_system=None,
+    ):
+        # external subsystems
+        self.reward_system        = reward_system
+        self.emotional_core       = emotional_core
+        self.memory_core          = memory_core
         self.somatosensory_system = somatosensory_system
-        
-        # Classical conditioning associations (stimulus → response)
-        self.classical_associations = {}  # stimulus → ConditionedAssociation
-        
-        # Operant conditioning associations (behavior → consequences)
-        self.operant_associations = {}  # behavior → ConditionedAssociation
-        
-        # Association strength thresholds
-        self.weak_association_threshold = 0.3
+
+        # mutable association stores
+        self.classical_associations: dict = {}
+        self.operant_associations:   dict = {}
+
+        # learning hyper‑parameters (will be overwritten by the
+        # ConditioningSystem right after it instantiates us)
+        self.weak_association_threshold     = 0.3
         self.moderate_association_threshold = 0.6
-        self.strong_association_threshold = 0.8
-        
-        # Learning parameters
+        self.strong_association_threshold   = 0.8
+
         self.association_learning_rate = 0.1
-        self.extinction_rate = 0.05
-        self.generalization_factor = 0.3
-        
-        # Tracking metrics
-        self.total_associations = 0
-        self.total_reinforcements = 0
+        self.extinction_rate           = 0.05
+        self.generalization_factor     = 0.3
+
+        # counters
+        self.total_associations      = 0
+        self.total_reinforcements    = 0
         self.successful_associations = 0
-        
-        # Trace group ID for linking traces
-        self.trace_group_id = f"conditioning_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}"
+
 
 
 class ConditioningSystem:
@@ -127,14 +115,50 @@ class ConditioningSystem:
     Refactored to leverage OpenAI Agents SDK for improved modularity and capability.
     """
     
-    def __init__(self, reward_system=None, emotional_core=None, memory_core=None, somatosensory_system=None):
-        # Initialize context
+    def __init__(self, reward_system=None, emotional_core=None,
+                 memory_core=None, somatosensory_system=None):
+        # ➊ create the shared context
         self.context = ConditioningContext(
-            reward_system=reward_system, 
+            reward_system=reward_system,
             emotional_core=emotional_core,
             memory_core=memory_core,
-            somatosensory_system=somatosensory_system
+            somatosensory_system=somatosensory_system,
         )
+
+        # ➋ create *local* references that tools & methods already expect
+        self.classical_associations = {}
+        self.operant_associations   = {}
+
+        # expose the same dicts on the context so every tool
+        # that receives `ctx.context` sees the same objects
+        self.context.classical_associations = self.classical_associations
+        self.context.operant_associations   = self.operant_associations
+
+        # ➌ thresholds & learning params
+        self.weak_association_threshold     = 0.3
+        self.moderate_association_threshold = 0.6
+        self.strong_association_threshold   = 0.8
+        self.association_learning_rate      = 0.1
+        self.extinction_rate                = 0.05
+        self.generalization_factor          = 0.3
+
+        for name in (
+            "weak_association_threshold",
+            "moderate_association_threshold",
+            "strong_association_threshold",
+            "association_learning_rate",
+            "extinction_rate",
+            "generalization_factor",
+        ):
+            setattr(self.context, name, getattr(self, name))
+
+        # ➍ counters
+        self.total_associations      = 0
+        self.total_reinforcements    = 0
+        self.successful_associations = 0
+        self.context.total_associations      = 0
+        self.context.total_reinforcements    = 0
+        self.context.successful_associations = 0
 
         self._generate_reward_signal_tool = function_tool(
             self._generate_reward_signal_logic,
