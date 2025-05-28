@@ -314,7 +314,8 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             from nyx.core.femdom.femdom_integration_manager import FemdomIntegrationManager    
             from nyx.core.femdom.orgasm_control import OrgasmControlSystem
             from nyx.core.femdom.persona_manager import DominancePersonaManager
-            from nyx.core.femdom.sadistic_responses import SadisticResponseSystem          
+            from nyx.core.femdom.sadistic_responses import SadisticResponseSystem    
+            from nyx.core.femdom.submission_progression import SubmissionProgression
     
             from nyx.core.issue_tracking_system import IssueTrackingSystem
             from nyx.core.passive_observation import PassiveObservationSystem
