@@ -287,9 +287,9 @@ class AutobiographicalNarrative:
             )
 
     # Additional tool functions for specialized agents
-    
+    @staticmethod
     @function_tool
-    async def _analyze_memory_emotions(self, ctx: RunContextWrapper[NarrativeContext], 
+    async def _analyze_memory_emotions(ctx: RunContextWrapper[NarrativeContext], 
                                     memories: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
         Analyze emotional patterns in memories
@@ -346,9 +346,10 @@ class AutobiographicalNarrative:
             "emotion_intensities": avg_intensities,
             "emotional_arcs": emotional_arcs
         }
-    
+
+    @staticmethod
     @function_tool
-    async def _identify_memory_themes(self, ctx: RunContextWrapper[NarrativeContext], 
+    async def _identify_memory_themes(ctx: RunContextWrapper[NarrativeContext], 
                                    memories: List[Dict[str, Any]]) -> List[str]:
         """
         Identify common themes across memories
@@ -375,9 +376,10 @@ class AutobiographicalNarrative:
         
         # Return themes or default values if none found
         return top_themes or ["growth", "experience", "development"]
-    
+
+    @staticmethod
     @function_tool
-    async def _calculate_memory_significance(self, ctx: RunContextWrapper[NarrativeContext],
+    async def _calculate_memory_significance(ctx: RunContextWrapper[NarrativeContext],
                                          memories: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
         Calculate relative significance of memories for narrative
@@ -426,9 +428,10 @@ class AutobiographicalNarrative:
         result.sort(key=lambda x: x["narrative_significance"], reverse=True)
         
         return result
-    
+
+    @staticmethod
     @function_tool
-    async def _analyze_identity_shifts(self, ctx: RunContextWrapper[NarrativeContext],
+    async def _analyze_identity_shifts(ctx: RunContextWrapper[NarrativeContext],
                                     identity_state: Dict[str, Any]) -> List[Dict[str, Any]]:
         """
         Analyze shifts in identity based on identity state
@@ -459,9 +462,10 @@ class AutobiographicalNarrative:
                         })
         
         return shifts
-    
+
+    @staticmethod
     @function_tool
-    async def _extract_core_values(self, ctx: RunContextWrapper[NarrativeContext],
+    async def _extract_core_values(ctx: RunContextWrapper[NarrativeContext],
                                identity_state: Dict[str, Any]) -> List[str]:
         """
         Extract core values from identity state
@@ -485,9 +489,10 @@ class AutobiographicalNarrative:
                 core_values = [trait for trait, _ in sorted_traits[:5]]
         
         return core_values
-    
+
+    @staticmethod
     @function_tool
-    async def _calculate_identity_stability(self, ctx: RunContextWrapper[NarrativeContext],
+    async def _calculate_identity_stability(ctx: RunContextWrapper[NarrativeContext],
                                         identity_state: Dict[str, Any]) -> float:
         """
         Calculate stability of current identity
@@ -535,9 +540,10 @@ class AutobiographicalNarrative:
         
         # Ensure result is in valid range
         return max(0.0, min(1.0, stability))
-    
+
+    @staticmethod
     @function_tool
-    async def _check_narrative_coherence(self, ctx: RunContextWrapper[NarrativeContext],
+    async def _check_narrative_coherence(ctx: RunContextWrapper[NarrativeContext],
                                      narrative: Dict[str, Any],
                                      existing_segments: List[Dict[str, Any]]) -> float:
         """
@@ -583,9 +589,10 @@ class AutobiographicalNarrative:
                 
         # Ensure result is in valid range
         return max(0.0, min(1.0, coherence))
-    
+
+    @staticmethod
     @function_tool
-    async def _verify_continuity(self, ctx: RunContextWrapper[NarrativeContext],
+    async def _verify_continuity(ctx: RunContextWrapper[NarrativeContext],
                              narrative: Dict[str, Any],
                              existing_segments: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
@@ -647,9 +654,10 @@ class AutobiographicalNarrative:
             "continuity_score": max(0.0, min(1.0, continuity_score)),
             "issues": issues
         }
-    
+
+    @staticmethod
     @function_tool
-    async def _validate_emotional_authenticity(self, ctx: RunContextWrapper[NarrativeContext],
+    async def _validate_emotional_authenticity(ctx: RunContextWrapper[NarrativeContext],
                                           narrative: Dict[str, Any],
                                           memories: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
@@ -704,9 +712,9 @@ class AutobiographicalNarrative:
             "issues": issues
         }
 
+    @staticmethod
     @function_tool
-    async def retrieve_significant_memories(self, 
-                                        ctx: RunContextWrapper[NarrativeContext], 
+    async def retrieve_significant_memories(ctx: RunContextWrapper[NarrativeContext], 
                                         start_time: str, 
                                         end_time: str, 
                                         min_significance: int = 6) -> List[Dict]:
@@ -736,9 +744,9 @@ class AutobiographicalNarrative:
             logger.error(f"Error retrieving memories: {e}")
             return []
 
+    @staticmethod
     @function_tool
-    async def get_identity_snapshot(self, 
-                                 ctx: RunContextWrapper[NarrativeContext], 
+    async def get_identity_snapshot(ctx: RunContextWrapper[NarrativeContext], 
                                  timestamp: str) -> Dict[str, Any]:
         """
         Gets a snapshot of Nyx's identity at a specific time.
