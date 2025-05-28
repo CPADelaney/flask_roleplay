@@ -362,7 +362,26 @@ class IssueTrackingSystem:
         
         # Initialize tools first
         self.add_issue_tool = function_tool(self._add_issue)
-        self.update_issue_tool = function_tool(self._update_issue)
+        self.update_issue_tool = function_tool(
+            self._update_issue,
+            name="update_issue",
+            description="Update fields on an existing issue",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "issue_id": {
+                        "type": "string",
+                        "description": "The ID of the issue to update"
+                    },
+                    "update_data": {
+                        "type": "object",
+                        "description": "A dict of field names to new values (e.g. {'append_description': '…'})",
+                        "additionalProperties": True
+                    }
+                },
+                "required": ["issue_id", "update_data"]
+            }
+        )
         self.find_similar_issues_tool = function_tool(self._find_similar_issues)
         self.get_issue_tool = function_tool(self._get_issue)
         self.search_issues_tool = function_tool(self._search_issues)
