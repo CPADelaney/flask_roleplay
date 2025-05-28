@@ -109,7 +109,7 @@ class AutobiographicalNarrative:
         self.narrative_agent = self._create_narrative_agent()
         
         # Create input validation guardrail
-        self.memory_validation_guardrail = self._create_memory_validation_guardrail()
+        self.memory_validation_guardrail = self._memory_validation_guardrail
 
     def _create_narrative_agent(self) -> Optional[Agent[NarrativeContext]]:
         """Creates main agent for synthesizing narrative segments."""
