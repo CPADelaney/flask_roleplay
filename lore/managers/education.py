@@ -148,7 +148,7 @@ class EducationalSystemManager(BaseLoreManager):
                 '  "notes": "Focus on advanced vs basic teaching..."\n'
                 "}"
             ),
-            model="o3-mini",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.8)
         )
         
@@ -160,7 +160,7 @@ class EducationalSystemManager(BaseLoreManager):
                 "Create hierarchical, structured learning programs with clear progression paths. "
                 "Emphasize matriarchal authority in educational leadership and teaching methods."
             ),
-            model="o3-mini",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.9)
         )
         
@@ -172,7 +172,7 @@ class EducationalSystemManager(BaseLoreManager):
                 "Create learning programs based on direct transmission of skills from expert to novice. "
                 "Emphasize matriarchal authority with female masters and gender-based access."
             ),
-            model="o3-mini",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.9)
         )
         
@@ -184,7 +184,7 @@ class EducationalSystemManager(BaseLoreManager):
                 "Create programs that transmit spiritual knowledge, rituals, and traditions. "
                 "Emphasize female religious authority and gendered access to sacred knowledge."
             ),
-            model="o3-mini",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.9)
         )
         
@@ -192,7 +192,7 @@ class EducationalSystemManager(BaseLoreManager):
         self.education_agent = Agent(
             name="EducationalSystemAgent",
             instructions="You create educational systems for fictional matriarchal societies.",
-            model="o3-mini",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.9),
             handoffs=[
                 handoff(
@@ -221,7 +221,7 @@ class EducationalSystemManager(BaseLoreManager):
                 "Analyze what knowledge can be shared, adapted, or must remain separate. "
                 "Consider power dynamics, accessibility, and cultural context."
             ),
-            model="o3-mini",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.7)
         )
 
@@ -1203,7 +1203,7 @@ class EducationalSystemManager(BaseLoreManager):
             tradition_agent = Agent(
                 name="KnowledgeTraditionAgent",
                 instructions="You create knowledge transmission traditions for matriarchal societies.",
-                model="o3-mini",
+                model="gpt-4.1-nano",
                 model_settings=ModelSettings(temperature=0.9),
                 output_type=List[KnowledgeTradition]
             )
