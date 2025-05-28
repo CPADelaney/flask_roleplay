@@ -156,7 +156,6 @@ class AutobiographicalNarrative:
                 ],
                 model="gpt-4.1-nano",
                 model_settings=ModelSettings(
-                    response_format={"type": "json_object"}, 
                     temperature=0.6
                 ),
                 output_type=Dict[str, Any]
