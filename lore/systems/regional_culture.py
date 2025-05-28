@@ -122,7 +122,7 @@ class RegionalCultureSystem(BaseLoreManager):
                 "You create realistic languages for a fantasy world with matriarchal power. "
                 "Reflect how language encodes status, formality, and gender hierarchy."
             ),
-            model="o3-mini",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.9)
         )
         
@@ -134,7 +134,7 @@ class RegionalCultureSystem(BaseLoreManager):
                 "You create cultural norms for fantasy nations. Norms must reflect matriarchal structures. "
                 "Consider differences by gender, status, and context. Provide taboos, consequences, variations."
             ),
-            model="o3-mini",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.9)
         )
         
@@ -147,7 +147,7 @@ class RegionalCultureSystem(BaseLoreManager):
                 "Include greetings, body language, titles, gift-giving, and display of power. "
                 "Be explicit about how men must defer to female authority."
             ),
-            model="o3-mini",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.9)
         )
     
@@ -313,7 +313,7 @@ class RegionalCultureSystem(BaseLoreManager):
                     "Remember we have matriarchal nations of varying size and importance; "
                     "some languages might be major (used by multiple large nations), others minor."
                 ),
-                model="o3-mini",
+                model="gpt-4.1-nano",
                 model_settings=ModelSettings(temperature=0.8)
             )
             
@@ -478,7 +478,7 @@ class RegionalCultureSystem(BaseLoreManager):
                     "or\n"
                     "{ \"categories\": [\"greeting\",\"public_behavior\",\"religious_practice\"], \"count\": 5 }"
                 ),
-                model="o3-mini",
+                model="gpt-4.1-nano",
                 model_settings=ModelSettings(temperature=0.8)
             )
             
@@ -625,7 +625,7 @@ class RegionalCultureSystem(BaseLoreManager):
                     "Example contexts might be 'court', 'noble', 'public', 'private', 'religious', 'business'. "
                     "Return a JSON array of strings for contexts. Example:\n[\"court\",\"public\",\"business\"]"
                 ),
-                model="o3-mini",
+                model="gpt-4.1-nano",
                 model_settings=ModelSettings(temperature=0.8)
             )
             
@@ -804,7 +804,7 @@ class RegionalCultureSystem(BaseLoreManager):
                     "Highlight the most distinctive norms, how matriarchal authority is expressed, "
                     "and any notable linguistic or etiquette features."
                 ),
-                model="o3-mini",
+                model="gpt-4.1-nano",
                 model_settings=ModelSettings(temperature=0.8)
             )
             
@@ -856,7 +856,7 @@ class RegionalCultureSystem(BaseLoreManager):
                     "Focus on greeting norms, etiquette, taboos, religious differences, etc. "
                     "Return a JSON object with fields 'potential_conflicts', 'severity_level', and 'recommendations'."
                 ),
-                model="o3-mini",
+                model="gpt-4.1-nano",
                 model_settings=ModelSettings(temperature=0.8)
             )
             
@@ -924,7 +924,7 @@ class RegionalCultureSystem(BaseLoreManager):
                 flow between societies based on proximity, relations, and power dynamics.
                 Maintain matriarchal power structures as the dominant framework.
                 """,
-                model="o3-mini",
+                model="gpt-4.1-nano",
                 model_settings=ModelSettings(temperature=0.9)
             )
             
@@ -1092,7 +1092,7 @@ async def evolve_dialect(self, ctx, language_id: int, region_id: int, years: int
             and social contexts. Pay special attention to how language reflects
             matriarchal power structures and feminine-dominated society.
             """,
-            model="o3-mini",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.9),
             output_type=DialectEvolutionModel
         )
