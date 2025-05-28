@@ -262,36 +262,30 @@ class HormoneSystem:
         await self.update_hormone(ctx, "oxynixin", oxynixin_boost, source=f"{gratification_type}_aftermath")
     
     @handle_errors("Error updating hormone")
-    async def update_hormone(self, 
-                         ctx: RunContextWrapper[EmotionalContext],
-                         hormone: str, 
-                         change: float, 
-                         source: str = "system") -> Dict[str, Any]:
-        """
-        Update a specific hormone with a delta change
-        
-        Args:
-            ctx: Run context wrapper with emotional state
-            hormone: Hormone to update
-            change: Delta change value
-            source: Source of the change
-            
-        Returns:
-            Update result
-        """
-        with function_span("update_hormone", input=f"{hormone}:{change}"):
-            # Create a trace for hormone update
-            with trace(
-                workflow_name="Hormone_Update",
-                trace_id=gen_trace_id(),
-                group_id=ctx.context.get_value("conversation_id", "default"),
-                metadata={
-                    "hormone": hormone,
-                    "change": change,
-                    "source": source,
-                    "cycle": ctx.context.cycle_count if hasattr(ctx.context, "cycle_count") else 0
-                }
-            ):
+    async def update_hormone(
+            self,
+            ctx: RunContextWrapper[EmotionalContext] | EmotionalContext,
+            hormone: str,
+            change: float,
+            source: str = "system"
+    ) -> Dict[str, Any]:
+    
+        # ➊ accept either wrapper *or* raw context
+        core_ctx = getattr(ctx, "context", ctx)
+    
+        # use core_ctx everywhere below
+        group_id = (
+            getattr(core_ctx, "conversation_id", None)
+            or getattr(core_ctx, "get_value", lambda *_: "default")("conversation_id", "default")
+        )
+        cycle = getattr(core_ctx, "cycle_count", 0)
+    
+        with trace(
+            workflow_name="Hormone_Update",
+            trace_id=gen_trace_id(),
+            group_id=group_id,
+            metadata={"hormone": hormone, "change": change, "source": source, "cycle": cycle},
+        ):
                 if hormone not in self.hormones:
                     # Return list of valid hormones in error
                     valid_hormones = list(self.hormones.keys())
@@ -514,112 +508,86 @@ class HormoneSystem:
         return 0.0
     
     @handle_errors("Error updating hormone influences")
-    async def _update_hormone_influences(self, ctx: RunContextWrapper[EmotionalContext]) -> Dict[str, Any]:
+    async def _update_hormone_influences(
+        self,
+        ctx: Union[RunContextWrapper[EmotionalContext], EmotionalContext]
+    ) -> Dict[str, Any]:
         """
-        Update neurochemical influences from hormones
-        
-        Args:
-            ctx: Run context wrapper with emotional state
-            
-        Returns:
-            Updated influence values
+        Propagate every hormone’s current value into temporary neuro‑chemical
+        baselines inside EmotionalCore.  Works whether we get a RunContextWrapper
+        *or* the raw EmotionalContext.
         """
+        core_ctx = getattr(ctx, "context", ctx)          # <-- dual‑mode guard
+    
+        if not self.emotional_core:
+            return {"message": "No emotional core available", "influences": {}}
+    
         with function_span("update_hormone_influences"):
-            # Skip if no emotional core
-            if not self.emotional_core:
-                return {
-                    "message": "No emotional core available",
-                    "influences": {}
-                }
-            
-            # Create a span for hormone influences
             with custom_span(
                 "hormone_neurochemical_influences",
                 data={
                     "hormones": list(self.hormones.keys()),
-                    "neurochemicals": list(self.emotional_core.neurochemicals.keys())
-                }
+                    "neurochemicals": list(self.emotional_core.neurochemicals.keys()),
+                },
             ):
-                # Pre-initialize all influences to zero for cleaner calculation
-                influences = {
-                    chemical: 0.0 for chemical in self.emotional_core.neurochemicals
+    
+                influences: dict[str, float] = {
+                    chem: 0.0 for chem in self.emotional_core.neurochemicals
                 }
-                
-                # Calculate influences from each hormone
-                for hormone_name, hormone_data in self.hormones.items():
-                    # Skip if hormone has no influence mapping
-                    if hormone_name not in self.hormone_neurochemical_influences:
+    
+                # --- accumulate influences -------------------------------------
+                for h_name, h_data in self.hormones.items():
+                    mapping = self.hormone_neurochemical_influences.get(h_name)
+                    if not mapping:
                         continue
-                        
-                    hormone_value = hormone_data["value"]
-                    hormone_influence_map = self.hormone_neurochemical_influences[hormone_name]
-                    
-                    # Apply influences based on hormone value
-                    for chemical, influence_factor in hormone_influence_map.items():
-                        if chemical in self.emotional_core.neurochemicals:
-                            # Calculate scaled influence
-                            scaled_influence = influence_factor * (hormone_value - 0.5) * 2
-                            
-                            # Accumulate influence (allows multiple hormones to affect the same chemical)
-                            influences[chemical] += scaled_influence
-                
-                # Create spans for each significant influence
-                applied_influences = {}
-                for chemical, influence in influences.items():
-                    if chemical in self.emotional_core.neurochemicals and abs(influence) > 0.05:
-                        # Get original baseline
-                        original_baseline = self.emotional_core.neurochemicals[chemical]["baseline"]
-                        
-                        # Add temporary hormone influence with bounds checking
-                        temporary_baseline = max(0.1, min(0.9, original_baseline + influence))
-                        
-                        # Record influence but don't permanently change baseline
-                        self.emotional_core.hormone_influences[chemical] = influence
-                        self.emotional_core.neurochemicals[chemical]["temporary_baseline"] = temporary_baseline
-                        
-                        # Create a span for this influence
-                        with custom_span(
-                            "hormone_influence",
-                            data={
-                                "chemical": chemical,
-                                "influence": influence,
-                                "original_baseline": original_baseline,
-                                "temporary_baseline": temporary_baseline,
-                                "cycle": ctx.context.cycle_count if hasattr(ctx.context, "cycle_count") else 0
-                            }
-                        ):
-                            applied_influences[chemical] = {
-                                "influence": influence,
-                                "original_baseline": original_baseline,
-                                "temporary_baseline": temporary_baseline
-                            }
-                            
-                            # Add to context buffer if available
-                            if hasattr(ctx.context, "_add_to_circular_buffer"):
-                                ctx.context._add_to_circular_buffer("hormone_influences", {
-                                    "chemical": chemical,
-                                    "influence": influence,
-                                    "original_baseline": original_baseline,
-                                    "temporary_baseline": temporary_baseline,
-                                    "timestamp": datetime.datetime.now().isoformat()
-                                })
-                
-                # Fixed indentation issue and added the computed influence to the dict
-                if self.emotional_core and 'testoryx' in self.hormones:
-                    testoryx_level = self.hormones['testoryx']['value']
-                    if testoryx_level > 0.6:
-                        nyxamine_influence = (testoryx_level - 0.5) * 0.1 # Small boost to reward seeking baseline
-                        influences["nyxamine"] = influences.get("nyxamine", 0.0) + nyxamine_influence
-                
-                # Store in context for tracking
-                ctx.context.set_value("hormone_influences", {
-                    chemical: influence for chemical, influence in influences.items() if abs(influence) > 0.01
-                })
-                
+    
+                    delta = (h_data["value"] - h_data["baseline"]) * 2
+                    if abs(delta) < 0.05:
+                        continue  # negligible
+    
+                    for chem, factor in mapping.items():
+                        if chem in influences:
+                            influences[chem] += factor * delta
+    
+                applied: dict[str, Any] = {}
+                for chem, infl in influences.items():
+                    if abs(infl) < 0.05:
+                        continue  # skip tiny shifts
+    
+                    base = self.emotional_core.neurochemicals[chem]["baseline"]
+                    tmp  = max(0.1, min(0.9, base + infl))
+    
+                    self.emotional_core.hormone_influences[chem] = infl
+                    self.emotional_core.neurochemicals[chem]["temporary_baseline"] = tmp
+    
+                    applied[chem] = {
+                        "influence": infl,
+                        "original_baseline": base,
+                        "temporary_baseline": tmp,
+                    }
+    
+                    add_buf = getattr(core_ctx, "_add_to_circular_buffer", None)
+                    if add_buf:
+                        add_buf(
+                            "hormone_influences",
+                            {
+                                "chemical": chem,
+                                **applied[chem],
+                                "timestamp": datetime.datetime.now().isoformat(),
+                            },
+                        )
+    
+                core_ctx.set_value(          # safe for both context types
+                    "hormone_influences",
+                    {c: i for c, i in influences.items() if abs(i) > 0.01},
+                )
+    
                 return {
-                    "applied_influences": applied_influences,
-                    "timestamp": datetime.datetime.now().isoformat()
+                    "applied_influences": applied,
+                    "timestamp": datetime.datetime.now().isoformat(),
                 }
+
+                # Pre-initialize 
     
     @handle_errors("Error getting hormone levels")
     def get_hormone_levels(self) -> Dict[str, Dict[str, Any]]:
@@ -945,151 +913,91 @@ class HormoneSystem:
             return "highly unstable - chaotic regulation"
             
     @handle_errors("Error analyzing hormone influences")
-    async def analyze_hormone_influences(self, ctx: RunContextWrapper[EmotionalContext]) -> Dict[str, Any]:
+    async def analyze_hormone_influences(
+        self,
+        ctx: Union[RunContextWrapper[EmotionalContext], EmotionalContext]
+    ) -> Dict[str, Any]:
         """
-        Analyze the current influences of hormones on neurochemicals
-        
-        Args:
-            ctx: Run context wrapper with emotional state
-            
-        Returns:
-            Analysis of hormone influences
+        Inspect current hormone → neuro‑chemical influence network and return a
+        compact report of dominant forces.
         """
+        core_ctx = getattr(ctx, "context", ctx)          # <-- dual‑mode guard
+    
+        if not self.emotional_core:
+            return {"message": "No emotional core available", "influences": {}}
+    
         with function_span("analyze_hormone_influences"):
-            # Create a trace for influence analysis
             with trace(
                 workflow_name="Hormone_Influence_Analysis",
                 trace_id=gen_trace_id(),
-                group_id=ctx.context.get_value("conversation_id", "default"),
-                metadata={
-                    "cycle": ctx.context.cycle_count if hasattr(ctx.context, "cycle_count") else 0
-                }
+                group_id=core_ctx.get_value("conversation_id", "default"),
+                metadata={"cycle": getattr(core_ctx, "cycle_count", 0)},
             ):
-                # Skip if no emotional core
-                if not self.emotional_core:
-                    return {
-                        "message": "No emotional core available",
-                        "influences": {}
-                    }
-                
-                # Get current hormone and neurochemical states
-                hormone_values = {name: data["value"] for name, data in self.hormones.items()}
-                
-                # Get neurochemical baselines and current values
-                baselines = {c: d["baseline"] for c, d in self.emotional_core.neurochemicals.items()}
-                current_values = {c: d["value"] for c, d in self.emotional_core.neurochemicals.items()}
-                
-                # Create a span for influence calculation
-                with custom_span(
-                    "hormone_influence_analysis",
-                    data={
-                        "hormones": list(hormone_values.keys()),
-                        "chemicals": list(current_values.keys())
-                    }
-                ):
-                    # Calculate total influences
-                    influences = {}
-                    for hormone, hormone_value in hormone_values.items():
-                        if hormone not in self.hormone_neurochemical_influences:
-                            continue
-                            
-                        # Calculate deviation from baseline
-                        hormone_deviation = hormone_value - self.hormones[hormone]["baseline"]
-                        
-                        # No influence if hormone is at baseline
-                        if abs(hormone_deviation) < 0.05:
-                            continue
-                            
-                        # Calculate influences
-                        hormone_influences = {}
-                        for chemical, factor in self.hormone_neurochemical_influences[hormone].items():
-                            if chemical in current_values:
-                                # Calculate influence
-                                influence = factor * hormone_deviation * 2
-                                
-                                # Skip negligible influences
-                                if abs(influence) < 0.01:
-                                    continue
-                                    
-                                hormone_influences[chemical] = influence
-                                
-                                # Accumulate total influences
-                                if chemical not in influences:
-                                    influences[chemical] = 0.0
-                                influences[chemical] += influence
-                        
-                        # Only include hormones with significant influences
-                        if hormone_influences:
-                            # Create a span for each influential hormone
-                            with custom_span(
-                                "hormone_influence_detail",
-                                data={
-                                    "hormone": hormone,
-                                    "deviation": hormone_deviation,
-                                    "influences": hormone_influences
-                                }
-                            ):
-                                pass
-                    
-                    # Calculate influence effects
-                    influence_effects = {}
-                    for chemical, influence in influences.items():
-                        if chemical in baselines and abs(influence) >= 0.01:
-                            baseline = baselines[chemical]
-                            current = current_values[chemical]
-                            
-                            # Calculate temporary baseline
-                            temp_baseline = baseline + influence
-                            
-                            # Calculate how much of current value is due to hormone influence
-                            baseline_effect = (current - baseline) / (temp_baseline - baseline) if temp_baseline != baseline else 0.0
-                            
-                            influence_effects[chemical] = {
-                                "influence": influence,
-                                "original_baseline": baseline,
-                                "temporary_baseline": temp_baseline,
-                                "current_value": current,
-                                "baseline_effect": baseline_effect
-                            }
-                    
-                    # Determine dominant hormones by influence strength
-                    hormone_influence_strength = {}
-                    for hormone, value in hormone_values.items():
-                        if hormone not in self.hormone_neurochemical_influences:
-                            continue
-                            
-                        # Calculate overall influence strength
-                        strength = 0.0
-                        for chemical, factor in self.hormone_neurochemical_influences[hormone].items():
-                            if chemical in current_values:
-                                influence = factor * (value - self.hormones[hormone]["baseline"]) * 2
-                                strength += abs(influence)
-                        
-                        if strength > 0.01:
-                            hormone_influence_strength[hormone] = strength
-                    
-                    # Get dominant hormones
-                    dominant_hormones = sorted(
-                        hormone_influence_strength.items(),
-                        key=lambda x: x[1],
-                        reverse=True
+    
+                # Ensure influences are up to date
+                await self._update_hormone_influences(ctx)
+    
+                hormone_vals = {n: d["value"] for n, d in self.hormones.items()}
+                baselines     = {
+                    c: d["baseline"] for c, d in self.emotional_core.neurochemicals.items()
+                }
+                currents      = {
+                    c: d["value"]    for c, d in self.emotional_core.neurochemicals.items()
+                }
+    
+                total_influences: dict[str, float] = {}
+                for h, v in hormone_vals.items():
+                    mapping = self.hormone_neurochemical_influences.get(h)
+                    if not mapping:
+                        continue
+                    delta = (v - self.hormones[h]["baseline"]) * 2
+                    if abs(delta) < 0.05:
+                        continue
+                    for chem, fac in mapping.items():
+                        total_influences[chem] = total_influences.get(chem, 0.0) + fac * delta
+    
+                effects: dict[str, Any] = {}
+                for chem, infl in total_influences.items():
+                    if abs(infl) < 0.01 or chem not in baselines:
+                        continue
+                    tmp_base   = baselines[chem] + infl
+                    base_eff   = (
+                        (currents[chem] - baselines[chem]) / (tmp_base - baselines[chem])
+                        if tmp_base != baselines[chem]
+                        else 0.0
                     )
-                    
-                    # Store in context
-                    ctx.context.set_value("hormone_influence_analysis", {
-                        "influences": influences,
-                        "dominant_hormones": [h for h, _ in dominant_hormones[:2]] if dominant_hormones else [],
-                        "timestamp": datetime.datetime.now().isoformat()
-                    })
-                    
-                    return {
-                        "hormone_values": hormone_values,
-                        "influences": influences,
-                        "influence_effects": influence_effects,
-                        "dominant_hormones": [{"hormone": h, "strength": s} for h, s in dominant_hormones[:3]],
-                        "timestamp": datetime.datetime.now().isoformat()
+                    effects[chem] = {
+                        "influence": infl,
+                        "original_baseline": baselines[chem],
+                        "temporary_baseline": tmp_base,
+                        "current_value": currents[chem],
+                        "baseline_effect": base_eff,
                     }
     
+                # strongest three influences
+                dominant = sorted(
+                    ((c, abs(i)) for c, i in total_influences.items()),
+                    key=lambda x: x[1],
+                    reverse=True,
+                )[:3]
+    
+                core_ctx.set_value(
+                    "hormone_influence_analysis",
+                    {
+                        "influences": total_influences,
+                        "dominant_hormones": [c for c, _ in dominant],
+                        "timestamp": datetime.datetime.now().isoformat(),
+                    },
+                )
+    
+                return {
+                    "hormone_values": hormone_vals,
+                    "influences": total_influences,
+                    "influence_effects": effects,
+                    "dominant_hormones": [{"chemical": c, "strength": s} for c, s in dominant],
+                    "timestamp": datetime.datetime.now().isoformat(),
+                }
+        
     async def process_hormone_agent(self, ctx: RunContextWrapper[EmotionalContext], query: str) -> Dict[str, Any]:
         """
         Process a query using the hormone agent
