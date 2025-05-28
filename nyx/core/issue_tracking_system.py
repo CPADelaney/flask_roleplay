@@ -366,22 +366,7 @@ class IssueTrackingSystem:
         self.update_issue_tool = function_tool(
             self._update_issue,
             name_override="update_issue",
-            description_override="Update fields on an existing issue",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "issue_id": {
-                        "type": "string",
-                        "description": "The ID of the issue to update"
-                    },
-                    "update_data": {
-                        "type": "object",
-                        "description": "A dict of field names to new values",
-                        "additionalProperties": True
-                    }
-                },
-                "required": ["issue_id", "update_data"]
-            }
+            description_override="Update fields on an existing issue"
         )
         self.find_similar_issues_tool = function_tool(self._find_similar_issues)
         self.get_issue_tool = function_tool(self._get_issue)
