@@ -540,14 +540,14 @@ class BaseLoreManager:
             return ctx
         return RunContextWrapper(context=ctx)
     
-    async def execute_llm_prompt(self, prompt: str, agent_name: str = None, model: str = "o3-mini") -> str:
+    async def execute_llm_prompt(self, prompt: str, agent_name: str = None, model: str = "gpt-4.1-nano") -> str:
         """
         Execute a prompt with an LLM agent via the OpenAI Agents SDK.
         
         Args:
             prompt: Prompt text to send to the agent
             agent_name: Optional name for the agent
-            model: Model identifier to use (defaults to "o3-mini")
+            model: Model identifier to use (defaults to "gpt-4.1-nano")
             
         Returns:
             Response text from the agent
