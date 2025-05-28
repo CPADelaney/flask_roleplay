@@ -1265,7 +1265,7 @@ class ConditioningSystem:
             result = await Runner.run(
                 self.classical_conditioning_agent,
                 data,
-                context=self.context
+                context=RunContextWrapper(context=self.context)
             )
             
             conditioning_output = result.final_output
@@ -1332,7 +1332,7 @@ class ConditioningSystem:
             result = await Runner.run(
                 self.operant_conditioning_agent,
                 data,
-                context=self.context
+                context=RunContextWrapper(context=self.context)
             )
             
             conditioning_output = result.final_output
@@ -1394,7 +1394,7 @@ class ConditioningSystem:
             result = await Runner.run(
                 self.behavior_evaluation_agent,
                 data,
-                context=self.context
+                context=RunContextWrapper(context=self.context)
             )
             
             evaluation_output = result.final_output
@@ -1447,7 +1447,7 @@ class ConditioningSystem:
             result = await Runner.run(
                 self.personality_development_agent, # This agent now uses the correctly named tool
                 data,
-                context=self.context
+                context=RunContextWrapper(context=self.context)
             )
             
             conditioning_output = result.final_output
