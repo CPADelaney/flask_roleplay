@@ -361,35 +361,38 @@ class HormoneSystem:
                 }
     
     @handle_errors("Error updating hormone cycles")
-    async def update_hormone_cycles(self, ctx: RunContextWrapper[EmotionalContext]) -> Dict[str, Any]:
+    async def update_hormone_cycles(self, ctx: Union[RunContextWrapper[EmotionalContext], EmotionalContext]) -> Dict[str, Any]:
         """
         Update hormone cycles based on elapsed time and environmental factors
-        
-        Args:
-            ctx: Run context wrapper with emotional state
-            
-        Returns:
-            Updated hormone values
         """
+        # Support both RunContextWrapper (with .context) and raw EmotionalContext
+        core_ctx = getattr(ctx, 'context', ctx)
+
         with function_span("update_hormone_cycles"):
             # Create a trace for hormone cycle updates
+            # Use core_ctx for all context operations
+            group_id = (
+                getattr(core_ctx, 'conversation_id', None)
+                or core_ctx.get_value("conversation_id", "default")
+            )
+            cycle_count = getattr(core_ctx, 'cycle_count', 0)
+
             with trace(
                 workflow_name="Hormone_Cycle_Update",
                 trace_id=gen_trace_id(),
-                group_id=ctx.context.get_value("conversation_id", "default"),
+                group_id=group_id,
                 metadata={
-                    "cycle": ctx.context.cycle_count if hasattr(ctx.context, "cycle_count") else 0,
+                    "cycle": cycle_count,
                     "environmental_factors": self.environmental_factors
                 }
             ):
                 now = datetime.datetime.now()
                 updated_values = {}
-                
-                # Update time of day environmental factor based on current time
-                hour_of_day = now.hour + (now.minute / 60.0)
+
+                # Update time-of-day factor
+                hour_of_day = now.hour + now.minute / 60.0
                 self.environmental_factors["time_of_day"] = (hour_of_day % 24) / 24.0
-                
-                # Create a span for cycle processing
+
                 with custom_span(
                     "hormone_cycle_processing",
                     data={
@@ -398,45 +401,31 @@ class HormoneSystem:
                     }
                 ):
                     for hormone_name, hormone_data in self.hormones.items():
-                        # Get time since last update
-                        last_update = datetime.datetime.fromisoformat(hormone_data.get("last_update", self.init_time.isoformat()))
+                        last_update = datetime.datetime.fromisoformat(
+                            hormone_data.get("last_update", self.init_time.isoformat())
+                        )
                         hours_elapsed = (now - last_update).total_seconds() / 3600
-                        
-                        # Skip if very little time has passed
-                        if hours_elapsed < 0.1:  # Less than 6 minutes
+                        if hours_elapsed < 0.1:
                             continue
-                            
-                        # Calculate natural cycle progression
+
                         cycle_period = hormone_data["cycle_period"]
                         old_phase = hormone_data["cycle_phase"]
-                        
-                        # Progress cycle phase based on elapsed time - use efficient math
                         phase_change = (hours_elapsed / cycle_period) % 1.0
                         new_phase = (old_phase + phase_change) % 1.0
-                        
-                        # Calculate cycle-based value using a sinusoidal pattern
-                        cycle_amplitude = 0.2  # How much the cycle affects the value
+
+                        cycle_amplitude = 0.2
                         cycle_influence = cycle_amplitude * math.sin(new_phase * 2 * math.pi)
-                        
-                        # Apply environmental factors
                         env_influence = self._calculate_environmental_influence(hormone_name)
-                        
-                        # Calculate decay based on half-life
+
                         half_life = hormone_data["half_life"]
                         decay_factor = math.pow(0.5, hours_elapsed / half_life)
-                        
-                        # Calculate new value
+
                         old_value = hormone_data["value"]
                         baseline = hormone_data["baseline"]
-                        
-                        # Value decays toward (baseline + cycle_influence + env_influence)
                         target_value = baseline + cycle_influence + env_influence
                         new_value = old_value * decay_factor + target_value * (1 - decay_factor)
-                        
-                        # Constrain to valid range
                         new_value = max(0.1, min(0.9, new_value))
-                        
-                        # Create a span for this hormone update
+
                         with custom_span(
                             "hormone_cycle_update",
                             data={
@@ -449,12 +438,10 @@ class HormoneSystem:
                                 "env_influence": env_influence
                             }
                         ):
-                            # Update hormone data
                             hormone_data["value"] = new_value
                             hormone_data["cycle_phase"] = new_phase
                             hormone_data["last_update"] = now.isoformat()
-                            
-                            # Track significant changes
+
                             if abs(new_value - old_value) > 0.05:
                                 hormone_data["evolution_history"].append({
                                     "timestamp": now.isoformat(),
@@ -464,20 +451,19 @@ class HormoneSystem:
                                     "new_phase": new_phase,
                                     "reason": "cycle_update"
                                 })
-                                
-                                # Limit history size
                                 if len(hormone_data["evolution_history"]) > 50:
                                     hormone_data["evolution_history"] = hormone_data["evolution_history"][-50:]
-                            
+
                             updated_values[hormone_name] = {
                                 "old_value": old_value,
                                 "new_value": new_value,
                                 "phase": new_phase
                             }
-                            
-                            # Add to context buffer if available
-                            if hasattr(ctx.context, "_add_to_circular_buffer"):
-                                ctx.context._add_to_circular_buffer("hormone_cycles", {
+
+                            # Buffer
+                            add_buf = getattr(core_ctx, '_add_to_circular_buffer', None)
+                            if add_buf:
+                                add_buf("hormone_cycles", {
                                     "hormone": hormone_name,
                                     "old_value": old_value,
                                     "new_value": new_value,
@@ -487,18 +473,19 @@ class HormoneSystem:
                                     "env_influence": env_influence,
                                     "timestamp": now.isoformat()
                                 })
-                                
-                multi_hormone_results = await self.update_multi_hormone_interactions(ctx)
-    
-                # After updating hormones, update their influence on neurochemicals
+
+                # After cycles, propagate interactions
+                await self.update_multi_hormone_interactions(ctx)
+
                 if self.emotional_core:
                     await self._update_hormone_influences(ctx)
-                
+
                 return {
                     "updated_hormones": updated_values,
                     "time_of_day": self.environmental_factors["time_of_day"],
                     "timestamp": now.isoformat()
                 }
+
     
     def _calculate_environmental_influence(self, hormone_name: str) -> float:
         """
