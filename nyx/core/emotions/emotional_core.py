@@ -144,7 +144,7 @@ class EmotionalCore:
     - Optimized data sharing between agents
     """
     
-    def __init__(self, model: str = "o3-mini"):
+    def __init__(self, model: str = "gpt-4.1-nano"):
         """
         Initialize the emotional core system
         
