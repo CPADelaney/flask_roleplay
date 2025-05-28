@@ -365,7 +365,8 @@ class IssueTrackingSystem:
         # explicitly supply a JSON-schema for the update_issue tool
         self.update_issue_tool = function_tool(
             self._update_issue,
-            description="Update fields on an existing issue",
+            name_override="update_issue",
+            description_override="Update fields on an existing issue",
             parameters={
                 "type": "object",
                 "properties": {
