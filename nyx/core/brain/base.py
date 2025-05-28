@@ -307,6 +307,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             from nyx.core.theory_of_mind import TheoryOfMind, SubspaceDetectionSystem, create_theory_of_mind_agent, create_subspace_detection_agent
             from nyx.core.imagination_simulator import ImaginationSimulator
             from nyx.core.internal_thoughts import InternalThoughtsManager, pre_process_input, pre_process_output
+            from nyx.core.integration.system_context import get_system_context
     
             from nyx.core.femdom.body_service_system import BodyServiceSystem
             from nyx.core.femdom.protocol_enforcement import ProtocolEnforcement
@@ -413,6 +414,8 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             from dev_log.storage import get_dev_log_storage
             self.dev_log_storage = get_dev_log_storage()
             await self.dev_log_storage.initialize()
+
+            self.system_context = get_system_context()
 
             # Initialize Global Workspace Architecture
             if self.workspace_engine is None:
