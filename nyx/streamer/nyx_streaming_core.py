@@ -1644,7 +1644,7 @@ class OptimizedStreamingCore(StreamingCore):
             
             return results
 
-    def summarize_session_learnings(self) -> Dict[str, Any]:
+    async def summarize_session_learnings(self) -> Dict[str, Any]:
         """
         Summarize what was learned during the streaming session
         
