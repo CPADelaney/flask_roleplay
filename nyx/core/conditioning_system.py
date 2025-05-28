@@ -14,6 +14,7 @@ from nyx.core.reward_system import RewardSignal
 from nyx.core.emotions.tools.neurochemical_tools import NeurochemicalTools
 from nyx.core.emotions.context import EmotionalContext
 
+logging.basicConfig(level=logging.DEBUG) # Or configure your specific logger
 logger = logging.getLogger(__name__)
 
 # Pydantic models for data structures
@@ -384,53 +385,49 @@ class ConditioningSystem:
                                                intensity: float,
                                                valence: float,
                                                context_keys: List[str]) -> Dict[str, Any]:
-        """
-        Create or update a classical conditioning association
-        
-        Args:
-            unconditioned_stimulus: The natural stimulus that triggers the response
-            conditioned_stimulus: The neutral stimulus to be conditioned
-            response: The response to be conditioned
-            intensity: The intensity of the unconditioned stimulus (0.0-1.0)
-            valence: Emotional valence of the association (-1.0 to 1.0)
-            context_keys: List of context keys for this association
-            
-        Returns:
-            The updated or created association
-        """
+        tool_name = "_create_or_update_classical_association"
+        logger.debug(f"[{tool_name}] Called. "
+                     f"unconditioned_stimulus='{unconditioned_stimulus}', "
+                     f"conditioned_stimulus='{conditioned_stimulus}', "
+                     f"response='{response}', intensity={intensity}, valence={valence}, "
+                     f"INPUT context_keys type: {type(context_keys)}, value: {context_keys!r}")
+
         # Create a unique key for this association
-        context_keys = ConditioningSystem._force_str_list(context_keys)
+        # Your _force_str_list is crucial here. Let's log before and after.
+        try:
+            processed_context_keys = ConditioningSystem._force_str_list(context_keys)
+        except Exception as e_force_list:
+            logger.error(f"[{tool_name}] Error in _force_str_list for context_keys. Input was type: {type(context_keys)}, value: {context_keys!r}. Error: {e_force_list}", exc_info=True)
+            # Depending on desired behavior, you might re-raise, or default to empty list, or handle
+            # For now, let's default to empty to prevent downstream errors if _force_str_list itself fails on unexpected input
+            processed_context_keys = []
+
+
+        logger.debug(f"[{tool_name}] PROCESSED context_keys type: {type(processed_context_keys)}, value: {processed_context_keys!r}")
                                           
         association_key = f"{conditioned_stimulus}→{response}"
         
-        # Check if this association already exists
+        return_value = {} # Initialize
         if association_key in ctx.context.classical_associations:
-            # Get existing association
             association = ctx.context.classical_associations[association_key]
-            
-            # Update association strength based on intensity and learning rate
             old_strength = association.association_strength
             new_strength = min(1.0, old_strength + (intensity * ctx.context.association_learning_rate))
-            
-            # Update association data
             association.association_strength = new_strength
             association.last_reinforced = datetime.datetime.now().isoformat()
             association.reinforcement_count += 1
-            
-            # Update valence (average with existing)
             association.valence = (association.valence + valence) / 2
             
-            # Add new context keys
-            for key in context_keys:
-                if key not in association.context_keys:
-                    association.context_keys.append(key)
+            # Log before extending/appending to association.context_keys
+            logger.debug(f"[{tool_name}] Existing association.context_keys before update: type={type(association.context_keys)}, value={association.context_keys!r}")
+            for key_to_add in processed_context_keys: # Iterate over the processed list
+                if key_to_add not in association.context_keys:
+                    association.context_keys.append(key_to_add) # append is safe for lists
+            logger.debug(f"[{tool_name}] Existing association.context_keys after update: type={type(association.context_keys)}, value={association.context_keys!r}")
             
-            # Record reinforcement
             ctx.context.total_reinforcements += 1
-
             logger.info(f"Reinforced classical association: {association_key} ({old_strength:.2f} → {new_strength:.2f})")
             
-            return {
+            return_value = {
                 "association_key": association_key,
                 "type": "reinforcement",
                 "old_strength": old_strength,
@@ -448,22 +445,22 @@ class ConditioningSystem:
                 last_reinforced=datetime.datetime.now().isoformat(),
                 reinforcement_count=1,
                 valence=valence,
-                context_keys=context_keys
+                context_keys=processed_context_keys # Use the processed list
             )
-            
-            # Store the association
             ctx.context.classical_associations[association_key] = association
             ctx.context.total_associations += 1
-            
             logger.info(f"Created new classical association: {association_key} ({association.association_strength:.2f})")
             
-            return {
+            return_value = {
                 "association_key": association_key,
                 "type": "new_association",
                 "strength": association.association_strength,
                 "reinforcement_count": 1,
                 "valence": association.valence
             }
+        
+        logger.debug(f"[{tool_name}] Returning: {return_value!r}")
+        return return_value
 
     async def _generate_reward_signal_logic(
         self,
@@ -746,40 +743,64 @@ class ConditioningSystem:
     @function_tool
     async def _calculate_expected_valence(ctx: RunContextWrapper,
                                     associations: List[Dict[str, Any]]) -> Dict[str, float]:
-        """
-        Calculate expected valence based on associations
+        tool_name = "_calculate_expected_valence"
+        logger.debug(f"[{tool_name}] Called. INPUT associations type: {type(associations)}, value: {associations!r}")
         
-        Args:
-            associations: List of behavior associations
-            
-        Returns:
-            Expected valence and confidence
-        """
-        if not associations:
-            return {
-                "expected_valence": 0.0,
-                "confidence": 0.1
-            }
+        # Here, 'associations' is expected to be a List of Dicts.
+        # The '.extend' error is unlikely to originate here if 'associations' is a dict,
+        # as this tool primarily iterates or sums over it. But good to log its type.
         
-        # Calculate the expected outcomes
-        total_strength = sum(assoc["strength"] for assoc in associations)
-        weighted_valence = sum(assoc["strength"] * assoc["valence"] for assoc in associations)
+        if not isinstance(associations, list): # Add a type check for safety
+            logger.warning(f"[{tool_name}] Expected 'associations' to be a list, but got {type(associations)}. Value: {associations!r}. Proceeding cautiously.")
+            # Decide how to handle: return error, or try to process if it's a single dict in a list, etc.
+            # For now, if it's not a list, Pydantic validation on the agent side should ideally catch this earlier for the tool call.
+            # If it's None or empty, the original logic handles it.
+            if associations is None: # Explicitly handle None if it makes it this far
+                 associations = []
+
+
+        if not associations: # Original check
+            return_value = {"expected_valence": 0.0, "confidence": 0.1}
+            logger.debug(f"[{tool_name}] No associations provided. Returning: {return_value!r}")
+            return return_value
         
-        if total_strength > 0:
-            expected_valence = weighted_valence / total_strength
-        else:
-            expected_valence = 0.0
+        # Calculations
+        total_strength = 0.0
+        weighted_valence = 0.0
+        total_reinforcements = 0 # Initialize
+
+        # Ensure associations is iterable and items are dicts as expected for safety
+        if isinstance(associations, list):
+            for i, assoc in enumerate(associations):
+                if not isinstance(assoc, dict):
+                    logger.warning(f"[{tool_name}] Item at index {i} in 'associations' is not a dict: {type(assoc)}, value: {assoc!r}. Skipping this item.")
+                    continue
+                try:
+                    total_strength += assoc.get("strength", 0.0) # Use .get for safety
+                    weighted_valence += assoc.get("strength", 0.0) * assoc.get("valence", 0.0)
+                    total_reinforcements += assoc.get("reinforcement_count", 0) # Use .get for safety
+                except TypeError as te: # Catch if e.g. strength is not a number
+                    logger.error(f"[{tool_name}] TypeError processing association item: {assoc!r}. Error: {te}", exc_info=True)
+                    continue # Skip malformed item
+        else: # Should not happen if initial check is robust
+            logger.error(f"[{tool_name}] 'associations' is not a list after initial checks. This should not happen. associations: {associations!r}")
+            # Fallback or raise error
+            return_value = {"expected_valence": 0.0, "confidence": 0.0, "error": "Malformed associations input"}
+            logger.debug(f"[{tool_name}] Returning error due to malformed associations: {return_value!r}")
+            return return_value
+
+
+        expected_valence = (weighted_valence / total_strength) if total_strength > 0 else 0.0
+        confidence = min(0.9, (total_strength / len(associations) if associations else 0.0) * 0.7 + (min(10, total_reinforcements) / 10) * 0.3)
         
-        # Calculate confidence based on total strength and number of reinforcements
-        total_reinforcements = sum(assoc["reinforcement_count"] for assoc in associations)
-        confidence = min(0.9, (total_strength / len(associations)) * 0.7 + (min(10, total_reinforcements) / 10) * 0.3)
-        
-        return {
+        return_value = {
             "expected_valence": expected_valence,
             "confidence": confidence,
             "total_strength": total_strength,
             "total_reinforcements": total_reinforcements
         }
+        logger.debug(f"[{tool_name}] Returning: {return_value!r}")
+        return return_value
 
     @staticmethod
     @function_tool
@@ -1252,18 +1273,34 @@ class ConditioningSystem:
         context: Dict[str, Any] = None
     ) -> Dict[str, Any]:
         """
-        Process a classical conditioning event where an unconditioned stimulus 
+        Process a classical conditioning event where an unconditioned stimulus
         is paired with a conditioned stimulus to create an association.
         """
+        method_name = "process_classical_conditioning"
+        logger.debug(f"[{method_name}] Called with: unconditioned_stimulus='{unconditioned_stimulus}', "
+                     f"conditioned_stimulus='{conditioned_stimulus}', response='{response}', "
+                     f"intensity={intensity}, context type: {type(context)}, context: {context!r}")
+
         data = {
             "unconditioned_stimulus": unconditioned_stimulus,
             "conditioned_stimulus": conditioned_stimulus,
             "response": response,
             "intensity": intensity
         }
+        
+        # Log context_keys before and after _force_str_list
+        raw_context_keys_from_input = None
+        if context and "context_keys" in context:
+            raw_context_keys_from_input = context.get("context_keys")
+        
+        logger.debug(f"[{method_name}] Raw context_keys from input: type={type(raw_context_keys_from_input)}, value={raw_context_keys_from_input!r}")
+        
         data["context_keys"] = ConditioningSystem._force_str_list(
-            context.get("context_keys") if context else []
+            raw_context_keys_from_input if raw_context_keys_from_input is not None else (context.get("context_keys") if context else [])
         )
+        logger.debug(f"[{method_name}] Processed context_keys for agent: type={type(data['context_keys'])}, value={data['context_keys']!r}")
+
+        logger.debug(f"[{method_name}] Data prepared for {self.classical_conditioning_agent.name}: {data!r}")
 
         try:
             result = await Runner.run(
@@ -1272,6 +1309,7 @@ class ConditioningSystem:
                 context=RunContextWrapper(context=self.context)
             )
             co = result.final_output
+            logger.debug(f"[{method_name}] {self.classical_conditioning_agent.name} run successful. Output: {co!r}")
 
             if hasattr(self, "event_bus"):
                 await self.publish_conditioning_event(
@@ -1285,7 +1323,7 @@ class ConditioningSystem:
                     }
                 )
 
-            return {
+            return_value = {
                 "success": True,
                 "association_key": co.association_key,
                 "type": co.type,
@@ -1294,9 +1332,11 @@ class ConditioningSystem:
                 "valence": co.valence,
                 "explanation": co.explanation
             }
+            logger.debug(f"[{method_name}] Returning: {return_value!r}")
+            return return_value
 
         except Exception as e:
-            logger.error(f"Error processing classical conditioning: {e}")
+            logger.error(f"[{method_name}] Error processing classical conditioning: {e}", exc_info=True) # exc_info=True will log the stack trace
             return {"success": False, "error": str(e)}
 
 
@@ -1309,18 +1349,31 @@ class ConditioningSystem:
         context: Dict[str, Any] = None
     ) -> Dict[str, Any]:
         """
-        Process an operant conditioning event where a behavior 
+        Process an operant conditioning event where a behavior
         is reinforced or punished based on its consequences.
         """
+        method_name = "process_operant_conditioning"
+        logger.debug(f"[{method_name}] Called with: behavior='{behavior}', "
+                     f"consequence_type='{consequence_type}', intensity={intensity}, "
+                     f"context type: {type(context)}, context: {context!r}")
         data = {
             "behavior": behavior,
             "consequence_type": consequence_type,
             "intensity": intensity
         }
+        
+        raw_context_keys_from_input = None
+        if context and "context_keys" in context:
+            raw_context_keys_from_input = context.get("context_keys")
+        
+        logger.debug(f"[{method_name}] Raw context_keys from input: type={type(raw_context_keys_from_input)}, value={raw_context_keys_from_input!r}")
+        
         data["context_keys"] = ConditioningSystem._force_str_list(
-            context.get("context_keys") if context else []
+            raw_context_keys_from_input if raw_context_keys_from_input is not None else (context.get("context_keys") if context else [])
         )
+        logger.debug(f"[{method_name}] Processed context_keys for agent: type={type(data['context_keys'])}, value={data['context_keys']!r}")
 
+        logger.debug(f"[{method_name}] Data prepared for {self.operant_conditioning_agent.name}: {data!r}")
         try:
             result = await Runner.run(
                 self.operant_conditioning_agent,
@@ -1328,6 +1381,7 @@ class ConditioningSystem:
                 context=RunContextWrapper(context=self.context)
             )
             co = result.final_output
+            logger.debug(f"[{method_name}] {self.operant_conditioning_agent.name} run successful. Output: {co!r}")
 
             if hasattr(self, "event_bus"):
                 await self.publish_conditioning_event(
@@ -1341,7 +1395,7 @@ class ConditioningSystem:
                     }
                 )
 
-            return {
+            return_value = {
                 "success": True,
                 "association_key": co.association_key,
                 "type": co.type,
@@ -1352,10 +1406,12 @@ class ConditioningSystem:
                 "is_positive": co.is_positive,
                 "explanation": co.explanation
             }
+            logger.debug(f"[{method_name}] Returning: {return_value!r}")
+            return return_value
 
         except Exception as e:
-            logger.error(f"Error processing operant conditioning: {e}")
-            return {"success": False, "error": str(e)}
+        logger.error(f"[{method_name}] Error processing operant conditioning: {e}", exc_info=True)
+        return {"success": False, "error": str(e)}
 
 
     
@@ -1410,17 +1466,24 @@ class ConditioningSystem:
         self,
         trait: str,
         value: float,
-        behaviors: List[str] = None,
-        context: Dict[str, Any] = None
+        behaviors: List[str] = None, # This param is not used in the agent call, so logging its input might be less critical for this specific bug
+        context: Dict[str, Any] = None # This param is not used in the agent call
     ) -> Dict[str, Any]:
         """
         Condition a personality trait through reinforcement of related behaviors.
         """
+        method_name = "condition_personality_trait"
+        logger.debug(f"[{method_name}] Called with: trait='{trait}', value={value}, "
+                     f"behaviors type: {type(behaviors)}, behaviors: {behaviors!r}, "
+                     f"context type: {type(context)}, context: {context!r}")
+        
         # Only pass the scalar inputs
         data = {
             "trait": trait,
             "target_value": value
+            # Note: behaviors and context_keys are not directly passed to this agent in the current setup
         }
+        logger.debug(f"[{method_name}] Data prepared for {self.personality_development_agent.name}: {data!r}")
 
         try:
             result = await Runner.run(
@@ -1429,19 +1492,23 @@ class ConditioningSystem:
                 context=RunContextWrapper(context=self.context)
             )
             co = result.final_output
+            logger.debug(f"[{method_name}] {self.personality_development_agent.name} run successful. Output: {co!r}")
 
-            return {
+            return_value = {
                 "success": True,
                 "trait": co.trait,
                 "target_value": co.target_value,
                 "actual_value": co.actual_value,
-                "conditioned_behaviors": co.conditioned_behaviors,
+                "conditioned_behaviors": co.conditioned_behaviors, # This is an output field
                 "identity_impact": co.identity_impact,
                 "conditioning_strategy": co.conditioning_strategy
             }
+            logger.debug(f"[{method_name}] Type of co.conditioned_behaviors: {type(co.conditioned_behaviors)}")
+            logger.debug(f"[{method_name}] Returning: {return_value!r}")
+            return return_value
 
         except Exception as e:
-            logger.error(f"Error conditioning personality trait: {e}")
+            logger.error(f"[{method_name}] Error conditioning personality trait: {e}", exc_info=True)
             return {"success": False, "error": str(e)}
 
 
