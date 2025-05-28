@@ -362,9 +362,9 @@ class IssueTrackingSystem:
         
         # Initialize tools first
         self.add_issue_tool = function_tool(self._add_issue)
+        # explicitly supply a JSON-schema for the update_issue tool
         self.update_issue_tool = function_tool(
             self._update_issue,
-            name="update_issue",
             description="Update fields on an existing issue",
             parameters={
                 "type": "object",
@@ -375,7 +375,7 @@ class IssueTrackingSystem:
                     },
                     "update_data": {
                         "type": "object",
-                        "description": "A dict of field names to new values (e.g. {'append_description': '…'})",
+                        "description": "A dict of field names to new values",
                         "additionalProperties": True
                     }
                 },
