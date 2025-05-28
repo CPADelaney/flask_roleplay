@@ -47,7 +47,7 @@ class ManagerRegistry:
                 "You receive requests and determine which manager(s) should handle them, "
                 "then orchestrate handoffs between managers when needed for complex tasks."
             ),
-            model="o3-mini",
+            model="gpt-4.1-nano",
         )
         
         # We'll add handoffs as managers are registered
