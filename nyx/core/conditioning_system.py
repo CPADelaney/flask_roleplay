@@ -1242,6 +1242,7 @@ class ConditioningSystem:
         Process a classical conditioning event where an unconditioned stimulus 
         is paired with a conditioned stimulus to create an association.
         """
+        # Only pass the scalar inputs
         data = {
             "unconditioned_stimulus": unconditioned_stimulus,
             "conditioned_stimulus": conditioned_stimulus,
@@ -1284,6 +1285,7 @@ class ConditioningSystem:
             return {"success": False, "error": str(e)}
 
 
+
     async def process_operant_conditioning(
         self,
         behavior: str,
@@ -1295,6 +1297,7 @@ class ConditioningSystem:
         Process an operant conditioning event where a behavior 
         is reinforced or punished based on its consequences.
         """
+        # Only pass the scalar inputs
         data = {
             "behavior": behavior,
             "consequence_type": consequence_type,
@@ -1336,6 +1339,7 @@ class ConditioningSystem:
         except Exception as e:
             logger.error(f"Error processing operant conditioning: {e}")
             return {"success": False, "error": str(e)}
+
 
     
     async def evaluate_behavior_consequences(self,
@@ -1393,14 +1397,14 @@ class ConditioningSystem:
         context: Dict[str, Any] = None
     ) -> Dict[str, Any]:
         """
-        Condition a personality trait through reinforcement of related behaviors
+        Condition a personality trait through reinforcement of related behaviors.
         """
         # Only pass the scalar inputs
         data = {
             "trait": trait,
             "target_value": value
         }
-    
+
         try:
             result = await Runner.run(
                 self.personality_development_agent,
@@ -1408,7 +1412,7 @@ class ConditioningSystem:
                 context=RunContextWrapper(context=self.context)
             )
             co = result.final_output
-    
+
             return {
                 "success": True,
                 "trait": co.trait,
@@ -1418,10 +1422,11 @@ class ConditioningSystem:
                 "identity_impact": co.identity_impact,
                 "conditioning_strategy": co.conditioning_strategy
             }
-    
+
         except Exception as e:
             logger.error(f"Error conditioning personality trait: {e}")
             return {"success": False, "error": str(e)}
+
 
     
     async def condition_preference(self, 
