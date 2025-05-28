@@ -1595,7 +1595,7 @@ foundation_lore_agent = Agent(
         "Always respect directives from the Nyx governance system and check permissions "
         "before performing any actions."
     ),
-    model=OpenAIResponsesModel(model="o3-mini", openai_client=openai_client),
+    model=OpenAIResponsesModel(model="gpt-4.1-nano", openai_client=openai_client),
     model_settings=ModelSettings(temperature=0.4),
     output_type=FoundationLoreOutput,
 )
@@ -1611,7 +1611,7 @@ factions_agent = Agent(
         "Always respect directives from the Nyx governance system and check permissions "
         "before performing any actions."
     ),
-    model=OpenAIResponsesModel(model="o3-mini", openai_client=openai_client),
+    model=OpenAIResponsesModel(model="gpt-4.1-nano", openai_client=openai_client),
     model_settings=ModelSettings(temperature=0.7),
     output_type=FactionsOutput,
 )
@@ -1626,7 +1626,7 @@ cultural_agent = Agent(
         "Always respect directives from the Nyx governance system and check permissions "
         "before performing any actions."
     ),
-    model=OpenAIResponsesModel(model="o3-mini", openai_client=openai_client),
+    model=OpenAIResponsesModel(model="gpt-4.1-nano", openai_client=openai_client),
     model_settings=ModelSettings(temperature=0.5),
     output_type=CulturalElementsOutput,
 )
@@ -1641,7 +1641,7 @@ history_agent = Agent(
         "Always respect directives from the Nyx governance system and check permissions "
         "before performing any actions."
     ),
-    model=OpenAIResponsesModel(model="o3-mini", openai_client=openai_client),
+    model=OpenAIResponsesModel(model="gpt-4.1-nano", openai_client=openai_client),
     model_settings=ModelSettings(temperature=0.6),
     output_type=HistoricalEventsOutput,
 )
@@ -1656,7 +1656,7 @@ locations_agent = Agent(
         "Always respect directives from the Nyx governance system and check permissions "
         "before performing any actions."
     ),
-    model=OpenAIResponsesModel(model="o3-mini", openai_client=openai_client),
+    model=OpenAIResponsesModel(model="gpt-4.1-nano", openai_client=openai_client),
     model_settings=ModelSettings(temperature=0.7),
     output_type=LocationsOutput,
 )
@@ -1671,7 +1671,7 @@ quests_agent = Agent(
         "Always respect directives from the Nyx governance system and check permissions "
         "before performing any actions."
     ),
-    model=OpenAIResponsesModel(model="o3-mini", openai_client=openai_client),
+    model=OpenAIResponsesModel(model="gpt-4.1-nano", openai_client=openai_client),
     model_settings=ModelSettings(temperature=0.7),
     output_type=QuestsOutput,
 )
