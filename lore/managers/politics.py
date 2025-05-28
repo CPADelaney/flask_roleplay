@@ -56,7 +56,7 @@ distribution_agent = Agent(
         "You decide how many conflicts to generate or how to distribute them. "
         "Return JSON, e.g. {\"count\": 3}, or additional instructions.\n"
     ),
-    model="o3-mini",
+    model="gpt-4.1-nano",
     model_settings=ModelSettings(temperature=0.0)
 )
 
@@ -248,7 +248,7 @@ class FactionAgentProxy:
         self.agent = Agent(
             name=f"{faction_data['name']}Agent",
             instructions=self._build_instructions(),
-            model="o3-mini",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.9)
         )
         self.actions_history = []
@@ -805,7 +805,7 @@ class WorldPoliticsManager(BaseLoreManager):
             conflict_agent = Agent(
                 name="NationalConflictAgent",
                 instructions="You create realistic international conflicts for a fantasy world with matriarchal structures.",
-                model="o3-mini",
+                model="gpt-4.1-nano",
                 model_settings=ModelSettings(temperature=0.9)
             )
     
@@ -942,7 +942,7 @@ class WorldPoliticsManager(BaseLoreManager):
             news_agent = Agent(
                 name="ConflictNewsAgent",
                 instructions="You create realistic news articles about new conflicts in a matriarchal fantasy world.",
-                model="o3-mini",
+                model="gpt-4.1-nano",
                 model_settings=ModelSettings(temperature=0.8)
             )
     
@@ -1025,7 +1025,7 @@ class WorldPoliticsManager(BaseLoreManager):
             crisis_streaming_agent = Agent(
                 name="CrisisStreamingAgent",
                 instructions="Generate a stream of real-time developments in an ongoing crisis.",
-                model="o3-mini",
+                model="gpt-4.1-nano",
                 model_settings=ModelSettings(temperature=0.9)
             )
     
@@ -1106,7 +1106,7 @@ class WorldPoliticsManager(BaseLoreManager):
                     f"nation's interests while finding a workable resolution. Traits: "
                     f"{nations['nation1'].get('cultural_traits', [])}"
                 ),
-                model="o3-mini",
+                model="gpt-4.1-nano",
                 model_settings=ModelSettings(temperature=0.9)
             )
             
@@ -1117,7 +1117,7 @@ class WorldPoliticsManager(BaseLoreManager):
                     f"nation's interests while finding a workable resolution. Traits: "
                     f"{nations['nation2'].get('cultural_traits', [])}"
                 ),
-                model="o3-mini",
+                model="gpt-4.1-nano",
                 model_settings=ModelSettings(temperature=0.9)
             )
     
@@ -1128,7 +1128,7 @@ class WorldPoliticsManager(BaseLoreManager):
                     "You are a neutral diplomatic mediator. Your goal is to facilitate productive "
                     "negotiations and help reach a resolution that both parties can accept."
                 ),
-                model="o3-mini",
+                model="gpt-4.1-nano",
                 model_settings=ModelSettings(temperature=0.7)
             )
     
@@ -1196,7 +1196,7 @@ class WorldPoliticsManager(BaseLoreManager):
                         f"You are {media['name']}, a news outlet with a {media['bias']} bias. "
                         f"Cover political events with your unique perspective. Maintain matriarchal themes."
                     ),
-                    model="o3-mini",
+                    model="gpt-4.1-nano",
                     model_settings=ModelSettings(temperature=0.8)
                 )
                 
@@ -1290,7 +1290,7 @@ class WorldPoliticsManager(BaseLoreManager):
             issue_agent = Agent(
                 name="DomesticIssueAgent",
                 instructions="You create realistic domestic political and social issues in a matriarchal society.",
-                model="o3-mini",
+                model="gpt-4.1-nano",
                 model_settings=ModelSettings(temperature=0.9)
             )
     
@@ -1405,7 +1405,7 @@ class WorldPoliticsManager(BaseLoreManager):
             news_agent = Agent(
                 name="DomesticNewsAgent",
                 instructions="You create realistic news articles about domestic issues in a matriarchal society.",
-                model="o3-mini",
+                model="gpt-4.1-nano",
                 model_settings=ModelSettings(temperature=0.8)
             )
     
@@ -1645,7 +1645,7 @@ class WorldPoliticsManager(BaseLoreManager):
             evolution_agent = Agent(
                 name="ConflictEvolutionAgent",
                 instructions="You evolve international conflicts over time in a matriarchal fantasy world.",
-                model="o3-mini",
+                model="gpt-4.1-nano",
                 model_settings=ModelSettings(temperature=0.8)
             )
     
@@ -1795,7 +1795,7 @@ class WorldPoliticsManager(BaseLoreManager):
             news_agent = Agent(
                 name="ConflictNewsUpdateAgent",
                 instructions="You create news updates about evolving international conflicts in a matriarchal world.",
-                model="o3-mini",
+                model="gpt-4.1-nano",
                 model_settings=ModelSettings(temperature=0.8)
             )
     
@@ -1893,7 +1893,7 @@ class WorldPoliticsManager(BaseLoreManager):
             agent = Agent(
                 name="PoliticalReformAgent",
                 instructions="Consider internal and external pressures to propose feasible political reforms.",
-                model="o3-mini",
+                model="gpt-4.1-nano",
                 model_settings=ModelSettings(temperature=0.8)
             )
     
@@ -1987,7 +1987,7 @@ class WorldPoliticsManager(BaseLoreManager):
             agent = Agent(
                 name="DynastyAgent",
                 instructions="You simulate how a dynasty evolves over multiple generations in a matriarchal fantasy world.",
-                model="o3-mini",
+                model="gpt-4.1-nano",
                 model_settings=ModelSettings(temperature=0.7)
             )
     
