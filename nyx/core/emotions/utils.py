@@ -196,7 +196,7 @@ def create_run_config(
     max_tokens: int = 300,
     include_sensitive_data: bool = True,
     cycle_count: int = 0,
-    model: str = "o3-mini",
+    model: str = "gpt-4.1-nano",
     model_provider: Optional[ModelProvider] = None,
     input_guardrails: Optional[List[InputGuardrail[Any]]] = None,
     output_guardrails: Optional[List[OutputGuardrail[Any]]] = None,
