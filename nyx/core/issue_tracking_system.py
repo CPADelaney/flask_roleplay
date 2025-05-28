@@ -355,25 +355,44 @@ class IssueDatabase:
 
 class IssueTrackingSystem:
     """System for tracking issues using OpenAI Agents SDK"""
-    
+
     def __init__(self, db_path: str = "issues_db.json"):
         """Initialize the issue tracking system"""
         self.db = IssueDatabase(db_path)
-        
-        # Initialize tools first
-        self.add_issue_tool = function_tool(self._add_issue)
-        # explicitly supply a JSON-schema for the update_issue tool
+
+        # --- register all tools with explicit names & descriptions ---
+        self.add_issue_tool = function_tool(
+            self._add_issue,
+            name_override="add_issue",
+            description_override="Add a new issue to the database"
+        )
         self.update_issue_tool = function_tool(
             self._update_issue,
             name_override="update_issue",
             description_override="Update fields on an existing issue"
         )
-        self.find_similar_issues_tool = function_tool(self._find_similar_issues)
-        self.get_issue_tool = function_tool(self._get_issue)
-        self.search_issues_tool = function_tool(self._search_issues)
-        self.get_stats_tool = function_tool(self._get_stats)
-        
-        # Then create agents that use those tools
+        self.find_similar_issues_tool = function_tool(
+            self._find_similar_issues,
+            name_override="find_similar_issues",
+            description_override="Find issues similar to a given title and description"
+        )
+        self.get_issue_tool = function_tool(
+            self._get_issue,
+            name_override="get_issue",
+            description_override="Retrieve a single issue by its ID"
+        )
+        self.search_issues_tool = function_tool(
+            self._search_issues,
+            name_override="search_issues",
+            description_override="Search issues by query across titles, descriptions, and tags"
+        )
+        self.get_stats_tool = function_tool(
+            self._get_stats,
+            name_override="get_stats",
+            description_override="Get summary statistics of the issue database"
+        )
+
+        # --- now build the two agents that will use those tools ---
         self.issue_analyzer_agent = self._create_issue_analyzer_agent()
         self.issue_manager_agent = self._create_issue_manager_agent()
     
