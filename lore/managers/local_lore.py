@@ -122,7 +122,7 @@ class LocalLoreManager(BaseLoreManager):
                 "Create poetic, metaphorical narratives with moral lessons "
                 "that center matriarchal values and feminine wisdom."
             ),
-            model="o3-mini",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.9)
         )
         
@@ -133,7 +133,7 @@ class LocalLoreManager(BaseLoreManager):
                 "Add details that make myths seem like real historical events with dates, "
                 "specific people (especially female leaders), and concrete impacts."
             ),
-            model="o3-mini",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.9)
         )
         
@@ -144,7 +144,7 @@ class LocalLoreManager(BaseLoreManager):
                 "Introduce divine intervention, magical occurrences, and mystical beings. "
                 "Emphasize feminine divine power and matriarchal spiritual authority."
             ),
-            model="o3-mini",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.9)
         )
         
@@ -155,7 +155,7 @@ class LocalLoreManager(BaseLoreManager):
                 "You evolve urban myths over time using different narrative styles. "
                 "You select the appropriate specialist based on the desired evolution type."
             ),
-            model="o3-mini",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.8),
             handoffs=[
                 handoff(
@@ -184,7 +184,7 @@ class LocalLoreManager(BaseLoreManager):
                 "Create plausible narrative links between folklore and actual events, "
                 "showing how myths might have originated from real occurrences."
             ),
-            model="o3-mini",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.8)
         )
         
@@ -196,7 +196,7 @@ class LocalLoreManager(BaseLoreManager):
                 "Create narrative links between events and physical places, "
                 "explaining how events led to landmarks or how landmarks witnessed events."
             ),
-            model="o3-mini",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.8)
         )
         
@@ -208,7 +208,7 @@ class LocalLoreManager(BaseLoreManager):
                 "Analyze myths, histories, and landmarks for contradictions or gaps. "
                 "Suggest modifications to maintain a cohesive narrative."
             ),
-            model="o3-mini",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.7)
         )
         
@@ -220,7 +220,7 @@ class LocalLoreManager(BaseLoreManager):
                 "Track changes that occur during transmission, including distortions, "
                 "adaptations to local contexts, and shifts in central elements."
             ),
-            model="o3-mini",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.8)
         )
 
@@ -231,7 +231,7 @@ class LocalLoreManager(BaseLoreManager):
                 "You create multiple contradictory versions of the same myth, "
                 "each with at least one intentional inconsistency."
             ),
-            model="o3-mini",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.9)
         )
         
@@ -242,7 +242,7 @@ class LocalLoreManager(BaseLoreManager):
                 "including marketing angles, attractions, merchandise, etc. "
                 "Focus on how matriarchal elements can draw in visitors."
             ),
-            model="o3-mini",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.8)
         )
         
@@ -253,7 +253,7 @@ class LocalLoreManager(BaseLoreManager):
                 "Highlight differences in detail, consistency, and local variations. "
                 "Always emphasize matriarchal elements in both mediums."
             ),
-            model="o3-mini",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.8)
         )
 
@@ -1745,7 +1745,7 @@ class LocalLoreManager(BaseLoreManager):
         myth_agent = Agent(
             name="UrbanMythAgent",
             instructions="You create urban myths and local legends for locations.",
-            model="o3-mini",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.8)
         )
         run_config = RunConfig(workflow_name="GenerateMyths")
@@ -1817,7 +1817,7 @@ class LocalLoreManager(BaseLoreManager):
         history_agent = Agent(
             name="LocalHistoryAgent",
             instructions="You create local historical events for locations.",
-            model="o3-mini",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.8)
         )
         run_config = RunConfig(workflow_name="GenerateLocalHistory")
@@ -1894,7 +1894,7 @@ class LocalLoreManager(BaseLoreManager):
         landmark_agent = Agent(
             name="LandmarkAgent",
             instructions="You create landmarks for specific locations.",
-            model="o3-mini",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.8)
         )
         run_config = RunConfig(workflow_name="GenerateLandmarks")
@@ -1971,7 +1971,7 @@ class LocalLoreManager(BaseLoreManager):
         evolution_agent = Agent(
             name="LoreEvolutionAgent",
             instructions="You evolve location lore based on an event that occurs.",
-            model="o3-mini",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.8)
         )
 
