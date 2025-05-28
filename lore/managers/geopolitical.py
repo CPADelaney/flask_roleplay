@@ -148,7 +148,7 @@ class GeopoliticalSystemManager(BaseLoreManager):
                 "Given context about the world, you decide how many geopolitical items to generate, or how to distribute them. "
                 "Return JSON like: { \"count\": 5 }, or something relevant. "
             ),
-            model="o3-mini",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.0)
         )
         
@@ -160,7 +160,7 @@ class GeopoliticalSystemManager(BaseLoreManager):
                 "Consider defensibility, resources, isolation factors, and how matriarchal societies "
                 "would develop in such terrain."
             ),
-            model="o3-mini",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.9)
         )
         
@@ -171,7 +171,7 @@ class GeopoliticalSystemManager(BaseLoreManager):
                 "Consider trade, naval power, resources, and how matriarchal societies "
                 "would leverage maritime advantages."
             ),
-            model="o3-mini",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.9)
         )
         
@@ -182,7 +182,7 @@ class GeopoliticalSystemManager(BaseLoreManager):
                 "Consider agriculture, mobility, defensibility challenges, and how matriarchal societies "
                 "would organize in open territories."
             ),
-            model="o3-mini",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.9)
         )
         
@@ -194,7 +194,7 @@ class GeopoliticalSystemManager(BaseLoreManager):
                 "Consider military capabilities, terrain, diplomatic factors, leadership quality, "
                 "and social cohesion. Produce detailed timelines with multiple possible outcomes."
             ),
-            model="o3-mini",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.7)
         )
         
@@ -206,7 +206,7 @@ class GeopoliticalSystemManager(BaseLoreManager):
                 "Consider historical claims, resources, strategic value, cultural factors, and diplomatic options. "
                 "Suggest multiple resolution paths with their implications."
             ),
-            model="o3-mini",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.7)
         )
         
@@ -218,7 +218,7 @@ class GeopoliticalSystemManager(BaseLoreManager):
                 "Consider trends, leadership shifts, resource pressures, cultural factors, and external influences. "
                 "Show how matriarchal power structures might develop or respond to changes."
             ),
-            model="o3-mini",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.8)
         )
         
@@ -226,7 +226,7 @@ class GeopoliticalSystemManager(BaseLoreManager):
         self.region_agent = Agent(
             name="RegionCreationAgent",
             instructions="You create detailed geographic regions, adapting to terrain types.",
-            model="o3-mini",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.9),
             handoffs=[
                 handoff(
@@ -251,7 +251,7 @@ class GeopoliticalSystemManager(BaseLoreManager):
         self.trade_modeling_agent = Agent(
             name="EconomicTradeModelingAgent",
             instructions="Simulate trade relations between two nations, considering trade routes, goods, and economic impact.",
-            model="o3-mini",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.7),
             output_type=EconomicTradeSimulation
         )
@@ -259,7 +259,7 @@ class GeopoliticalSystemManager(BaseLoreManager):
         self.geography_effect_agent = Agent(
             name="ClimateGeographyEffectAgent",
             instructions="Simulate the effects of climate and geography on political development.",
-            model="o3-mini",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.7),
             output_type=ClimateGeographyEffect
         )
@@ -267,7 +267,7 @@ class GeopoliticalSystemManager(BaseLoreManager):
         self.covert_operations_agent = Agent(
             name="CovertOperationsSimulator",
             instructions="Simulate espionage and covert operations between nations.",
-            model="o3-mini",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.8),
             output_type=CovertOperation
         )
@@ -605,7 +605,7 @@ class GeopoliticalSystemManager(BaseLoreManager):
             nation_agent = Agent(
                 name="NationGenerationAgent",
                 instructions="You create detailed nations for matriarchal fantasy worlds.",
-                model="o3-mini",
+                model="gpt-4.1-nano",
                 model_settings=ModelSettings(temperature=0.9),
                 output_type=List[PoliticalEntity]
             )
