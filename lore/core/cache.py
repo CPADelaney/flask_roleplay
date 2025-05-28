@@ -75,7 +75,7 @@ class LoreCache:
                 "cache misses, suggesting priority adjustments, and predicting "
                 "which items should be pre-warmed."
             ),
-            model="o3-mini",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.0)
         )
     
