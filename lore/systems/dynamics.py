@@ -69,7 +69,7 @@ class LoreDynamicsSystem(BaseLoreManager):
                 "Your updates should be meaningful and reflect the impact of events on the world. "
                 "Maintain the matriarchal power dynamics in all updates."
             ),
-            model="o3-mini",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.9)
         )
         
@@ -82,7 +82,7 @@ class LoreDynamicsSystem(BaseLoreManager):
                 "Events should be specific and detailed, creating opportunities for character development "
                 "and plot advancement. Focus on how events impact or reinforce matriarchal power dynamics."
             ),
-            model="o3-mini",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.9)
         )
         
@@ -95,7 +95,7 @@ class LoreDynamicsSystem(BaseLoreManager):
                 "New elements should fit seamlessly with existing lore while expanding the world. "
                 "Ensure all new lore reinforces matriarchal power dynamics."
             ),
-            model="o3-mini",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.9)
         )
         
@@ -108,7 +108,7 @@ class LoreDynamicsSystem(BaseLoreManager):
                 "Focus on power dynamics, succession, alliances, and court intrigue. "
                 "Events should highlight feminine leadership and authority."
             ),
-            model="o3-mini",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.9)
         )
         
@@ -121,7 +121,7 @@ class LoreDynamicsSystem(BaseLoreManager):
                 "Focus on strategy, leadership, and the consequences of warfare. "
                 "Events should highlight feminine military command structures."
             ),
-            model="o3-mini",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.9)
         )
         
@@ -134,7 +134,7 @@ class LoreDynamicsSystem(BaseLoreManager):
                 "Focus on traditions, arts, festivals, and social changes. "
                 "Events should highlight feminine cultural influence and values."
             ),
-            model="o3-mini",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.9)
         )
     
@@ -217,7 +217,7 @@ class LoreDynamicsSystem(BaseLoreManager):
                 "Determine if the event description is appropriate for world lore evolution. "
                 "Return a structured response with is_valid=True/False and reasoning."
             ),
-            model="o3-mini",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.8),
             output_type=self.EventValidation
         )
@@ -299,7 +299,7 @@ class LoreDynamicsSystem(BaseLoreManager):
                     "Identify affected elements, generate updates, apply them, and create new lore. "
                     "Maintain matriarchal power dynamics in all transformations."
                 ),
-                model="o3-mini",
+                model="gpt-4.1-nano",
                 model_settings=ModelSettings(temperature=0.9),
                 input_guardrails=[input_guardrail],
                 tools=[
@@ -542,7 +542,7 @@ class LoreDynamicsSystem(BaseLoreManager):
                 "3) public_perception: short text describing how people see or react to the event\n\n"
                 "Output valid JSON with these keys."
             ),
-            model="o3-mini",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.9)
         )
         
@@ -770,7 +770,7 @@ class LoreDynamicsSystem(BaseLoreManager):
                 "Pick exactly one event type from that array that best fits the context. "
                 "Return JSON with a single field: {'event_type': 'the chosen type'}"
             ),
-            model="o3-mini",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.8)
         )
         
@@ -874,7 +874,7 @@ class LoreDynamicsSystem(BaseLoreManager):
                     "If it's 'military_conflict', hand off to 'transfer_to_military_agent'. "
                     "Otherwise, hand off to 'transfer_to_cultural_agent'."
                 ),
-                model="o3-mini",
+                model="gpt-4.1-nano",
                 model_settings=ModelSettings(temperature=0.8),
                 handoffs=[
                     handoff(
@@ -1337,7 +1337,7 @@ class LoreDynamicsSystem(BaseLoreManager):
                     myth_agent = Agent(
                         name="MythEvolutionAgent",
                         instructions="You develop and evolve urban myths over time.",
-                        model="o3-mini"
+                        model="gpt-4.1-nano"
                     )
                     
                     # Create tracing configuration
@@ -1456,7 +1456,7 @@ class LoreDynamicsSystem(BaseLoreManager):
                         "You update the text of an urban myth in a matriarchal fantasy world. "
                         "Possible changes: it grows, evolves, or fades. Return only the new text."
                     ),
-                    model="o3-mini",
+                    model="gpt-4.1-nano",
                     model_settings=ModelSettings(temperature=0.8)
                 )
                 
@@ -1571,7 +1571,7 @@ class LoreDynamicsSystem(BaseLoreManager):
                         "reflect how the element transforms (formalizes, adapts, spreads, codifies, etc.). "
                         "Return only the new, updated description in a cohesive style."
                     ),
-                    model="o3-mini",
+                    model="gpt-4.1-nano",
                     model_settings=ModelSettings(temperature=0.8)
                 )
                 
@@ -1734,7 +1734,7 @@ class LoreDynamicsSystem(BaseLoreManager):
                             "You rewrite faction or region descriptions to reflect changes in alliances, "
                             "territory, or governance. Keep the matriarchal theme strong."
                         ),
-                        model="o3-mini",
+                        model="gpt-4.1-nano",
                         model_settings=ModelSettings(temperature=0.8)
                     )
                     
@@ -1997,7 +1997,7 @@ class LoreDynamicsSystem(BaseLoreManager):
                         "You evolve the reputations or stories of notable figures in a matriarchal setting. "
                         "Given a change_type, rewrite their description to reflect that new condition."
                     ),
-                    model="o3-mini",
+                    model="gpt-4.1-nano",
                     model_settings=ModelSettings(temperature=0.8)
                 )
                 
@@ -2182,7 +2182,7 @@ class MultiStepPlanner:
             expected outcomes, and potential narrative branches.
             Maintain matriarchal themes throughout the planning process.
             """,
-            model="o3-mini",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.8)
         )
     
@@ -2421,7 +2421,7 @@ class NarrativeEvaluator:
             Provide specific, constructive feedback on how to improve future generations.
             Consider themes, character motivations, plot development, and matriarchal elements.
             """,
-            model="o3-mini",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.7)
         )
         self.feedback_history = []
@@ -2580,7 +2580,7 @@ class NarrativeEvolutionSystem:
             You evaluate and select the most compelling narrative elements from a pool of candidates.
             Select elements that enhance the overall narrative, maintain consistency, and advance matriarchal themes.
             """,
-            model="o3-mini",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.7)
         )
         self.mutation_agent = Agent(
@@ -2589,7 +2589,7 @@ class NarrativeEvolutionSystem:
             You modify narrative elements to improve their quality, interest, and consistency.
             Enhance matriarchal themes and ensure coherent integration with the world.
             """,
-            model="o3-mini",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.9)
         )
     
@@ -2865,7 +2865,7 @@ class WorldStateStreamer:
             Narrate how the world evolves, highlighting key developments, reactions,
             and emerging patterns. Focus on matriarchal power dynamics.
             """,
-            model="o3-mini",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.8)
         )
     
