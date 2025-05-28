@@ -1230,145 +1230,113 @@ class ConditioningSystem:
     
     # Public API methods
     
-    async def process_classical_conditioning(self, 
-                                          unconditioned_stimulus: str,
-                                          conditioned_stimulus: str,
-                                          response: str,
-                                          intensity: float = 1.0,
-                                          context: Dict[str, Any] = None) -> Dict[str, Any]:
+    async def process_classical_conditioning(
+        self,
+        unconditioned_stimulus: str,
+        conditioned_stimulus: str,
+        response: str,
+        intensity: float = 1.0,
+        context: Dict[str, Any] = None
+    ) -> Dict[str, Any]:
         """
         Process a classical conditioning event where an unconditioned stimulus 
         is paired with a conditioned stimulus to create an association.
-        
-        Args:
-            unconditioned_stimulus: The natural stimulus that triggers the response
-            conditioned_stimulus: The neutral stimulus to be conditioned
-            response: The response to be conditioned
-            intensity: The intensity of the unconditioned stimulus (0.0-1.0)
-            context: Additional contextual information
-            
-        Returns:
-            Processing results
         """
-
-        # Prepare data for conditioning agent
         data = {
             "unconditioned_stimulus": unconditioned_stimulus,
             "conditioned_stimulus": conditioned_stimulus,
             "response": response,
-            "intensity": intensity,
-            "context": context or {}
+            "intensity": intensity
         }
-        
+
         try:
-            # Run the classical conditioning agent
             result = await Runner.run(
                 self.classical_conditioning_agent,
                 data,
                 context=RunContextWrapper(context=self.context)
             )
-            
-            conditioning_output = result.final_output
-            
-            # Record for events if available
+            co = result.final_output
+
             if hasattr(self, "event_bus"):
                 await self.publish_conditioning_event(
                     event_type="conditioning_update",
                     data={
                         "update_type": "classical",
-                        "association_key": conditioning_output.association_key,
-                        "association_type": conditioning_output.type,
-                        "strength": conditioning_output.association_strength,
+                        "association_key": co.association_key,
+                        "association_type": co.type,
+                        "strength": co.association_strength,
                         "user_id": context.get("user_id", "default") if context else "default"
                     }
                 )
-            
-            # Structure the response
+
             return {
                 "success": True,
-                "association_key": conditioning_output.association_key,
-                "type": conditioning_output.type,
-                "association_strength": conditioning_output.association_strength,
-                "reinforcement_count": conditioning_output.reinforcement_count,
-                "valence": conditioning_output.valence,
-                "explanation": conditioning_output.explanation
+                "association_key": co.association_key,
+                "type": co.type,
+                "association_strength": co.association_strength,
+                "reinforcement_count": co.reinforcement_count,
+                "valence": co.valence,
+                "explanation": co.explanation
             }
-        
+
         except Exception as e:
             logger.error(f"Error processing classical conditioning: {e}")
-            return {
-                "success": False,
-                "error": str(e)
-            }
-    
-    async def process_operant_conditioning(self,
-                                        behavior: str,
-                                        consequence_type: str,
-                                        intensity: float = 1.0,
-                                        context: Dict[str, Any] = None) -> Dict[str, Any]:
+            return {"success": False, "error": str(e)}
+
+
+    async def process_operant_conditioning(
+        self,
+        behavior: str,
+        consequence_type: str,
+        intensity: float = 1.0,
+        context: Dict[str, Any] = None
+    ) -> Dict[str, Any]:
         """
         Process an operant conditioning event where a behavior 
         is reinforced or punished based on its consequences.
-        
-        Args:
-            behavior: The behavior being conditioned
-            consequence_type: Type of consequence
-            intensity: The intensity of the consequence (0.0-1.0)
-            context: Additional contextual information
-            
-        Returns:
-            Processing results
         """
-        # Prepare data for conditioning agent
         data = {
             "behavior": behavior,
             "consequence_type": consequence_type,
-            "intensity": intensity,
-            "context": context or {}
+            "intensity": intensity
         }
-        
+
         try:
-            # Run the operant conditioning agent
             result = await Runner.run(
                 self.operant_conditioning_agent,
                 data,
                 context=RunContextWrapper(context=self.context)
             )
-            
-            conditioning_output = result.final_output
-            
-            # Record for events if available
+            co = result.final_output
+
             if hasattr(self, "event_bus"):
                 await self.publish_conditioning_event(
                     event_type="conditioning_update",
                     data={
                         "update_type": "operant",
-                        "association_key": conditioning_output.association_key,
-                        "association_type": conditioning_output.type,
-                        "strength": conditioning_output.association_strength,
+                        "association_key": co.association_key,
+                        "association_type": co.type,
+                        "strength": co.association_strength,
                         "user_id": context.get("user_id", "default") if context else "default"
                     }
                 )
-            
-            # Structure the response
+
             return {
                 "success": True,
-                "association_key": conditioning_output.association_key,
-                "type": conditioning_output.type,
-                "behavior": conditioning_output.behavior,
-                "consequence_type": conditioning_output.consequence_type,
-                "association_strength": conditioning_output.association_strength,
-                "is_reinforcement": conditioning_output.is_reinforcement,
-                "is_positive": conditioning_output.is_positive,
-                "explanation": conditioning_output.explanation
+                "association_key": co.association_key,
+                "type": co.type,
+                "behavior": co.behavior,
+                "consequence_type": co.consequence_type,
+                "association_strength": co.association_strength,
+                "is_reinforcement": co.is_reinforcement,
+                "is_positive": co.is_positive,
+                "explanation": co.explanation
             }
-        
+
         except Exception as e:
             logger.error(f"Error processing operant conditioning: {e}")
-            return {
-                "success": False,
-                "error": str(e)
-            }
+            return {"success": False, "error": str(e)}
+
     
     async def evaluate_behavior_consequences(self,
                                           behavior: str,
