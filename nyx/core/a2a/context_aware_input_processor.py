@@ -14,7 +14,7 @@ class ContextAwareInputProcessor(ContextAwareModule):
     Enhanced BlendedInputProcessor with full context distribution capabilities
     """
     
-    async def __init__(self, original_input_processor):
+    def __init__(self, original_input_processor):
         super().__init__("input_processor")
         self.original_processor = original_input_processor
         
