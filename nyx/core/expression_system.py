@@ -1188,7 +1188,7 @@ def create_expression_orchestrator_agent(emotional_core=None, mood_manager=None)
             get_context_specific_pattern,
             get_pattern_history
         ],
-        model="o3-mini",
+        model="gpt-4.1-nano",
         model_settings=ModelSettings(temperature=0.3)
     )
 
@@ -1207,7 +1207,7 @@ def create_text_expression_agent() -> Agent:
             apply_text_expression
         ],
         output_type=TextExpressionRequest,
-        model="o3-mini",
+        model="gpt-4.1-nano",
         model_settings=ModelSettings(temperature=0.4)
     )
 
@@ -1225,7 +1225,7 @@ def create_behavioral_expression_agent() -> Agent:
         tools=[
             get_behavioral_expressions
         ],
-        model="o3-mini",
+        model="gpt-4.1-nano",
         model_settings=ModelSettings(temperature=0.4)
     )
 
@@ -1244,7 +1244,7 @@ def create_action_bias_agent() -> Agent:
             get_action_biases
         ],
         output_type=ActionBiasRequest,
-        model="o3-mini",
+        model="gpt-4.1-nano",
         model_settings=ModelSettings(temperature=0.3)
     )
 
