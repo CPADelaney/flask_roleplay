@@ -619,7 +619,7 @@ class IssueTrackingSystem:
         result = self.db.add_issue(new_issue)
         return result.dict()
     
-    async def _update_issue(self, issue_id: str, update_data: Dict[str, Any]) -> Dict[str, Any]:
+    async def _update_issue(self, issue_id: str, update_data: dict) -> Dict[str, Any]:
         """
         Update an existing issue (used as a tool for agents)
         """
