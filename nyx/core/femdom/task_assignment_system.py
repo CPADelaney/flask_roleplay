@@ -156,6 +156,9 @@ class TaskAssignmentSystem:
         self.assigned_tasks: Dict[str, AssignedTask] = {}  # task_id -> AssignedTask
         self.user_settings: Dict[str, UserTaskSettings] = {}  # user_id -> UserTaskSettings
         self.task_templates: Dict[str, TaskTemplate] = {}  # template_id -> TaskTemplate
+
+        self.task_validation_guardrail = self._create_task_validation_guardrail()
+        self.verification_validation_guardrail = self._create_verification_validation_guardrail()
         
         # Initialize agents
         self.task_ideation_agent = self._create_task_ideation_agent()
@@ -177,8 +180,7 @@ class TaskAssignmentSystem:
         )
         
         # Create guardrails
-        self.task_validation_guardrail = self._create_task_validation_guardrail()
-        self.verification_validation_guardrail = self._create_verification_validation_guardrail()
+
         
         # Lock for thread safety
         self._lock = asyncio.Lock()
