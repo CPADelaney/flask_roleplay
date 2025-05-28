@@ -173,6 +173,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
         self.default_active_modules: Set[str] = set() # Initialize as empty set
         self.internal_module_registry: Dict[str, Any] = {} # Initialize as empty dict
         self.motivations: Dict[str, float] = {} # Example: Initialize if used by action generator
+        self._module_registry: Dict[str, Any] = {}
 
         # --- State tracking & Timestamps ---
         self.last_interaction = datetime.datetime.now()
