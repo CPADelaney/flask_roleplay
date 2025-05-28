@@ -1051,7 +1051,6 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             # Assign dominance_system after femdom_coordinator init
             self.dominance_system = self.femdom_coordinator
             if self.use_a2a_integration and self.dominance_system:
-                from nyx.core.a2a.context_aware_dominance_system import ContextAwareDominanceSystem
                 self.dominance_system = ContextAwareDominanceSystem(self.dominance_system)
                 logger.debug("Enhanced DominanceSystem with A2A context distribution")
             
