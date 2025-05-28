@@ -1437,9 +1437,7 @@ class ConditioningSystem:
         # Prepare data for personality development agent
         data = {
             "trait": trait,
-            "target_value": value,
-            "behaviors": behaviors,
-            "context": context or {}
+            "target_value": value
         }
         
         try:
