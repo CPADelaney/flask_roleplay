@@ -273,23 +273,32 @@ async def _analyze_behavior_distribution(ctx: RunContextWrapper) -> Dict[str, An
 @function_tool
 async def _calculate_trait_coherence(
     ctx: RunContextWrapper[MaintenanceContext],
-    traits: Optional[Dict[str, float]] = None # Make 'traits' Optional, default to None
+    traits: Dict[str, float]  # Required parameter
 ) -> Dict[str, Any]:
     """
     Calculate coherence between personality traits
     
     Args:
-        traits: Dictionary of trait values
+        traits: Dictionary of trait values (REQUIRED)
         
     Returns:
         Trait coherence analysis
     """
-    # Add a check at the beginning to handle the case where the caller forgets to provide it
+    # Validate traits parameter
     if traits is None:
-        logger.error("Tool _calculate_trait_coherence called without providing the required 'traits' argument.")
-        # Return an error structure or raise an exception, depending on desired handling
+        logger.error("Tool _calculate_trait_coherence called without 'traits' parameter")
         return {
-            "error": "Missing required 'traits' argument.",
+            "error": "Missing required 'traits' parameter",
+            "overall_coherence": 0.0,
+            "incoherent_pairs": [],
+            "complementary_coherence": [],
+            "opposing_coherence": []
+        }
+    
+    if not isinstance(traits, dict):
+        logger.error(f"Tool _calculate_trait_coherence: traits must be a dict, got {type(traits)}")
+        return {
+            "error": f"Invalid traits type: {type(traits).__name__}",
             "overall_coherence": 0.0,
             "incoherent_pairs": [],
             "complementary_coherence": [],
@@ -349,12 +358,17 @@ async def _calculate_trait_coherence(
     
     overall_coherence = total_coherence / total_pairs if total_pairs > 0 else 0.5
     
+    # Identify incoherent pairs
+    incoherent_pairs = (
+        [p for p in complementary_coherence if p["coherence"] < 0.5] + 
+        [p for p in opposing_coherence if p["coherence"] < 0.5]
+    )
+    
     return {
         "complementary_coherence": complementary_coherence,
         "opposing_coherence": opposing_coherence,
         "overall_coherence": overall_coherence,
-        "incoherent_pairs": [p for p in complementary_coherence if p["coherence"] < 0.5] + 
-                          [p for p in opposing_coherence if p["coherence"] < 0.5]
+        "incoherent_pairs": incoherent_pairs
     }
 
 @function_tool
@@ -417,11 +431,10 @@ async def _identify_trait_imbalances(ctx: RunContextWrapper) -> List[Dict[str, A
 @function_tool
 async def _calculate_trait_adjustment(
     ctx: RunContextWrapper[MaintenanceContext],
-    trait: Optional[str] = None,
-    current_value: Optional[float] = None,
-    target_value: Optional[float] = None,
-    # CHANGE 1: Make importance Optional in the signature
-    importance: Optional[float] = None
+    trait: str,
+    current_value: float,
+    target_value: float,
+    importance: float = 0.5  # Make importance have a default value
 ) -> float:
     """
     Calculate appropriate adjustment for a personality trait
@@ -430,20 +443,18 @@ async def _calculate_trait_adjustment(
         trait: The trait to adjust
         current_value: Current trait value
         target_value: Target trait value
-        importance: Importance of the trait (0.0-1.0). Defaults to 0.5 if not provided. # Updated docstring
+        importance: Importance of the trait (0.0-1.0). Defaults to 0.5 if not provided.
 
     Returns:
         Calculated adjustment value
     """
-    # Parameter validation (already present)
+    # Parameter validation
     if trait is None or current_value is None or target_value is None:
         logger.error("Tool _calculate_trait_adjustment missing required arguments (trait, current_value, or target_value).")
-        return 0.0 # Return neutral adjustment on error
+        return 0.0  # Return neutral adjustment on error
 
-    # CHANGE 2: Handle the default value inside the function logic
-    actual_importance = importance if importance is not None else 0.5
-    # Ensure the effective importance is within the valid range
-    actual_importance = max(0.0, min(1.0, actual_importance))
+    # Ensure importance is within valid range
+    importance = max(0.0, min(1.0, importance))
 
     # Calculate difference
     difference = target_value - current_value
@@ -452,8 +463,7 @@ async def _calculate_trait_adjustment(
     basic_adjustment = difference * 0.3
 
     # Scale based on importance
-    # Use the actual_importance which includes the default handling
-    importance_factor = 0.5 + (actual_importance / 2)  # Range: 0.5 to 1.0
+    importance_factor = 0.5 + (importance / 2)  # Range: 0.5 to 1.0
 
     # Calculate final adjustment
     adjustment = basic_adjustment * importance_factor
@@ -695,8 +705,8 @@ async def _get_association_details(
 @function_tool
 async def _apply_extinction_to_association_logic(
     ctx: RunContextWrapper[MaintenanceContext],
-    association_key: Optional[str] = None,
-    association_type: Optional[str] = None
+    association_key: str,
+    association_type: str
 ) -> Dict[str, Any]:
     """
     Apply extinction to a specific association (Internal logic function)
@@ -708,21 +718,21 @@ async def _apply_extinction_to_association_logic(
     Returns:
         Result of extinction
     """
-    # Enhanced error checking with detailed feedback
-    missing_args = []
-    if association_key is None:
-        missing_args.append("association_key")
-    if association_type is None:
-        missing_args.append("association_type")
-    
-    if missing_args:
-        error_msg = f"Tool _apply_extinction_to_association missing required arguments: {', '.join(missing_args)}"
-        logger.error(error_msg)
+    # Validate parameters
+    if not association_key:
+        logger.error("Tool _apply_extinction_to_association missing association_key")
         return {
             "success": False,
-            "error": f"Missing required arguments: {', '.join(missing_args)}. Please provide all required parameters."
+            "error": "Missing required argument: association_key"
         }
-        
+    
+    if not association_type or association_type not in ['classical', 'operant']:
+        logger.error(f"Tool _apply_extinction_to_association invalid association_type: {association_type}")
+        return {
+            "success": False,
+            "error": "Invalid association_type. Must be 'classical' or 'operant'"
+        }
+    
     try:
         result = await ctx.context.conditioning_system.apply_extinction(association_key, association_type)
         return result
@@ -740,12 +750,12 @@ _apply_extinction_to_association_tool = function_tool(
     description_override="Apply extinction to a specific association. REQUIRED PARAMETERS: association_key (string), association_type ('classical' or 'operant')"
 )
 
-@function_tool
+
 async def _adjust_association_decay_rate_logic(
     ctx: RunContextWrapper[MaintenanceContext],
-    association_key: Optional[str] = None,
-    association_type: Optional[str] = None,
-    new_decay_rate: Optional[float] = None
+    association_key: str,
+    association_type: str,
+    new_decay_rate: float
 ) -> Dict[str, Any]:
     """
     Adjust the decay rate of an association (Internal logic function)
@@ -758,30 +768,41 @@ async def _adjust_association_decay_rate_logic(
     Returns:
         Result of adjustment
     """
-    # Enhanced error checking with detailed feedback
-    missing_args = []
-    if association_key is None:
-        missing_args.append("association_key")
-    if association_type is None:
-        missing_args.append("association_type")
-    if new_decay_rate is None:
-        missing_args.append("new_decay_rate")
-    
-    if missing_args:
-        error_msg = f"Tool _adjust_association_decay_rate missing required arguments: {', '.join(missing_args)}"
-        logger.error(error_msg)
+    # Validate parameters
+    if not association_key:
         return {
             "success": False,
-            "error": f"Missing required arguments: {', '.join(missing_args)}. Please provide all required parameters."
+            "error": "Missing required argument: association_key"
         }
-        
+    
+    if not association_type or association_type not in ['classical', 'operant']:
+        return {
+            "success": False,
+            "error": "Invalid association_type. Must be 'classical' or 'operant'"
+        }
+    
+    if new_decay_rate is None:
+        return {
+            "success": False,
+            "error": "Missing required argument: new_decay_rate"
+        }
+    
+    # Validate decay rate range
+    if not (0.0 <= new_decay_rate <= 1.0):
+        return {
+            "success": False,
+            "error": f"new_decay_rate must be between 0.0 and 1.0, got {new_decay_rate}"
+        }
+    
     # Get the appropriate association dictionary
-    associations = ctx.context.classical_associations if association_type == "classical" else ctx.context.operant_associations
+    associations = (ctx.context.conditioning_system.classical_associations 
+                   if association_type == "classical" 
+                   else ctx.context.conditioning_system.operant_associations)
     
     if association_key not in associations:
         return {
             "success": False,
-            "message": f"Association {association_key} not found"
+            "message": f"Association {association_key} not found in {association_type} associations"
         }
     
     # Get the association
@@ -789,7 +810,9 @@ async def _adjust_association_decay_rate_logic(
     
     # Update decay rate
     old_decay_rate = association.decay_rate
-    association.decay_rate = max(0.0, min(1.0, new_decay_rate))
+    association.decay_rate = new_decay_rate
+    
+    logger.info(f"Updated decay rate for {association_type} association {association_key}: {old_decay_rate} -> {new_decay_rate}")
     
     return {
         "success": True,
@@ -799,7 +822,7 @@ async def _adjust_association_decay_rate_logic(
         "new_decay_rate": association.decay_rate
     }
 
-# Step 2: Create the tool wrapper with explicit description
+# Tool wrapper with explicit description
 _adjust_association_decay_rate_tool = function_tool(
     _adjust_association_decay_rate_logic,
     name_override="_adjust_association_decay_rate",
@@ -874,19 +897,25 @@ async def _identify_extinction_candidates(ctx: RunContextWrapper) -> List[Dict[s
 @function_tool
 async def _find_similar_associations(
     ctx: RunContextWrapper[MaintenanceContext],
-    # CHANGE: Make association_type required
-    association_type: str
+    association_type: str  # Required parameter
 ) -> List[Dict[str, Any]]:
     """
     Find groups of similar associations that are candidates for consolidation
 
     Args:
-        association_type: Type of association (classical or operant) - REQUIRED.
+        association_type: Type of association ('classical' or 'operant') - REQUIRED
 
     Returns:
         Groups of similar associations
     """
-    associations = ctx.context.conditioning_system.classical_associations if association_type == "classical" else ctx.context.conditioning_system.operant_associations
+    # Validate association_type
+    if association_type not in ['classical', 'operant']:
+        logger.error(f"Invalid association_type: {association_type}. Must be 'classical' or 'operant'")
+        return []
+    
+    associations = (ctx.context.conditioning_system.classical_associations 
+                   if association_type == "classical" 
+                   else ctx.context.conditioning_system.operant_associations)
     
     # Group associations by stimulus
     stimulus_groups = {}
@@ -935,82 +964,69 @@ async def _find_similar_associations(
                     })
     
     return similar_groups
-
+    
 @function_tool
-async def _consolidate_associations(
+async def _analyze_consolidation_impact(
     ctx: RunContextWrapper[MaintenanceContext],
-    group: Optional[Dict[str, Any]] = None # Make Optional
+    association_type: str  # Required parameter
 ) -> Dict[str, Any]:
     """
-    Consolidate a group of similar associations
-    
+    Analyze the impact of consolidation on the association set
+
     Args:
-        group: Group of similar associations
-        
+        association_type: Type of association ('classical' or 'operant') - REQUIRED
+
     Returns:
-        Result of consolidation
+        Analysis of consolidation impact
     """
-    if group is None:
-        logger.error("Tool _consolidate_associations missing required 'group' argument.")
-        return {"success": False, "error": "Missing required 'group' argument."}
-        
-    association_type = group.get("association_type", "classical")
-    associations = ctx.context.conditioning_system.classical_associations if association_type == "classical" else ctx.context.conditioning_system.operant_associations
-    
-    # Get associations from group
-    group_associations = group.get("associations", [])
-    
-    if len(group_associations) < 2:
+    # Validate association_type
+    if association_type not in ['classical', 'operant']:
+        logger.error(f"Invalid association_type: {association_type}. Must be 'classical' or 'operant'")
         return {
-            "success": False,
-            "message": "Need at least 2 associations to consolidate"
+            "potential_consolidations": 0,
+            "potential_removals": 0,
+            "efficiency_gain": 0.0,
+            "recommendation": "Invalid association type provided"
         }
     
-    # Find the strongest association
-    strongest_key = max(group_associations, key=lambda x: x.get("strength", 0.0)).get("key")
+    similar_groups = await _find_similar_associations(ctx, association_type=association_type)
     
-    if not strongest_key or strongest_key not in associations:
+    if not similar_groups:
         return {
-            "success": False,
-            "message": "Strongest association not found"
+            "potential_consolidations": 0,
+            "potential_removals": 0,
+            "efficiency_gain": 0.0,
+            "recommendation": "No consolidation needed"
         }
     
-    # Get the strongest association
-    strongest_association = associations[strongest_key]
+    # Calculate potential impact
+    total_associations = len(ctx.context.conditioning_system.classical_associations 
+                           if association_type == "classical" 
+                           else ctx.context.conditioning_system.operant_associations)
+    potential_removals = sum(group.get("count", 0) - 1 for group in similar_groups)
     
-    # Track removed keys
-    removed_keys = []
+    # Calculate efficiency gain
+    if total_associations > 0:
+        efficiency_gain = potential_removals / total_associations
+    else:
+        efficiency_gain = 0.0
     
-    # Consolidate other associations into the strongest
-    for assoc_info in group_associations:
-        key = assoc_info.get("key")
-        
-        if key and key != strongest_key and key in associations:
-            association = associations[key]
-            
-            # Strengthen the strongest association
-            new_strength = min(1.0, strongest_association.association_strength + (association.association_strength * 0.2))
-            strongest_association.association_strength = new_strength
-            
-            # Combine context keys
-            for context_key in association.context_keys:
-                if context_key not in strongest_association.context_keys:
-                    strongest_association.context_keys.append(context_key)
-            
-            # Remove the weaker association
-            del associations[key]
-            removed_keys.append(key)
+    # Generate recommendation
+    if efficiency_gain < 0.05:
+        recommendation = "Minimal benefit from consolidation"
+    elif efficiency_gain < 0.15:
+        recommendation = "Moderate benefit from consolidation"
+    else:
+        recommendation = "Significant benefit from consolidation"
     
     return {
-        "success": True,
-        "stimulus": group.get("stimulus"),
-        "response": group.get("response"),
-        "strongest_key": strongest_key,
-        "removed_keys": removed_keys,
-        "new_strength": strongest_association.association_strength,
-        "combined_context_keys": strongest_association.context_keys
+        "potential_consolidations": len(similar_groups),
+        "potential_removals": potential_removals,
+        "efficiency_gain": efficiency_gain,
+        "total_associations": total_associations,
+        "recommendation": recommendation
     }
-
+    
 @function_tool
 async def _calculate_consolidated_strength(
     ctx: RunContextWrapper[MaintenanceContext],
@@ -1164,67 +1180,60 @@ async def _create_maintenance_schedule(ctx: RunContextWrapper) -> List[Maintenan
 
 async def _get_maintenance_status_logic(ctx: RunContextWrapper[MaintenanceContext]) -> Dict[str, Any]:
     """Internal logic to get the current status of maintenance."""
-    # Check if context is valid and has necessary attributes
+    # Validate context
     if not hasattr(ctx, 'context') or ctx.context is None:
         logger.error("Context missing in _get_maintenance_status_logic")
-        # Return a default error state or raise an appropriate exception
-        return {"error": "Invalid context"}
-    if not hasattr(ctx.context, 'last_maintenance_time') or \
-       not hasattr(ctx.context, 'maintenance_interval_hours') or \
-       not hasattr(ctx.context, 'consolidation_interval_days') or \
-       not hasattr(ctx.context, 'maintenance_history'):
-         logger.error("Context missing required attributes in _get_maintenance_status_logic")
-         return {"error": "Context attributes missing"}
-
-
+        return {"error": "Invalid context", "maintenance_due": True}
+    
+    context = ctx.context
+    
+    # Validate required attributes
+    required_attrs = ['last_maintenance_time', 'maintenance_interval_hours', 
+                     'consolidation_interval_days', 'maintenance_history']
+    for attr in required_attrs:
+        if not hasattr(context, attr):
+            logger.error(f"Context missing required attribute: {attr}")
+            return {"error": f"Missing {attr}", "maintenance_due": True}
+    
     now = datetime.datetime.now()
-    context = ctx.context # Now safe to access
-
+    
     # Calculate time since last maintenance
-    seconds_since_last = None
     hours_since_last = None
     days_since_last = None
+    
     if context.last_maintenance_time:
         try:
-            # Ensure last_maintenance_time is a datetime object
-            last_maint_dt = context.last_maintenance_time
-            if isinstance(last_maint_dt, str):
-                 last_maint_dt = datetime.datetime.fromisoformat(last_maint_dt.replace("Z", "+00:00"))
-
-            if isinstance(last_maint_dt, datetime.datetime):
-                 seconds_since_last = (now - last_maint_dt).total_seconds()
-                 hours_since_last = seconds_since_last / 3600
-                 days_since_last = hours_since_last / 24
+            # Handle both string and datetime objects
+            if isinstance(context.last_maintenance_time, str):
+                last_time = datetime.datetime.fromisoformat(
+                    context.last_maintenance_time.replace("Z", "+00:00")
+                )
             else:
-                 logger.warning(f"last_maintenance_time is not a datetime object: {type(last_maint_dt)}")
+                last_time = context.last_maintenance_time
+            
+            delta = now - last_time
+            hours_since_last = delta.total_seconds() / 3600
+            days_since_last = hours_since_last / 24
         except Exception as e:
             logger.error(f"Error processing last_maintenance_time: {e}")
-
-
+    
     # Calculate next scheduled maintenance
     next_maintenance = None
     hours_until_next = 0
-    if context.last_maintenance_time and isinstance(context.last_maintenance_time, datetime.datetime):
-        try:
-             next_maintenance = context.last_maintenance_time + datetime.timedelta(hours=context.maintenance_interval_hours)
-             hours_until_next = max(0, (next_maintenance - now).total_seconds() / 3600)
-        except Exception as e:
-             logger.error(f"Error calculating next maintenance time: {e}")
-    elif not context.last_maintenance_time:
-         hours_until_next = 0 # Due immediately if never run
-
+    
+    if context.last_maintenance_time and hours_since_last is not None:
+        next_maintenance = last_time + datetime.timedelta(hours=context.maintenance_interval_hours)
+        hours_until_next = max(0, (next_maintenance - now).total_seconds() / 3600)
+    
     # Check if maintenance is due
-    maintenance_due = hours_until_next <= 0
-
-    # Check if consolidation is due
-    consolidation_due = False
-    if context.last_maintenance_time and days_since_last is not None:
-        consolidation_due = days_since_last >= context.consolidation_interval_days
-    elif not context.last_maintenance_time:
-        consolidation_due = True # Due if never run
-
+    maintenance_due = hours_until_next <= 0 or context.last_maintenance_time is None
+    consolidation_due = (days_since_last is not None and 
+                        days_since_last >= context.consolidation_interval_days) or \
+                       context.last_maintenance_time is None
+    
     return {
-        "last_maintenance_time": context.last_maintenance_time.isoformat() if isinstance(context.last_maintenance_time, datetime.datetime) else None,
+        "last_maintenance_time": context.last_maintenance_time.isoformat() 
+            if isinstance(context.last_maintenance_time, datetime.datetime) else None,
         "hours_since_last_maintenance": hours_since_last,
         "next_scheduled_maintenance": next_maintenance.isoformat() if next_maintenance else None,
         "hours_until_next_maintenance": hours_until_next,
@@ -1232,89 +1241,75 @@ async def _get_maintenance_status_logic(ctx: RunContextWrapper[MaintenanceContex
         "consolidation_due": consolidation_due,
         "maintenance_interval_hours": context.maintenance_interval_hours,
         "consolidation_interval_days": context.consolidation_interval_days,
-        "maintenance_history_count": len(context.maintenance_history) if isinstance(context.maintenance_history, list) else 0
+        "maintenance_history_count": len(context.maintenance_history) 
+            if isinstance(context.maintenance_history, list) else 0
     }
 
-# 2. Create the FunctionTool object *from* the logic function
-#    Use the original desired name for the tool the LLM sees.
+# Create the tool wrapper
 _get_maintenance_status_tool = function_tool(
     _get_maintenance_status_logic,
     name_override="_get_maintenance_status",
-    description_override="Get the current status of maintenance" # Add description
+    description_override="Get the current status of maintenance"
 )
+
 
 
 async def _record_maintenance_history_logic(
     ctx: RunContextWrapper[MaintenanceContext],
-    maintenance_record: Optional[Dict[str, Any]] = None # Make Optional
+    maintenance_record: Dict[str, Any]  # Required parameter
 ) -> Dict[str, Any]:
     """Internal logic to record maintenance history."""
-    # Parameter check moved inside as per previous refinement
-    if maintenance_record is None:
-        logger.error("_record_maintenance_history_logic called without 'maintenance_record' parameter.")
-        return {
-            "success": False,
-            "error": "Missing required 'maintenance_record' parameter."
-        }
-
-    # Context check
+    # Validate context
     if not hasattr(ctx, 'context') or ctx.context is None:
         logger.error("Context missing in _record_maintenance_history_logic")
         return {"success": False, "error": "Invalid context"}
-
-    context = ctx.context # Access context only after validation
-
-    # Ensure context has the expected attributes
-    if not hasattr(context, 'maintenance_history') or not hasattr(context, 'max_history_entries'):
-         logger.error("Context missing maintenance_history or max_history_entries in _record_maintenance_history_logic")
-         return {"success": False, "error": "Internal context setup error"}
-
+    
+    context = ctx.context
+    
+    # Validate maintenance_record
+    if maintenance_record is None:
+        logger.error("_record_maintenance_history_logic called without 'maintenance_record' parameter.")
+        return {"success": False, "error": "Missing required 'maintenance_record' parameter."}
+    
+    if not isinstance(maintenance_record, dict):
+        logger.error(f"maintenance_record must be a dict, got {type(maintenance_record)}")
+        return {"success": False, "error": "Invalid maintenance_record format"}
+    
+    # Ensure required attributes exist
+    if not hasattr(context, 'maintenance_history'):
+        context.maintenance_history = []
+    if not hasattr(context, 'max_history_entries'):
+        context.max_history_entries = 30
+    
     try:
-        # Ensure maintenance_record is a dict if not None
-        if not isinstance(maintenance_record, dict):
-            logger.error(f"_record_maintenance_history_logic received non-dict record: {type(maintenance_record)}")
-            return {"success": False, "error": "Invalid maintenance_record format"}
-
         # Add timestamp if not present
         if "timestamp" not in maintenance_record:
             maintenance_record["timestamp"] = datetime.datetime.now().isoformat()
-
-        # Add to history (assuming it's a list)
-        if isinstance(context.maintenance_history, list):
-            context.maintenance_history.append(maintenance_record)
-        else:
-             logger.error("maintenance_history in context is not a list.")
-             return {"success": False, "error": "Internal context error: history is not a list"}
-
-        # Trim history if needed (ensure max_history_entries is an int)
-        max_entries = getattr(context, 'max_history_entries', 100) # Default if missing
-        if not isinstance(max_entries, int):
-            logger.warning(f"max_history_entries is not an integer ({type(max_entries)}), using default 100.")
-            max_entries = 100
-
-        if len(context.maintenance_history) > max_entries:
-            context.maintenance_history = context.maintenance_history[-max_entries:]
-
-        # Safely get latest timestamp
-        latest_timestamp = None
-        if context.maintenance_history:
-             latest_timestamp = context.maintenance_history[-1].get("timestamp")
-
+        
+        # Add to history
+        context.maintenance_history.append(maintenance_record)
+        
+        # Trim history if needed
+        if len(context.maintenance_history) > context.max_history_entries:
+            context.maintenance_history = context.maintenance_history[-context.max_history_entries:]
+        
+        latest_timestamp = context.maintenance_history[-1].get("timestamp") if context.maintenance_history else None
+        
         return {
             "success": True,
             "history_count": len(context.maintenance_history),
-            "max_history_entries": max_entries,
+            "max_history_entries": context.max_history_entries,
             "latest_entry_timestamp": latest_timestamp
         }
     except Exception as e:
         logger.error(f"Error recording maintenance history: {e}", exc_info=True)
         return {"success": False, "error": f"Error processing record: {str(e)}"}
 
-# 2. Create the FunctionTool object *from* the logic function
+# Create the tool wrapper
 _record_maintenance_history_tool = function_tool(
     _record_maintenance_history_logic,
     name_override="_record_maintenance_history",
-    description_override="Record maintenance history." # Add description
+    description_override="Record maintenance history. REQUIRED: maintenance_record (dict)"
 )
 
         
@@ -1470,27 +1465,36 @@ class ConditioningMaintenanceSystem:
             4. Prune redundant or contradictory associations
             
             CRITICAL TOOL USAGE REQUIREMENTS:
-            - When using _apply_extinction_to_association, you MUST ALWAYS provide both 'association_key' and 'association_type'
-            - When using _adjust_association_decay_rate, you MUST ALWAYS provide 'association_key', 'association_type', and 'new_decay_rate'
-            - For 'association_type', only use 'classical' or 'operant' as values
-            - Ensure decay rates are between 0.0 and 1.0
             
-            Always first identify candidate associations using _identify_extinction_candidates before applying extinction
-            or adjusting decay rates to ensure you have valid association keys.
+            When using _apply_extinction_to_association:
+            - ALWAYS provide 'association_key' (string) - the key of the association
+            - ALWAYS provide 'association_type' (string) - must be either 'classical' or 'operant'
+            - Example: _apply_extinction_to_association(association_key="stimulus→response", association_type="classical")
+            
+            When using _adjust_association_decay_rate:
+            - ALWAYS provide 'association_key' (string) - the key of the association
+            - ALWAYS provide 'association_type' (string) - must be either 'classical' or 'operant'
+            - ALWAYS provide 'new_decay_rate' (float) - must be between 0.0 and 1.0
+            - Example: _adjust_association_decay_rate(association_key="behavior→consequence", association_type="operant", new_decay_rate=0.1)
+            
+            BEFORE applying extinction or adjusting decay rates:
+            1. First use _identify_extinction_candidates to find valid associations
+            2. Only operate on associations that actually exist
+            3. Check the association details with _get_association_details if needed
             
             Balance maintaining important learned associations with removing
             outdated or unused ones. Consider the significance and recency
             of reinforcement when determining extinction.
             """,
             tools=[
-                # Use the wrapped tool objects instead of direct function references
                 _apply_extinction_to_association_tool,
                 _adjust_association_decay_rate_tool,
-                _identify_extinction_candidates
+                _identify_extinction_candidates,
+                _get_association_details
             ],
             model_settings=ModelSettings(temperature=0.3)
         )
-    
+        
     def _create_consolidation_agent(self) -> Agent:
         """Create agent for consolidating similar associations"""
         return Agent(
@@ -1503,8 +1507,22 @@ class ConditioningMaintenanceSystem:
             2. Merge redundant associations efficiently
             3. Determine appropriate strength for consolidated associations
             4. Preserve context keys and transfer relevant properties
-
-            To find candidates for consolidation, call the `find_similar_associations` tool. You MUST provide the `association_type` ('classical' or 'operant') you want to search within. To analyze the overall impact, use `analyze_consolidation_impact`, again specifying the `association_type`.
+            
+            CRITICAL TOOL USAGE REQUIREMENTS:
+            
+            When using _find_similar_associations:
+            - ALWAYS provide 'association_type' (string) - must be either 'classical' or 'operant'
+            - Example: _find_similar_associations(association_type="classical")
+            
+            When using _analyze_consolidation_impact:
+            - ALWAYS provide 'association_type' (string) - must be either 'classical' or 'operant'
+            - Example: _analyze_consolidation_impact(association_type="operant")
+            
+            To perform a complete analysis:
+            1. Call _find_similar_associations with association_type="classical"
+            2. Call _find_similar_associations with association_type="operant"
+            3. Call _analyze_consolidation_impact for each type if similar associations are found
+            4. Use _consolidate_associations on specific groups identified
             
             Focus on improving efficiency without losing learned information.
             Use similarity measures to determine which associations to consolidate.
@@ -1518,7 +1536,7 @@ class ConditioningMaintenanceSystem:
             output_type=AssociationConsolidationOutput,
             model_settings=ModelSettings(temperature=0.2)
         )
-    
+
     def _create_maintenance_orchestrator(self) -> Agent:
         """Create orchestrator agent for maintenance processes"""
         return Agent(
@@ -1531,21 +1549,39 @@ class ConditioningMaintenanceSystem:
             2. Coordinate between specialized maintenance agents
             3. Determine which aspects of the system need attention
             4. Summarize maintenance results and improvements
-
-            When checking for association consolidation using `find_similar_associations` or `analyze_consolidation_impact`, you MUST specify the `association_type` parameter as either 'classical' or 'operant'. You should typically perform the analysis for both types by calling the relevant tool twice, once for each type, if a full analysis is needed.
             
-            IMPORTANT: You MUST produce a MaintenanceSummaryOutput with all fields populated
-            at the end of your execution.
+            CRITICAL PARAMETER REQUIREMENTS:
+            
+            When checking consolidation needs:
+            - ALWAYS analyze BOTH association types by calling tools twice:
+              1. _find_similar_associations(association_type="classical")
+              2. _find_similar_associations(association_type="operant")
+            - Similarly for _analyze_consolidation_impact
+            
+            When recording history:
+            - _record_maintenance_history REQUIRES a 'maintenance_record' dictionary parameter
+            - The maintenance_record should include: timestamp, tasks_performed, results, etc.
+            
+            IMPORTANT OUTPUT REQUIREMENT:
+            You MUST produce a MaintenanceSummaryOutput with ALL fields populated at the end of execution:
+            - tasks_performed: List of task dictionaries
+            - time_taken_seconds: Float value
+            - associations_modified: Integer count
+            - traits_adjusted: Integer count
+            - extinction_count: Integer count
+            - improvements: List of improvement descriptions
+            - next_maintenance_recommendation: String recommendation
             
             Balance routine maintenance with specialized interventions based on
             system needs. Ensure the overall coherence of the conditioning system
             while optimizing for efficiency and effectiveness.
             """,
             tools=[
-                _get_maintenance_status_tool,         # USE THE TOOL OBJECT
-                _analyze_system_efficiency, # Assuming this one IS correctly just a tool
-                _create_maintenance_schedule, # Assuming this one IS correctly just a tool
-                # Convert handoffs to tools
+                _get_maintenance_status_tool,
+                _record_maintenance_history_tool,
+                _analyze_system_efficiency,
+                _create_maintenance_schedule,
+                # Agent tools...
                 self.balance_analysis_agent.as_tool(
                     tool_name="analyze_personality_balance",
                     tool_description="Analyze personality trait and behavior balance"
