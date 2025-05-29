@@ -1325,13 +1325,13 @@ class ConditioningSystem:
             ),
             "full_context_provided": context # Optionally pass the full context if agent instructions can use it
         }
-        json_input_for_agent = json.dumps(data_for_agent)
-        logger.debug(f"[{method_name}] JSON input for {self.classical_conditioning_agent.name}: {json_input_for_agent!r}")
+    #    json_input_for_agent = json.dumps(data_for_agent)
+   #     logger.debug(f"[{method_name}] JSON input for {self.classical_conditioning_agent.name}: {json_input_for_agent!r}")
     
         try:
             result = await Runner.run(
                 self.classical_conditioning_agent,
-                json_input_for_agent, # Pass JSON string as input
+    #            json_input_for_agent, # Pass JSON string as input
                 context=RunContextWrapper(context=self.context)
             )
             co: ClassicalConditioningOutput = result.final_output # Pydantic model defined for agent output
@@ -1400,13 +1400,13 @@ class ConditioningSystem:
             ),
             "full_context_provided": context
         }
-        json_input_for_agent = json.dumps(data_for_agent)
-        logger.debug(f"[{method_name}] JSON input for {self.operant_conditioning_agent.name}: {json_input_for_agent!r}")
+#        json_input_for_agent = json.dumps(data_for_agent)
+#        logger.debug(f"[{method_name}] JSON input for {self.operant_conditioning_agent.name}: {json_input_for_agent!r}")
 
         try:
             result = await Runner.run(
                 self.operant_conditioning_agent,
-                json_input_for_agent, # Pass JSON string as input
+#                json_input_for_agent, # Pass JSON string as input
                 context=RunContextWrapper(context=self.context),
             )
             co: OperantConditioningOutput = result.final_output
@@ -1464,13 +1464,13 @@ class ConditioningSystem:
             "behavior": behavior,
             "context": current_context # Agent's tools will use this context
         }
-        json_input_for_agent = json.dumps(data_for_agent)
-        logger.debug(f"[{method_name}] JSON input for {self.behavior_evaluation_agent.name}: {json_input_for_agent!r}")
+ #       json_input_for_agent = json.dumps(data_for_agent)
+ #       logger.debug(f"[{method_name}] JSON input for {self.behavior_evaluation_agent.name}: {json_input_for_agent!r}")
         
         try:
             result = await Runner.run(
                 self.behavior_evaluation_agent,
-                json_input_for_agent, # Pass JSON string as input
+   #             json_input_for_agent, # Pass JSON string as input
                 context=RunContextWrapper(context=self.context)
             )
             
@@ -1522,7 +1522,7 @@ class ConditioningSystem:
             "full_context_provided": current_context
         }
 
-        logger.debug(f"[{method_name}] JSON input for {self.personality_development_agent.name}: {json_input_for_agent!r}")
+ #       logger.debug(f"[{method_name}] JSON input for {self.personality_development_agent.name}: {json_input_for_agent!r}")
     
         try:
             result = await Runner.run(
