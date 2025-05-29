@@ -3,6 +3,7 @@
 import logging
 from typing import Dict, List, Any, Optional
 from datetime import datetime
+import inspect
 
 from nyx.core.brain.integration_layer import ContextAwareModule
 from nyx.core.brain.context_distribution import SharedContext, ContextUpdate, ContextScope, ContextPriority
@@ -146,6 +147,39 @@ class ContextAwareNeedsSystem(ContextAwareModule):
             "expressed_needs": expressed_needs,
             "cross_module_effects": len(needs_affected)
         }
+
+    async def get_needs_state_async(self) -> Dict[str, Dict]:
+        """Delegate to original system's get_needs_state_async or get_needs_state method"""
+        if hasattr(self.original_system, 'get_needs_state_async'):
+            return await self.original_system.get_needs_state_async()
+        elif hasattr(self.original_system, 'get_needs_state'):
+            result = self.original_system.get_needs_state()
+            # If it's a coroutine, await it
+            if inspect.iscoroutine(result):
+                return await result
+            return result
+        else:
+            raise AttributeError("Original needs system has no get_needs_state method")
+    
+    async def decrease_need(self, need_name: str, amount: float, reason: str) -> Dict[str, Any]:
+        """Delegate to original system's decrease_need method"""
+        return await self.original_system.decrease_need(need_name, amount, reason)
+    
+    async def satisfy_need(self, need_name: str, amount: float, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Delegate to original system's satisfy_need method"""
+        return await self.original_system.satisfy_need(need_name, amount, context)
+    
+    def get_total_drive(self) -> float:
+        """Delegate to original system's get_total_drive method"""
+        return self.original_system.get_total_drive()
+    
+    async def get_most_unfulfilled_need(self) -> Optional[str]:
+        """Delegate to original system's get_most_unfulfilled_need method"""
+        return await self.original_system.get_most_unfulfilled_need()
+    
+    async def update_needs(self) -> Dict[str, float]:
+        """Delegate to original system's update_needs method"""
+        return await self.original_system.update_needs()
     
     async def process_analysis(self, context: SharedContext) -> Dict[str, Any]:
         """Analyze needs in context of current situation"""
