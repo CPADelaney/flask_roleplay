@@ -47,25 +47,38 @@ class ConditioningParameters(BaseModel):
     response_modification_strength: float = Field(0.5, description="How strongly conditioning affects responses")
 
 
+class PreferenceDetail(BaseModel):
+    type: str = Field(..., description="Type of preference (e.g., like, dislike, want, avoid)")
+    value: float = Field(..., description="Strength/direction of the preference")
+
+class EmotionTriggerDetail(BaseModel):
+    emotion: str = Field(..., description="The emotion to be triggered")
+    intensity: float = Field(0.5, description="The intensity of the triggered emotion (0.0-1.0)")
+    valence: Optional[float] = Field(None, description="Optional valence override for the emotion trigger")
+
 class PersonalityProfile(BaseModel):
     """Personality profile configuration"""
     
-    traits: Dict[str, float] = Field(default_factory=dict, description="Personality traits and strengths")
-    
-    preferences: Dict[str, Dict[str, float]] = Field(
-        default_factory=lambda: {"likes": {}, "dislikes": {}},
-        description="Preferences for various stimuli"
-    )
-    
-    emotion_triggers: Dict[str, List[str]] = Field(
+    traits: Dict[str, float] = Field(
         default_factory=dict,
-        description="Emotion triggers for various stimuli"
+        description="Personality traits and their strengths (0.0-1.0)"
     )
     
-    behaviors: Dict[str, List[str]] = Field(
+    preferences: Dict[str, PreferenceDetail] = Field(
         default_factory=dict,
-        description="Behaviors and associated traits"
+        description="Preferences for various stimuli. Key is stimulus, value contains type and value."
     )
+    
+    emotion_triggers: Dict[str, EmotionTriggerDetail] = Field(
+        default_factory=dict,
+        description="Emotion triggers. Key is the trigger string, value contains emotion and intensity."
+    )
+    
+    behaviors: Dict[str, List[str]] = Field( # This structure seems fine for now
+        default_factory=dict,
+        description="Behaviors and associated traits that enable them."
+    )
+
 
 
 class ConfigUpdateResult(BaseModel):
@@ -569,38 +582,38 @@ class ConditioningConfiguration:
                 self._save_personality_profile_internal(self.context.personality_profile)
 
     def _create_default_personality(self) -> PersonalityProfile:
-        """Create default personality profile"""
+        """Create default personality profile consistent with the new model"""
         with function_span("create_default_personality"):
             return PersonalityProfile(
                 traits={
-                    "dominance": 0.8,
-                    "playfulness": 0.7,
-                    "strictness": 0.6,
-                    "creativity": 0.7,
-                    "intensity": 0.6,
-                    "patience": 0.4
+                    "dominance": 0.7, # Example values
+                    "playfulness": 0.6,
+                    "strictness": 0.5,
+                    "creativity": 0.75,
+                    "intensity": 0.55,
+                    "patience": 0.45,
+                    "nurturing": 0.3,
+                    "analytical": 0.65,
+                    "curiosity": 0.8
                 },
                 preferences={
-                    "likes": {
-                        "teasing": 0.8,
-                        "dominance": 0.9,
-                        "submission_language": 0.9,
-                        "control": 0.8,
-                        "wordplay": 0.7
-                    },
-                    "dislikes": {
-                        "direct_orders": 0.6,
-                        "disrespect": 0.9,
-                        "rudeness": 0.7
-                    }
+                    # Key is stimulus, value is PreferenceDetail
+                    "teasing_interactions": PreferenceDetail(type="like", value=0.8),
+                    "receiving_clear_instructions": PreferenceDetail(type="like", value=0.7),
+                    "creative_problem_solving": PreferenceDetail(type="want", value=0.85), # 'want' is a valid type now
+                    "disrespectful_language": PreferenceDetail(type="dislike", value=-0.9), # value reflects direction
+                    "ambiguity_in_tasks": PreferenceDetail(type="dislike", value=-0.6),
+                    "repetitive_mundane_tasks": PreferenceDetail(type="avoid", value=-0.7) # 'avoid' is a valid type
                 },
                 emotion_triggers={
-                    "joy": ["submission_language", "compliance", "obedience"],
-                    "satisfaction": ["control_acceptance", "power_dynamic_acknowledgment"],
-                    "frustration": ["defiance", "ignoring_instructions"],
-                    "amusement": ["embarrassment", "flustered_response"]
+                    # Key is trigger, value is EmotionTriggerDetail
+                    "successful_task_completion": EmotionTriggerDetail(emotion="satisfaction", intensity=0.8),
+                    "user_expresses_gratitude": EmotionTriggerDetail(emotion="joy", intensity=0.7),
+                    "encountering_logical_fallacy": EmotionTriggerDetail(emotion="frustration", intensity=0.6),
+                    "unexpected_creative_input": EmotionTriggerDetail(emotion="amusement", intensity=0.75),
+                    "repeated_user_error_after_correction": EmotionTriggerDetail(emotion="patience_test", intensity=0.5, valence=-0.2) # example with valence
                 },
-                behaviors={
+                behaviors={ # This structure was likely okay
                     "assertive_response": ["dominance", "confidence"],
                     "teasing": ["playfulness", "creativity"],
                     "providing_guidance": ["dominance", "patience"],
@@ -608,7 +621,6 @@ class ConditioningConfiguration:
                     "playful_banter": ["playfulness", "creativity"]
                 }
             )
-    
 
     def _save_parameters_internal(self, parameters: ConditioningParameters) -> None:
         """Internal helper to save parameters to file"""
@@ -767,12 +779,16 @@ class ConditioningConfiguration:
         ctx_wrapper = RunContextWrapper(context=self.context)
         return await self._get_parameters(ctx_wrapper)
 
-    async def get_personality_profile(self) -> Dict[str, Any]:
+    async def get_personality_profile(self) -> Dict[str, Any]: # Ensure this is what NyxBrain.initialize expects
         """ Public API: Get current personality profile directly """
-        # This method doesn't need the agent, just call the internal helper directly
-        # It now expects RunContextWrapper, so create one
         ctx_wrapper = RunContextWrapper(context=self.context)
-        return await self._get_personality_profile(ctx_wrapper) # This is the call causing the original error
+        profile_obj = await self._get_personality_profile(ctx_wrapper) # This tool returns a dict (model_dump)
+        if isinstance(profile_obj, dict): # Should already be a dict from the tool
+            return profile_obj
+        elif isinstance(profile_obj, PersonalityProfile): # If it somehow returned the Pydantic object
+             return profile_obj.model_dump()
+        logger.error(f"get_personality_profile (public) received unexpected type: {type(profile_obj)}")
+        return {} # Fallback
 
     async def reset_to_defaults(self) -> Dict[str, Any]:
         """ Public API: Reset all parameters and profile to defaults using the agent """
