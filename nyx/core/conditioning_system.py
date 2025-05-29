@@ -412,52 +412,72 @@ class ConditioningSystem:
 
     @staticmethod
     @function_tool
-    async def _create_or_update_classical_association(ctx: RunContextWrapper,
-                                               unconditioned_stimulus: str, # Assuming LLM extracts this from JSON input
-                                               conditioned_stimulus: str, # Assuming LLM extracts this
-                                               response: str, # Assuming LLM extracts this
-                                               intensity: float, # Assuming LLM extracts this
-                                               valence: float, # Assuming LLM extracts this
-                                               context_keys: List[str]) -> Dict[str, Any]: # Assuming LLM extracts this
+    async def _create_or_update_classical_association(
+        ctx: RunContextWrapper,
+        unconditioned_stimulus: str,
+        conditioned_stimulus: str,
+        response: str,
+        intensity: float,
+        valence: float,
+        context_keys: Union[List[str], str, None] = None  # Allow multiple types
+    ) -> Dict[str, Any]:
+        """
+        Create or update a classical conditioning association.
+        
+        Args:
+            unconditioned_stimulus: The unconditioned stimulus
+            conditioned_stimulus: The conditioned stimulus  
+            response: The conditioned response
+            intensity: Intensity of the association (0.0-1.0)
+            valence: Emotional valence (-1.0 to 1.0)
+            context_keys: Context keys (can be list, string, or None)
+        """
         tool_name = "_create_or_update_classical_association"
-        # Log the received arguments to see what the LLM is passing after interpreting the JSON input.
-        logger.debug(f"[{tool_name}] Called by LLM. "
-                     f"unconditioned_stimulus='{unconditioned_stimulus}', "
-                     f"conditioned_stimulus='{conditioned_stimulus}', "
-                     f"response='{response}', intensity={intensity}, valence={valence}, "
-                     f"INPUT context_keys type: {type(context_keys)}, value: {context_keys!r}")
-
-        try:
-            processed_context_keys = ConditioningSystem._force_str_list(context_keys)
-        except Exception as e_force_list:
-            logger.error(f"[{tool_name}] Error in _force_str_list for context_keys. Input was type: {type(context_keys)}, value: {context_keys!r}. Error: {e_force_list}", exc_info=True)
+        
+        # Handle context_keys more robustly
+        if context_keys is None:
             processed_context_keys = []
-
-
-        logger.debug(f"[{tool_name}] PROCESSED context_keys type: {type(processed_context_keys)}, value: {processed_context_keys!r}")
-                                          
+        elif isinstance(context_keys, str):
+            # If it's a string, wrap it in a list
+            processed_context_keys = [context_keys]
+        elif isinstance(context_keys, list):
+            # Ensure all items are strings
+            processed_context_keys = [str(k) for k in context_keys]
+        else:
+            logger.warning(f"[{tool_name}] Unexpected context_keys type: {type(context_keys)}. Converting to string list.")
+            try:
+                # Try to convert whatever it is
+                if hasattr(context_keys, '__iter__') and not isinstance(context_keys, (str, bytes)):
+                    processed_context_keys = [str(k) for k in context_keys]
+                else:
+                    processed_context_keys = [str(context_keys)]
+            except Exception as e:
+                logger.error(f"[{tool_name}] Failed to process context_keys: {e}")
+                processed_context_keys = []
+        
+        logger.debug(f"[{tool_name}] Processed context_keys: {processed_context_keys}")
+        
         association_key = f"{conditioned_stimulus}→{response}"
         
-        return_value = {} 
         if association_key in ctx.context.classical_associations:
+            # Update existing association
             association = ctx.context.classical_associations[association_key]
             old_strength = association.association_strength
             new_strength = min(1.0, old_strength + (intensity * ctx.context.association_learning_rate))
+            
             association.association_strength = new_strength
-            association.last_reinforced = datetime.datetime.now().isoformat()
+            association.last_reinforced = datetime.datetime.now(datetime.timezone.utc).isoformat()
             association.reinforcement_count += 1
             association.valence = (association.valence + valence) / 2
             
-            logger.debug(f"[{tool_name}] Existing association.context_keys before update: type={type(association.context_keys)}, value={association.context_keys!r}")
-            for key_to_add in processed_context_keys: 
-                if key_to_add not in association.context_keys:
-                    association.context_keys.append(key_to_add) 
-            logger.debug(f"[{tool_name}] Existing association.context_keys after update: type={type(association.context_keys)}, value={association.context_keys!r}")
+            # Add new context keys
+            for key in processed_context_keys:
+                if key and key not in association.context_keys:
+                    association.context_keys.append(key)
             
             ctx.context.total_reinforcements += 1
-            logger.info(f"Reinforced classical association: {association_key} ({old_strength:.2f} → {new_strength:.2f})")
             
-            return_value = {
+            return {
                 "association_key": association_key,
                 "type": "reinforcement",
                 "old_strength": old_strength,
@@ -466,59 +486,66 @@ class ConditioningSystem:
                 "valence": association.valence
             }
         else:
+            # Create new association
             association = ConditionedAssociation(
                 stimulus=conditioned_stimulus,
                 response=response,
                 association_strength=intensity * ctx.context.association_learning_rate,
-                formation_date=datetime.datetime.now().isoformat(),
-                last_reinforced=datetime.datetime.now().isoformat(),
+                formation_date=datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                last_reinforced=datetime.datetime.now(datetime.timezone.utc).isoformat(),
                 reinforcement_count=1,
                 valence=valence,
-                context_keys=processed_context_keys 
+                context_keys=processed_context_keys
             )
+            
             ctx.context.classical_associations[association_key] = association
             ctx.context.total_associations += 1
-            logger.info(f"Created new classical association: {association_key} ({association.association_strength:.2f})")
             
-            return_value = {
+            return {
                 "association_key": association_key,
                 "type": "new_association",
                 "strength": association.association_strength,
                 "reinforcement_count": 1,
                 "valence": association.valence
             }
-        
-        logger.debug(f"[{tool_name}] Returning: {return_value!r}")
-        return return_value
-
+            
     async def _generate_reward_signal_logic(
         self,
         ctx: RunContextWrapper,
         behavior: str,
         consequence_type: str,
         reward_value: float,
-        metadata: Dict[str, Any] | None = None,
+        metadata: Optional[Dict[str, Any]] = None,
     ) -> bool:
         """
         Generate a reward signal for the reward system.
         """
         logger.debug(f"Entering _generate_reward_signal_logic for behavior: {behavior}")
-        if not hasattr(ctx, 'context') or ctx.context is None:
-            logger.error("Context object missing in _generate_reward_signal_logic's RunContextWrapper.")
+        
+        # More robust context checking
+        if not hasattr(ctx, 'context'):
+            logger.error("No context attribute in RunContextWrapper")
             return False
-        if not hasattr(ctx.context, 'reward_system') or ctx.context.reward_system is None:
-            logger.error("reward_system attribute missing or None on ctx.context in _generate_reward_signal_logic.")
+            
+        if not ctx.context:
+            logger.error("Context is None")
             return False
-    
-        reward_system_instance = ctx.context.reward_system
-        logger.info(f"Inside _generate_reward_signal_logic: Type of reward_system_instance = {type(reward_system_instance)}")
-        logger.info(f"Inside _generate_reward_signal_logic: Does reward_system_instance have process_reward_signal? {hasattr(reward_system_instance, 'process_reward_signal')}")
-    
-        if not reward_system_instance:
-             logger.error("Reward system instance is None, cannot generate reward signal.")
-             return False
-    
+            
+        if not hasattr(ctx.context, 'reward_system'):
+            logger.error("No reward_system in context")
+            return False
+            
+        reward_system = ctx.context.reward_system
+        if not reward_system:
+            logger.warning("Reward system is None - skipping reward signal generation")
+            return False
+        
         try:
+            # Check if reward system has the expected method
+            if not hasattr(reward_system, 'process_reward_signal'):
+                logger.error(f"Reward system of type {type(reward_system)} lacks process_reward_signal method")
+                return False
+                
             reward_signal = RewardSignal(
                 value=reward_value,
                 source="operant_conditioning",
@@ -528,39 +555,52 @@ class ConditioningSystem:
                     **(metadata or {}),
                 },
             )
-            logger.debug(f"Dispatching reward signal: {reward_signal.model_dump_json(indent=2)}")
-            await reward_system_instance.process_reward_signal(reward_signal)
-            logger.debug("Reward signal dispatched successfully.")
+            
+            logger.debug(f"Dispatching reward signal: {reward_signal.model_dump()}")
+            await reward_system.process_reward_signal(reward_signal)
+            logger.debug("Reward signal dispatched successfully")
             return True
-    
+            
         except Exception as e:
-            logger.error(f"Error during reward signal generation/dispatch for behavior '{behavior}': {e}", exc_info=True)
+            logger.error(f"Error generating/dispatching reward signal: {e}", exc_info=True)
             return False
         
 
     @staticmethod
     @function_tool
-    async def _create_or_update_operant_association(ctx: RunContextWrapper,
-                                             behavior: str, # Assuming LLM extracts this
-                                             consequence_type: str, # Assuming LLM extracts this
-                                             intensity: float, # Assuming LLM extracts this
-                                             valence: float, # Assuming LLM extracts this
-                                             context_keys: List[str]) -> Dict[str, Any]: # Assuming LLM extracts this
+    async def _create_or_update_operant_association(
+        ctx: RunContextWrapper,
+        behavior: str,
+        consequence_type: str,
+        intensity: float,
+        valence: float,
+        context_keys: Union[List[str], str, None] = None
+    ) -> Dict[str, Any]:
         """
         Create or update an operant conditioning association.
-        The LLM should extract parameters from the JSON input string.
         """
         tool_name = "_create_or_update_operant_association"
-        logger.debug(f"[{tool_name}] Called by LLM. "
-                     f"behavior='{behavior}', consequence_type='{consequence_type}', "
-                     f"intensity={intensity}, valence={valence}, "
-                     f"INPUT context_keys type: {type(context_keys)}, value: {context_keys!r}")
-
-        context_keys = ConditioningSystem._force_str_list(context_keys)                                      
+        
+        # Process context_keys the same way
+        if context_keys is None:
+            processed_context_keys = []
+        elif isinstance(context_keys, str):
+            processed_context_keys = [context_keys]
+        elif isinstance(context_keys, list):
+            processed_context_keys = [str(k) for k in context_keys]
+        else:
+            try:
+                if hasattr(context_keys, '__iter__') and not isinstance(context_keys, (str, bytes)):
+                    processed_context_keys = [str(k) for k in context_keys]
+                else:
+                    processed_context_keys = [str(context_keys)]
+            except:
+                processed_context_keys = []
+        
         association_key = f"{behavior}→{consequence_type}"
         
-        is_reinforcement = "reinforcement" in consequence_type.lower() # Make case-insensitive
-        is_positive = "positive" in consequence_type.lower() # Make case-insensitive
+        is_reinforcement = "reinforcement" in consequence_type.lower()
+        is_positive = "positive" in consequence_type.lower()
         
         if association_key in ctx.context.operant_associations:
             association = ctx.context.operant_associations[association_key]
