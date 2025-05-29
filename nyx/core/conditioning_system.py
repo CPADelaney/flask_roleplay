@@ -1305,7 +1305,7 @@ class ConditioningSystem:
         try:
             result = await Runner.run(
                 self.classical_conditioning_agent,
-                data,
+                prompt,
                 context=RunContextWrapper(context=self.context)
             )
             co = result.final_output
@@ -1377,7 +1377,7 @@ class ConditioningSystem:
         try:
             result = await Runner.run(
                 self.operant_conditioning_agent,
-                data,
+                prompt,
                 context=RunContextWrapper(context=self.context)
             )
             co = result.final_output
@@ -1487,7 +1487,7 @@ class ConditioningSystem:
         try:
             result = await Runner.run(
                 self.personality_development_agent,
-                data,
+                prompt,
                 context=RunContextWrapper(context=self.context)
             )
             co = result.final_output
