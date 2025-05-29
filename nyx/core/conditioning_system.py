@@ -119,49 +119,40 @@ class ConditioningSystem:
     
     def __init__(self, reward_system=None, emotional_core=None,
                  memory_core=None, somatosensory_system=None):
-        # ➊ create the shared context
+        # ➊ Create the shared context
         self.context = ConditioningContext(
             reward_system=reward_system,
             emotional_core=emotional_core,
             memory_core=memory_core,
             somatosensory_system=somatosensory_system,
         )
-
-        # ➋ create *local* references that tools & methods already expect
-        self.classical_associations = {}
-        self.operant_associations   = {}
-
-        # expose the same dicts on the context so every tool
-        # that receives `ctx.context` sees the same objects
-        self.context.classical_associations = self.classical_associations
-        self.context.operant_associations   = self.operant_associations
-
-        # ➌ thresholds & learning params
-        self.weak_association_threshold     = 0.3
+    
+        # ➋ DON'T create new dictionaries! Just reference the ones from context:
+        self.classical_associations = self.context.classical_associations
+        self.operant_associations = self.context.operant_associations
+        
+        # ➌ Set thresholds & learning params on BOTH self and context
+        self.weak_association_threshold = 0.3
         self.moderate_association_threshold = 0.6
-        self.strong_association_threshold   = 0.8
-        self.association_learning_rate      = 0.1
-        self.extinction_rate                = 0.05
-        self.generalization_factor          = 0.3
-
-        for name in (
-            "weak_association_threshold",
-            "moderate_association_threshold",
-            "strong_association_threshold",
-            "association_learning_rate",
-            "extinction_rate",
-            "generalization_factor",
-        ):
-            setattr(self.context, name, getattr(self, name))
-
-        # ➍ counters
-        self.total_associations      = 0
-        self.total_reinforcements    = 0
-        self.successful_associations = 0
-        self.context.total_associations      = 0
-        self.context.total_reinforcements    = 0
-        self.context.successful_associations = 0
-
+        self.strong_association_threshold = 0.8
+        self.association_learning_rate = 0.1
+        self.extinction_rate = 0.05
+        self.generalization_factor = 0.3
+        
+        # Copy to context
+        self.context.weak_association_threshold = self.weak_association_threshold
+        self.context.moderate_association_threshold = self.moderate_association_threshold  
+        self.context.strong_association_threshold = self.strong_association_threshold
+        self.context.association_learning_rate = self.association_learning_rate
+        self.context.extinction_rate = self.extinction_rate
+        self.context.generalization_factor = self.generalization_factor
+        
+        # ➍ Initialize counters
+        self.total_associations = self.context.total_associations
+        self.total_reinforcements = self.context.total_reinforcements
+        self.successful_associations = self.context.successful_associations
+        
+        # Create the reward signal tool
         self._generate_reward_signal_tool = function_tool(
             self._generate_reward_signal_logic,
             name_override="_generate_reward_signal",
@@ -1390,7 +1381,7 @@ class ConditioningSystem:
             result = await Runner.run(
                 self.classical_conditioning_agent,
                 json_input_for_agent, # Pass JSON string as input
-                context=RunContextWrapper(context=self.context)
+                context=self.context
             )
             co: ClassicalConditioningOutput = result.final_output # Pydantic model defined for agent output
             logger.debug(f"[{method_name}] {self.classical_conditioning_agent.name} run successful. Output: {co!r}")
@@ -1465,7 +1456,7 @@ class ConditioningSystem:
             result = await Runner.run(
                 self.operant_conditioning_agent,
                 json_input_for_agent, # Pass JSON string as input
-                context=RunContextWrapper(context=self.context),
+                context=self.context
             )
             co: OperantConditioningOutput = result.final_output
             logger.debug(f"[{method_name}] {self.operant_conditioning_agent.name} run successful. Output: {co!r}")
@@ -1529,7 +1520,7 @@ class ConditioningSystem:
             result = await Runner.run(
                 self.behavior_evaluation_agent,
                 json_input_for_agent, # Pass JSON string as input
-                context=RunContextWrapper(context=self.context)
+                context=self.context
             )
             
             co: BehaviorEvaluationOutput = result.final_output
@@ -1586,7 +1577,7 @@ class ConditioningSystem:
             result = await Runner.run(
                 self.personality_development_agent,
                 json_input_for_agent, # Pass JSON string as input
-                context=RunContextWrapper(context=self.context)
+                context=self.context
             )
             co: TraitConditioningOutput = result.final_output
             logger.debug(f"[{method_name}] {self.personality_development_agent.name} run successful. Output: {co!r}")
