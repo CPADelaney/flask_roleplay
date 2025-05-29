@@ -1079,29 +1079,52 @@ class ConditioningSystem:
     @function_tool
     async def _check_trait_balance(
         ctx: RunContextWrapper,
-        traits_snapshot: Dict[str, float]  # Direct dict parameter instead of Pydantic model
+        traits_snapshot: Optional[Dict[str, float]] = None  # MODIFIED: Made Optional with default None
     ) -> Dict[str, Any]:
         """
         Check balance of personality traits from a given snapshot.
         Args:
-            traits_snapshot: Dictionary of trait names to their current values (0.0-1.0).
+            traits_snapshot: Dictionary of trait names to their current values (0.0-1.0). Can be None.
         Returns:
             Trait balance analysis.
         """
-        # No need to access from input_args anymore - it's directly available
-        
+        # ADDED: Handle the case where traits_snapshot is None
+        if traits_snapshot is None:
+            logger.warning("_check_trait_balance received None for traits_snapshot.")
+            return {
+                "balanced": False,
+                "imbalances": [{"issue": "Traits snapshot not provided", "recommendation": "Ensure traits_snapshot is provided for analysis."}],
+                "trait_count": 0,
+                "average_value": 0.0,
+                "message": "Traits snapshot was None."
+            }
+
+        # Original logic for when traits_snapshot is a dict (even if empty)
         if not isinstance(traits_snapshot, dict) or not all(isinstance(v, (int, float)) for v in traits_snapshot.values()):
             logger.warning(f"_check_trait_balance: 'traits_snapshot' is not a dict of trait:value. Got: {type(traits_snapshot)}. Input: {traits_snapshot!r}")
-            return {"balanced": False, "imbalances": [{"issue": "Invalid input format for traits_snapshot"}], "trait_count": 0, "average_value": 0.0}
-    
+            # Ensure the output matches the expected structure if an error occurs within the tool
+            return {
+                "balanced": False,
+                "imbalances": [{"issue": "Invalid input format for traits_snapshot", "recommendation": "Ensure traits_snapshot is a dictionary of string keys to numeric values."}],
+                "trait_count": 0,
+                "average_value": 0.0,
+                "message": "Invalid traits_snapshot format."
+            }
+
         imbalances = []
         num_traits = len(traits_snapshot)
         if num_traits == 0:
-            return {"balanced": True, "imbalances": [], "trait_count": 0, "average_value": 0.0, "message": "No traits to analyze."}
-    
+            return {
+                "balanced": True, # An empty set of traits can be considered balanced
+                "imbalances": [],
+                "trait_count": 0,
+                "average_value": 0.0,
+                "message": "No traits to analyze (empty snapshot)." # Modified message
+            }
+
         # 1. Check for extremely high or low values
         for trait, value in traits_snapshot.items():
-            if value > 0.95: 
+            if value > 0.95:
                 imbalances.append({
                     "trait": trait, "value": round(value,3), "issue": "extremely_high",
                     "recommendation": f"Consider strategies to moderate '{trait}' for better balance if it's causing issues."
@@ -1111,25 +1134,25 @@ class ConditioningSystem:
                     "trait": trait, "value": round(value,3), "issue": "extremely_low",
                     "recommendation": f"Consider strategies to develop '{trait}' if its absence is detrimental."
                 })
-    
+
         # 2. Check for opposing trait imbalances (example pairs)
         opposing_pairs = [
-            ("dominance", "patience"), ("playfulness", "strictness"), 
-            ("intensity", "nurturing"), ("creativity", "analytical") 
+            ("dominance", "patience"), ("playfulness", "strictness"),
+            ("intensity", "nurturing"), ("creativity", "analytical")
         ]
         for t1, t2 in opposing_pairs:
             if t1 in traits_snapshot and t2 in traits_snapshot:
                 val1, val2 = traits_snapshot[t1], traits_snapshot[t2]
                 diff = abs(val1 - val2)
-                if diff > 0.7: 
+                if diff > 0.7:
                     higher_trait = t1 if val1 > val2 else t2
                     lower_trait  = t2 if higher_trait == t1 else t1
                     imbalances.append({
-                        "traits": [t1, t2], "values": {t1: round(val1,3), t2: round(val2,3)}, 
+                        "traits": [t1, t2], "values": {t1: round(val1,3), t2: round(val2,3)},
                         "difference": round(diff,3), "issue": "opposing_imbalance",
                         "recommendation": f"'{higher_trait}' significantly outweighs '{lower_trait}'. Evaluate if this imbalance is desired or if moderation/development is needed."
                     })
-        
+
         return {
             "balanced":     len(imbalances) == 0,
             "imbalances":   imbalances,
