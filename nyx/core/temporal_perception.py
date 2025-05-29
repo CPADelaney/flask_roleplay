@@ -161,35 +161,40 @@ class TemporalReflection(BaseModel):
 
 class TimePerceptionState(BaseModel):
     """Current state of temporal perception"""
-    last_interaction: datetime.datetime = Field(..., description="Timestamp of last interaction")
-    current_session_start: datetime.datetime = Field(..., description="Timestamp of current session start")
-    current_session_duration: float = Field(0.0, description="Duration of current session in seconds")
-    time_since_last_interaction: float = Field(0.0, description="Time since last interaction in seconds")
-    subjective_time_dilation: float = Field(1.0, description="Subjective time dilation factor (1.0 = normal)")
-    current_time_category: str = Field("none", description="Current time category")
-    current_time_effects: List[Dict[str, Any]] | None = None
-    lifetime_total_interactions: int = Field(0, description="Total lifetime interactions")
-    lifetime_total_duration: float = Field(0.0, description="Total lifetime interaction duration")
-    relationship_age_days: float = Field(0.0, description="Age of relationship in days")
+    # Make all fields optional with proper defaults
+    last_interaction: Optional[datetime.datetime] = Field(None, description="Timestamp of last interaction")
+    current_session_start: Optional[datetime.datetime] = Field(None, description="Timestamp of current session start")
+    current_session_duration: Optional[float] = Field(None, description="Duration of current session in seconds")
+    time_since_last_interaction: Optional[float] = Field(None, description="Time since last interaction in seconds")
+    subjective_time_dilation: Optional[float] = Field(None, description="Subjective time dilation factor (1.0 = normal)")
+    current_time_category: Optional[str] = Field(None, description="Current time category")
+    current_time_effects: Optional[List[Dict[str, Any]]] = Field(None, description="Current time effects")
+    lifetime_total_interactions: Optional[int] = Field(None, description="Total lifetime interactions")
+    lifetime_total_duration: Optional[float] = Field(None, description="Total lifetime interaction duration")
+    relationship_age_days: Optional[float] = Field(None, description="Age of relationship in days")
     first_interaction: Optional[datetime.datetime] = Field(None, description="Timestamp of first interaction")
-    current_temporal_context: str = Field("", description="Current temporal context (morning, evening, weekday, etc.)")
-    time_scales_active: Dict[str, float] = Field(default_factory=dict, description="Active awareness of time scales")
+    current_temporal_context: Optional[str] = Field(None, description="Current temporal context (morning, evening, weekday, etc.)")
+    time_scales_active: Optional[Dict[str, float]] = Field(None, description="Active awareness of time scales")
 
     model_config = {
         "json_schema_extra": {
-            "required": []  # Make all fields optional in the JSON schema
+            "required": []  # This ensures no fields are required in the JSON schema
         }
     }
 
 class TimeExpressionOutput(BaseModel):
     """Output for time-related expressions"""
-    expression: str = Field(..., description="Natural expression about time perception")
-    time_scale: str = Field(..., description="Primary time scale referenced")
-    intensity: float = Field(..., description="Intensity of expression (0.0-1.0)")
-    reference_type: str = Field(..., description="Type of time reference (e.g., 'interval', 'scale', 'rhythm')")
-    time_reference: Dict[str, Any] = Field(..., description="Details about the time reference")
-    # All fields are required, so this model naturally complies with the "exhaustive required list" rule.
-    # No model_config needed here unless a field becomes optional.
+    expression: Optional[str] = Field(None, description="Natural expression about time perception")
+    time_scale: Optional[str] = Field(None, description="Primary time scale referenced")
+    intensity: Optional[float] = Field(None, description="Intensity of expression (0.0-1.0)")
+    reference_type: Optional[str] = Field(None, description="Type of time reference (e.g., 'interval', 'scale', 'rhythm')")
+    time_reference: Optional[Dict[str, Any]] = Field(None, description="Details about the time reference")
+    
+    model_config = {
+        "json_schema_extra": {
+            "required": []
+        }
+    }
 
 class TemporalAwarenessOutput(BaseModel):
     """Output for temporal awareness processing"""
