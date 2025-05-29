@@ -303,39 +303,34 @@ class ConditioningSystem:
         )
     
     def _create_personality_development_agent(self) -> Agent:
-        """Create agent for personality development"""
         return Agent(
             name="Personality_Development_Agent",
             instructions="""
             You are the Personality Development Agent for Nyx's learning system.
-            The input you receive will be a JSON string containing 'trait' and 'target_value'.
-            Optionally, the input JSON might contain 'current_trait_values_snapshot' which is a dictionary of all current trait values.
-
-            Your role is to guide the development of personality traits, preferences,
-            and emotional responses through conditioning.
-
+            The input you receive will be a JSON string. This JSON may contain:
+            - 'trait': (string, required) The name of the personality trait to condition.
+            - 'target_value': (float, required) The desired value for the trait.
+            - 'current_trait_values_snapshot': (object/dictionary, optional) A snapshot of all current trait names to their values (e.g., {"kindness": 0.7, "humor": 0.5}).
+    
+            Your role is to guide the development of personality traits.
+    
             Focus on:
             1. Extracting 'trait' and 'target_value' from the input JSON.
             2. Identifying behaviors related to the trait using '_identify_trait_behaviors'.
-            3. Calculating trait adjustments using '_calculate_conditioning_trait_adjustment'.
+            3. Calculating trait adjustments using '_calculate_conditioning_trait_adjustment'. (You will need to determine the current_value of the specific trait being conditioned, perhaps from the 'current_trait_values_snapshot' if provided, or assume a default if not. You'll also need to manage or infer a 'reinforcement_count' for this specific trait conditioning.)
             4. Updating identity traits with '_update_identity_trait'.
-            5. Conditioning appropriate behaviors that reinforce target personality traits.
-            6. If 'current_trait_values_snapshot' is available from the input JSON, creating balanced trait development by calling the '_check_trait_balance' tool.
-               When calling '_check_trait_balance', you MUST provide the arguments nested under 'input_args'.
-               For example, if you have a dictionary `my_traits = {"kindness": 0.8, "humor": 0.6}`,
-               you must call `_check_trait_balance` with parameters like `{"input_args": {"traits_snapshot": my_traits}}`.
-            7. Integrating conditioning with identity evolution.
-            8. Formulating a conditioning strategy and describing identity impact in the final output.
-
-            Balance stable personality characteristics with adaptability to new experiences.
-            Ensure personality development is consistent with overall identity and values.
+            5. If the 'current_trait_values_snapshot' dictionary IS PROVIDED in your input JSON, you MUST use the '_check_trait_balance' tool to analyze it.
+               WHEN CALLING '_check_trait_balance', the 'current_trait_values_snapshot' dictionary (which is a map of trait names to float values) MUST be passed as the value for the 'traits_snapshot' field, nested under an 'input_args' object.
+               For example, if the 'current_trait_values_snapshot' from your input was `{"kindness": 0.8, "humor": 0.6}`, you MUST call `_check_trait_balance` with tool parameters like this:
+               `{"input_args": {"traits_snapshot": {"kindness": 0.8, "humor": 0.6}}}`.
+            6. Formulating a conditioning strategy and describing identity impact in the final output.
             """,
             model="gpt-4.1-nano",
             tools=[
-                self._identify_trait_behaviors,
-                self._calculate_conditioning_trait_adjustment,
-                self._update_identity_trait,
-                self._check_trait_balance 
+                self._identify_trait_behaviors,                 # tools[0]
+                self._calculate_conditioning_trait_adjustment,  # tools[1]
+                self._update_identity_trait,                    # tools[2]
+                self._check_trait_balance                       # tools[3] - THIS IS THE ONE
             ],
             output_type=TraitConditioningOutput
         )
@@ -419,6 +414,8 @@ class ConditioningSystem:
                                                intensity: float, # Assuming LLM extracts this
                                                valence: float, # Assuming LLM extracts this
                                                context_keys: List[str]) -> Dict[str, Any]: # Assuming LLM extracts this
+        logger.debug(f"TOOL_CCA_DEBUG: type(ctx)={type(ctx)}, dir(ctx)={dir(ctx)}")
+        logger.debug(f"TOOL_CCA_DEBUG: type(ctx.context)={type(getattr(ctx, 'context', None))}, dir(ctx.context)={dir(getattr(ctx, 'context', None)) if hasattr(ctx, 'context') else 'N/A'}")
         tool_name = "_create_or_update_classical_association"
         # Log the received arguments to see what the LLM is passing after interpreting the JSON input.
         logger.debug(f"[{tool_name}] Called by LLM. "
@@ -645,6 +642,8 @@ class ConditioningSystem:
         Returns:
             Calculated association strength
         """
+        logger.debug(f"TOOL_CCA_DEBUG: type(ctx)={type(ctx)}, dir(ctx)={dir(ctx)}")
+        logger.debug(f"TOOL_CCA_DEBUG: type(ctx.context)={type(getattr(ctx, 'context', None))}, dir(ctx.context)={dir(getattr(ctx, 'context', None)) if hasattr(ctx, 'context') else 'N/A'}")
         strength = base_strength
         intensity_factor = intensity * ctx.context.association_learning_rate
         strength += intensity_factor
@@ -1044,7 +1043,7 @@ class ConditioningSystem:
     @function_tool
     async def _check_trait_balance(
         ctx: RunContextWrapper,
-        input_args: TraitsSnapshotArgs # Using the Pydantic model as the argument type
+        input_args: TraitsSnapshotArgs  # Parameter name is 'input_args', its type is TraitsSnapshotArgs
     ) -> Dict[str, Any]:
         """
         Check balance of personality traits from a given snapshot.
@@ -1055,8 +1054,7 @@ class ConditioningSystem:
         Returns:
             Trait balance analysis.
         """
-        # Access the actual dictionary from the input_args model
-        traits_snapshot = input_args.traits_snapshot # This is correct for this signature
+        traits_snapshot = input_args.traits_snapshot # Correctly access the dict
     
         if not isinstance(traits_snapshot, dict) or not all(isinstance(v, (int, float)) for v in traits_snapshot.values()):
             logger.warning(f"_check_trait_balance: 'traits_snapshot' field within input_args is not a dict of trait:value. Got: {type(traits_snapshot)}. Input: {traits_snapshot!r}")
@@ -1099,12 +1097,11 @@ class ConditioningSystem:
                     })
         
         return {
-            "balanced":     len(imbalances) == 0,
-            "imbalances":   imbalances,
-            "trait_count":  num_traits,
+            "balanced": len(imbalances) == 0,
+            "imbalances": imbalances,
+            "trait_count": num_traits,
             "average_value": round(sum(traits_snapshot.values()) / num_traits, 3) if num_traits > 0 else 0.0
         }
-
 
     @staticmethod
     @function_tool
@@ -1524,13 +1521,12 @@ class ConditioningSystem:
             "current_trait_values_snapshot": current_context.get("current_trait_values", {}), 
             "full_context_provided": current_context
         }
-        json_input_for_agent = json.dumps(data_for_agent)
+
         logger.debug(f"[{method_name}] JSON input for {self.personality_development_agent.name}: {json_input_for_agent!r}")
     
         try:
             result = await Runner.run(
                 self.personality_development_agent,
-                json_input_for_agent, # Pass JSON string as input
                 context=RunContextWrapper(context=self.context)
             )
             co: TraitConditioningOutput = result.final_output
