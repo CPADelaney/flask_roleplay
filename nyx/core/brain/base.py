@@ -737,6 +737,16 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
     
             # Initialize conditioning configuration (keep existing)
             self.conditioning_config = ConditioningConfiguration()
+
+            logger.debug(f"NYXB_DEBUG: Before ConditioningSystem init. Type of self.reward_system: {type(self.reward_system)}")
+            if self.reward_system is None:
+                logger.error("NYXB_DEBUG: CRITICAL! self.reward_system is None right before creating ConditioningSystem.")
+            else:
+                # If A2A wrapped, check original
+                original_rs_for_cs = getattr(self.reward_system, 'original_system', self.reward_system)
+                logger.debug(f"NYXB_DEBUG: Original reward system for CS: {type(original_rs_for_cs)}")
+                if not isinstance(original_rs_for_cs, RewardSignalProcessor):
+                    logger.warning(f"NYXB_DEBUG: Original reward system is not RewardSignalProcessor, it is {type(original_rs_for_cs)}")
             
             # Initialize base conditioning system (keep existing)
             base_conditioning_system = ConditioningSystem(
