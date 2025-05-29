@@ -782,7 +782,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             personality_profile_obj = await self.conditioning_config.get_personality_profile()
             personality_profile_dict = personality_profile_obj.model_dump() if hasattr(personality_profile_obj, "model_dump") else personality_profile_obj
             await ConditioningSystem.initialize_baseline_personality(
-                conditioning_system=self.conditioning_system, 
+                self.conditioning_system,  # Changed from keyword to positional argument
                 personality_profile=personality_profile_dict
             )
             logger.debug("Baseline personality conditioning completed.")
