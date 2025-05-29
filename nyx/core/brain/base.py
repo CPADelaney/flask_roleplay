@@ -5213,6 +5213,22 @@ System Prompt End
             
             return stats    
 
+    def _get_current_user_id_from_context(self, context: Dict[str, Any]) -> Optional[str]:
+        """Extract user ID from context"""
+        # Try different possible keys
+        for key in ["user_id", "userId", "user", "interlocutor_id"]:
+            if key in context:
+                return str(context[key])
+                
+        # Try to extract from nested structures
+        if "user" in context and isinstance(context["user"], dict) and "id" in context["user"]:
+            return str(context["user"]["id"])
+            
+        if "message" in context and isinstance(context["message"], dict) and "user_id" in context["message"]:
+            return str(context["message"]["user_id"])
+            
+        return None
+
     async def get_identity_state(self) -> Dict[str, Any]:
         """
         Get the current state of Nyx's identity.
