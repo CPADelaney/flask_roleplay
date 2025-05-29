@@ -323,11 +323,12 @@ class BlendedInputProcessor:
 
     @staticmethod
     @function_tool
-    async def _detect_patterns(ctx: RunContextWrapper[ProcessingContext], text: str) -> List[Dict[str, Any]]:
+    async def _detect_patterns(ctx: RunContextWrapper[ProcessingContext], text: str = "") -> List[Dict[str, Any]]:
         """
         Detect patterns in input text using regular expressions.
         
         Args:
+            ctx: The run context wrapper
             text: Input text to analyze
             
         Returns:
@@ -335,6 +336,9 @@ class BlendedInputProcessor:
         """
         context = ctx.context
         detected = []
+        
+        if not text:
+            return detected
         
         for pattern_name, regex_list in context.input_patterns.items():
             for regex in regex_list:
@@ -353,21 +357,36 @@ class BlendedInputProcessor:
     @function_tool
     async def _evaluate_behavior(
         ctx: RunContextWrapper[ProcessingContext], 
-        behavior: str,
-        detected_patterns: List[Dict[str, Any]],
-        user_history: Optional[Dict[str, Any]] = None
+        behavior: str = "",
+        detected_patterns: List[Dict[str, Any]] = None,
+        user_history: Dict[str, Any] = None
     ) -> Dict[str, Any]:
         """
         Evaluate if a behavior should be approached or avoided.
         
         Args:
+            ctx: The run context wrapper
             behavior: Behavior to evaluate
             detected_patterns: Patterns detected in the input
-            user_history: Optional history of user interactions
+            user_history: History of user interactions
             
         Returns:
             Evaluation result with recommendation
         """
+        # Handle None values and defaults
+        if not behavior:
+            return {
+                "behavior": "unknown",
+                "recommendation": "avoid",
+                "confidence": 0.0,
+                "reasoning": "No behavior specified"
+            }
+        
+        if detected_patterns is None:
+            detected_patterns = []
+        if user_history is None:
+            user_history = {}
+            
         context = ctx.context
         if context.conditioning_system and hasattr(context.conditioning_system, 'evaluate_behavior_consequences'):
             # Use the actual conditioning system if available
@@ -375,7 +394,7 @@ class BlendedInputProcessor:
                 behavior=behavior,
                 context={
                     "detected_patterns": [p["pattern_name"] for p in detected_patterns],
-                    "user_history": user_history or {}
+                    "user_history": user_history
                 }
             )
             return result
@@ -435,23 +454,32 @@ class BlendedInputProcessor:
     @function_tool
     async def _process_operant_conditioning(
         ctx: RunContextWrapper[ProcessingContext],
-        behavior: str,
-        consequence_type: str,
+        behavior: str = "",
+        consequence_type: str = "",
         intensity: float = 0.5,
-        context_info: Optional[Dict[str, Any]] = None
+        context_info: Dict[str, Any] = None
     ) -> Dict[str, Any]:
         """
         Process operant conditioning for a behavior.
         
         Args:
+            ctx: The run context wrapper
             behavior: Behavior being conditioned
-            consequence_type: Type of operant conditioning (positive/negative reinforcement/punishment)
+            consequence_type: Type of operant conditioning
             intensity: Intensity of the conditioning (0.0-1.0)
             context_info: Additional context information
             
         Returns:
             Result of the conditioning process
         """
+        # Handle defaults
+        if not behavior:
+            behavior = "unspecified"
+        if not consequence_type:
+            consequence_type = "neutral"
+        if context_info is None:
+            context_info = {}
+            
         processor_ctx = ctx.context
         if processor_ctx.conditioning_system and hasattr(processor_ctx.conditioning_system, 'process_operant_conditioning'):
             # Use the actual conditioning system if available
@@ -459,7 +487,7 @@ class BlendedInputProcessor:
                 behavior=behavior,
                 consequence_type=consequence_type,
                 intensity=intensity,
-                context=context_info or {}
+                context=context_info
             )
             return result
         
@@ -478,17 +506,21 @@ class BlendedInputProcessor:
     @function_tool
     async def _get_mode_preferences(
         ctx: RunContextWrapper[ProcessingContext],
-        mode: str
+        mode: str = ""
     ) -> Dict[str, Any]:
         """
         Get response modification preferences for a specific mode
         
         Args:
+            ctx: The run context wrapper
             mode: The interaction mode
             
         Returns:
             Response modification preferences for the mode
         """
+        if not mode:
+            return {}
+            
         processor_ctx = ctx.context
         preferences = processor_ctx.mode_response_preferences.get(mode.lower(), {})
         
@@ -534,17 +566,21 @@ class BlendedInputProcessor:
     @function_tool
     async def _calculate_style_elements(
         ctx: RunContextWrapper[ProcessingContext],
-        mode_distribution: Dict[str, float]
+        mode_distribution: Dict[str, float] = None
     ) -> Dict[str, Any]:
         """
         Calculate blended style elements based on mode distribution
         
         Args:
+            ctx: The run context wrapper
             mode_distribution: The mode distribution
             
         Returns:
             Blended style elements
         """
+        if mode_distribution is None:
+            mode_distribution = {}
+            
         processor_ctx = ctx.context
         
         # Initialize style elements
@@ -575,8 +611,8 @@ class BlendedInputProcessor:
         
         # For each significant mode
         for mode, norm_weight in normalized_weights.items():
-            # Get mode preferences
-            preferences = await self._get_mode_preferences(ctx, mode)
+            # Get mode preferences - use await since _get_mode_preferences is async
+            preferences = await BlendedInputProcessor._get_mode_preferences(ctx, mode)
             
             if not preferences:
                 continue
@@ -640,19 +676,37 @@ class BlendedInputProcessor:
     @function_tool
     async def _analyze_response_coherence(
         ctx: RunContextWrapper[ProcessingContext],
-        original_response: str,
-        modified_response: str
+        original_response: str = "",
+        modified_response: str = ""
     ) -> Dict[str, Any]:
         """
         Analyze the coherence of a modified response
         
         Args:
+            ctx: The run context wrapper
             original_response: Original response text
             modified_response: Modified response text
             
         Returns:
             Coherence analysis
         """
+        # Handle empty strings
+        if not original_response and not modified_response:
+            return {
+                "coherence_score": 1.0,
+                "metrics": {
+                    "length_change": 1.0,
+                    "word_retention": 1.0,
+                    "sentence_count_ratio": 1.0
+                },
+                "is_coherent": True
+            }
+        
+        if not original_response:
+            original_response = " "  # Avoid division by zero
+        if not modified_response:
+            modified_response = " "
+        
         # Calculate simple metrics
         
         # 1. Length change
