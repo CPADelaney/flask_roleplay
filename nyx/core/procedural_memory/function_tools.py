@@ -43,21 +43,23 @@ async def add_procedure(
         if isinstance(steps_json, str):
             logger.debug(f"ADD_PROCEDURE_DEBUG: Length of steps_json string: {len(steps_json)}")
             logger.debug(f"ADD_PROCEDURE_DEBUG: repr(steps_json): {repr(steps_json)}")
-            if len(steps_json) >= 1140: # Check characters around the suspected error point
-                logger.debug(f"ADD_PROCEDURE_DEBUG: Last 10 chars (repr): {repr(steps_json[-10:])}")
-                if len(steps_json) > 1144:
-                     logger.debug(f"ADD_PROCEDURE_DEBUG: Character at index 1144 (repr): {repr(steps_json[1144])}")
-        # ---- END DEBUG LOGGING ----
-        try:
-            steps = json.loads(steps_json)
-            if not isinstance(steps, list):
-                raise ValueError("Decoded JSON is not a list of steps.")
-        except Exception as e:
-            # ---- Log the problematic string on error ----
-            logger.error(f"ADD_PROCEDURE_ERROR: Failed to parse steps_json. Error: {e}")
-            if isinstance(steps_json, str):
-                 logger.error(f"ADD_PROCEDURE_ERROR: Problematic steps_json (len {len(steps_json)}): {repr(steps_json)}")
-            return {"error": f"Invalid steps JSON: {e}", "success": False}
+            # ---- END DEBUG LOGGING ----
+            try:
+                # Targeted fix for the observed "extra }" issue
+                s_to_parse = steps_json
+                if len(steps_json) == 1145 and steps_json.endswith("}]}"):
+                    logger.warning(f"ADD_PROCEDURE_WARN: Detected steps_json with length 1145 ending in '}}]'. "
+                                   f"Assuming extra trailing brace. Trimming.")
+                    s_to_parse = steps_json[:-1] # Remove the last character
+
+                steps = json.loads(s_to_parse)
+                if not isinstance(steps, list):
+                    raise ValueError("Decoded JSON is not a list of steps.")
+            except Exception as e:
+                logger.error(f"ADD_PROCEDURE_ERROR: Failed to parse steps_json. Error: {e}")
+                if isinstance(steps_json, str):
+                     logger.error(f"ADD_PROCEDURE_ERROR: Original steps_json (len {len(steps_json)}): {repr(steps_json)}")
+                return {"error": f"Invalid steps JSON: {e}", "success": False}
 
 
     # ---------- 2️⃣  Validate / enrich each step ----------
