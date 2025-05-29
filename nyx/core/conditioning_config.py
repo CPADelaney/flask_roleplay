@@ -114,9 +114,10 @@ class ConditioningConfiguration:
     """
     def __init__(self, config_dir: str = "config"):
         self.context = ConfigurationContext(config_dir)
-        # Load configurations *before* creating agents that might need them immediately
+        # Load configurations BEFORE creating agents
         self._load_parameters()
         self._load_personality_profile()
+        
         # Initialize agents
         self.config_manager_agent = self._create_config_manager_agent()
         self.personality_editor_agent = self._create_personality_editor_agent()
@@ -133,18 +134,166 @@ class ConditioningConfiguration:
             2. Ensure parameter values remain within valid ranges
             3. Provide explanations for parameter adjustments
             4. Save and load parameter configurations
-            Make thoughtful adjustments that maintain system coherence.
+            
+            When you receive a request, analyze it and use the appropriate tools.
+            The tools expect specific parameter types - ensure you pass the correct types.
             """,
             tools=[
-                # Correct usage: Wrap the method reference here
-                function_tool(self._get_parameters),
-                function_tool(self._update_parameters),
-                function_tool(self._save_parameters), # Assuming you want this as a tool too
-                function_tool(self._validate_parameters),
-                function_tool(self._reset_to_defaults)
+                self._create_get_parameters_tool(),
+                self._create_update_parameters_tool(),
+                self._create_save_parameters_tool(),
+                self._create_validate_parameters_tool(),
+                self._create_reset_to_defaults_tool()
             ],
             model_settings=ModelSettings(temperature=0.1)
         )
+
+    def _create_get_parameters_tool(self) -> FunctionTool:
+        async def get_parameters_impl(ctx: RunContextWrapper) -> Dict[str, Any]:
+            """Get current conditioning parameters"""
+            if self.context.parameters:
+                return self.context.parameters.model_dump()
+            return {}
+        
+        return function_tool(
+            get_parameters_impl,
+            name_override="_get_parameters",
+            description_override="Get current conditioning parameters"
+        )
+
+    def _create_update_parameters_tool(self) -> FunctionTool:
+        async def update_parameters_impl(
+            ctx: RunContextWrapper,
+            new_params: Dict[str, Any]
+        ) -> Dict[str, Any]:
+            """Update conditioning parameters"""
+            if not self.context.parameters:
+                return {"success": False, "message": "Parameters not loaded"}
+            
+            result = ConfigUpdateResult(success=True)
+            current_params = self.context.parameters.model_dump()
+            valid_updates = {}
+            
+            for key, value in new_params.items():
+                if hasattr(self.context.parameters, key):
+                    result.previous_values[key] = current_params[key]
+                    result.new_values[key] = value
+                    result.updated_keys.append(key)
+                    valid_updates[key] = value
+                else:
+                    result.message += f"Unknown parameter: {key}. "
+            
+            if not result.updated_keys:
+                result.success = False
+                result.message += "No valid parameters provided for update."
+                return result.model_dump()
+            
+            try:
+                updated_params_dict = {**current_params, **valid_updates}
+                self.context.parameters = ConditioningParameters(**updated_params_dict)
+                self._save_parameters_internal(self.context.parameters)
+                result.message += f"Updated {len(result.updated_keys)} parameters."
+            except Exception as e:
+                logger.error(f"Error updating parameters: {e}")
+                result.success = False
+                result.message = f"Error during parameter update: {e}"
+            
+            return result.model_dump()
+        
+        return function_tool(
+            update_parameters_impl,
+            name_override="_update_parameters",
+            description_override="Update conditioning parameters. Expects a dictionary of parameter names to new values."
+        )
+
+    def _create_save_parameters_tool(self) -> FunctionTool:
+        async def save_parameters_impl(ctx: RunContextWrapper) -> Dict[str, Any]:
+            """Save current parameters to disk"""
+            if self.context.parameters:
+                try:
+                    self._save_parameters_internal(self.context.parameters)
+                    return {"success": True, "message": "Parameters saved."}
+                except Exception as e:
+                    logger.error(f"Error saving parameters: {e}")
+                    return {"success": False, "message": f"Error saving parameters: {e}"}
+            else:
+                return {"success": False, "message": "No parameters loaded to save."}
+        
+        return function_tool(
+            save_parameters_impl,
+            name_override="_save_parameters",
+            description_override="Save current parameters to disk"
+        )
+
+    def _create_validate_parameters_tool(self) -> FunctionTool:
+        async def validate_parameters_impl(
+            ctx: RunContextWrapper,
+            parameters: Dict[str, Any]
+        ) -> Dict[str, Any]:
+            """Validate parameters against constraints"""
+            validation_result = {"valid": True, "issues": {}}
+            
+            try:
+                # Try Pydantic validation
+                ConditioningParameters(**parameters)
+                
+                # Define constraints
+                constraints = {
+                    "association_learning_rate": (0.0, 1.0),
+                    "extinction_rate": (0.0, 0.5),
+                    "generalization_factor": (0.0, 1.0),
+                    # ... other constraints
+                }
+                
+                # Check ranges
+                for param, value in parameters.items():
+                    if param in constraints:
+                        min_val, max_val = constraints[param]
+                        if not isinstance(value, (int, float)):
+                            validation_result["valid"] = False
+                            validation_result["issues"][param] = f"Invalid type: expected number"
+                        elif not min_val <= value <= max_val:
+                            validation_result["valid"] = False
+                            validation_result["issues"][param] = f"Value {value} outside range [{min_val}, {max_val}]"
+                
+            except Exception as e:
+                validation_result["valid"] = False
+                validation_result["issues"]["validation_error"] = str(e)
+            
+            return validation_result
+        
+        return function_tool(
+            validate_parameters_impl,
+            name_override="_validate_parameters",
+            description_override="Validate parameters against constraints"
+        )
+
+    def _create_reset_to_defaults_tool(self) -> FunctionTool:
+        async def reset_to_defaults_impl(ctx: RunContextWrapper) -> Dict[str, Any]:
+            """Reset all parameters and profile to defaults"""
+            try:
+                self.context.parameters = ConditioningParameters()
+                self._save_parameters_internal(self.context.parameters)
+                
+                self.context.personality_profile = self._create_default_personality()
+                self._save_personality_profile_internal(self.context.personality_profile)
+                
+                return {
+                    "success": True,
+                    "message": "Parameters and profile reset to defaults.",
+                    "parameters": self.context.parameters.model_dump(),
+                    "personality_profile": self.context.personality_profile.model_dump()
+                }
+            except Exception as e:
+                logger.error(f"Error resetting to defaults: {e}")
+                return {"success": False, "message": f"Error: {e}"}
+        
+        return function_tool(
+            reset_to_defaults_impl,
+            name_override="_reset_to_defaults",
+            description_override="Reset all parameters and profile to defaults"
+        )
+
 
     def _create_personality_editor_agent(self) -> Agent:
         """Create agent for editing personality profiles"""
@@ -152,22 +301,88 @@ class ConditioningConfiguration:
             name="Personality_Editor",
             instructions="""
             You are the personality profile editor for a sophisticated conditioning architecture.
-            Your role is to:
-            1. Manage personality traits and their values
-            2. Configure preferences and their strengths
-            3. Set up emotion triggers and behavior associations
-            4. Ensure profile coherence and balance
-            Make thoughtful adjustments that maintain personality coherence.
+            Manage personality traits, preferences, emotion triggers, and behaviors.
+            
+            IMPORTANT: When calling _check_trait_balance:
+            - Pass the traits dictionary directly as the 'traits_snapshot' parameter
+            - Do NOT nest it under 'input_args'
+            - Example: _check_trait_balance(traits_snapshot={"dominance": 0.8, "patience": 0.3})
             """,
             tools=[
-                # Correct usage: Wrap the method reference here
-                function_tool(self._get_personality_profile),
-                function_tool(self._update_personality_profile),
-                function_tool(self._adjust_trait),
-                function_tool(self._adjust_preference),
-                function_tool(self._save_personality_profile) # Assuming you want this as a tool too
+                self._create_get_personality_profile_tool(),
+                self._create_update_personality_profile_tool(),
+                self._create_adjust_trait_tool(),
+                self._create_adjust_preference_tool(),
+                self._create_save_personality_profile_tool(),
+                self._create_check_trait_balance_tool()
             ],
             model_settings=ModelSettings(temperature=0.2)
+        )
+
+    def _create_check_trait_balance_tool(self) -> FunctionTool:
+        async def check_trait_balance_impl(
+            ctx: RunContextWrapper,
+            traits_snapshot: Dict[str, float]
+        ) -> Dict[str, Any]:
+            """Check balance of personality traits"""
+            if not isinstance(traits_snapshot, dict):
+                return {
+                    "balanced": False,
+                    "imbalances": [{"issue": "Invalid input format"}],
+                    "trait_count": 0,
+                    "average_value": 0.0
+                }
+            
+            imbalances = []
+            
+            # Check for extreme values
+            for trait, value in traits_snapshot.items():
+                if value > 0.95:
+                    imbalances.append({
+                        "trait": trait,
+                        "value": value,
+                        "issue": "extremely_high",
+                        "recommendation": f"Consider moderating '{trait}'"
+                    })
+                elif value < 0.05:
+                    imbalances.append({
+                        "trait": trait,
+                        "value": value,
+                        "issue": "extremely_low",
+                        "recommendation": f"Consider developing '{trait}'"
+                    })
+            
+            # Check opposing pairs
+            opposing_pairs = [
+                ("dominance", "patience"),
+                ("playfulness", "strictness"),
+                ("intensity", "nurturing")
+            ]
+            
+            for t1, t2 in opposing_pairs:
+                if t1 in traits_snapshot and t2 in traits_snapshot:
+                    diff = abs(traits_snapshot[t1] - traits_snapshot[t2])
+                    if diff > 0.7:
+                        imbalances.append({
+                            "traits": [t1, t2],
+                            "difference": diff,
+                            "issue": "opposing_imbalance"
+                        })
+            
+            num_traits = len(traits_snapshot)
+            avg_value = sum(traits_snapshot.values()) / num_traits if num_traits > 0 else 0.0
+            
+            return {
+                "balanced": len(imbalances) == 0,
+                "imbalances": imbalances,
+                "trait_count": num_traits,
+                "average_value": round(avg_value, 3)
+            }
+        
+        return function_tool(
+            check_trait_balance_impl,
+            name_override="_check_trait_balance",
+            description_override="Check balance of personality traits. Pass traits_snapshot as a dictionary."
         )
 
     # REMOVED @staticmethod and @function_tool decorators from method definitions
