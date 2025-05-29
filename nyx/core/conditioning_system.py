@@ -1277,40 +1277,36 @@ class ConditioningSystem:
         is paired with a conditioned stimulus to create an association.
         """
         method_name = "process_classical_conditioning"
-        logger.debug(f"[{method_name}] Called with: unconditioned_stimulus='{unconditioned_stimulus}', "
-                     f"conditioned_stimulus='{conditioned_stimulus}', response='{response}', "
-                     f"intensity={intensity}, context type: {type(context)}, context: {context!r}")
-
+        logger.debug(
+            f"[{method_name}] Called with: "
+            f"unconditioned_stimulus='{unconditioned_stimulus}', "
+            f"conditioned_stimulus='{conditioned_stimulus}', "
+            f"response='{response}', intensity={intensity}, "
+            f"context={context!r}"
+        )
+    
+        # prepare the payload
         data = {
             "unconditioned_stimulus": unconditioned_stimulus,
             "conditioned_stimulus": conditioned_stimulus,
             "response": response,
-            "intensity": intensity
+            "intensity": intensity,
+            "context_keys": ConditioningSystem._force_str_list(
+                (context or {}).get("context_keys", [])
+            ),
         }
-        
-        # Log context_keys before and after _force_str_list
-        raw_context_keys_from_input = None
-        if context and "context_keys" in context:
-            raw_context_keys_from_input = context.get("context_keys")
-        
-        logger.debug(f"[{method_name}] Raw context_keys from input: type={type(raw_context_keys_from_input)}, value={raw_context_keys_from_input!r}")
-        
-        data["context_keys"] = ConditioningSystem._force_str_list(
-            raw_context_keys_from_input if raw_context_keys_from_input is not None else (context.get("context_keys") if context else [])
-        )
-        logger.debug(f"[{method_name}] Processed context_keys for agent: type={type(data['context_keys'])}, value={data['context_keys']!r}")
-
         logger.debug(f"[{method_name}] Data prepared for {self.classical_conditioning_agent.name}: {data!r}")
-
+    
         try:
+            # ⚠️ pass `data`, not `prompt`
             result = await Runner.run(
                 self.classical_conditioning_agent,
-                prompt,
+                data,
                 context=RunContextWrapper(context=self.context)
             )
             co = result.final_output
             logger.debug(f"[{method_name}] {self.classical_conditioning_agent.name} run successful. Output: {co!r}")
-
+    
             if hasattr(self, "event_bus"):
                 await self.publish_conditioning_event(
                     event_type="conditioning_update",
@@ -1319,10 +1315,10 @@ class ConditioningSystem:
                         "association_key": co.association_key,
                         "association_type": co.type,
                         "strength": co.association_strength,
-                        "user_id": context.get("user_id", "default") if context else "default"
+                        "user_id": (context or {}).get("user_id", "default"),
                     }
                 )
-
+    
             return_value = {
                 "success": True,
                 "association_key": co.association_key,
@@ -1334,55 +1330,50 @@ class ConditioningSystem:
             }
             logger.debug(f"[{method_name}] Returning: {return_value!r}")
             return return_value
-
+    
         except Exception as e:
-            logger.error(f"[{method_name}] Error processing classical conditioning: {e}", exc_info=True) # exc_info=True will log the stack trace
+            logger.error(
+                f"[{method_name}] Error processing classical conditioning: {e!s}",
+                exc_info=True
+            )
             return {"success": False, "error": str(e)}
+    
 
 
-
+    
     async def process_operant_conditioning(
         self,
         behavior: str,
         consequence_type: str,
         intensity: float = 1.0,
-        context: Dict[str, Any] = None
+        context: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        """
-        Process an operant conditioning event where a behavior
-        is reinforced or punished based on its consequences.
-        """
+        """Reinforce or punish a behaviour and record the association."""
         method_name = "process_operant_conditioning"
-        logger.debug(f"[{method_name}] Called with: behavior='{behavior}', "
-                     f"consequence_type='{consequence_type}', intensity={intensity}, "
-                     f"context type: {type(context)}, context: {context!r}")
+        logger.debug(
+            f"[{method_name}] Called with behavior='{behavior}', "
+            f"consequence_type='{consequence_type}', intensity={intensity}, "
+            f"context={context!r}"
+        )
+    
         data = {
             "behavior": behavior,
             "consequence_type": consequence_type,
-            "intensity": intensity
+            "intensity": intensity,
+            "context_keys": ConditioningSystem._force_str_list(
+                (context or {}).get("context_keys", [])
+            ),
         }
-        
-        raw_context_keys_from_input = None
-        if context and "context_keys" in context:
-            raw_context_keys_from_input = context.get("context_keys")
-        
-        logger.debug(f"[{method_name}] Raw context_keys from input: type={type(raw_context_keys_from_input)}, value={raw_context_keys_from_input!r}")
-        
-        data["context_keys"] = ConditioningSystem._force_str_list(
-            raw_context_keys_from_input if raw_context_keys_from_input is not None else (context.get("context_keys") if context else [])
-        )
-        logger.debug(f"[{method_name}] Processed context_keys for agent: type={type(data['context_keys'])}, value={data['context_keys']!r}")
-
-        logger.debug(f"[{method_name}] Data prepared for {self.operant_conditioning_agent.name}: {data!r}")
+    
         try:
+            # ⬇️  **THIS LINE is the fix – we pass `data`, not an undefined `prompt`**
             result = await Runner.run(
                 self.operant_conditioning_agent,
-                prompt,
-                context=RunContextWrapper(context=self.context)
+                data,
+                context=RunContextWrapper(context=self.context),
             )
             co = result.final_output
-            logger.debug(f"[{method_name}] {self.operant_conditioning_agent.name} run successful. Output: {co!r}")
-
+    
             if hasattr(self, "event_bus"):
                 await self.publish_conditioning_event(
                     event_type="conditioning_update",
@@ -1391,11 +1382,11 @@ class ConditioningSystem:
                         "association_key": co.association_key,
                         "association_type": co.type,
                         "strength": co.association_strength,
-                        "user_id": context.get("user_id", "default") if context else "default"
-                    }
+                        "user_id": (context or {}).get("user_id", "default"),
+                    },
                 )
-
-            return_value = {
+    
+            return {
                 "success": True,
                 "association_key": co.association_key,
                 "type": co.type,
@@ -1404,14 +1395,16 @@ class ConditioningSystem:
                 "association_strength": co.association_strength,
                 "is_reinforcement": co.is_reinforcement,
                 "is_positive": co.is_positive,
-                "explanation": co.explanation
+                "explanation": co.explanation,
             }
-            logger.debug(f"[{method_name}] Returning: {return_value!r}")
-            return return_value
-
+    
         except Exception as e:
-            logger.error(f"[{method_name}] Error processing operant conditioning: {e}", exc_info=True)
+            logger.error(
+                f"[{method_name}] Error processing operant conditioning: {e!s}",
+                exc_info=True,
+            )
             return {"success": False, "error": str(e)}
+
 
     
     async def evaluate_behavior_consequences(self,
@@ -1465,51 +1458,53 @@ class ConditioningSystem:
         self,
         trait: str,
         value: float,
-        behaviors: List[str] = None, # This param is not used in the agent call, so logging its input might be less critical for this specific bug
-        context: Dict[str, Any] = None # This param is not used in the agent call
+        behaviors: List[str] = None,
+        context: Dict[str, Any] = None
     ) -> Dict[str, Any]:
         """
         Condition a personality trait through reinforcement of related behaviors.
         """
         method_name = "condition_personality_trait"
-        logger.debug(f"[{method_name}] Called with: trait='{trait}', value={value}, "
-                     f"behaviors type: {type(behaviors)}, behaviors: {behaviors!r}, "
-                     f"context type: {type(context)}, context: {context!r}")
-        
-        # Only pass the scalar inputs
+        logger.debug(
+            f"[{method_name}] Called with: trait='{trait}', value={value}, "
+            f"behaviors={behaviors!r}, context={context!r}"
+        )
+    
+        # Only the scalar inputs are sent to the agent
         data = {
             "trait": trait,
             "target_value": value
-            # Note: behaviors and context_keys are not directly passed to this agent in the current setup
         }
         logger.debug(f"[{method_name}] Data prepared for {self.personality_development_agent.name}: {data!r}")
-
+    
         try:
+            # ⚠️ pass `data`, not `prompt`
             result = await Runner.run(
                 self.personality_development_agent,
-                prompt,
+                data,
                 context=RunContextWrapper(context=self.context)
             )
             co = result.final_output
             logger.debug(f"[{method_name}] {self.personality_development_agent.name} run successful. Output: {co!r}")
-
+    
             return_value = {
                 "success": True,
                 "trait": co.trait,
                 "target_value": co.target_value,
                 "actual_value": co.actual_value,
-                "conditioned_behaviors": co.conditioned_behaviors, # This is an output field
+                "conditioned_behaviors": co.conditioned_behaviors,
                 "identity_impact": co.identity_impact,
                 "conditioning_strategy": co.conditioning_strategy
             }
-            logger.debug(f"[{method_name}] Type of co.conditioned_behaviors: {type(co.conditioned_behaviors)}")
             logger.debug(f"[{method_name}] Returning: {return_value!r}")
             return return_value
-
+    
         except Exception as e:
-            logger.error(f"[{method_name}] Error conditioning personality trait: {e}", exc_info=True)
+            logger.error(
+                f"[{method_name}] Error conditioning personality trait: {e!s}",
+                exc_info=True
+            )
             return {"success": False, "error": str(e)}
-
 
     
     async def condition_preference(self, 
