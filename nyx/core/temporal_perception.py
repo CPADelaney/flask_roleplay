@@ -111,6 +111,10 @@ class TimeDriftEffect(BaseModel):
     description: str = Field(..., description="Description of the temporal effect")
     hormone_effects: Dict[str, float] = Field(default_factory=dict, description="Effects on digital hormones")
 
+    # If this model were used as an agent output_type, it would need the fix.
+    # model_config = {"json_schema_extra": {"required": []}}
+
+
 class TemporalMemoryMetadata(BaseModel):
     """Temporal metadata for memories"""
     timestamp: datetime.datetime = Field(..., description="When the memory was created")
@@ -119,6 +123,9 @@ class TemporalMemoryMetadata(BaseModel):
     perceived_duration: Optional[str] = Field(None, description="Subjective perception of duration")
     time_category: Optional[str] = Field(None, description="Category of time duration")
     temporal_context: Optional[str] = Field(None, description="Current temporal context (morning, evening, etc.)")
+
+    # If this model were used as an agent output_type, it would need the fix.
+    # model_config = {"json_schema_extra": {"required": []}}
 
 class TemporalMilestone(BaseModel):
     """Significant milestone in the relationship timeline"""
@@ -130,6 +137,12 @@ class TemporalMilestone(BaseModel):
     associated_memory_ids: List[str] = Field(default_factory=list, description="Associated memories")
     next_anniversary: Optional[datetime.datetime] = Field(None, description="Next anniversary date")
 
+    model_config = {
+        "json_schema_extra": {
+            "required": []  # Make all fields optional in the JSON schema
+        }
+    }
+
 class TemporalReflection(BaseModel):
     """Reflection generated during idle time"""
     reflection_id: str = Field(..., description="Unique ID for the reflection")
@@ -139,6 +152,12 @@ class TemporalReflection(BaseModel):
     emotional_state: Dict[str, Any] = Field(..., description="Emotional state during reflection")
     focus_areas: List[str] = Field(default_factory=list, description="Areas of focus")
     time_scales: List[str] = Field(..., description="Time scales considered in this reflection")
+
+    model_config = {
+        "json_schema_extra": {
+            "required": []  # Make all fields optional in the JSON schema
+        }
+    }
 
 class TimePerceptionState(BaseModel):
     """Current state of temporal perception"""
@@ -156,6 +175,12 @@ class TimePerceptionState(BaseModel):
     current_temporal_context: str = Field("", description="Current temporal context (morning, evening, weekday, etc.)")
     time_scales_active: Dict[str, float] = Field(default_factory=dict, description="Active awareness of time scales")
 
+    model_config = {
+        "json_schema_extra": {
+            "required": []  # Make all fields optional in the JSON schema
+        }
+    }
+
 class TimeExpressionOutput(BaseModel):
     """Output for time-related expressions"""
     expression: str = Field(..., description="Natural expression about time perception")
@@ -163,6 +188,8 @@ class TimeExpressionOutput(BaseModel):
     intensity: float = Field(..., description="Intensity of expression (0.0-1.0)")
     reference_type: str = Field(..., description="Type of time reference (e.g., 'interval', 'scale', 'rhythm')")
     time_reference: Dict[str, Any] = Field(..., description="Details about the time reference")
+    # All fields are required, so this model naturally complies with the "exhaustive required list" rule.
+    # No model_config needed here unless a field becomes optional.
 
 class TemporalAwarenessOutput(BaseModel):
     """Output for temporal awareness processing"""
@@ -189,6 +216,7 @@ class TimeScaleTransition(BaseModel):
     transition_time: datetime.datetime = Field(..., description="When the transition occurred")
     description: str = Field(..., description="Description of the transition")
     perception_shift: Dict[str, Any] = Field(..., description="How perception shifts with this transition")
+    # All fields are required, so this model naturally complies.
 
 class TimeExpressionState(BaseModel):
     """
@@ -1294,7 +1322,7 @@ class TemporalPerceptionSystem:
                 json.dumps({
                     "days_elapsed": (now - self.first_interaction).total_seconds() / 86400,
                     "total_interactions": self.interaction_count,
-                    "time_since_last": time_since_last
+        #            "time_since_last": time_since_last
                 }),
                 run_config=RunConfig(
                     workflow_name="TemporalAwareness",
@@ -1477,7 +1505,7 @@ class TemporalPerceptionSystem:
                 json.dumps({
                     "days_elapsed": relationship_age_days,
                     "total_interactions": self.interaction_count,
-                    "time_since_last": (now - self.last_interaction).total_seconds()
+    #                "time_since_last": (now - self.last_interaction).total_seconds()
                 }),
                 run_config=RunConfig(
                     workflow_name="TemporalAwareness",
