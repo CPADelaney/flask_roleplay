@@ -34,76 +34,105 @@ async def add_procedure(
         – a Python list/tuple that the SDK has already deserialised
     """
 
+    steps: List[Dict[str, Any]] # Declare steps here for consistent typing
+
     # ---------- 1️⃣  Normalise `steps_json` ----------
     if isinstance(steps_json, (list, tuple)):
-        steps: List[Dict[str, Any]] = [dict(step) for step in steps_json]
-    else:
-        # ---- START DEBUG LOGGING ----
-        logger.debug(f"ADD_PROCEDURE_DEBUG: Received steps_json of type: {type(steps_json)}")
-        if isinstance(steps_json, str):
-            logger.debug(f"ADD_PROCEDURE_DEBUG: Length of steps_json string: {len(steps_json)}")
-            logger.debug(f"ADD_PROCEDURE_DEBUG: repr(steps_json): {repr(steps_json)}")
-            # ---- END DEBUG LOGGING ----
+        # If it's already a list/tuple, use it directly
+        logger.debug(f"ADD_PROCEDURE_DEBUG: Received steps_json of type: {type(steps_json)}. Processing as pre-parsed list/tuple.")
+        steps = [dict(step) for step in steps_json]
+    elif isinstance(steps_json, str):
+        logger.debug(f"ADD_PROCEDURE_DEBUG: Received steps_json of type: <class 'str'>")
+        logger.debug(f"ADD_PROCEDURE_DEBUG: Length of steps_json string: {len(steps_json)}")
+        logger.debug(f"ADD_PROCEDURE_DEBUG: repr(steps_json): {repr(steps_json)}")
+        
+        try:
+            # Attempt to parse the string as JSON
+            # Generalize the fix for "Extra data" errors
             try:
-                # Targeted fix for the observed "extra }" issue
-                s_to_parse = steps_json
-                if len(steps_json) == 1145 and steps_json.endswith("}]}"):
-                    logger.warning(f"ADD_PROCEDURE_WARN: Detected steps_json with length 1145 ending in '}}]'. "
-                                   f"Assuming extra trailing brace. Trimming.")
-                    s_to_parse = steps_json[:-1] # Remove the last character
+                steps = json.loads(steps_json)
+            except json.JSONDecodeError as e_inner:
+                if "Extra data" in str(e_inner) and e_inner.pos < len(steps_json):
+                    # This means valid JSON was parsed up to e_inner.pos,
+                    # and there was garbage data afterwards.
+                    logger.warning(
+                        f"ADD_PROCEDURE_WARN: JSONDecodeError with extra data. "
+                        f"Original len: {len(steps_json)}, error char index: {e_inner.pos}. "
+                        f"Attempting to parse substring up to error index."
+                    )
+                    valid_json_part = steps_json[:e_inner.pos]
+                    steps = json.loads(valid_json_part) # Try parsing just the valid part
+                    logger.info(
+                        f"ADD_PROCEDURE_INFO: Successfully parsed substring of length {len(valid_json_part)}."
+                    )
+                else:
+                    # Not an "Extra data" error, or e.inner.pos is not useful, re-raise.
+                    raise e_inner 
 
-                steps = json.loads(s_to_parse)
-                if not isinstance(steps, list):
-                    raise ValueError("Decoded JSON is not a list of steps.")
-            except Exception as e:
-                logger.error(f"ADD_PROCEDURE_ERROR: Failed to parse steps_json. Error: {e}")
-                if isinstance(steps_json, str):
-                     logger.error(f"ADD_PROCEDURE_ERROR: Original steps_json (len {len(steps_json)}): {repr(steps_json)}")
-                return {"error": f"Invalid steps JSON: {e}", "success": False}
+            if not isinstance(steps, list):
+                # This check is important if parsing was successful but didn't yield a list
+                logger.error(f"ADD_PROCEDURE_ERROR: Decoded JSON is not a list of steps. Type: {type(steps)}")
+                raise ValueError("Decoded JSON is not a list of steps.")
 
+        except Exception as e: # Catch parsing errors (original, from substring, or ValueError)
+            logger.error(f"ADD_PROCEDURE_ERROR: Failed to parse steps_json string. Error: {e}")
+            logger.error(f"ADD_PROCEDURE_ERROR: Problematic steps_json (len {len(steps_json)}): {repr(steps_json)}")
+            return {"error": f"Invalid steps_json string: {e}", "success": False}
+    else:
+        logger.error(f"ADD_PROCEDURE_ERROR: steps_json is of unexpected type: {type(steps_json)}")
+        return {"error": f"steps_json is of unexpected type: {type(steps_json)}", "success": False}
 
     # ---------- 2️⃣  Validate / enrich each step ----------
-    for i, step in enumerate(steps):
-        if not isinstance(step, dict):
-            return {"error": f"Step {i+1} is not an object.", "success": False}
+    # (This part of your code seems fine)
+    for i, step_data in enumerate(steps): # Renamed 'step' to 'step_data' to avoid confusion
+        if not isinstance(step_data, dict):
+            logger.error(f"ADD_PROCEDURE_ERROR: Step {i+1} is not an object (dictionary). Found: {type(step_data)}")
+            return {"error": f"Step {i+1} is not an object (dictionary).", "success": False}
 
-        step.setdefault("id", f"step_{i+1}")
+        step_data.setdefault("id", f"step_{i+1}")
 
-        if "function" not in step or not step["function"]:
+        if "function" not in step_data or not step_data["function"]:
+            logger.error(f"ADD_PROCEDURE_ERROR: Step {step_data['id']} is missing the required 'function' field.")
             return {
-                "error": f"Step {step['id']} is missing the required 'function' field.",
+                "error": f"Step {step_data['id']} is missing the required 'function' field.",
                 "success": False,
             }
-
-        # Ensure parameters exist (avoid KeyErrors later on)
-        step.setdefault("parameters", {})
+        step_data.setdefault("parameters", {})
 
     # ---------- 3️⃣  House‑keeping ----------
+    # (This part of your code seems fine)
     domain = domain or "general"
-    manager = ctx.context.manager
+    manager = ctx.context.manager # Assuming AgentContext has a 'manager' attribute
     procedure_id = f"proc_{int(datetime.datetime.now().timestamp())}_{random.randint(1000, 9999)}"
 
     # ---------- 4️⃣  Register any *callable* step.functions ---------
-    for step in steps:
-        fn = step["function"]
-        if callable(fn):  # e.g. a real Python function passed in
+    # (This part of your code seems fine)
+    for step_data in steps:
+        fn = step_data["function"]
+        if callable(fn):
             fn_name = fn.__name__
-            ctx.context.register_function(fn_name, fn)
-            step["function"] = fn_name  # store by name for serialisation
+            if hasattr(ctx.context, 'register_function') and callable(ctx.context.register_function):
+                 ctx.context.register_function(fn_name, fn)
+            elif hasattr(manager, 'register_function') and callable(manager.register_function): # Fallback if register_function is on manager
+                 manager.register_function(fn_name, fn)
+            else:
+                logger.warning(f"Could not register callable function {fn_name} as register_function not found on context or manager.")
+            step_data["function"] = fn_name
 
     # ---------- 5️⃣  Persist ----------
+    # (This part of your code seems fine)
     procedure = Procedure(
         id=procedure_id,
         name=name,
         description=description or f"Procedure for {name}",
         domain=domain,
-        steps=steps,
+        steps=steps, # Use the processed 'steps' list
         created_at=datetime.datetime.now().isoformat(),
         last_updated=datetime.datetime.now().isoformat(),
     )
 
     manager.procedures[name] = procedure
-    logger.info(f"Added procedure '{name}' ({len(steps)} steps) in domain '{domain}'")
+    logger.info(f"Added procedure '{name}' ({len(steps)} steps) in domain '{domain}') with ID {procedure_id}")
 
     return {
         "success": True,
@@ -112,6 +141,7 @@ async def add_procedure(
         "domain": domain,
         "steps_count": len(steps),
     }
+
 
 
 @function_tool(use_docstring_info=True)
