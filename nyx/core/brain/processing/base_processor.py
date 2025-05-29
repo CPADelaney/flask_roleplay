@@ -314,9 +314,12 @@ class BaseProcessor:
                                    processing_result: Dict[str, Any],
                                    context: Dict[str, Any]) -> Dict[str, str]:
         """Determine the main response content based on processing results"""
+        # Safely check for has_experience with default value
+        has_experience = processing_result.get("has_experience", False)
+        
         # Determine if experience response should be used
-        if processing_result["has_experience"]:
-            main_response = processing_result["experience_response"]
+        if has_experience:
+            main_response = processing_result.get("experience_response", "I understand your input.")
             response_type = "experience"
             
             # If it's a cross-user experience, mark it
