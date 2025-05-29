@@ -1040,22 +1040,20 @@ class ConditioningSystem:
     @function_tool
     async def _check_trait_balance(
         ctx: RunContextWrapper,
-        input_args: TraitsSnapshotArgs # Changed from traits_snapshot: Dict[str, float]
+        traits_snapshot: Dict[str, float] # Reverted to direct parameter
     ) -> Dict[str, Any]:
         """
         Check balance of personality traits from a given snapshot.
         Args:
-            input_args: Container for the traits_snapshot. The 'traits_snapshot' field
-                        within this object should be a dictionary of trait names to their
-                        current values (0.0-1.0).
+            traits_snapshot: Dictionary of trait names to their current values (0.0-1.0).
         Returns:
             Trait balance analysis.
         """
-        # Access the actual dictionary from the input_args model
-        traits_snapshot = input_args.traits_snapshot
+        # The line `traits_snapshot = input_args.traits_snapshot` is no longer needed
+        # as traits_snapshot is now a direct argument.
     
         if not isinstance(traits_snapshot, dict) or not all(isinstance(v, (int, float)) for v in traits_snapshot.values()):
-            logger.warning(f"_check_trait_balance: 'traits_snapshot' field within input_args is not a dict of trait:value. Got: {type(traits_snapshot)}")
+            logger.warning(f"_check_trait_balance: 'traits_snapshot' is not a dict of trait:value. Got: {type(traits_snapshot)}. Input: {traits_snapshot!r}")
             return {"balanced": False, "imbalances": [{"issue": "Invalid input format for traits_snapshot"}], "trait_count": 0, "average_value": 0.0}
     
         imbalances = []
@@ -1101,6 +1099,7 @@ class ConditioningSystem:
             "trait_count":  num_traits,
             "average_value": round(sum(traits_snapshot.values()) / num_traits, 3) if num_traits > 0 else 0.0
         }
+
 
     @staticmethod
     @function_tool
