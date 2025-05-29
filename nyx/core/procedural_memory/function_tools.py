@@ -22,86 +22,81 @@ logger = logging.getLogger(__name__)
 async def add_procedure(
     ctx: RunContextWrapper[Any],
     name: str,
-    steps_json: str,
+    steps_json: Union[str, List[Dict[str, Any]], Tuple[Dict[str, Any], ...]],
     description: Optional[str] = None,
-    domain: Optional[str] = None
+    domain: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
-    Add a new procedure to the procedural memory system.
-    
-    Args:
-        name: Name of the procedure
-        steps_json: JSON string representation of steps
-        description: Optional description
-        domain: Optional domain/context
+    Add (or import) a procedure.
+
+    • `steps_json` may be:
+        – a JSON *string*  → will be `json.loads()`‑ed
+        – a Python list/tuple that the SDK has already deserialised
     """
-    # Parse the steps from JSON
-    import json
-    try:
-        steps = json.loads(steps_json)
-    except json.JSONDecodeError:
-        return {
-            "error": "Invalid steps JSON",
-            "success": False
-        }
-    
+
+    # ---------- 1️⃣  Normalise `steps_json` ----------
+    if isinstance(steps_json, (list, tuple)):
+        # Already a Python sequence ➜ make a *copy* to avoid mutating caller’s list
+        steps: List[Dict[str, Any]] = [dict(step) for step in steps_json]
+    else:
+        try:
+            steps = json.loads(steps_json)
+            if not isinstance(steps, list):
+                raise ValueError("Decoded JSON is not a list of steps.")
+        except Exception as e:
+            return {"error": f"Invalid steps JSON: {e}", "success": False}
+
+    # ---------- 2️⃣  Validate / enrich each step ----------
+    for i, step in enumerate(steps):
+        if not isinstance(step, dict):
+            return {"error": f"Step {i+1} is not an object.", "success": False}
+
+        step.setdefault("id", f"step_{i+1}")
+
+        if "function" not in step or not step["function"]:
+            return {
+                "error": f"Step {step['id']} is missing the required 'function' field.",
+                "success": False,
+            }
+
+        # Ensure parameters exist (avoid KeyErrors later on)
+        step.setdefault("parameters", {})
+
+    # ---------- 3️⃣  House‑keeping ----------
     domain = domain or "general"
     manager = ctx.context.manager
-    
-    # Create trace span for this operation
-    with custom_span(
-        name="add_procedure", 
-        data={
-            "procedure_name": name,
-            "domain": domain,
-            "steps_count": len(steps)
-        }
-    ):
-        # Generate a unique ID for the procedure
-        procedure_id = f"proc_{int(datetime.datetime.now().timestamp())}_{random.randint(1000, 9999)}"
-        
-        # Validate steps structure
-        for i, step in enumerate(steps):
-            if "id" not in step:
-                step["id"] = f"step_{i+1}"
-            if "function" not in step:
-                return {
-                    "error": f"Step {i+1} is missing a function name",
-                    "success": False
-                }
-        
-        # Create procedure object
-        procedure = Procedure(
-            id=procedure_id,
-            name=name,
-            description=description or f"Procedure for {name}",
-            domain=domain,
-            steps=steps,
-            created_at=datetime.datetime.now().isoformat(),
-            last_updated=datetime.datetime.now().isoformat()
-        )
-        
-        # Register function names if needed
-        for step in steps:
-            function_name = step.get("function")
-            if function_name and callable(function_name):
-                # It's a callable, register it by name
-                func_name = function_name.__name__
-                ctx.context.register_function(func_name, function_name)
-                step["function"] = func_name
-        
-        # Store the procedure
-        manager.procedures[name] = procedure
-        
-        logger.info(f"Added new procedure '{name}' with {len(steps)} steps in {domain} domain")
-        
-        return {
-            "procedure_id": procedure_id,
-            "name": name,
-            "domain": domain,
-            "steps_count": len(steps),
-            "success": True
-        }
+    procedure_id = f"proc_{int(datetime.datetime.now().timestamp())}_{random.randint(1000, 9999)}"
+
+    # ---------- 4️⃣  Register any *callable* step.functions ---------
+    for step in steps:
+        fn = step["function"]
+        if callable(fn):  # e.g. a real Python function passed in
+            fn_name = fn.__name__
+            ctx.context.register_function(fn_name, fn)
+            step["function"] = fn_name  # store by name for serialisation
+
+    # ---------- 5️⃣  Persist ----------
+    procedure = Procedure(
+        id=procedure_id,
+        name=name,
+        description=description or f"Procedure for {name}",
+        domain=domain,
+        steps=steps,
+        created_at=datetime.datetime.now().isoformat(),
+        last_updated=datetime.datetime.now().isoformat(),
+    )
+
+    manager.procedures[name] = procedure
+    logger.info(f"Added procedure '{name}' ({len(steps)} steps) in domain '{domain}'")
+
+    return {
+        "success": True,
+        "procedure_id": procedure_id,
+        "name": name,
+        "domain": domain,
+        "steps_count": len(steps),
+    }
+
 
 @function_tool(use_docstring_info=True)
 async def execute_procedure(
