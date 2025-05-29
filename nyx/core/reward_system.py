@@ -1256,7 +1256,7 @@ class RewardSignalProcessor:
         if not self.needs_system:
             logger.warning("NeedsSystem not available for action prediction.")
             # Handle appropriately, maybe return a default action or raise error
-
+    
         state_key = self._create_state_key(state)
     
         mood_state_obj: Optional[MoodState] = None
@@ -1289,6 +1289,18 @@ class RewardSignalProcessor:
             for action in available_actions
         }
     
+        # Get pleasure drive if needs system is available
+        pleasure_drive = 0.0
+        if self.needs_system:
+            try:
+                # FIX: Await the coroutine first, then access the result
+                needs_state = await self.needs_system.get_needs_state_async()
+                pleasure_need = needs_state.get("pleasure_indulgence", {})
+                pleasure_drive = pleasure_need.get("drive_strength", 0.0)
+            except Exception as e:
+                logger.warning(f"Error getting pleasure drive: {e}")
+                pleasure_drive = 0.0
+    
         # Score each action
         combined_scores = {}
         for action in available_actions:
@@ -1298,19 +1310,17 @@ class RewardSignalProcessor:
     
             # Strong novelty bias when Nyx is dominant + aroused
             adjusted_novelty = novelty + control_boost
-
-            # Optional: boost preference for pleasure when needy
-            pleasure_drive = await self.needs_system.get_needs_state_async().get("pleasure_indulgence", {}).get("drive_strength", 0.0)
-            if pleasure_drive > 0.7 and control > 0.3:
-                logger.info(f"[Nyx] High pleasure drive ({pleasure_drive:.2f}) + control ({control:.2f}) — escalating assertiveness.")
-
-            combined_score += pleasure_drive * 0.1
     
             combined_score = (
                 q * q_weight +
                 adjusted_novelty * novelty_weight +
                 habit * 0.1
             )
+            
+            # FIX: Apply pleasure drive boost inside the loop for each action
+            if pleasure_drive > 0.7 and control > 0.3:
+                logger.info(f"[Nyx] High pleasure drive ({pleasure_drive:.2f}) + control ({control:.2f}) — escalating assertiveness for action: {action}")
+                combined_score += pleasure_drive * 0.1
     
             combined_scores[action] = {
                 "combined_score": combined_score,
@@ -1346,7 +1356,7 @@ class RewardSignalProcessor:
         q_value = q_values.get(selected_action, 0.0)
         habit = habit_strengths.get(selected_action, 0.0)
         confidence = (q_value * 0.4) + (habit * 0.3) + (avg_confidence * 0.3)
-
+    
         mood_snapshot_for_return = { # Create dict for return value
              "arousal": arousal,
              "control": control,
@@ -1361,11 +1371,7 @@ class RewardSignalProcessor:
             "confidence": confidence,
             "is_exploration": is_exploration,
             "selection_method": selection_method,
-            "mood_snapshot": {
-                "arousal": arousal,
-                "control": control,
-                "valence": valence
-            },
+            "mood_snapshot": mood_snapshot_for_return,
             "combined_score": combined_scores.get(selected_action)
         }
 
