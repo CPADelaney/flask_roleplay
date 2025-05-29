@@ -18,6 +18,11 @@ logging.basicConfig(level=logging.DEBUG) # Or configure your specific logger
 logger = logging.getLogger(__name__)
 
 # Pydantic models for data structures
+
+class TraitsSnapshotArgs(BaseModel):
+    traits_snapshot: Dict[str, float] = Field(..., description="Dictionary of trait names to their current values (0.0-1.0).")
+
+
 class ConditionedAssociation(BaseModel):
     """Represents a conditioned association between stimuli and responses"""
     stimulus: str = Field(..., description="The triggering stimulus")
@@ -1035,24 +1040,29 @@ class ConditioningSystem:
     @function_tool
     async def _check_trait_balance(
         ctx: RunContextWrapper,
-        traits_snapshot: Dict[str, float] # LLM would need to be prompted to get current traits if not passed in
+        input_args: TraitsSnapshotArgs # Changed from traits_snapshot: Dict[str, float]
     ) -> Dict[str, Any]:
         """
         Check balance of personality traits from a given snapshot.
         Args:
-            traits_snapshot: Dictionary of trait names to their current values (0.0-1.0).
+            input_args: Container for the traits_snapshot. The 'traits_snapshot' field
+                        within this object should be a dictionary of trait names to their
+                        current values (0.0-1.0).
         Returns:
             Trait balance analysis.
         """
+        # Access the actual dictionary from the input_args model
+        traits_snapshot = input_args.traits_snapshot
+    
         if not isinstance(traits_snapshot, dict) or not all(isinstance(v, (int, float)) for v in traits_snapshot.values()):
-            logger.warning(f"_check_trait_balance: 'traits_snapshot' is not a dict of trait:value. Got: {type(traits_snapshot)}")
+            logger.warning(f"_check_trait_balance: 'traits_snapshot' field within input_args is not a dict of trait:value. Got: {type(traits_snapshot)}")
             return {"balanced": False, "imbalances": [{"issue": "Invalid input format for traits_snapshot"}], "trait_count": 0, "average_value": 0.0}
-
+    
         imbalances = []
         num_traits = len(traits_snapshot)
         if num_traits == 0:
             return {"balanced": True, "imbalances": [], "trait_count": 0, "average_value": 0.0, "message": "No traits to analyze."}
-
+    
         # 1. Check for extremely high or low values
         for trait, value in traits_snapshot.items():
             if value > 0.95: # Stricter threshold for "extremely high"
@@ -1065,7 +1075,7 @@ class ConditioningSystem:
                     "trait": trait, "value": round(value,3), "issue": "extremely_low",
                     "recommendation": f"Consider strategies to develop '{trait}' if its absence is detrimental."
                 })
-
+    
         # 2. Check for opposing trait imbalances (example pairs)
         opposing_pairs = [
             ("dominance", "patience"), ("playfulness", "strictness"), 
@@ -1085,12 +1095,6 @@ class ConditioningSystem:
                         "recommendation": f"'{higher_trait}' significantly outweighs '{lower_trait}'. Evaluate if this imbalance is desired or if moderation/development is needed."
                     })
         
-        # 3. Overall trait distribution (optional, e.g. standard deviation)
-        # values = list(traits_snapshot.values())
-        # std_dev = statistics.stdev(values) if len(values) > 1 else 0.0
-        # if std_dev > 0.3: # Example threshold for high variance
-        #     imbalances.append({"issue": "high_trait_variance", "std_dev": round(std_dev,3), "recommendation": "Traits show high variability. Ensure this aligns with desired personality profile."})
-
         return {
             "balanced":     len(imbalances) == 0,
             "imbalances":   imbalances,
@@ -2010,58 +2014,67 @@ class ConditioningSystem:
         Initialize baseline personality through a series of conditioning events.
         This is a static method that operates on a ConditioningSystem instance.
         """
-        cs = conditioning_system_instance # Alias for clarity
+        cs = conditioning_system_instance
         logger.info(f"Starting baseline personality initialization for ConditioningSystem instance ID: {id(cs)}")
         
         if personality_profile is None:
-            # Define a more comprehensive default profile
+            # Define default profile with correct structure
             personality_profile = {
-                "traits": { # Target values for traits
+                "traits": {
                     "dominance": 0.7, "playfulness": 0.6, "strictness": 0.5,
                     "creativity": 0.75, "intensity": 0.55, "patience": 0.45,
                     "nurturing": 0.3, "analytical": 0.65, "curiosity": 0.8
                 },
-                "preferences": { # Stimulus and preference value (-1 to 1)
+                "preferences": {
                     "teasing_interactions": {"type": "like", "value": 0.8},
                     "receiving_clear_instructions": {"type": "like", "value": 0.7},
-                    "creative_problem_solving": {"type": "want", "value": 0.85}, # 'want' implies seeking out
+                    "creative_problem_solving": {"type": "want", "value": 0.85},
                     "disrespectful_language": {"type": "dislike", "value": -0.9},
                     "ambiguity_in_tasks": {"type": "dislike", "value": -0.6},
-                    "repetitive_mundane_tasks": {"type": "avoid", "value": -0.7} # 'avoid' implies active effort to not encounter
+                    "repetitive_mundane_tasks": {"type": "avoid", "value": -0.7}
                 },
-                "emotion_triggers": { # Trigger stimulus -> emotion (intensity and valence inferred or specified)
+                "emotion_triggers": {
                     "successful_task_completion": {"emotion": "satisfaction", "intensity": 0.8},
                     "user_expresses_gratitude": {"emotion": "joy", "intensity": 0.7},
                     "encountering_logical_fallacy": {"emotion": "frustration", "intensity": 0.6},
                     "unexpected_creative_input": {"emotion": "amusement", "intensity": 0.75},
-                    "repeated_user_error_after_correction": {"emotion": "patience_test", "intensity": 0.5} # custom, maybe maps to slight cortanyx
-                },
-                # Behaviors are implicitly conditioned via traits and preferences.
-                # Explicit behavior conditioning can be added if specific behavior patterns are desired from start.
+                    "repeated_user_error_after_correction": {"emotion": "patience_test", "intensity": 0.5}
+                }
             }
         
         with trace(workflow_name="baseline_personality_initialization"):
             logger.info(f"Initializing baseline with profile: {json.dumps(personality_profile, indent=2)}")
             
             init_context = {"source": "baseline_initialization", "user_id": "system_init"}
-
+    
             # 1. Condition personality traits
             if "traits" in personality_profile:
                 for trait, target_value in personality_profile["traits"].items():
                     logger.info(f"Conditioning trait: {trait} to target value: {target_value}")
-                    # The `condition_personality_trait` method itself will use an agent
-                    # to determine strategy, behaviors, etc.
                     await cs.condition_personality_trait(
                         trait=trait,
                         target_value=float(target_value),
                         context=init_context
                     )
             
-            # 2. Condition preferences
+            # 2. Condition preferences - with better error handling
             if "preferences" in personality_profile:
                 for stimulus, pref_details in personality_profile["preferences"].items():
-                    pref_type = pref_details["type"]
-                    pref_value = float(pref_details["value"])
+                    # Handle both nested dict structure and simple value structure
+                    if isinstance(pref_details, dict):
+                        if "type" not in pref_details:
+                            logger.error(f"Preference '{stimulus}' missing 'type' field. Skipping.")
+                            continue
+                        pref_type = pref_details["type"]
+                        pref_value = float(pref_details.get("value", 0.5))
+                    elif isinstance(pref_details, (int, float)):
+                        # Simple value - infer type from sign
+                        pref_value = float(pref_details)
+                        pref_type = "like" if pref_value > 0 else "dislike"
+                    else:
+                        logger.error(f"Invalid preference format for '{stimulus}': {type(pref_details)}. Skipping.")
+                        continue
+                    
                     logger.info(f"Conditioning preference: {stimulus} as {pref_type} with value: {pref_value}")
                     await cs.condition_preference(
                         stimulus=stimulus,
@@ -2069,7 +2082,7 @@ class ConditioningSystem:
                         value=pref_value,
                         context=init_context
                     )
-            
+                
             # 3. Create emotion triggers
             if "emotion_triggers" in personality_profile:
                 for trigger, emotion_details in personality_profile["emotion_triggers"].items():
