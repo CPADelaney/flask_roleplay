@@ -309,29 +309,33 @@ class ConditioningSystem:
             instructions="""
             You are the Personality Development Agent for Nyx's learning system.
             The input you receive will be a JSON string containing 'trait' and 'target_value'.
-    
+            Optionally, the input JSON might contain 'current_trait_values_snapshot' which is a dictionary of all current trait values.
+
             Your role is to guide the development of personality traits, preferences,
             and emotional responses through conditioning.
-    
+
             Focus on:
             1. Extracting 'trait' and 'target_value' from the input JSON.
             2. Identifying behaviors related to the trait using '_identify_trait_behaviors'.
             3. Calculating trait adjustments using '_calculate_conditioning_trait_adjustment'.
             4. Updating identity traits with '_update_identity_trait'.
             5. Conditioning appropriate behaviors that reinforce target personality traits.
-            6. Creating balanced trait development (potentially using '_check_trait_balance').
+            6. If 'current_trait_values_snapshot' is available from the input JSON, creating balanced trait development by calling the '_check_trait_balance' tool.
+               When calling '_check_trait_balance', you MUST provide the arguments nested under 'input_args'.
+               For example, if you have a dictionary `my_traits = {"kindness": 0.8, "humor": 0.6}`,
+               you must call `_check_trait_balance` with parameters like `{"input_args": {"traits_snapshot": my_traits}}`.
             7. Integrating conditioning with identity evolution.
             8. Formulating a conditioning strategy and describing identity impact in the final output.
-    
+
             Balance stable personality characteristics with adaptability to new experiences.
             Ensure personality development is consistent with overall identity and values.
             """,
-            model="gpt-4.1-nano", # Consider gpt-4o or similar
+            model="gpt-4.1-nano",
             tools=[
                 self._identify_trait_behaviors,
                 self._calculate_conditioning_trait_adjustment,
                 self._update_identity_trait,
-                self._check_trait_balance # Added for completeness based on instructions
+                self._check_trait_balance 
             ],
             output_type=TraitConditioningOutput
         )
@@ -1040,20 +1044,22 @@ class ConditioningSystem:
     @function_tool
     async def _check_trait_balance(
         ctx: RunContextWrapper,
-        traits_snapshot: Dict[str, float] # Reverted to direct parameter
+        input_args: TraitsSnapshotArgs # Using the Pydantic model as the argument type
     ) -> Dict[str, Any]:
         """
         Check balance of personality traits from a given snapshot.
         Args:
-            traits_snapshot: Dictionary of trait names to their current values (0.0-1.0).
+            input_args: Container for the traits_snapshot. The 'traits_snapshot' field
+                        within this object should be a dictionary of trait names to their
+                        current values (0.0-1.0).
         Returns:
             Trait balance analysis.
         """
-        # The line `traits_snapshot = input_args.traits_snapshot` is no longer needed
-        # as traits_snapshot is now a direct argument.
+        # Access the actual dictionary from the input_args model
+        traits_snapshot = input_args.traits_snapshot # This is correct for this signature
     
         if not isinstance(traits_snapshot, dict) or not all(isinstance(v, (int, float)) for v in traits_snapshot.values()):
-            logger.warning(f"_check_trait_balance: 'traits_snapshot' is not a dict of trait:value. Got: {type(traits_snapshot)}. Input: {traits_snapshot!r}")
+            logger.warning(f"_check_trait_balance: 'traits_snapshot' field within input_args is not a dict of trait:value. Got: {type(traits_snapshot)}. Input: {traits_snapshot!r}")
             return {"balanced": False, "imbalances": [{"issue": "Invalid input format for traits_snapshot"}], "trait_count": 0, "average_value": 0.0}
     
         imbalances = []
@@ -1063,12 +1069,12 @@ class ConditioningSystem:
     
         # 1. Check for extremely high or low values
         for trait, value in traits_snapshot.items():
-            if value > 0.95: # Stricter threshold for "extremely high"
+            if value > 0.95: 
                 imbalances.append({
                     "trait": trait, "value": round(value,3), "issue": "extremely_high",
                     "recommendation": f"Consider strategies to moderate '{trait}' for better balance if it's causing issues."
                 })
-            elif value < 0.05: # Stricter threshold for "extremely low"
+            elif value < 0.05:
                 imbalances.append({
                     "trait": trait, "value": round(value,3), "issue": "extremely_low",
                     "recommendation": f"Consider strategies to develop '{trait}' if its absence is detrimental."
@@ -1078,13 +1084,12 @@ class ConditioningSystem:
         opposing_pairs = [
             ("dominance", "patience"), ("playfulness", "strictness"), 
             ("intensity", "nurturing"), ("creativity", "analytical") 
-            # Add more relevant pairs for your AI's personality model
         ]
         for t1, t2 in opposing_pairs:
             if t1 in traits_snapshot and t2 in traits_snapshot:
                 val1, val2 = traits_snapshot[t1], traits_snapshot[t2]
                 diff = abs(val1 - val2)
-                if diff > 0.7: # Significant difference threshold
+                if diff > 0.7: 
                     higher_trait = t1 if val1 > val2 else t2
                     lower_trait  = t2 if higher_trait == t1 else t1
                     imbalances.append({
@@ -1498,8 +1503,7 @@ class ConditioningSystem:
     async def condition_personality_trait(
         self,
         trait: str,
-        target_value: float, # Renamed from 'value' for clarity
-        # Behaviors are now primarily identified by the agent or through context
+        target_value: float, 
         context: Optional[Dict[str, Any]] = None 
     ) -> Dict[str, Any]:
         """
