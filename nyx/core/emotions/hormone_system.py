@@ -1049,46 +1049,57 @@ class HormoneSystem:
         }
         
     async def update_multi_hormone_interactions(self, ctx):
-        """
-        Process complex interactions between multiple hormones
-        to support sophisticated emotional states
-        """
-        # Support for Melancholy (combination of multiple hormonal effects)
-        if (self.hormones["melatonyx"]["value"] > 0.6
-            and self.hormones["estradyx"]["value"] > 0.5):
-            await self.update_hormone(ctx, "seranix", 0.1, source="hormone_interaction")
-            await self.update_hormone(ctx, "cortanyx", 0.05, source="hormone_interaction")
-    
-        if self.emotional_core and 'testoryx' in self.hormones:
-            testoryx_level = self.hormones['testoryx']['value']
-            if testoryx_level > 0.6:
-                # Example: small boost to reward seeking baseline
-                nyxamine_influence = (testoryx_level - 0.5) * 0.1
-                # Apply the influence to the neurochemical if available
-                if 'nyxamine' in self.emotional_core.neurochemicals:
-                    await self.update_hormone(ctx, "nyxamine", nyxamine_influence, source="testoryx_influence")
-    
-        # Support for Nostalgia
-        if (self.hormones["melatonyx"]["value"] > 0.4
-            and self.hormones["oxytonyx"]["value"] > 0.5):
-            await self.update_hormone(ctx, "seranix", 0.1, source="hormone_interaction")
-            await self.update_hormone(ctx, "nyxamine", 0.05, source="hormone_interaction")
-    
-        # Support for Amusement/Humor
-        if (self.hormones["endoryx"]["value"] > 0.6
-            and self.hormones["testoryx"]["value"] > 0.4
-            and self.hormones.get("cortanyx", {}).get("value", 1.0) < 0.3):  # Safely check cortanyx
-            await self.update_hormone(ctx, "nyxamine", 0.15, source="hormone_interaction")
-            await self.update_hormone(ctx, "adrenyx", 0.05, source="hormone_interaction")
-    
-        # Support for Curiosity
-        if (self.hormones["endoryx"]["value"] > 0.5
-            and self.hormones["melatonyx"]["value"] < 0.4):
-            await self.update_hormone(ctx, "nyxamine", 0.1, source="hormone_interaction")
-            await self.update_hormone(ctx, "adrenyx", 0.05, source="hormone_interaction")
-    
-        # Support for Boredom
-        if (self.hormones["endoryx"]["value"] < 0.3
-            and self.hormones["melatonyx"]["value"] > 0.5):
-            await self.update_hormone(ctx, "nyxamine", -0.1, source="hormone_interaction")
-            await self.update_hormone(ctx, "adrenyx", -0.1, source="hormone_interaction")
+            """
+            Process complex interactions between multiple hormones
+            to support sophisticated emotional states
+            """
+            # Support for Melancholy (combination of multiple hormonal effects)
+            if (self.hormones["melatonyx"]["value"] > 0.6
+                and self.hormones["estradyx"]["value"] > 0.5):
+                # These properly update hormones (not neurochemicals)
+                await self.update_hormone(ctx, "seranix", 0.1, source="hormone_interaction")
+                await self.update_hormone(ctx, "cortanyx", 0.05, source="hormone_interaction")
+        
+            # Testoryx influence on neurochemicals (not hormones)
+            if self.emotional_core and 'testoryx' in self.hormones:
+                testoryx_level = self.hormones['testoryx']['value']
+                if testoryx_level > 0.6:
+                    # Example: small boost to reward seeking baseline
+                    nyxamine_influence = (testoryx_level - 0.5) * 0.1
+                    # Apply the influence to the neurochemical if available
+                    if 'nyxamine' in self.emotional_core.neurochemicals:
+                        # FIXED: Use the emotional core's update method for neurochemicals, not hormones
+                        await self.emotional_core.update_neurochemical("nyxamine", nyxamine_influence, source="testoryx_influence")
+        
+            # Support for Nostalgia
+            if (self.hormones["melatonyx"]["value"] > 0.4
+                and self.hormones["oxytonyx"]["value"] > 0.5):
+                # FIXED: These should update neurochemicals through the emotional core
+                if self.emotional_core:
+                    await self.emotional_core.update_neurochemical("seranix", 0.1, source="hormone_interaction")
+                    await self.emotional_core.update_neurochemical("nyxamine", 0.05, source="hormone_interaction")
+        
+            # Support for Amusement/Humor
+            if (self.hormones["endoryx"]["value"] > 0.6
+                and self.hormones["testoryx"]["value"] > 0.4
+                and self.emotional_core  # Ensure emotional_core exists
+                and self.emotional_core.neurochemicals.get("cortanyx", {}).get("value", 1.0) < 0.3):
+                # FIXED: Update neurochemicals through the emotional core
+                await self.emotional_core.update_neurochemical("nyxamine", 0.15, source="hormone_interaction")
+                await self.emotional_core.update_neurochemical("adrenyx", 0.05, source="hormone_interaction")
+        
+            # Support for Curiosity
+            if (self.hormones["endoryx"]["value"] > 0.5
+                and self.hormones["melatonyx"]["value"] < 0.4):
+                # FIXED: Update neurochemicals through the emotional core
+                if self.emotional_core:
+                    await self.emotional_core.update_neurochemical("nyxamine", 0.1, source="hormone_interaction")
+                    await self.emotional_core.update_neurochemical("adrenyx", 0.05, source="hormone_interaction")
+        
+            # Support for Boredom
+            if (self.hormones["endoryx"]["value"] < 0.3
+                and self.hormones["melatonyx"]["value"] > 0.5):
+                # FIXED: Update neurochemicals through the emotional core
+                if self.emotional_core:
+                    await self.emotional_core.update_neurochemical("nyxamine", -0.1, source="hormone_interaction")
+                    await self.emotional_core.update_neurochemical("adrenyx", -0.1, source="hormone_interaction")
