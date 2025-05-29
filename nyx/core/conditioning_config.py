@@ -319,6 +319,186 @@ class ConditioningConfiguration:
             model_settings=ModelSettings(temperature=0.2)
         )
 
+    def _create_get_personality_profile_tool(self) -> FunctionTool:
+        """Create tool for getting personality profile"""
+        async def get_personality_profile_impl(ctx: RunContextWrapper) -> Dict[str, Any]:
+            """Get current personality profile"""
+            if self.context.personality_profile:
+                return self.context.personality_profile.model_dump()
+            return {}
+        
+        return function_tool(
+            get_personality_profile_impl,
+            name_override="_get_personality_profile",
+            description_override="Get current personality profile"
+        )
+    
+    def _create_update_personality_profile_tool(self) -> FunctionTool:
+        """Create tool for updating personality profile"""
+        async def update_personality_profile_impl(
+            ctx: RunContextWrapper,
+            new_profile: Dict[str, Any]
+        ) -> Dict[str, Any]:
+            """Update personality profile"""
+            if not self.context.personality_profile:
+                return {"success": False, "message": "Personality profile not loaded"}
+            
+            result = ConfigUpdateResult(success=True)
+            current_profile_dict = self.context.personality_profile.model_dump()
+            updated_profile_dict = current_profile_dict.copy()
+            
+            # Update profile
+            for key, value in new_profile.items():
+                if key in updated_profile_dict:
+                    result.previous_values[key] = updated_profile_dict[key]
+                    result.new_values[key] = value
+                    result.updated_keys.append(key)
+                    updated_profile_dict[key] = value
+                else:
+                    result.message += f"Unknown profile key: {key}. "
+            
+            if not result.updated_keys:
+                result.success = False
+                result.message += "No valid profile elements provided for update."
+                return result.model_dump()
+            
+            try:
+                self.context.personality_profile = PersonalityProfile(**updated_profile_dict)
+                self._save_personality_profile_internal(self.context.personality_profile)
+                result.message += f"Updated {len(result.updated_keys)} profile elements."
+            except Exception as e:
+                logger.error(f"Error updating personality profile: {e}")
+                result.success = False
+                result.message = f"Error during profile update: {e}"
+            
+            return result.model_dump()
+        
+        return function_tool(
+            update_personality_profile_impl,
+            name_override="_update_personality_profile",
+            description_override="Update personality profile. Expects a dictionary with profile updates."
+        )
+    
+    def _create_adjust_trait_tool(self) -> FunctionTool:
+        """Create tool for adjusting personality traits"""
+        async def adjust_trait_impl(
+            ctx: RunContextWrapper,
+            trait: str,
+            value: float
+        ) -> Dict[str, Any]:
+            """Adjust a specific personality trait"""
+            if not self.context.personality_profile:
+                return {
+                    "success": False,
+                    "trait": trait,
+                    "old_value": 0.0,
+                    "new_value": value,
+                    "message": "Personality profile not loaded"
+                }
+            
+            # Get current traits
+            updated_profile_dict = self.context.personality_profile.model_dump()
+            traits = updated_profile_dict.get("traits", {})
+            
+            old_value = traits.get(trait, 0.0)
+            new_value_clamped = max(0.0, min(1.0, value))
+            traits[trait] = new_value_clamped
+            
+            updated_profile_dict["traits"] = traits
+            
+            try:
+                self.context.personality_profile = PersonalityProfile(**updated_profile_dict)
+                self._save_personality_profile_internal(self.context.personality_profile)
+                
+                return {
+                    "success": True,
+                    "trait": trait,
+                    "old_value": old_value,
+                    "new_value": new_value_clamped
+                }
+            except Exception as e:
+                logger.error(f"Error adjusting trait '{trait}': {e}")
+                return {
+                    "success": False,
+                    "trait": trait,
+                    "old_value": old_value,
+                    "new_value": value,
+                    "message": f"Error: {e}"
+                }
+        
+        return function_tool(
+            adjust_trait_impl,
+            name_override="_adjust_trait",
+            description_override="Adjust a personality trait. Parameters: trait (string), value (float 0.0-1.0)"
+        )
+    
+    def _create_adjust_preference_tool(self) -> FunctionTool:
+        """Create tool for adjusting preferences"""
+        async def adjust_preference_impl(
+            ctx: RunContextWrapper,
+            stimulus: str,
+            preference_type: str,
+            value: float
+        ) -> Dict[str, Any]:
+            """Adjust a specific preference"""
+            if not self.context.personality_profile:
+                return {"success": False, "error": "Personality profile not loaded"}
+            
+            updated_profile_dict = self.context.personality_profile.model_dump()
+            preferences = updated_profile_dict.get("preferences", {})
+            
+            # Create PreferenceDetail
+            new_preference = PreferenceDetail(type=preference_type, value=value)
+            
+            # Store old value if exists
+            old_preference = preferences.get(stimulus)
+            old_value = old_preference.value if isinstance(old_preference, dict) and "value" in old_preference else None
+            
+            # Update preference
+            preferences[stimulus] = new_preference.model_dump()
+            updated_profile_dict["preferences"] = preferences
+            
+            try:
+                self.context.personality_profile = PersonalityProfile(**updated_profile_dict)
+                self._save_personality_profile_internal(self.context.personality_profile)
+                
+                return {
+                    "success": True,
+                    "stimulus": stimulus,
+                    "preference_type": preference_type,
+                    "old_value": old_value,
+                    "new_value": value
+                }
+            except Exception as e:
+                logger.error(f"Error adjusting preference for '{stimulus}': {e}")
+                return {"success": False, "error": str(e)}
+        
+        return function_tool(
+            adjust_preference_impl,
+            name_override="_adjust_preference",
+            description_override="Adjust a preference. Parameters: stimulus (string), preference_type (like/dislike/want/avoid), value (float)"
+        )
+    
+    def _create_save_personality_profile_tool(self) -> FunctionTool:
+        """Create tool for saving personality profile"""
+        async def save_personality_profile_impl(ctx: RunContextWrapper) -> Dict[str, Any]:
+            """Save current personality profile to disk"""
+            if self.context.personality_profile:
+                try:
+                    self._save_personality_profile_internal(self.context.personality_profile)
+                    return {"success": True, "message": "Personality profile saved."}
+                except Exception as e:
+                    logger.error(f"Error saving personality profile: {e}")
+                    return {"success": False, "message": f"Error saving profile: {e}"}
+            else:
+                return {"success": False, "message": "No personality profile loaded to save."}
+        
+        return function_tool(
+            save_personality_profile_impl,
+            name_override="_save_personality_profile",
+            description_override="Save current personality profile to disk"
+        )
+
     def _create_check_trait_balance_tool(self) -> FunctionTool:
         async def check_trait_balance_impl(
             ctx: RunContextWrapper,
