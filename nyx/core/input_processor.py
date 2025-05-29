@@ -245,7 +245,7 @@ class BlendedInputProcessor:
             model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.2),
             tools=[
-                function_tool(self._detect_patterns)
+                self._detect_patterns
             ],
             output_type=List[PatternDetection]
         )
@@ -269,8 +269,8 @@ class BlendedInputProcessor:
             model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.3),
             tools=[
-                function_tool(self._evaluate_behavior),
-                function_tool(self._process_operant_conditioning)
+                self._evaluate_behavior,
+                self._process_operant_conditioning
             ],
             output_type=List[BehaviorEvaluation]
         )
@@ -314,9 +314,9 @@ class BlendedInputProcessor:
             model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.4),
             tools=[
-                function_tool(self._get_mode_preferences),
-                function_tool(self._calculate_style_elements),
-                function_tool(self._analyze_response_coherence)
+                self._get_mode_preferences,
+                self._calculate_style_elements,
+                self._analyze_response_coherence
             ],
             output_type=BlendedResponseModification
         )
