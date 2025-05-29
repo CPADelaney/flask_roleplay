@@ -19,10 +19,6 @@ logger = logging.getLogger(__name__)
 
 # Pydantic models for data structures
 
-class TraitsSnapshotArgs(BaseModel):
-    traits_snapshot: Dict[str, float] = Field(..., description="Dictionary of trait names to their current values (0.0-1.0).")
-
-
 class ConditionedAssociation(BaseModel):
     """Represents a conditioned association between stimuli and responses"""
     stimulus: str = Field(..., description="The triggering stimulus")
@@ -310,10 +306,10 @@ class ConditioningSystem:
             You are the Personality Development Agent for Nyx's learning system.
             The input you receive will be a JSON string containing 'trait' and 'target_value'.
             Optionally, the input JSON might contain 'current_trait_values_snapshot' which is a dictionary of all current trait values.
-
+    
             Your role is to guide the development of personality traits, preferences,
             and emotional responses through conditioning.
-
+    
             Focus on:
             1. Extracting 'trait' and 'target_value' from the input JSON.
             2. Identifying behaviors related to the trait using '_identify_trait_behaviors'.
@@ -321,12 +317,11 @@ class ConditioningSystem:
             4. Updating identity traits with '_update_identity_trait'.
             5. Conditioning appropriate behaviors that reinforce target personality traits.
             6. If 'current_trait_values_snapshot' is available from the input JSON, creating balanced trait development by calling the '_check_trait_balance' tool.
-               When calling '_check_trait_balance', you MUST provide the arguments nested under 'input_args'.
-               For example, if you have a dictionary `my_traits = {"kindness": 0.8, "humor": 0.6}`,
-               you must call `_check_trait_balance` with parameters like `{"input_args": {"traits_snapshot": my_traits}}`.
+               When calling '_check_trait_balance', simply pass the traits dictionary directly as the 'traits_snapshot' parameter.
+               For example: _check_trait_balance(traits_snapshot={"kindness": 0.8, "humor": 0.6})
             7. Integrating conditioning with identity evolution.
             8. Formulating a conditioning strategy and describing identity impact in the final output.
-
+    
             Balance stable personality characteristics with adaptability to new experiences.
             Ensure personality development is consistent with overall identity and values.
             """,
@@ -339,7 +334,7 @@ class ConditioningSystem:
             ],
             output_type=TraitConditioningOutput
         )
-        
+            
     def _create_conditioning_orchestrator(self) -> Agent:
         """Create orchestrator agent for coordinating conditioning processes"""
         return Agent(
@@ -1084,22 +1079,19 @@ class ConditioningSystem:
     @function_tool
     async def _check_trait_balance(
         ctx: RunContextWrapper,
-        input_args: TraitsSnapshotArgs # Using the Pydantic model as the argument type
+        traits_snapshot: Dict[str, float]  # Direct dict parameter instead of Pydantic model
     ) -> Dict[str, Any]:
         """
         Check balance of personality traits from a given snapshot.
         Args:
-            input_args: Container for the traits_snapshot. The 'traits_snapshot' field
-                        within this object should be a dictionary of trait names to their
-                        current values (0.0-1.0).
+            traits_snapshot: Dictionary of trait names to their current values (0.0-1.0).
         Returns:
             Trait balance analysis.
         """
-        # Access the actual dictionary from the input_args model
-        traits_snapshot = input_args.traits_snapshot # This is correct for this signature
-    
+        # No need to access from input_args anymore - it's directly available
+        
         if not isinstance(traits_snapshot, dict) or not all(isinstance(v, (int, float)) for v in traits_snapshot.values()):
-            logger.warning(f"_check_trait_balance: 'traits_snapshot' field within input_args is not a dict of trait:value. Got: {type(traits_snapshot)}. Input: {traits_snapshot!r}")
+            logger.warning(f"_check_trait_balance: 'traits_snapshot' is not a dict of trait:value. Got: {type(traits_snapshot)}. Input: {traits_snapshot!r}")
             return {"balanced": False, "imbalances": [{"issue": "Invalid input format for traits_snapshot"}], "trait_count": 0, "average_value": 0.0}
     
         imbalances = []
