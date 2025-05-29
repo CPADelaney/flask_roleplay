@@ -1373,6 +1373,34 @@ async def _analyze_system_efficiency(ctx: RunContextWrapper) -> Dict[str, Any]:
         "recommendations": recommendations
     }
 
+@function_tool
+async def _consolidate_associations(self) -> Dict[str, Any]:
+    """Consolidate similar associations"""
+    with trace(workflow_name="association_consolidation", group_id=self.context.trace_group_id):
+        try:
+            # Run the consolidation agent
+            result = await Runner.run(
+                self.consolidation_agent,
+                json.dumps({}),
+                context=self.context
+            )
+            
+            consolidation_output = result.final_output
+            
+            return {
+                "consolidations": consolidation_output.consolidations,
+                "removed_keys": consolidation_output.removed_keys,
+                "strengthened_keys": consolidation_output.strengthened_keys,
+                "efficiency_gain": consolidation_output.efficiency_gain,
+                "reasoning": consolidation_output.reasoning
+            }
+        except Exception as e:
+            logger.error(f"Error consolidating associations: {e}")
+            return {
+                "error": str(e),
+                "consolidations": []
+            }
+
 
 # ===========================================
 # CONDITIONING MAINTENANCE SYSTEM CLASS
@@ -1896,32 +1924,7 @@ class ConditioningMaintenanceSystem:
                 "core_traits": core_traits
             }
     
-    async def _consolidate_associations(self) -> Dict[str, Any]:
-        """Consolidate similar associations"""
-        with trace(workflow_name="association_consolidation", group_id=self.context.trace_group_id):
-            try:
-                # Run the consolidation agent
-                result = await Runner.run(
-                    self.consolidation_agent,
-                    json.dumps({}),
-                    context=self.context
-                )
-                
-                consolidation_output = result.final_output
-                
-                return {
-                    "consolidations": consolidation_output.consolidations,
-                    "removed_keys": consolidation_output.removed_keys,
-                    "strengthened_keys": consolidation_output.strengthened_keys,
-                    "efficiency_gain": consolidation_output.efficiency_gain,
-                    "reasoning": consolidation_output.reasoning
-                }
-            except Exception as e:
-                logger.error(f"Error consolidating associations: {e}")
-                return {
-                    "error": str(e),
-                    "consolidations": []
-                }
+
     
     async def get_maintenance_stats(self) -> Dict[str, Any]:
         """Get maintenance statistics"""
