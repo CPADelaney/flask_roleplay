@@ -1410,9 +1410,8 @@ class ConditioningSystem:
             return return_value
 
         except Exception as e:
-        logger.error(f"[{method_name}] Error processing operant conditioning: {e}", exc_info=True)
-        return {"success": False, "error": str(e)}
-
+            logger.error(f"[{method_name}] Error processing operant conditioning: {e}", exc_info=True)
+            return {"success": False, "error": str(e)}
 
     
     async def evaluate_behavior_consequences(self,
