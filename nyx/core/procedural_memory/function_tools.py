@@ -36,15 +36,29 @@ async def add_procedure(
 
     # ---------- 1️⃣  Normalise `steps_json` ----------
     if isinstance(steps_json, (list, tuple)):
-        # Already a Python sequence ➜ make a *copy* to avoid mutating caller’s list
         steps: List[Dict[str, Any]] = [dict(step) for step in steps_json]
     else:
+        # ---- START DEBUG LOGGING ----
+        logger.debug(f"ADD_PROCEDURE_DEBUG: Received steps_json of type: {type(steps_json)}")
+        if isinstance(steps_json, str):
+            logger.debug(f"ADD_PROCEDURE_DEBUG: Length of steps_json string: {len(steps_json)}")
+            logger.debug(f"ADD_PROCEDURE_DEBUG: repr(steps_json): {repr(steps_json)}")
+            if len(steps_json) >= 1140: # Check characters around the suspected error point
+                logger.debug(f"ADD_PROCEDURE_DEBUG: Last 10 chars (repr): {repr(steps_json[-10:])}")
+                if len(steps_json) > 1144:
+                     logger.debug(f"ADD_PROCEDURE_DEBUG: Character at index 1144 (repr): {repr(steps_json[1144])}")
+        # ---- END DEBUG LOGGING ----
         try:
             steps = json.loads(steps_json)
             if not isinstance(steps, list):
                 raise ValueError("Decoded JSON is not a list of steps.")
         except Exception as e:
+            # ---- Log the problematic string on error ----
+            logger.error(f"ADD_PROCEDURE_ERROR: Failed to parse steps_json. Error: {e}")
+            if isinstance(steps_json, str):
+                 logger.error(f"ADD_PROCEDURE_ERROR: Problematic steps_json (len {len(steps_json)}): {repr(steps_json)}")
             return {"error": f"Invalid steps JSON: {e}", "success": False}
+
 
     # ---------- 2️⃣  Validate / enrich each step ----------
     for i, step in enumerate(steps):
