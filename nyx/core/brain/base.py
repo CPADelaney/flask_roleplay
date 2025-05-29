@@ -7629,7 +7629,7 @@ System Prompt End
         # --- 7. Internal State Activation (Needs, Mood) ---
         if hasattr(self, "needs_system") and self.needs_system:
              try:
-                 needs_state = await self._get_current_need_states()
+                 needs_state = await self.needs_system.get_needs_state_async()
                  for need, state_data in needs_state.items():
                      if isinstance(state_data, dict) and state_data.get('drive_strength', 0.0) > self.need_drive_threshold:
                          reason = f"high drive for need '{need}' ({state_data['drive_strength']:.2f})"
@@ -7659,7 +7659,7 @@ System Prompt End
 
         if hasattr(self, "mood_manager") and self.mood_manager:
              try:
-                 mood_state_obj = await self._get_current_mood_state()
+                 mood_state_obj = await self.mood_manager.get_current_mood()
                  mood_state = mood_state_obj.model_dump() if hasattr(mood_state_obj, 'model_dump') else mood_state_obj
 
                  if mood_state and isinstance(mood_state, dict) and mood_state.get('intensity', 0.0) > 0.6: # Lowered threshold slightly
