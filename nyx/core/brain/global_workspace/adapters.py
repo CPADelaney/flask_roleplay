@@ -593,6 +593,80 @@ class UIConversationAdapter(EnhancedWorkspaceModule):
         if tot > 15:
             return {"ui_msg_volume": tot, "significance": .55}
 
+@register_adapter("emergency_response")
+class EmergencyResponseAdapter(EnhancedWorkspaceModule):
+    """Handles emergency situations requiring immediate response"""
+    name = "emergency_response"
+    
+    def __init__(self, brain, ws=None):
+        super().__init__(ws)
+        self.brain = brain
+    
+    async def on_phase(self, phase: int):
+        if phase != 2:
+            return
+            
+        # Check for emergency signals
+        emergencies = [p for p in self.ws.focus 
+                      if p.context_tag in ["emergency", "critical_error", "system_failure"]]
+        
+        if emergencies:
+            highest_priority = max(emergencies, key=lambda p: p.salience)
+            response = await self._handle_emergency(highest_priority)
+            
+            await self.submit(
+                {
+                    "response": response,
+                    "confidence": 1.0,
+                    "override_reason": "emergency",
+                    "priority": "critical"
+                },
+                salience=1.0,
+                context_tag="complete_response"
+            )
+    
+    async def _handle_emergency(self, emergency):
+        # Generate appropriate emergency response
+        return f"Emergency detected. Taking immediate action: {emergency.content}"
+
+@register_adapter("creative_response")
+class CreativeResponseAdapter(EnhancedWorkspaceModule):
+    """Can generate complete creative responses when inspiration strikes"""
+    name = "creative_response"
+    
+    def __init__(self, cs, ws=None):
+        super().__init__(ws)
+        self.cs = cs  # Creative system reference
+        
+    async def on_phase(self, phase: int):
+        if phase != 2:
+            return
+            
+        # Check if we have strong creative inspiration
+        creative_signals = [p for p in self.ws.focus 
+                           if p.context_tag in ["creative_synthesis", "imagination_output"]]
+        
+        if creative_signals and any(p.salience > 0.8 for p in creative_signals):
+            # Check if user asked for creative content
+            user_wants_creative = any(
+                p.context_tag == "user_input" and 
+                any(word in str(p.content).lower() 
+                    for word in ["write", "create", "imagine", "story", "poem"])
+                for p in self.ws.focus
+            )
+            
+            if user_wants_creative:
+                best_creative = max(creative_signals, key=lambda p: p.salience)
+                await self.submit(
+                    {
+                        "response": best_creative.content.get("imagination", "Let me create something for you..."),
+                        "confidence": best_creative.salience,
+                        "override_reason": "creative_inspiration"
+                    },
+                    salience=best_creative.salience,
+                    context_tag="complete_response"
+                )
+
 
 # ── INPUT PROCESSOR ────────────────────────────────────────────────────────
 @register_adapter("input_processor")
@@ -1708,6 +1782,62 @@ class ReflexiveSystemAdapter(EnhancedWorkspaceModule):
             updated = await maybe_async(self.rs.update_reflex_patterns)
             if updated:
                 return {"reflexes_updated": len(updated), "significance": .7}
+
+@register_adapter("reflexive_override")  # New adapter, different brain attribute
+class ReflexiveOverrideAdapter(EnhancedWorkspaceModule):
+    """Can generate complete responses for reflexive/emergency situations"""
+    name = "reflexive_override"
+    
+    def __init__(self, rs, ws=None):
+        super().__init__(ws)
+        self.rs = rs  # Reference to reflexive system if needed
+        self.register_unconscious("safety_monitor", self._safety_bg, .9)
+    
+    async def on_phase(self, phase: int):
+        if phase != 2:  # Late phase
+            return
+            
+        # Check for emergency/reflexive situations
+        for p in self.ws.focus:
+            if p.context_tag == "safety_alert" and p.salience > 0.9:
+                response = await self._generate_safety_response(p.content)
+                await self.submit(
+                    {
+                        "response": response,
+                        "confidence": 0.95,
+                        "override_reason": "safety"
+                    },
+                    salience=1.0,
+                    context_tag="complete_response"
+                )
+            elif p.context_tag == "reflex_response" and p.salience == 1.0:
+                # Handle reflex responses that need immediate output
+                await self.submit(
+                    {
+                        "response": p.content.get("reflex_action", "I need to respond immediately."),
+                        "confidence": 0.9,
+                        "override_reason": "reflex"
+                    },
+                    salience=0.95,
+                    context_tag="complete_response"
+                )
+    
+    async def _generate_safety_response(self, alert_content):
+        """Generate appropriate safety response based on alert type"""
+        if "harmful_content" in str(alert_content):
+            return "I cannot engage with that type of content."
+        elif "protocol_violation" in str(alert_content):
+            return "That would violate our established protocols."
+        else:
+            return "I need to handle this carefully for safety reasons."
+    
+    async def _safety_bg(self, view):
+        """Background safety monitoring"""
+        unsafe_patterns = ["harm", "danger", "emergency", "unsafe"]
+        for p in view.recent:
+            if any(pattern in str(p.content).lower() for pattern in unsafe_patterns):
+                return {"safety_concern": True, "pattern": p.content, "significance": .8}
+        return None
 
 
 # ── PROCEDURAL MEMORY ─────────────────────────────────────────────────────
