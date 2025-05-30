@@ -4147,6 +4147,10 @@ System Prompt End
                 Proposal("user_input", user_input, 1.0, context_tag="user_input")
             )
             
+            # Mark that we're processing
+            self.workspace_engine.ws.state["awaiting_response"] = True
+            self.workspace_engine.ws.state["input_timestamp"] = datetime.datetime.now()
+            
             # Let modules react and gather context (don't wait for a full response)
             for _ in range(2):  # Just 2 cycles for context gathering
                 await asyncio.sleep(0.1)  # Brief pause for module processing
@@ -4317,6 +4321,29 @@ System Prompt End
                         "processor_metadata": {"mode": "global_workspace_override"},
                         "features_used": kwargs
                     }
+        
+        # ── NEW: Wait for GWA to process if we haven't already ──
+        if self.workspace_engine and self.workspace_engine.ws.state.get("awaiting_response"):
+            try:
+                # Wait for up to 1 second for GWA to generate a response
+                decision = await self.workspace_engine.wait_for_decision(timeout=1.0)
+                
+                if decision and decision.get("confidence", 0) > 0.6:
+                    # Use GWA response if confident enough
+                    return {
+                        "message": decision.get("response", "I understand."),
+                        "epistemic_status": "confident", 
+                        "processor_metadata": {
+                            "mode": "global_workspace",
+                            "strategy": decision.get("strategy", "unknown"),
+                            "contributing_modules": decision.get("contributing_modules", [])
+                        },
+                        "features_used": kwargs
+                    }
+            except asyncio.TimeoutError:
+                logger.debug("GWA processing timed out, falling back to standard processing")
+            finally:
+                self.workspace_engine.ws.state["awaiting_response"] = False
         
         # ── 2️⃣ otherwise call process_input() which now embeds workspace hints
         input_result = await self.process_input(
