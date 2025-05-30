@@ -1854,7 +1854,7 @@ class ReflexiveOverrideAdapter(EnhancedWorkspaceModule):
     def __init__(self, rs, ws=None):
         super().__init__(ws)
         self.rs = rs  # Reference to reflexive system if needed
-        self.register_unconscious("safety_monitor", self._safety_bg, .9)
+        self.register_unconscious("safety_monitor", self._safety_bg)
     
     async def on_phase(self, phase: int):
         if phase != 2:  # Late phase
