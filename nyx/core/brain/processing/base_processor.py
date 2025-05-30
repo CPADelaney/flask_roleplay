@@ -404,7 +404,7 @@ class BaseProcessor:
         """Handle errors during processing"""
         # Get safe class name
         class_name = self._get_safe_name(self)
-        logger.error(f"Error in {class_name}: {str(error)}")
+        logger.error(f"Error in {self._get_safe_name(self)}: {str(error)}")
         
         # Get safe error type
         error_type = self._get_safe_name(error)
@@ -412,7 +412,7 @@ class BaseProcessor:
         # Register with issue tracker if available
         if hasattr(self.brain, "issue_tracker"):
             issue_data = {
-                "title": f"Error in {class_name}",
+                "title": f"Error in {self._get_safe_name(self)}",
                 "error_type": error_type,
                 "error_message": str(error),
                 "component": class_name,
