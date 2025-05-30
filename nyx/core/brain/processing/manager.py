@@ -131,8 +131,12 @@ class ProcessingManager:
         context = context or {}
         
         try:
+            # Add debug logging
+            logger.debug("Starting process_input")
+            
             # Determine processing mode
             mode = context.get("processing_mode", self.current_mode)
+            logger.debug(f"Processing mode: {mode}")
             
             # Handle auto mode with mode selector
             if mode == "auto" and self.mode_selector is not None:
@@ -180,7 +184,12 @@ class ProcessingManager:
             
             return result
         except Exception as e:
-            logger.error(f"Error in processing input: {str(e)}")
+            # More detailed error logging
+            logger.error(f"Error in processing input: {type(e).__name__}: {str(e)}")
+            logger.error(f"Error type: {type(e)}")
+            logger.error(f"Error details: {repr(e)}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
             
             # Update mode metrics if mode selector available
             if self.mode_selector:
