@@ -316,7 +316,8 @@ class SerialProcessor(BaseProcessor):
             response_type = main_response_result["response_type"]
             
             # Generate emotional expression using base class method
-            emotional_expression_result = await self._generate_emotional_expression(processing_result["emotional_state"])
+            emotional_state = processing_result.get("emotional_state", {})
+            emotional_expression_result = await self._generate_emotional_expression(emotional_state)
             emotional_expression = emotional_expression_result["expression"]
             
             # Package the response
