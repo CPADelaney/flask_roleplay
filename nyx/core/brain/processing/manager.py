@@ -96,7 +96,11 @@ class ProcessingManager:
             else:
                 return "InputGuardrail[unknown]"
         else:
-            return str(type(obj).__name__ if hasattr(type(obj), '__name__') else str(obj))
+            # Safe fallback that won't cause AttributeError
+            try:
+                return str(type(obj).__name__)
+            except:
+                return str(obj)[:50]  # Truncate to avoid huge outputs
     
     def _create_error_handler(self, processor_name):
         """Create an error handler function for a processor"""
