@@ -306,6 +306,21 @@ class SerialProcessor(BaseProcessor):
         context = context or {}
         
         with trace(workflow_name="generate_response_serial", group_id=self.brain.trace_group_id):
+            # Check if this is an error result
+            if "error" in processing_result:
+                # Return a safe error response
+                return {
+                    "message": f"I encountered an error: {processing_result.get('error', 'Unknown error')}",
+                    "response_type": "error",
+                    "emotional_state": {},  # Empty emotional state
+                    "emotional_expression": None,
+                    "memories_used": [],
+                    "memory_count": 0,
+                    "experience_sharing_adapted": False,
+                    "identity_impact": None,
+                    "error": processing_result.get("error")
+                }
+            
             # Track if experience sharing was adapted
             experience_sharing_adapted = processing_result.get("context_change") is not None and \
                                        processing_result.get("adaptation_result") is not None
@@ -316,21 +331,23 @@ class SerialProcessor(BaseProcessor):
             response_type = main_response_result["response_type"]
             
             # Generate emotional expression using base class method
+            # Use .get() with default empty dict instead of direct access
             emotional_state = processing_result.get("emotional_state", {})
             emotional_expression_result = await self._generate_emotional_expression(emotional_state)
             emotional_expression = emotional_expression_result["expression"]
             
-            # Package the response
+            # Package the response with safe access to fields
             response_data = {
                 "message": main_response,
                 "response_type": response_type,
-                "emotional_state": processing_result["emotional_state"],
+                "emotional_state": emotional_state,  # Already safely retrieved above
                 "emotional_expression": emotional_expression,
-                "memories_used": [m["id"] for m in processing_result["memories"]] if "memories" in processing_result else [],
+                "memories_used": [m["id"] for m in processing_result.get("memories", [])] if "memories" in processing_result else [],
                 "memory_count": processing_result.get("memory_count", 0),
                 "experience_sharing_adapted": experience_sharing_adapted,
                 "identity_impact": processing_result.get("identity_impact")
             }
+        
             
             # Add memory of this response
             if hasattr(self.brain, "memory_core"):
