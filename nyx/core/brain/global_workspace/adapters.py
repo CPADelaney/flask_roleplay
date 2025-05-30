@@ -2327,6 +2327,12 @@ def build_gw_modules(brain) -> List[EnhancedWorkspaceModule]:
             modules.append(SocialBrowsingAdapter(obj, motiv=getattr(brain, "motivations", {})))
             continue
 
-        modules.append(cls(obj))
+    modules.append(ReflexiveOverrideAdapter(
+        brain.reflexive_system if hasattr(brain, 'reflexive_system') else None
+    ))
+    modules.append(EmergencyResponseAdapter(brain))
+    modules.append(CreativeResponseAdapter(
+        brain.creative_system if hasattr(brain, 'creative_system') else None
+    ))
     
     return modules
