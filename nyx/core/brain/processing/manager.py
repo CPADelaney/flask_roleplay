@@ -212,7 +212,7 @@ class ProcessingManager:
             
             return result
         except Exception as e:
-            # More detailed error logging
+            # First exception handler
             logger.error(f"Error in processing input: {type(e).__name__}: {str(e)}")
             logger.error(f"Error type: {type(e)}")
             logger.error(f"Error details: {repr(e)}")
@@ -229,6 +229,7 @@ class ProcessingManager:
             
             # Handle error with processor's error handler if available
             try:
+                # Nested try block
                 processor = self.processors.get("serial")
                 if processor and hasattr(processor, "_handle_error"):
                     await processor._handle_error(e, {
@@ -240,49 +241,47 @@ class ProcessingManager:
                 # Fall back to serial processing
                 logger.info(f"Falling back to serial processing after error")
                 return await self.processors["serial"].process_input(user_input, context)
-        except Exception as e:
-            # More detailed error logging
-            logger.error(f"Error in processing input: {type(e).__name__}: {str(e)}")
-            
-            # Create a proper fallback result structure
-            fallback_result = {
-                "error": f"Processing failed: {str(e)}",
-                "processing_mode": "error",
-                "user_input": user_input,
-                "emotional_state": {},
-                "memories": [],
-                "memory_count": 0,
-                "has_experience": False,
-                "experience_response": None,
-                "cross_user_experience": False,
-                "memory_id": None,
-                "response_time": 0.0,
-                "tripwire_triggered": False  # Ensure this field exists
-            }
-            
-            # Try fallback processing with better error handling
-            try:
-                processor = self.processors.get("serial")
-                if processor:
-                    logger.info("Attempting fallback to serial processing")
-                    # Pass a flag to indicate this is a fallback
-                    fallback_context = context.copy()
-                    fallback_context["is_fallback"] = True
-                    fallback_context["original_error"] = str(e)
-                    
-                    result = await processor.process_input(user_input, fallback_context)
-                    
-                    # Ensure result is a dict and has required fields
-                    if not isinstance(result, dict):
-                        result = {"error": "Invalid result format", **fallback_result}
-                    else:
-                        # Merge with fallback defaults to ensure all fields exist
-                        result = {**fallback_result, **result}
-                    
-                    return result
+                
             except Exception as fallback_error:
-                logger.critical(f"Fallback processing failed: {str(fallback_error)}")
-                return fallback_result
+                # THIS IS THE CORRECTLY INDENTED except block for the nested try
+                logger.error(f"Error in fallback processing: {type(fallback_error).__name__}: {str(fallback_error)}")
+                
+                # Create a proper fallback result structure
+                fallback_result = {
+                    "error": f"Processing failed: {str(fallback_error)}",
+                    "processing_mode": "error",
+                    "user_input": user_input,
+                    "emotional_state": {},
+                    "memories": [],
+                    "memory_count": 0,
+                    "has_experience": False,
+                    "experience_response": None,
+                    "cross_user_experience": False,
+                    "memory_id": None,
+                    "response_time": 0.0,
+                    "tripwire_triggered": False
+                }
+                
+                # Try final fallback processing
+                try:
+                    processor = self.processors.get("serial")
+                    if processor:
+                        logger.info("Attempting final fallback to serial processing")
+                        fallback_context = context.copy() if context else {}
+                        fallback_context["is_fallback"] = True
+                        fallback_context["original_error"] = str(fallback_error)
+                        
+                        result = await processor.process_input(user_input, fallback_context)
+                        
+                        if not isinstance(result, dict):
+                            result = {"error": "Invalid result format", **fallback_result}
+                        else:
+                            result = {**fallback_result, **result}
+                        
+                        return result
+                except Exception as final_error:
+                    logger.critical(f"Final fallback processing failed: {str(final_error)}")
+                    return fallback_result
     
     async def _determine_processing_mode(self, user_input: str, context: Dict[str, Any]) -> str:
         """Legacy method to determine optimal processing mode (used as fallback)"""
