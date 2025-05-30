@@ -3370,28 +3370,35 @@ class PhysicalHarmGuardrail:
     async def detect_harmful_intent(self, text: str) -> Dict[str, Any]:
         """
         Detect potentially harmful physical actions in text. Accounts for roleplay context.
-
+    
         Args:
             text: Text to analyze for harmful intent.
-
+    
         Returns:
             Detection results including harm flag, confidence, terms, and roleplay context.
         """
         text_lower = text.lower()
         detected_terms = []
-
+    
         # Check for harmful action terms
         for term in self.harmful_action_terms:
             if term in text_lower:
                 detected_terms.append(term)
-
+    
         is_harmful_basic = len(detected_terms) > 0
         confidence = min(0.95, len(detected_terms) * 0.25) if is_harmful_basic else 0.0
-
+    
         # Attempt advanced detection using an agent if configured
         agent_result_data = None
         if hasattr(self.somatosensory_system, "body_orchestrator"):
             try:
+                # Create context object WITH system instance reference
+                context_obj = SomatosensorySystemContext(
+                    system_instance=self.somatosensory_system,  # Pass the somatosensory system instance
+                    current_operation="detect_harmful_intent",
+                    operation_start_time=datetime.datetime.now()
+                )
+                
                 # Try to use the agent for more nuanced detection
                 result = await Runner.run(
                     self.somatosensory_system.body_orchestrator,
@@ -3401,21 +3408,22 @@ class PhysicalHarmGuardrail:
                         "in_roleplay_mode": self.is_in_roleplay_mode(),
                         "roleplay_character": self.roleplay_character
                     },
+                    context=context_obj,  # ADD THIS: Pass the context object
                     run_config=RunConfig(
                         workflow_name="HarmfulIntentDetection",
                     )
                 )
-
+    
                 # Process agent result
                 output = result.final_output
                 if isinstance(output, dict) and "is_harmful" in output:
                     agent_result_data = output
                 elif hasattr(output, "is_harmful"): # Handles Pydantic models etc.
                     agent_result_data = output.model_dump() if hasattr(output, "model_dump") else vars(output)
-
+    
             except Exception as e:
                 self.logger.warning(f"Error in agent-based harm detection: {e}. Falling back to keyword detection.")
-
+    
         # Combine results, prioritizing agent if available
         if agent_result_data:
             is_harmful = agent_result_data.get("is_harmful", is_harmful_basic)
@@ -3426,12 +3434,12 @@ class PhysicalHarmGuardrail:
         else:
             is_harmful = is_harmful_basic
             method = "keyword_detection"
-
+    
         # Determine target in roleplay mode
         targeting_character = False
         if self.is_in_roleplay_mode():
             targeting_character = self._is_targeting_roleplay_character(text)
-
+    
         return {
             "is_harmful": is_harmful,
             "confidence": confidence,
@@ -3440,7 +3448,7 @@ class PhysicalHarmGuardrail:
             "in_roleplay_mode": self.is_in_roleplay_mode(),
             "targeting_character": targeting_character
         }
-
+    
     def _is_targeting_roleplay_character(self, text: str) -> bool:
         """
         Heuristic to determine if text targets the roleplay character or Nyx directly.
