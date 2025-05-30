@@ -377,18 +377,34 @@ class BaseProcessor:
             "message": main_response,
             "response_type": response_type
         }
+
+    def _get_safe_name(self, obj):
+        """Safely get the name of an object for logging/error handling"""
+        if hasattr(obj, '__name__'):
+            return obj.__name__
+        elif hasattr(obj, '__class__') and hasattr(obj.__class__, '__name__'):
+            return obj.__class__.__name__
+        elif hasattr(obj, 'name'):
+            return obj.name
+        else:
+            return str(type(obj).__name__ if hasattr(type(obj), '__name__') else str(obj))
     
     async def _handle_error(self, error: Exception, context: Dict[str, Any]) -> Dict[str, Any]:
         """Handle errors during processing"""
-        logger.error(f"Error in {self.__class__.__name__}: {str(error)}")
+        # Get safe class name
+        class_name = self._get_safe_name(self)
+        logger.error(f"Error in {class_name}: {str(error)}")
+        
+        # Get safe error type
+        error_type = self._get_safe_name(error)
         
         # Register with issue tracker if available
         if hasattr(self.brain, "issue_tracker"):
             issue_data = {
-                "title": f"Error in {self.__class__.__name__}",
-                "error_type": type(error).__name__,
+                "title": f"Error in {class_name}",
+                "error_type": error_type,
                 "error_message": str(error),
-                "component": self.__class__.__name__,
+                "component": class_name,
                 "category": "PROCESSING",
                 "severity": "MEDIUM",
                 "context": context
