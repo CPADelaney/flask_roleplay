@@ -19,3 +19,7 @@ class NyxSystemContext(NyxBaseContext, Generic[T]):
     system_name: str
     system_state: T
     execution_data: Dict[str, Any] = Field(default_factory=dict)
+    
+    def get_state(self) -> T:
+        """Get the system state"""
+        return self.system_state
