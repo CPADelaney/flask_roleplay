@@ -48,6 +48,214 @@ class UnconsciousProcess:
     decay_rate: float = 0.1          # How fast activation decays each cycle
     metadata: Dict[str, Any] = field(default_factory=dict)
 
+# ADD this complete class to workspace_v3.py
+
+class EnhancedCoordinator(Coordinator):
+    """Advanced coordinator that synthesizes multi-module responses"""
+    
+    def __init__(self, ws):
+        super().__init__(ws)
+        self.response_strategies = {
+            "emergency": self._handle_emergency,
+            "creative": self._handle_creative, 
+            "reflective": self._handle_reflective,
+            "analytical": self._handle_analytical,
+            "emotional": self._handle_emotional,
+            "conversational": self._handle_conversational
+        }
+
+    async def decide(self) -> Dict[str, Any]:
+        _, focus = await self.ws.snapshot()
+        if not focus:
+            return {
+                "response": "I'm considering that...", 
+                "confidence": 0.1,
+                "strategy": "none"
+            }
+        
+        # Categorize proposals
+        categorized = self._categorize_proposals(focus)
+        
+        # Select primary strategy
+        strategy = self._select_strategy(categorized)
+        
+        # Generate response
+        response_text = await self.response_strategies[strategy](categorized, focus)
+        
+        # Calculate confidence
+        confidence = self._calculate_confidence(focus, strategy)
+        
+        return {
+            "response": response_text,
+            "confidence": confidence,
+            "strategy": strategy,
+            "contributing_modules": list(set(p.source for p in focus)),
+            "focus_count": len(focus)
+        }
+
+    def _categorize_proposals(self, proposals: List[Proposal]) -> Dict[str, List[Proposal]]:
+        """Group proposals by their context tags"""
+        categories = defaultdict(list)
+        for p in proposals:
+            # Map context tags to categories
+            if p.context_tag in ["emergency", "safety_alert", "critical_error"]:
+                categories["emergency"].append(p)
+            elif p.context_tag in ["creative_synthesis", "imagination_output", "creative_ready"]:
+                categories["creative"].append(p)
+            elif p.context_tag in ["reflection_insight", "memory_recall", "identity_update"]:
+                categories["reflective"].append(p)
+            elif p.context_tag in ["reasoning_output", "knowledge_facts", "causal_analysis"]:
+                categories["analytical"].append(p)
+            elif p.context_tag in ["emotion_spike", "mood_extreme", "affect"]:
+                categories["emotional"].append(p)
+            elif p.context_tag in ["response_candidate", "ai_response", "complete_response"]:
+                categories["response"].append(p)
+            else:
+                categories["general"].append(p)
+        return dict(categories)
+
+    def _select_strategy(self, categorized: Dict[str, List[Proposal]]) -> str:
+        """Select response strategy based on proposal types"""
+        # Priority order
+        if categorized.get("emergency"):
+            return "emergency"
+        elif categorized.get("response") and any(p.salience > 0.9 for p in categorized["response"]):
+            # High confidence direct response available
+            return "conversational"
+        elif categorized.get("creative") and len(categorized.get("creative", [])) > 1:
+            return "creative"
+        elif categorized.get("analytical") and categorized.get("reflective"):
+            return "reflective"
+        elif categorized.get("analytical"):
+            return "analytical"
+        elif categorized.get("emotional") and any(p.salience > 0.7 for p in categorized["emotional"]):
+            return "emotional"
+        else:
+            return "conversational"
+
+    def _calculate_confidence(self, focus: List[Proposal], strategy: str) -> float:
+        """Calculate response confidence"""
+        if not focus:
+            return 0.1
+        
+        # Base confidence from average salience
+        avg_salience = sum(p.salience for p in focus) / len(focus)
+        
+        # Strategy bonuses
+        strategy_confidence = {
+            "emergency": 1.0,
+            "creative": 0.8,
+            "reflective": 0.7,
+            "analytical": 0.8,
+            "emotional": 0.7,
+            "conversational": 0.6
+        }
+        
+        base = strategy_confidence.get(strategy, 0.5)
+        
+        # Module diversity bonus
+        unique_sources = len(set(p.source for p in focus))
+        diversity_bonus = min(0.2, unique_sources * 0.05)
+        
+        return min(1.0, base * avg_salience + diversity_bonus)
+
+    async def _handle_emergency(self, categorized: Dict, focus: List[Proposal]) -> str:
+        """Handle emergency responses"""
+        emergency_proposals = categorized.get("emergency", [])
+        if emergency_proposals:
+            highest = max(emergency_proposals, key=lambda p: p.salience)
+            if isinstance(highest.content, dict):
+                return highest.content.get("response", "I need to handle this immediately.")
+            return str(highest.content)
+        return "I'm addressing an urgent situation."
+
+    async def _handle_creative(self, categorized: Dict, focus: List[Proposal]) -> str:
+        """Synthesize creative responses"""
+        creative = categorized.get("creative", [])
+        response_candidates = categorized.get("response", [])
+        
+        # Prefer explicit creative responses
+        for p in response_candidates:
+            if p.source.startswith("creative"):
+                return p.content.get("response", str(p.content))
+        
+        # Otherwise synthesize
+        if creative:
+            ideas = [p.content for p in creative if isinstance(p.content, dict)]
+            if ideas:
+                return f"Let me create something for you... {ideas[0].get('imagination', '')}"
+        
+        return "I'm feeling creative about this..."
+
+    async def _handle_reflective(self, categorized: Dict, focus: List[Proposal]) -> str:
+        """Generate reflective responses"""
+        reflections = categorized.get("reflective", [])
+        memories = [p for p in reflections if p.context_tag == "memory_recall"]
+        insights = [p for p in reflections if p.context_tag == "reflection_insight"]
+        
+        if insights:
+            insight = insights[0].content
+            if isinstance(insight, dict):
+                return f"I've been reflecting on this... {insight.get('insight', '')}"
+        
+        if memories:
+            mem_content = memories[0].content
+            if isinstance(mem_content, dict) and "memories" in mem_content:
+                return f"This reminds me of something... {mem_content['memories'][0].get('text', '')}"
+        
+        return "Let me think about this more deeply..."
+
+    async def _handle_analytical(self, categorized: Dict, focus: List[Proposal]) -> str:
+        """Generate analytical responses"""
+        analytical = categorized.get("analytical", [])
+        
+        for p in analytical:
+            if p.context_tag == "reasoning_output":
+                reasoning = p.content.get("reasoning", p.content)
+                return f"Based on my analysis: {reasoning}"
+            elif p.context_tag == "knowledge_facts":
+                facts = p.content.get("facts", [])
+                if facts:
+                    return f"Here's what I know: {facts[0]}"
+        
+        return "Let me analyze this systematically..."
+
+    async def _handle_emotional(self, categorized: Dict, focus: List[Proposal]) -> str:
+        """Generate emotionally-aware responses"""
+        emotional = categorized.get("emotional", [])
+        
+        # Find dominant emotion
+        for p in emotional:
+            if p.context_tag == "emotion_spike":
+                emotion = p.content.get("emotion", "")
+                intensity = p.content.get("intensity", 0.5)
+                
+                if emotion == "joy" and intensity > 0.7:
+                    return "This makes me genuinely happy!"
+                elif emotion == "curiosity" and intensity > 0.6:
+                    return "How fascinating! Tell me more..."
+                elif emotion == "concern" and intensity > 0.6:
+                    return "I'm a bit concerned about this..."
+        
+        return "I'm processing this emotionally..."
+
+    async def _handle_conversational(self, categorized: Dict, focus: List[Proposal]) -> str:
+        """Generate standard conversational responses"""
+        # Check for direct response candidates
+        responses = categorized.get("response", [])
+        if responses:
+            best = max(responses, key=lambda p: p.salience)
+            if isinstance(best.content, dict):
+                return best.content.get("response", "I understand.")
+            return str(best.content)
+        
+        # Fallback to acknowledging input
+        user_inputs = [p for p in focus if p.context_tag == "user_input"]
+        if user_inputs:
+            return f"I understand you're saying: {user_inputs[0].content}"
+        
+        return "I'm here and listening."
+
 
 class UnconsciousLayer:
     """Manages unconscious processing parallel to conscious workspace"""
@@ -291,12 +499,17 @@ class EnhancedWorkspaceModule(WorkspaceModule):
 
 class NyxEngineV3(NyxEngineV2):
     def __init__(self, modules: List[WorkspaceModule], *, hz: float = 10.0,
-                 enable_unconscious: bool = True, **kw):
-        super().__init__(modules, hz, **kw)
+                 enable_unconscious: bool = True, persist_bias=None):
+        super().__init__(modules, hz, persist_bias=persist_bias)
         self.enable_unconscious = enable_unconscious
         self.unconscious: Optional[UnconsciousLayer] = None
         if enable_unconscious:
             self.unconscious = UnconsciousLayer(self.ws)
+        
+        # ADD: Synchronization mechanisms
+        self._decision_ready = asyncio.Event()
+        self._last_decision = None
+        self._response_timeout = 2.0
 
     async def start(self):
         await super().start()
@@ -308,36 +521,82 @@ class NyxEngineV3(NyxEngineV2):
                         await self.unconscious.register_process(name, fn, threshold=thr)
             await self.unconscious.start()
 
+
     async def stop(self):
         if self.enable_unconscious and self.unconscious:
             await self.unconscious.stop()
-        await super().stop()
+        if self.task and not self.task.done():
+            self.task.cancel()
+            try:
+                await asyncio.wait_for(self.task, timeout=1.0)
+            except:
+                pass
 
-    async def process_input(self, text: str) -> str:
-        # reflex first
+    async def _loop(self):
+        """Main cognitive loop with proper decision tracking"""
+        while True:
+            await self.clock.tick()
+            phase = self.clock.phase
+            self.neuro.step()
+            
+            # Run all modules for this phase
+            await asyncio.gather(*(safe_call(m.on_phase(phase)) for m in self.modules))
+            
+            if phase == 1:
+                winners = await self.attn.select()
+                await self.ws.set_focus(winners)
+                
+            if phase == 2:
+                # Generate decision and signal completion
+                decision = await self.coord.decide()
+                self.ws.state["last_decision"] = decision
+                self._last_decision = decision
+                self._decision_ready.set()
+
+    async def wait_for_decision(self, timeout: Optional[float] = None) -> Optional[Dict[str, Any]]:
+        """Wait for the next decision cycle to complete"""
+        self._decision_ready.clear()
+        try:
+            await asyncio.wait_for(
+                self._decision_ready.wait(), 
+                timeout or self._response_timeout
+            )
+            return self._last_decision
+        except asyncio.TimeoutError:
+            # Return best available response from proposals
+            props, focus = await self.ws.snapshot()
+            response_candidates = [
+                p for p in props 
+                if p.context_tag in ["response_candidate", "complete_response", "ai_response"]
+            ]
+            if response_candidates:
+                best = max(response_candidates, key=lambda p: p.salience)
+                return {
+                    "response": best.content.get("response", str(best.content)),
+                    "confidence": best.salience,
+                    "source": best.source,
+                    "timeout": True
+                }
+            return None
+
+    async def process_input(self, text: str) -> Dict[str, Any]:
+        """Process input and return structured response"""
+        # Check reflexes first
         if self.enable_unconscious and self.unconscious:
             reflex = await self.unconscious.check_reflexes(text)
             if reflex:
-                return reflex
+                return {"response": reflex, "type": "reflex", "confidence": 1.0}
         
-        # Submit input to workspace (outside the unconscious check!)
-        await self.ws.submit(Proposal("user", text, 0.5, "user_input"))
+        # Submit to workspace
+        await self.ws.submit(Proposal("user", text, 1.0, context_tag="user_input"))
         
-        # Run cognitive cycle
-        await self.tick()
+        # Wait for decision
+        decision = await self.wait_for_decision()
         
-        # Look specifically for AI responses
-        responses = [p for p in self.ws.proposals 
-                     if p.context_tag in ("ai_response", "response_draft", "conditioned_output")]
-        
-        if responses:
-            best = max(responses, key=lambda p: p.salience)
-            if isinstance(best.content, dict):
-                return best.content.get("response", "...")
-            return str(best.content)
-        
-        # If no confident response from workspace, fall back to parent implementation
-        return await super().process_input(text)
+        if decision:
+            return decision
+        else:
+            return {"response": "I'm processing that...", "confidence": 0.1}
 
 # ---------------------------------------------------------------------------
 # EXAMPLE MODULES (unchanged API for NyxBrain)
