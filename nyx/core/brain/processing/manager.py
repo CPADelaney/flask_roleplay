@@ -14,7 +14,7 @@ class ProcessingManager:
     def __init__(self, brain):
         self.brain = brain
         self.processors = {}
-        self.current_mode = "auto"
+        self.current_mode = "auto"  # Ensure this is always set
         self.mode_switch_history = []
         self.complexity_threshold = {
             "parallel": 0.6,   # Switch to parallel at this complexity
@@ -23,6 +23,10 @@ class ProcessingManager:
         
         # Initialize mode selector
         self.mode_selector = None
+        
+        # FIX: Add validation to ensure current_mode is never None
+        if self.current_mode is None:
+            self.current_mode = "auto"
     
     async def initialize(self):
         """Initialize all processors and mode selector"""
@@ -136,6 +140,12 @@ class ProcessingManager:
             
             # Determine processing mode
             mode = context.get("processing_mode", self.current_mode)
+            
+            # FIX: Handle None mode by defaulting to "auto"
+            if mode is None:
+                logger.warning("Processing mode is None, defaulting to 'auto'")
+                mode = "auto"
+                
             logger.debug(f"Processing mode: {mode}")
             
             # Handle auto mode with mode selector
