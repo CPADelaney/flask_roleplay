@@ -374,6 +374,13 @@ class ProcessingManager:
         Returns:
             Status of the mode change
         """
+        # FIX: Validate mode is not None
+        if mode is None:
+            return {
+                "success": False,
+                "error": "Mode cannot be None. Please specify a valid mode or 'auto'."
+            }
+        
         valid_modes = list(self.processors.keys()) + ["auto"]
         
         if mode not in valid_modes:
@@ -387,6 +394,7 @@ class ProcessingManager:
         
         # Update mode
         self.current_mode = mode
+        
         
         # Track mode change
         self.mode_switch_history.append({
