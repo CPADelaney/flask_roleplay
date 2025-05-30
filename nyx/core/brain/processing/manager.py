@@ -79,15 +79,36 @@ class ProcessingManager:
                 # Add _handle_error method if not present
                 if not hasattr(processor, "_handle_error"):
                     processor._handle_error = self._create_error_handler(processor_name)
+
+    def _get_safe_name(self, obj):
+        """Safely get the name of an object for logging/error handling"""
+        if hasattr(obj, '__name__'):
+            return obj.__name__
+        elif hasattr(obj, '__class__') and hasattr(obj.__class__, '__name__'):
+            return obj.__class__.__name__
+        elif hasattr(obj, 'name'):
+            return obj.name
+        elif hasattr(obj, 'guardrail_function'):
+            # For InputGuardrail objects
+            func = obj.guardrail_function
+            if hasattr(func, '__name__'):
+                return f"InputGuardrail[{func.__name__}]"
+            else:
+                return "InputGuardrail[unknown]"
+        else:
+            return str(type(obj).__name__ if hasattr(type(obj), '__name__') else str(obj))
     
     def _create_error_handler(self, processor_name):
         """Create an error handler function for a processor"""
         async def handle_error(error, context):
+            # Safely get error type name
+            error_type_name = self._get_safe_name(error)
+            
             # Register issue with issue tracker
             if hasattr(self.brain, "issue_tracker"):
                 issue_data = {
                     "title": f"Error in {processor_name} processor",
-                    "error_type": type(error).__name__,
+                    "error_type": error_type_name,
                     "error_message": str(error),
                     "component": processor_name,
                     "category": "PROCESSING",
