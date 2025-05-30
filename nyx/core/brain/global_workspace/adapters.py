@@ -1381,24 +1381,41 @@ class TemporalPerceptionAdapter(EnhancedWorkspaceModule):
 @register_adapter("agentic_action_generator")
 class AgenticActionAdapter(EnhancedWorkspaceModule):
     name = "action_generator"
-    def __init__(self, aag, ws=None):
-        super().__init__(ws); self.aag = aag
-        self.register_unconscious("action_planning", self._plan_bg, .8)
-
+    def __init__(self, aag, brain, ws=None):  # Need brain reference!
+        super().__init__(ws)
+        self.aag = aag
+        self.brain = brain
+        
     async def on_phase(self, phase: int):
         if phase != 2 or not self.aag:
             return
-        # Generate actions based on workspace state
-        context = ActionContext(
-            workspace_focus=[p.content for p in self.ws.focus],
-            salience_map={p.source: p.salience for p in self.ws.focus}
+            
+        # Only process if we have user input
+        user_inputs = [p for p in self.ws.focus if p.context_tag == "user_input"]
+        if not user_inputs:
+            return
+            
+        # Use the brain's actual response generation!
+        user_input = user_inputs[0].content
+        if isinstance(user_input, dict):
+            user_input = user_input.get("raw", str(user_input))
+            
+        # Call the brain's generate_response method
+        response_data = await self.brain._generate_response_standard(
+            user_input,
+            {"active_modules": {"agentic_action_generator"}},  # context
+            {"internal_thoughts": []},  # input_result
+            {"agentic_action_generator"}  # active_modules
         )
-        actions = await maybe_async(self.aag.generate_actions, context)
-        if actions:
-            for action in actions[:3]:  # Top 3 actions
-                await self.submit({"action": action},
-                                  salience=action.get("priority", .5),
-                                  context_tag="action_proposal")
+        
+        # Submit the actual response with high salience
+        if response_data.get("main_message"):
+            await self.submit(
+                {"response": response_data["main_message"], 
+                 "action": response_data.get("action")},
+                salience=0.95,
+                context_tag="ai_response"
+            )
 
     async def _plan_bg(self, _):
         if hasattr(self.aag, "update_action_models"):
@@ -2152,14 +2169,16 @@ def _log_missing(brain):
 
 
 def build_gw_modules(brain) -> List[EnhancedWorkspaceModule]:
-    """Instantiate adapters for every registered attribute present on *brain*."""
-    _log_missing(brain)
-
     modules: List[EnhancedWorkspaceModule] = []
-
+    
     for attr, cls in _REGISTRY.items():
         obj = getattr(brain, attr, None)
         if obj is None:
+            continue
+            
+        # Special cases that need brain reference
+        if attr == "agentic_action_generator":
+            modules.append(cls(obj, brain))  # Pass brain!
             continue
 
         # special‑case: social_tools needs motivations; streaming_core supplies learning_manager
@@ -2168,5 +2187,5 @@ def build_gw_modules(brain) -> List[EnhancedWorkspaceModule]:
             continue
 
         modules.append(cls(obj))
-
+    
     return modules
