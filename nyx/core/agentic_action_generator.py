@@ -849,9 +849,9 @@ class EnhancedAgenticActionGenerator:
                        tool_description_override="Generate a leisure/idle action")
             ],
             tools=system_tools,
-            input_guardrails=[
-                self._create_homework_guardrail(),
-            ]
+   #         input_guardrails=[
+   #             self._create_homework_guardrail(),
+   #         ]
         )
         
         # Create selection agent that chooses the best action from recommendations
@@ -874,17 +874,26 @@ class EnhancedAgenticActionGenerator:
             tools=system_tools,
         )
     
-    def _create_homework_guardrail(self):
-        """Create a guardrail for checking homework requests"""
-        async def homework_guardrail(ctx, agent, input_data):
-            result = await Runner.run(self.guardrail_agent, input_data, context=ctx.context)
-            final_output = result.final_output_as(HomeworkOutput)
-            return GuardrailFunctionOutput(
-                output_info=final_output,
-                tripwire_triggered=not final_output.is_homework,
-            )
-        
-        return InputGuardrail(guardrail_function=homework_guardrail)
+#    def _create_homework_guardrail(self):
+#        """Create a guardrail for checking homework requests"""
+#        async def homework_guardrail_function(ctx, agent, input_data):
+#            result = await Runner.run(self.guardrail_agent, input_data, context=ctx.context)
+#            final_output = result.final_output_as(HomeworkOutput)
+#            return GuardrailFunctionOutput(
+#                output_info=final_output,
+#                tripwire_triggered=not final_output.is_homework,
+#            )
+#        
+#        # Ensure the function has a __name__ attribute
+#        homework_guardrail_function.__name__ = "homework_guardrail_function"
+#        
+#        # Create the InputGuardrail
+#        guardrail = InputGuardrail(guardrail_function=homework_guardrail_function)
+#        
+#        # Try adding __name__ to the guardrail object itself in case that's what's needed
+#        guardrail.__name__ = "homework_guardrail"
+#        
+#        return guardrail
     
     def _create_motivation_agent(self):
         """Create agent specialized in motivation-driven actions"""
