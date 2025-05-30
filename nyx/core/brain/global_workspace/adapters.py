@@ -1387,35 +1387,46 @@ class AgenticActionAdapter(EnhancedWorkspaceModule):
         self.brain = brain
         
     async def on_phase(self, phase: int):
-        if phase != 2 or not self.aag:
+        if phase != 1:  # Earlier phase to provide context
             return
             
-        # Only process if we have user input
+        # Don't generate responses, just provide action context
         user_inputs = [p for p in self.ws.focus if p.context_tag == "user_input"]
         if not user_inputs:
             return
-            
-        # Use the brain's actual response generation!
-        user_input = user_inputs[0].content
-        if isinstance(user_input, dict):
-            user_input = user_input.get("raw", str(user_input))
-            
-        # Call the brain's generate_response method
-        response_data = await self.brain._generate_response_standard(
-            user_input,
-            {"active_modules": {"agentic_action_generator"}},  # context
-            {"internal_thoughts": []},  # input_result
-            {"agentic_action_generator"}  # active_modules
-        )
         
-        # Submit the actual response with high salience
-        if response_data.get("main_message"):
+        # Analyze what kind of action might be appropriate
+        action_context = await self._analyze_action_context()
+        
+        if action_context:
             await self.submit(
-                {"response": response_data["main_message"], 
-                 "action": response_data.get("action")},
-                salience=0.95,
-                context_tag="ai_response"
+                action_context,
+                salience=0.7,
+                context_tag="action_context"
             )
+
+    async def _analyze_action_context(self):
+        """Analyze workspace to suggest action context"""
+        # Look at emotional state, memories, etc. to suggest action type
+        emotions = [p for p in self.ws.focus if p.context_tag == "emotion_spike"]
+        memories = [p for p in self.ws.focus if p.context_tag == "memory_recall"]
+        
+        context = {
+            "suggested_action_type": "conversational",  # default
+            "emotional_tone": "neutral",
+            "relevant_capabilities": []
+        }
+        
+        # Adjust based on workspace state
+        if any(e.content.get("emotion") == "curiosity" for e in emotions):
+            context["suggested_action_type"] = "exploratory"
+            context["relevant_capabilities"].append("knowledge_retrieval")
+        
+        if memories and len(memories) > 2:
+            context["suggested_action_type"] = "reflective"
+            context["relevant_capabilities"].append("memory_synthesis")
+        
+        return context
 
     async def _plan_bg(self, _):
         if hasattr(self.aag, "update_action_models"):
