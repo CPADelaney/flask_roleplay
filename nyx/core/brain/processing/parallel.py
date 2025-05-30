@@ -377,7 +377,7 @@ class ParallelProcessor(BaseProcessor):
             response_data = {
                 "message": main_response,
                 "response_type": response_type,
-                "emotional_state": processing_result["emotional_state"],
+                "emotional_state": processing_result.get("emotional_state", {}),
                 "emotional_expression": emotional_expression,
                 "memories_used": [m["id"] for m in processing_result["memories"]] if "memories" in processing_result and isinstance(processing_result["memories"], list) else [],
                 "memory_count": processing_result.get("memory_count", 0),
