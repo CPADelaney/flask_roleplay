@@ -60,8 +60,7 @@ from nyx.core.passive_observation import ObservationFilter
 
 from pydantic import BaseModel, Field
 
-if TYPE_CHECKING:
-    from nyx.core.mood_manager import MoodState
+from nyx.core.mood_manager import MoodState
 
 logger = logging.getLogger(__name__)
 
