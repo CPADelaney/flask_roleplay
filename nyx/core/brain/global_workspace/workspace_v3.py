@@ -502,9 +502,11 @@ class NyxEngineV3(NyxEngineV2):
                  enable_unconscious: bool = True, persist_bias=None):
         super().__init__(modules, hz, persist_bias=persist_bias)
         self.enable_unconscious = enable_unconscious
+        self.coord = EnhancedCoordinator(self.ws)             
         self.unconscious: Optional[UnconsciousLayer] = None
         if enable_unconscious:
             self.unconscious = UnconsciousLayer(self.ws)
+            
         
         # ADD: Synchronization mechanisms
         self._decision_ready = asyncio.Event()
