@@ -754,9 +754,9 @@ class ConditioningSystem:
     async def _get_behavior_associations(
         ctx: RunContextWrapper,
         behavior: str,
-        behavior_context: Dict[str, Any]  # Renamed from 'context'
+        behavior_context: Optional[Dict[str, Any]] = None  # Make it optional with default None
     ) -> List[Dict[str, Any]]:
-        behavior_context = behavior_context or {}  # Update variable name
+        behavior_context = behavior_context or {}  # Handle None case
         result = []
         behavior_lower = behavior.lower()
     
@@ -764,11 +764,11 @@ class ConditioningSystem:
             if assoc.stimulus.lower() == behavior_lower:
                 context_match = True
                 if assoc.context_keys:
-                    if not behavior_context:  # Update variable name
+                    if not behavior_context:
                         context_match = False
                     else:
                         for req_key in assoc.context_keys:
-                            if req_key not in behavior_context:  # Update variable name
+                            if req_key not in behavior_context:
                                 context_match = False
                                 break
                 
@@ -851,8 +851,8 @@ class ConditioningSystem:
     @function_tool
     async def _check_context_relevance(
         ctx: RunContextWrapper,
-        current_context: Dict[str, Any],  # Renamed from 'context'
-        context_keys_list: List[List[str]]
+        current_context: Optional[Dict[str, Any]] = None,  # Make optional with default None
+        context_keys_list: Optional[List[List[str]]] = None  # Make optional with default None
     ) -> Dict[str, Any]:
         """
         Check relevance of current context to multiple sets of required context keys from associations.
@@ -862,28 +862,33 @@ class ConditioningSystem:
         Returns:
             Relevance scores for each set of context keys.
         """
-        if not isinstance(current_context, dict):  # Update variable name
+        # Handle None cases
+        if current_context is None:
+            current_context = {}
+        if context_keys_list is None:
+            context_keys_list = []
+            
+        if not isinstance(current_context, dict):
             logger.warning(f"_check_context_relevance: 'current_context' arg is not a dict: {type(current_context)}. Defaulting to empty.")
             current_context = {}
         if not isinstance(context_keys_list, list) or not all(isinstance(sublist, list) for sublist in context_keys_list):
             logger.warning(f"_check_context_relevance: 'context_keys_list' arg is not a list of lists. Got: {type(context_keys_list)}. Returning empty scores.")
             return {"relevance_scores": [], "average_relevance": 0.0, "error": "Invalid context_keys_list format"}
-
-
+    
         relevance_scores = []
         
         for required_keys_for_assoc in context_keys_list:
-            if not isinstance(required_keys_for_assoc, list): # Should be caught by above check, but for safety
-                relevance_scores.append(0.0) # Invalid format for this sublist
+            if not isinstance(required_keys_for_assoc, list):
+                relevance_scores.append(0.0)
                 continue
-
-            if not required_keys_for_assoc: # If an association has no specific context_keys, it's universally relevant
+    
+            if not required_keys_for_assoc:
                 relevance_scores.append(1.0)
                 continue
                 
             matching_keys_count = 0
             for req_key in required_keys_for_assoc:
-                if req_key in context: # Check if the current context contains the required key
+                if req_key in current_context:  # Fixed variable name
                     matching_keys_count += 1
             
             relevance = matching_keys_count / len(required_keys_for_assoc) if len(required_keys_for_assoc) > 0 else 1.0
