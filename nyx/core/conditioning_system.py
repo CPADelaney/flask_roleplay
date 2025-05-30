@@ -54,21 +54,45 @@ class OperantConditioningOutput(BaseModel):
 
 class BehaviorEvaluationOutput(BaseModel):
     """Output schema for behavior evaluation"""
-    behavior: str = Field(..., description="The behavior being evaluated")
-    expected_valence: float = Field(..., description="Expected outcome valence (-1.0 to 1.0)")
-    confidence: float = Field(..., description="Confidence in the evaluation (0.0-1.0)")
-    recommendation: str = Field(..., description="Recommendation (approach, avoid, neutral)")
-    explanation: str = Field(..., description="Explanation of the recommendation")
-    relevant_associations: List[Dict[str, Any]] = Field(..., description="Relevant associations considered")
+    behavior: str = Field(default="", description="The behavior being evaluated")
+    expected_valence: float = Field(default=0.0, description="Expected outcome valence (-1.0 to 1.0)")
+    confidence: float = Field(default=0.0, description="Confidence in the evaluation (0.0-1.0)")
+    recommendation: str = Field(default="neutral", description="Recommendation (approach, avoid, neutral)")
+    explanation: str = Field(default="", description="Explanation of the recommendation")
+    relevant_associations: List[Dict[str, Any]] = Field(default_factory=list, description="Relevant associations considered")
+
+# Fix 2: Update other output models similarly
+class ClassicalConditioningOutput(BaseModel):
+    """Output schema for classical conditioning analysis"""
+    association_key: str = Field(default="", description="Key for the association")
+    type: str = Field(default="", description="Type of association (new_association or reinforcement)")
+    association_strength: float = Field(default=0.0, description="Strength of the association")
+    reinforcement_count: int = Field(default=0, description="Number of reinforcements")
+    valence: float = Field(default=0.0, description="Emotional valence of the association")
+    explanation: str = Field(default="", description="Explanation of the conditioning process")
+
+class OperantConditioningOutput(BaseModel):
+    """Output schema for operant conditioning analysis"""
+    association_key: str = Field(default="", description="Key for the association")
+    type: str = Field(default="", description="Type of association (new_association or update)")
+    behavior: str = Field(default="", description="The behavior being conditioned")
+    consequence_type: str = Field(default="", description="Type of consequence")
+    association_strength: float = Field(default=0.0, description="Strength of the association")
+    is_reinforcement: bool = Field(default=False, description="Whether this is reinforcement or punishment")
+    is_positive: bool = Field(default=False, description="Whether this is positive or negative")
+    explanation: str = Field(default="", description="Explanation of the conditioning process")
 
 class TraitConditioningOutput(BaseModel):
     """Output schema for personality trait conditioning"""
-    trait: str = Field(..., description="The personality trait being conditioned")
-    target_value: float = Field(..., description="Target trait value")
-    actual_value: float = Field(..., description="Achieved trait value after conditioning")
-    conditioned_behaviors: List[str] = Field(..., description="Behaviors conditioned for this trait")
-    identity_impact: str = Field(..., description="Description of impact on identity")
-    conditioning_strategy: str = Field(..., description="Strategy used for conditioning")
+    trait: str = Field(default="", description="The personality trait being conditioned")
+    target_value: float = Field(default=0.0, description="Target trait value")
+    actual_value: float = Field(default=0.0, description="Achieved trait value after conditioning")
+    conditioned_behaviors: List[str] = Field(default_factory=list, description="Behaviors conditioned for this trait")
+    identity_impact: str = Field(default="", description="Description of impact on identity")
+    conditioning_strategy: str = Field(default="", description="Strategy used for conditioning")
+
+# For conditioning_maintenance.py - these are already mostly correct but let's ensure consistency
+
 
 class ConditioningContext:
     """
