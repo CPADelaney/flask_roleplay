@@ -117,8 +117,7 @@ class ReflexPattern:
         self.pattern_data = pattern_data
         self.procedure_name = procedure_name
         self.threshold = threshold
-        self.priority = priority
-        self.decision_system = self.decision_system_agent             
+        self.priority = priority          
         self.context_template = context_template or {}
         
         # Performance tracking
@@ -480,6 +479,7 @@ class ReflexiveSystem:
         
         # Initialize the agents
         self._init_agents()
+        self.decision_system = ReflexDecisionSystem(self)
         
         logger.info("Reflexive system initialized with Agents SDK")
     
