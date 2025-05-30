@@ -2312,6 +2312,7 @@ def _log_missing(brain):
 def build_gw_modules(brain) -> List[EnhancedWorkspaceModule]:
     modules: List[EnhancedWorkspaceModule] = []
     
+    # Add standard modules
     for attr, cls in _REGISTRY.items():
         obj = getattr(brain, attr, None)
         if obj is None:
@@ -2319,20 +2320,34 @@ def build_gw_modules(brain) -> List[EnhancedWorkspaceModule]:
             
         # Special cases that need brain reference
         if attr == "agentic_action_generator":
-            modules.append(cls(obj, brain))  # Pass brain!
+            modules.append(cls(obj, brain))
             continue
 
-        # special‑case: social_tools needs motivations; streaming_core supplies learning_manager
+        # Special case for social_tools
         if attr == "social_tools":
             modules.append(SocialBrowsingAdapter(obj, motiv=getattr(brain, "motivations", {})))
             continue
-
-    modules.append(ReflexiveOverrideAdapter(
-        brain.reflexive_system if hasattr(brain, 'reflexive_system') else None
-    ))
-    modules.append(EmergencyResponseAdapter(brain))
-    modules.append(CreativeResponseAdapter(
-        brain.creative_system if hasattr(brain, 'creative_system') else None
-    ))
+            
+        # Standard case
+        try:
+            modules.append(cls(obj))
+        except Exception as e:
+            logger.error(f"Failed to create adapter for {attr}: {e}")
+    
+    # Add special response handling modules
+    modules.extend([
+        ResponseSynthesizerAdapter(brain),
+        FallbackResponderAdapter(brain),
+        ReflexiveOverrideAdapter(
+            brain.reflexive_system if hasattr(brain, 'reflexive_system') else None
+        ),
+        EmergencyResponseAdapter(brain),
+        CreativeResponseAdapter(
+            brain.creative_system if hasattr(brain, 'creative_system') else None
+        )
+    ])
+    
+    # Log what we've loaded
+    logger.info(f"Loaded {len(modules)} GWA modules: {[m.name for m in modules]}")
     
     return modules
