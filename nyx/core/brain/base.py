@@ -7863,6 +7863,88 @@ System Prompt End
         best = max(scores.items(), key=lambda kv: kv[1])[0]
         return best
 
+    async def _get_current_need_states(self) -> Dict[str, Dict[str, Any]]:
+        """Get current need states from the needs system"""
+        if not self.needs_system:
+            return {}
+            
+        try:
+            # Update needs first to ensure we have current states
+            await self.needs_system.update_needs()
+            
+            # Get all need states
+            return self.needs_system.get_needs_state()
+        except Exception as e:
+            logger.error(f"Error getting need states: {e}")
+            return {}
+    
+    async def _get_current_mood_state(self) -> Optional[MoodState]:
+        """Get current mood state from the mood manager"""
+        if not self.mood_manager:
+            return None
+            
+        try:
+            # Get current mood
+            return await self.mood_manager.get_current_mood()
+        except Exception as e:
+            logger.error(f"Error getting mood state: {e}")
+            return None
+    
+    async def _get_current_interaction_mode(self) -> Optional[str]:
+        """Get current interaction mode from the mode integration manager"""
+        if not self.mode_integration:
+            return None
+            
+        try:
+            # Get mode from mode manager if available
+            if hasattr(self.mode_integration, 'mode_manager') and self.mode_integration.mode_manager:
+                mode = self.mode_integration.mode_manager.current_mode
+                return str(mode) if mode else None
+        except Exception as e:
+            logger.error(f"Error getting interaction mode: {e}")
+        
+        return None
+    
+    async def _get_sensory_context(self) -> Dict[str, Any]:
+        """Get recent sensory context from the multimodal integrator"""
+        if not self.multimodal_integrator:
+            return {}
+            
+        try:
+            # Get recent percepts
+            recent_percepts = await self.multimodal_integrator.get_recent_percepts(limit=5)
+            
+            # Convert to a dictionary by modality
+            context = {}
+            for percept in recent_percepts:
+                if percept.attention_weight > 0.3:  # Only include significant percepts
+                    context[str(percept.modality)] = percept.content
+            
+            return context
+        except Exception as e:
+            logger.error(f"Error getting sensory context: {e}")
+            return {}
+    
+    async def _get_meta_system_state(self) -> Tuple[List[Dict[str, Any]], Dict[str, float]]:
+        """Get bottlenecks and resource allocation from meta core"""
+        if not self.meta_core:
+            return [], {}
+            
+        try:
+            # Run cognitive cycle to get updated state
+            cycle_result = await self.meta_core.cognitive_cycle()
+            
+            # Extract bottlenecks
+            bottlenecks = cycle_result.get("bottlenecks", [])
+            
+            # Extract resource allocation
+            resource_allocation = cycle_result.get("resource_allocation", {})
+            
+            return bottlenecks, resource_allocation
+        except Exception as e:
+            logger.error(f"Error getting meta system state: {e}")
+            return [], {}
+
     async def _gather_action_context(self, context: Dict[str, Any]) -> ActionContext:
         """Gather context from all integrated systems AND workspace"""
         active_modules = context.get("active_modules", self.default_active_modules)
@@ -7907,7 +7989,22 @@ System Prompt End
         if "needs_system" in active_modules:
              action_context_data["need_states"] = await self._get_current_need_states()
         if "mode_integration" in active_modules:
-             action_context_data["interaction_mode"] = await self._get_current_interaction_mode()
+            # Get from the agentic_action_generator if available
+            if hasattr(self, 'agentic_action_generator') and self.agentic_action_generator:
+                action_context_data["interaction_mode"] = await self.agentic_action_generator._get_current_interaction_mode()
+            elif hasattr(self, 'mode_integration') and self.mode_integration:
+                # Direct access fallback
+                try:
+                    if hasattr(self.mode_integration, 'mode_manager') and self.mode_integration.mode_manager:
+                        mode = self.mode_integration.mode_manager.current_mode
+                        action_context_data["interaction_mode"] = str(mode) if mode else None
+                    else:
+                        action_context_data["interaction_mode"] = None
+                except Exception as e:
+                    logger.error(f"Error getting interaction mode: {e}")
+                    action_context_data["interaction_mode"] = None
+            else:
+                action_context_data["interaction_mode"] = None
         if "multimodal_integrator" in active_modules:
              action_context_data["sensory_context"] = await self._get_sensory_context()
         if "meta_core" in active_modules:
