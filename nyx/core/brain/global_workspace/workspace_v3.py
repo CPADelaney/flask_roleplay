@@ -319,9 +319,25 @@ class NyxEngineV3(NyxEngineV2):
             reflex = await self.unconscious.check_reflexes(text)
             if reflex:
                 return reflex
-        # otherwise conscious path
+        
+        # Submit input to workspace (outside the unconscious check!)
+        await self.ws.submit(Proposal("user", text, 0.5, "user_input"))
+        
+        # Run cognitive cycle
+        await self.tick()
+        
+        # Look specifically for AI responses
+        responses = [p for p in self.ws.proposals 
+                     if p.context_tag in ("ai_response", "response_draft", "conditioned_output")]
+        
+        if responses:
+            best = max(responses, key=lambda p: p.salience)
+            if isinstance(best.content, dict):
+                return best.content.get("response", "...")
+            return str(best.content)
+        
+        # If no confident response from workspace, fall back to parent implementation
         return await super().process_input(text)
-
 
 # ---------------------------------------------------------------------------
 # EXAMPLE MODULES (unchanged API for NyxBrain)
