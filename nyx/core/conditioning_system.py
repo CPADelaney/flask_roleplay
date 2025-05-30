@@ -272,6 +272,8 @@ class ConditioningSystem:
             2. Analyzing relevant associations for the given behavior using '_get_behavior_associations' 
                (pass the context as 'behavior_context' parameter).
             3. Predicting the likely consequences and calculating expected valence using '_calculate_expected_valence'.
+               IMPORTANT: When calling '_calculate_expected_valence', you must convert the associations list 
+               to a JSON string using json.dumps(). For example: associations_json=json.dumps(associations_list)
             4. Checking context relevance with '_check_context_relevance' (pass the context as 'current_context' parameter) 
                and getting reinforcement history with '_get_reinforcement_history'.
             5. Calculating confidence levels for predictions.
@@ -281,7 +283,7 @@ class ConditioningSystem:
             Balance exploration (trying new behaviors) with exploitation (relying on known outcomes).
             Consider both immediate and delayed consequences when evaluating behaviors.
             """,
-            model="gpt-4.1-nano", # Consider gpt-4o or similar
+            model="gpt-4.1-nano",
             tools=[
                 self._get_behavior_associations,
                 self._calculate_expected_valence,
