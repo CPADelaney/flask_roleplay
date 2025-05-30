@@ -5,7 +5,7 @@ import numpy as np
 import datetime
 import asyncio
 import json
-from typing import Dict, List, Any, Optional, Tuple, Union, AsyncGenerator, Set
+from typing import Dict, List, Any, Optional, Tuple, Union, AsyncGenerator, Set, TypedDict
 from pydantic import BaseModel, Field
 from enum import Enum
 
@@ -131,6 +131,22 @@ class IntegrationResult(BaseModel):
     bottom_up_features: Optional[Any] = None
     top_down_features: Optional[Any] = None
 
+class SensoryInputDict(TypedDict, total=False):
+    """Type definition for sensory input data"""
+    modality: str
+    data: Any
+    confidence: float
+    timestamp: str
+    metadata: Dict[str, Any]
+
+class ExpectationDict(TypedDict, total=False):
+    """Type definition for expectation data"""
+    target_modality: str
+    pattern: Any
+    strength: float
+    source: str
+    priority: float
+
 # --- Constants for Feature Classification ---
 POSITIVE_TASTES = {"sweet", "umami", "fatty", "savory"}
 NEGATIVE_TASTES = {"bitter", "sour", "metallic", "spoiled"}
@@ -180,9 +196,9 @@ class MultimodalIntegratorContext:
 @function_tool
 async def process_sensory_input(
     ctx: RunContextWrapper[MultimodalIntegratorContext],
-    input_data: Dict[str, Any],
-    expectations: Optional[List[Dict[str, Any]]] = None
-) -> Dict[str, Any]:
+    input_data: dict,  # Changed from Dict[str, Any] to dict
+    expectations: list = None  # Changed from Optional[List[Dict[str, Any]]] to list with default None
+) -> dict:  # Changed return type to dict
     """
     Process sensory input using both bottom-up and top-down pathways.
     
