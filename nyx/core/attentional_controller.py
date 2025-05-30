@@ -161,7 +161,7 @@ class AttentionalController:
             ],
             output_type=AttentionDecisionOutput,
             input_guardrails=[
-                InputGuardrail(guardrail_function=self.input_validation)
+                self.input_validation  # This is already an InputGuardrail object
             ],
             model="gpt-4.1-nano",
             model_settings=ModelSettings(
