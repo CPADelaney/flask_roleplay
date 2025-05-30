@@ -386,8 +386,19 @@ class BaseProcessor:
             return obj.__class__.__name__
         elif hasattr(obj, 'name'):
             return obj.name
+        elif hasattr(obj, 'guardrail_function'):
+            # For InputGuardrail objects
+            func = obj.guardrail_function
+            if hasattr(func, '__name__'):
+                return f"InputGuardrail[{func.__name__}]"
+            else:
+                return "InputGuardrail[unknown]"
         else:
-            return str(type(obj).__name__ if hasattr(type(obj), '__name__') else str(obj))
+            # Safe fallback that won't cause AttributeError
+            try:
+                return str(type(obj).__name__)
+            except:
+                return str(obj)[:50]  # Truncate to avoid huge outputs
     
     async def _handle_error(self, error: Exception, context: Dict[str, Any]) -> Dict[str, Any]:
         """Handle errors during processing"""
