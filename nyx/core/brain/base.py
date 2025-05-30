@@ -4140,6 +4140,14 @@ System Prompt End
         
         context = context or {}
         
+        # Extract parameters from kwargs first
+        use_thinking = kwargs.get('use_thinking', None)
+        use_conditioning = kwargs.get('use_conditioning', None)
+        use_coordination = kwargs.get('use_coordination', None)
+        thinking_level = kwargs.get('thinking_level', 1)
+        mode = kwargs.get('mode', 'auto')
+        use_hierarchical_memory = kwargs.get('use_hierarchical_memory', False)
+        
         # ── 1️⃣ Use GWA to gather multi-module context ──
         if self.workspace_engine:
             # Submit input to workspace
@@ -4165,7 +4173,6 @@ System Prompt End
     
         # 2️⃣  Legacy pipeline (unchanged apart from early‑return above)
         # ------------------------------------------------------------------
-        context = context or {}
         start_time = datetime.datetime.now()
         
         # Auto-detect features if not specified
@@ -4254,7 +4261,7 @@ System Prompt End
             "coordination": use_coordination
         }
         
-        return await self._process_input_full(user_input, context, **kwargs)
+        return processing_result
 
     async def _gather_workspace_context(self) -> Dict[str, Any]:
         """Gather enriched context from workspace modules"""
@@ -4300,6 +4307,17 @@ System Prompt End
     ) -> Dict[str, Any]:
         if not self.initialized:
             await self.initialize()
+        
+        # Extract parameters from kwargs first
+        use_thinking = kwargs.get('use_thinking', None)
+        use_conditioning = kwargs.get('use_conditioning', None)
+        use_coordination = kwargs.get('use_coordination', None)
+        thinking_level = kwargs.get('thinking_level', 1)
+        mode = kwargs.get('mode', 'auto')
+        use_hierarchical_memory = kwargs.get('use_hierarchical_memory', False)
+        
+        context = context or {}
+        start_time = datetime.datetime.now()
         
         # ── 1️⃣ Check if GWA has a high-confidence complete response ──
         if self.workspace_engine and context.get("workspace_context", {}).get("high_confidence_insights"):
