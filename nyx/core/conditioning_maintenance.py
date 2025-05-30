@@ -32,54 +32,52 @@ class MaintenanceRecommendation(BaseModel):
 
 class BalanceAnalysisOutput(BaseModel):
     """Output schema for personality balance analysis"""
-    # CHANGE: Make all fields Optional and provide default=None
-    is_balanced: Optional[bool] = Field(default=None, description="Whether personality is balanced")
-    imbalances: Optional[List[Dict[str, Any]]] = Field(default=None, description="Detected imbalances")
-    trait_recommendations: Optional[List[Dict[str, Any]]] = Field(default=None, description="Trait recommendations")
-    behavior_recommendations: Optional[List[Dict[str, Any]]] = Field(default=None, description="Behavior recommendations")
-    balance_score: Optional[float] = Field(default=None, description="Overall balance score (0.0-1.0)")
-    analysis: Optional[str] = Field(default=None, description="Analysis of personality balance")
+    is_balanced: bool = Field(default=False, description="Whether personality is balanced")
+    imbalances: List[Dict[str, Any]] = Field(default_factory=list, description="Detected imbalances")
+    trait_recommendations: List[Dict[str, Any]] = Field(default_factory=list, description="Trait recommendations")
+    behavior_recommendations: List[Dict[str, Any]] = Field(default_factory=list, description="Behavior recommendations")
+    balance_score: float = Field(default=0.0, description="Overall balance score (0.0-1.0)")
+    analysis: str = Field(default="", description="Analysis of personality balance")
 
 class AssociationConsolidationOutput(BaseModel):
     """Output schema for association consolidation"""
-    # CHANGE: Make all fields Optional and provide default=None
-    consolidations: Optional[List[Dict[str, Any]]] = Field(default=None, description="Consolidations performed")
-    removed_keys: Optional[List[str]] = Field(default=None, description="Association keys removed")
-    strengthened_keys: Optional[List[str]] = Field(default=None, description="Association keys strengthened")
-    efficiency_gain: Optional[float] = Field(default=None, description="Efficiency gain from consolidation (0.0-1.0)")
-    reasoning: Optional[str] = Field(default=None, description="Reasoning for consolidations")
+    consolidations: List[Dict[str, Any]] = Field(default_factory=list, description="Consolidations performed")
+    removed_keys: List[str] = Field(default_factory=list, description="Association keys removed")
+    strengthened_keys: List[str] = Field(default_factory=list, description="Association keys strengthened")
+    efficiency_gain: float = Field(default=0.0, description="Efficiency gain from consolidation (0.0-1.0)")
+    reasoning: str = Field(default="", description="Reasoning for consolidations")
 
 class MaintenanceSummaryOutput(BaseModel):
-    """Output schema for maintenance run summary."""
-    # CHANGE: Make tasks_performed Optional as well
-    tasks_performed: Optional[List[Dict[str, Any]]] = Field(
-        default_factory=list, # Keep default_factory for initialization convenience
-        description="Tasks performed during the maintenance run."
+    """Output schema for maintenance run summary"""
+    tasks_performed: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="Tasks performed during the maintenance run"
     )
-    time_taken_seconds: Optional[float] = Field(
-        default=None,
-        description="Total time taken for the maintenance run in seconds."
+    time_taken_seconds: float = Field(
+        default=0.0,
+        description="Total time taken for the maintenance run in seconds"
     )
-    associations_modified: Optional[int] = Field(
-        default=None,
-        description="Number of conditioning associations modified (created, deleted, updated)."
+    associations_modified: int = Field(
+        default=0,
+        description="Number of conditioning associations modified"
     )
-    traits_adjusted: Optional[int] = Field(
-        default=None,
-        description="Number of personality traits adjusted."
+    traits_adjusted: int = Field(
+        default=0,
+        description="Number of personality traits adjusted"
     )
-    extinction_count: Optional[int] = Field(
-        default=None,
-        description="Number of associations removed due to extinction."
+    extinction_count: int = Field(
+        default=0,
+        description="Number of associations removed due to extinction"
     )
-    improvements: Optional[List[str]] = Field(
-        default=None,
-        description="List of key improvements or changes made to the system during the run."
+    improvements: List[str] = Field(
+        default_factory=list,
+        description="List of key improvements made during the run"
     )
-    next_maintenance_recommendation: Optional[str] = Field(
-        default=None,
-        description="Recommendation for the focus of the next maintenance run."
+    next_maintenance_recommendation: str = Field(
+        default="",
+        description="Recommendation for the next maintenance run"
     )
+
 
 
 class MaintenanceContext:
