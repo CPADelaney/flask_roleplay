@@ -63,13 +63,13 @@ class ImproveResult(BaseModel):
 
 class MetaCognitiveOutput(BaseModel):
     """Structured output for meta-cognitive results"""
-    analysis: Dict[str, Any]
+    analysis: Dict[str, Any] = Field(default_factory=dict)
     bottlenecks: List[Dict[str, Any]] = Field(default_factory=list)
     strategies: List[Dict[str, Any]] = Field(default_factory=list)
     improvements: List[Dict[str, Any]] = Field(default_factory=list)
     allocation_changes: Dict[str, float] = Field(default_factory=dict)
     prediction: Optional[Dict[str, Any]] = None
-    cycle_info: Dict[str, Any]
+    cycle_info: Dict[str, Any] = Field(default_factory=dict)
 
 class GuardrailOutputData(BaseModel):
     is_safe: bool
