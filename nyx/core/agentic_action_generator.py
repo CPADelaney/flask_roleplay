@@ -827,7 +827,7 @@ class EnhancedAgenticActionGenerator:
         
         try:
             # Get current hormone levels
-            hormone_levels = self.hormone_system.get_hormone_levels()
+            hormone_levels = await self.hormone_system.get_hormone_levels()
             
             # Endoryx (endorphins) affects expression and leisure
             if "endoryx" in hormone_levels:
