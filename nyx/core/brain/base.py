@@ -4133,42 +4133,31 @@ System Prompt End
         self,
         user_input: str,
         context: Dict[str, Any] | None = None,
-        *,
-        use_thinking: bool | None = None,
-        use_conditioning: bool | None = None,
-        use_coordination: bool | None = None,
-        thinking_level: int = 1,
-        mode: str = "auto",
+        **kwargs
     ) -> Dict[str, Any]:
-        """
-        • First try the Global‑Workspace engine.
-        • If it returns a *complete* answer (confident flag) we short‑circuit.
-        • Otherwise the workspace’s draft is copied into `context["workspace_draft"]`
-          and the legacy pipeline continues exactly as before.
-        """
-    
         if not self.initialized:
             await self.initialize()
-    
+        
         context = context or {}
-    
-        # ── 1️⃣ fast‑path through the workspace ──────────────────────────────
+        
+        # ── 1️⃣ Use GWA to gather multi-module context ──
         if self.workspace_engine:
-            gw_reply = await self.workspace_engine.process_input(user_input)
-    
-            # The engine writes its last decision into ws.state
-            confident = gw_reply not in ("…", "", None)
-            if confident:
-                return {
-                    "processing_mode": "global_workspace",
-                    "main_message": gw_reply,
-                    "response_time": 0.0,
-                    "features_used": {"thinking": False, "conditioning": False, "coordination": False},
-                }
-    
-            # No decisive reply – pass it down as a *hint* for the big pipeline
-            context["workspace_draft"] = gw_reply
-
+            # Submit input to workspace
+            await self.workspace_engine.ws.submit(
+                Proposal("user_input", user_input, 1.0, context_tag="user_input")
+            )
+            
+            # Let modules react and gather context (don't wait for a full response)
+            for _ in range(2):  # Just 2 cycles for context gathering
+                await asyncio.sleep(0.1)  # Brief pause for module processing
+            
+            # Collect enriched context from workspace
+            gw_context = await self._gather_workspace_context()
+            context["workspace_context"] = gw_context
+            
+            # If workspace has high-confidence insights, include them
+            if gw_context.get("high_confidence_insights"):
+                context["gw_insights"] = gw_context["high_confidence_insights"]
     
         # 2️⃣  Legacy pipeline (unchanged apart from early‑return above)
         # ------------------------------------------------------------------
@@ -4261,35 +4250,74 @@ System Prompt End
             "coordination": use_coordination
         }
         
-        return processing_result
+        return await self._process_input_full(user_input, context, **kwargs)
+
+    async def _gather_workspace_context(self) -> Dict[str, Any]:
+        """Gather enriched context from workspace modules"""
+        props, focus = await self.workspace_engine.ws.snapshot()
+        
+        context = {
+            "emotional_signals": [],
+            "memory_associations": [],
+            "spatial_context": [],
+            "unconscious_insights": [],
+            "cross_modal_bindings": [],
+            "high_confidence_insights": []
+        }
+        
+        # Collect insights from all modules
+        for p in props[-100:]:  # Recent proposals
+            if p.salience > 0.8:  # High confidence
+                context["high_confidence_insights"].append({
+                    "source": p.source,
+                    "content": p.content,
+                    "tag": p.context_tag
+                })
+            
+            # Categorize by type
+            if p.context_tag == "emotion_spike":
+                context["emotional_signals"].append(p.content)
+            elif p.context_tag == "memory_recall":
+                context["memory_associations"].extend(p.content.get("memories", []))
+            elif p.context_tag == "spatial_update":
+                context["spatial_context"].append(p.content)
+            elif p.context_tag == "promoted_from_unconscious":
+                context["unconscious_insights"].append(p.content)
+            elif p.context_tag == "binding":
+                context["cross_modal_bindings"].append(p.content)
+        
+        return context
 
     async def generate_response(
         self,
         user_input: str,
         context: Dict[str, Any] | None = None,
-        *,
-        use_thinking: bool | None = None,
-        use_conditioning: bool | None = None,
-        use_coordination: bool | None = None,
-        use_hierarchical_memory: bool | None = None,
-        mode: str = "auto",
+        **kwargs
     ) -> Dict[str, Any]:
-    
         if not self.initialized:
             await self.initialize()
-    
-        # ── 1️⃣ try workspace for a ready‑made answer ────────────────────────
-        if self.workspace_engine:
-            gw_reply = await self.workspace_engine.process_input(user_input)
-            if gw_reply not in ("…", "", None):
-                return {
-                    "message": gw_reply,
-                    "epistemic_status": "confident",
-                    "processor_metadata": {"mode": "global_workspace"},
-                }
-
-        start_time = datetime.datetime.now()
-    
+        
+        # ── 1️⃣ Check if GWA has a high-confidence complete response ──
+        if self.workspace_engine and context.get("workspace_context", {}).get("high_confidence_insights"):
+            # Look for complete responses from specialized modules
+            for insight in context["workspace_context"]["high_confidence_insights"]:
+                if insight["tag"] == "complete_response" and insight.get("confidence", 0) > 0.9:
+                    # Use GWA response but still apply safety and formatting
+                    gwa_response = insight["content"]
+                    
+                    # Apply conditioning if enabled
+                    if kwargs.get("use_conditioning") and self.conditioned_input_processor:
+                        gwa_response = await self.conditioned_input_processor.modify_response(
+                            gwa_response, context
+                        )
+                    
+                    return {
+                        "message": gwa_response,
+                        "epistemic_status": "confident",
+                        "processor_metadata": {"mode": "global_workspace_override"},
+                        "features_used": kwargs
+                    }
+        
         # ── 2️⃣ otherwise call process_input() which now embeds workspace hints
         input_result = await self.process_input(
             user_input,
@@ -7791,11 +7819,10 @@ System Prompt End
         return best
 
     async def _gather_action_context(self, context: Dict[str, Any]) -> ActionContext:
-        """
-        Gather context from all integrated systems, respecting the active_modules set.
-        """
+        """Gather context from all integrated systems AND workspace"""
         active_modules = context.get("active_modules", self.default_active_modules)
         user_id = self._get_current_user_id_from_context(context)
+    
 
         # Initialize with basic context
         action_context_data = {
@@ -7862,6 +7889,28 @@ System Prompt End
         # For now, assume ActionGenerator knows available actions or gets them via a tool
         action_context_data["available_actions"] = await self._get_all_available_actions_list() # Helper needed
 
+        # ── Add workspace context if available ──
+        if "workspace_context" in context:
+            ws_ctx = context["workspace_context"]
+            
+            # Enhance emotional context
+            if ws_ctx.get("emotional_signals"):
+                action_context_data["emotional_signals"] = ws_ctx["emotional_signals"]
+            
+            # Add unconscious insights
+            if ws_ctx.get("unconscious_insights"):
+                action_context_data["unconscious_insights"] = ws_ctx["unconscious_insights"]
+            
+            # Add cross-modal bindings
+            if ws_ctx.get("cross_modal_bindings"):
+                action_context_data["multimodal_bindings"] = ws_ctx["cross_modal_bindings"]
+            
+            # Use action context suggestions
+            if ws_ctx.get("high_confidence_insights"):
+                for insight in ws_ctx["high_confidence_insights"]:
+                    if insight["tag"] == "action_context":
+                        action_context_data["workspace_action_suggestion"] = insight["content"]
+        
         return ActionContext(**action_context_data)
 
     async def _get_all_available_actions_list(self) -> List[str]:
