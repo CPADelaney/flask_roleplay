@@ -786,57 +786,73 @@ class ConditioningSystem:
         
     @staticmethod
     @function_tool
-    async def _calculate_expected_valence(ctx: RunContextWrapper,
-                                    associations: List[Dict[str, Any]]) -> Dict[str, float]: # LLM provides this list based on previous tool calls
-        tool_name = "_calculate_expected_valence"
-        logger.debug(f"[{tool_name}] Called. INPUT associations type: {type(associations)}, value: {associations!r}")
+    async def _calculate_expected_valence(
+        ctx: RunContextWrapper,
+        associations_json: str  # Accept as JSON string to avoid schema issues
+    ) -> Dict[str, float]:
+        """
+        Calculate expected valence from a list of associations.
         
-        if not isinstance(associations, list): 
-            logger.warning(f"[{tool_name}] Expected 'associations' to be a list, but got {type(associations)}. Value: {associations!r}. Returning default.")
-            return {"expected_valence": 0.0, "confidence": 0.0, "error": "Malformed associations input, not a list"}
-
-        if not associations: 
-            return_value = {"expected_valence": 0.0, "confidence": 0.1} # Low confidence if no associations
+        Args:
+            associations_json: JSON string containing list of associations
+            
+        Returns:
+            Dictionary with expected_valence, confidence, and other metrics
+        """
+        tool_name = "_calculate_expected_valence"
+        logger.debug(f"[{tool_name}] Called with associations_json: {associations_json[:200]}...")
+        
+        # Parse the JSON string
+        try:
+            associations = json.loads(associations_json) if associations_json else []
+        except json.JSONDecodeError as e:
+            logger.error(f"[{tool_name}] Failed to parse associations_json: {e}")
+            return {"expected_valence": 0.0, "confidence": 0.0, "error": f"Invalid JSON: {str(e)}"}
+        
+        if not isinstance(associations, list):
+            logger.warning(f"[{tool_name}] Expected list but got {type(associations)}")
+            return {"expected_valence": 0.0, "confidence": 0.0, "error": "Associations must be a list"}
+        
+        if not associations:
+            return_value = {"expected_valence": 0.0, "confidence": 0.1}
             logger.debug(f"[{tool_name}] No associations provided. Returning: {return_value!r}")
             return return_value
         
         total_strength = 0.0
         weighted_valence = 0.0
-        total_reinforcements = 0 
-
+        total_reinforcements = 0
         valid_assoc_count = 0
+        
         for i, assoc in enumerate(associations):
             if not isinstance(assoc, dict):
-                logger.warning(f"[{tool_name}] Item at index {i} in 'associations' is not a dict: {type(assoc)}, value: {assoc!r}. Skipping this item.")
+                logger.warning(f"[{tool_name}] Item at index {i} is not a dict: {type(assoc)}")
                 continue
             try:
                 strength = float(assoc.get("strength", 0.0))
                 valence = float(assoc.get("valence", 0.0))
                 reinforcements = int(assoc.get("reinforcement_count", 0))
-
+    
                 total_strength += strength
                 weighted_valence += strength * valence
                 total_reinforcements += reinforcements
                 valid_assoc_count += 1
-            except (TypeError, ValueError) as e: 
-                logger.error(f"[{tool_name}] TypeError or ValueError processing association item: {assoc!r}. Error: {e}", exc_info=True)
-                continue 
+            except (TypeError, ValueError) as e:
+                logger.error(f"[{tool_name}] Error processing association at index {i}: {e}", exc_info=True)
+                continue
         
-        if valid_assoc_count == 0: # If all items were invalid
-             return_value = {"expected_valence": 0.0, "confidence": 0.0, "error": "No valid associations found in input"}
-             logger.debug(f"[{tool_name}] No valid associations. Returning: {return_value!r}")
-             return return_value
-
+        if valid_assoc_count == 0:
+            return_value = {"expected_valence": 0.0, "confidence": 0.0, "error": "No valid associations found in input"}
+            logger.debug(f"[{tool_name}] No valid associations. Returning: {return_value!r}")
+            return return_value
+    
         expected_valence = (weighted_valence / total_strength) if total_strength > 0 else 0.0
         
-        # Confidence calculation:
-        # Average strength component (scaled, max 0.7)
+        # Confidence calculation
         avg_strength_component = (total_strength / valid_assoc_count if valid_assoc_count > 0 else 0.0) * 0.7
-        # Reinforcement history component (scaled by log, max 0.3)
-        reinforcement_component = (min(1.0, math.log1p(total_reinforcements) / math.log1p(100))) * 0.3 # log1p(100) ~ 4.6, so scales up to 100 reinforcements for full impact
+        reinforcement_component = (min(1.0, math.log1p(total_reinforcements) / math.log1p(100))) * 0.3
         
         confidence = min(1.0, avg_strength_component + reinforcement_component)
-        confidence = max(0.1, confidence) # Minimum confidence floor
+        confidence = max(0.1, confidence)
         
         return_value = {
             "expected_valence": round(expected_valence, 3),
