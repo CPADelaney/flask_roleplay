@@ -70,6 +70,13 @@ class ProcessingManager:
                 logger.info("Initialized serial processor as fallback")
             except Exception as inner_e:
                 logger.critical(f"Failed to initialize even fallback processor: {str(inner_e)}")
+
+    def safe_get_attr(obj, attr_name, default=None):
+        """Safely get an attribute from an object or dict"""
+        if isinstance(obj, dict):
+            return obj.get(attr_name, default)
+        return getattr(obj, attr_name, default)
+
     
     def _register_error_handlers(self):
         """Register error handlers for processor failures"""
@@ -130,9 +137,11 @@ class ProcessingManager:
                 return {"registered": False, "error": "Issue tracker not available"}
         return handle_error
     
+    # Modified error handling in manager.py process_input method
     async def process_input(self, user_input: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
         """Process input using the appropriate processor based on mode selection"""
         context = context or {}
+    
         
         try:
             # Add debug logging
@@ -180,6 +189,15 @@ class ProcessingManager:
             end_time = datetime.datetime.now()
             processing_time = (end_time - start_time).total_seconds()
             
+            # Check for tripwire or other security flags
+            if hasattr(result, 'tripwire_triggered') and result.tripwire_triggered:
+                # Handle tripwire case
+                logger.warning("Tripwire triggered during processing")
+                result["tripwire_triggered"] = True
+            elif isinstance(result, dict) and result.get('tripwire_triggered', False):
+                # Handle dict case
+                logger.warning("Tripwire triggered during processing (dict result)")
+            
             # Update mode metrics if mode selector available
             if self.mode_selector:
                 self.mode_selector.update_mode_metrics(
@@ -222,22 +240,49 @@ class ProcessingManager:
                 # Fall back to serial processing
                 logger.info(f"Falling back to serial processing after error")
                 return await self.processors["serial"].process_input(user_input, context)
+        except Exception as e:
+            # More detailed error logging
+            logger.error(f"Error in processing input: {type(e).__name__}: {str(e)}")
+            
+            # Create a proper fallback result structure
+            fallback_result = {
+                "error": f"Processing failed: {str(e)}",
+                "processing_mode": "error",
+                "user_input": user_input,
+                "emotional_state": {},
+                "memories": [],
+                "memory_count": 0,
+                "has_experience": False,
+                "experience_response": None,
+                "cross_user_experience": False,
+                "memory_id": None,
+                "response_time": 0.0,
+                "tripwire_triggered": False  # Ensure this field exists
+            }
+            
+            # Try fallback processing with better error handling
+            try:
+                processor = self.processors.get("serial")
+                if processor:
+                    logger.info("Attempting fallback to serial processing")
+                    # Pass a flag to indicate this is a fallback
+                    fallback_context = context.copy()
+                    fallback_context["is_fallback"] = True
+                    fallback_context["original_error"] = str(e)
+                    
+                    result = await processor.process_input(user_input, fallback_context)
+                    
+                    # Ensure result is a dict and has required fields
+                    if not isinstance(result, dict):
+                        result = {"error": "Invalid result format", **fallback_result}
+                    else:
+                        # Merge with fallback defaults to ensure all fields exist
+                        result = {**fallback_result, **result}
+                    
+                    return result
             except Exception as fallback_error:
-                # If even the fallback fails, return a basic error result
                 logger.critical(f"Fallback processing failed: {str(fallback_error)}")
-                return {
-                    "error": f"Processing failed: {str(e)}",
-                    "processing_mode": "error",
-                    "user_input": user_input,
-                    "emotional_state": {},  # Add default empty emotional state
-                    "memories": [],
-                    "memory_count": 0,
-                    "has_experience": False,
-                    "experience_response": None,
-                    "cross_user_experience": False,
-                    "memory_id": None,
-                    "response_time": 0.0
-                }
+                return fallback_result
     
     async def _determine_processing_mode(self, user_input: str, context: Dict[str, Any]) -> str:
         """Legacy method to determine optimal processing mode (used as fallback)"""
