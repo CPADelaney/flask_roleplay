@@ -118,6 +118,7 @@ class ReflexPattern:
         self.procedure_name = procedure_name
         self.threshold = threshold
         self.priority = priority
+        self.decision_system = self.decision_system_agent             
         self.context_template = context_template or {}
         
         # Performance tracking
