@@ -1295,8 +1295,8 @@ class TemporalPerceptionSystem:
             if days_elapsed >= 365 and self.active_time_scales["years"] < 1.0:
                 self.active_time_scales["years"] = min(1.0, days_elapsed / 365)
             
-            transition = await detect_time_scale_transition(
-                previous_state, current_state
+            transition = await _detect_time_scale_transition_impl(
+                TimeScaleInput(previous_state=previous_state, current_state=current_state)
             )
             
             # Update session tracking
