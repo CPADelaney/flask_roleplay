@@ -207,9 +207,17 @@ class ProcessingManager:
                 # If even the fallback fails, return a basic error result
                 logger.critical(f"Fallback processing failed: {str(fallback_error)}")
                 return {
-                    "error": f"Processing failed: {str(e)}. Fallback also failed: {str(fallback_error)}",
+                    "error": f"Processing failed: {str(e)}",
                     "processing_mode": "error",
-                    "user_input": user_input
+                    "user_input": user_input,
+                    "emotional_state": {},  # Add default empty emotional state
+                    "memories": [],
+                    "memory_count": 0,
+                    "has_experience": False,
+                    "experience_response": None,
+                    "cross_user_experience": False,
+                    "memory_id": None,
+                    "response_time": 0.0
                 }
     
     async def _determine_processing_mode(self, user_input: str, context: Dict[str, Any]) -> str:
