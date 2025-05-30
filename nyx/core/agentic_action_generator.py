@@ -882,8 +882,11 @@ class EnhancedAgenticActionGenerator:
             return influences
         
         try:
-            # Get active goals
-            active_goals = await self.goal_system.get_active_goals()
+            # Get active goals - CHANGED FROM get_active_goals()
+            prioritized_goals = await self.goal_system.get_prioritized_goals()
+            
+            # Filter for only active/pending goals
+            active_goals = [g for g in prioritized_goals if g.status in ["active", "pending"]]
             
             if active_goals:
                 # Having active goals increases competence and self-improvement motivations
@@ -891,7 +894,7 @@ class EnhancedAgenticActionGenerator:
                 influences["self_improvement"] = min(0.3, len(active_goals) * 0.1)
                 
                 # High priority goals increase autonomy
-                max_priority = max(goal.get("priority", 0) for goal in active_goals)
+                max_priority = max(goal.priority for goal in active_goals)
                 influences["autonomy"] = max_priority * 0.2
                 
                 # Goals reduce leisure seeking
@@ -911,7 +914,13 @@ class EnhancedAgenticActionGenerator:
         
         try:
             # Get current user's relationship if available
-            user_id = self.system_context.get_state().get("user_id") if self.system_context else None
+            if self.system_context and hasattr(self.system_context, 'system_state'):
+                if isinstance(self.system_context.system_state, dict):
+                    user_id = self.system_context.system_state.get("user_id")
+                else:
+                    user_id = None
+            else:
+                user_id = None
             
             if user_id:
                 relationship = await self.relationship_manager.get_relationship_state(user_id)
@@ -2136,7 +2145,20 @@ class EnhancedAgenticActionGenerator:
         # 4. Apply identity influences from traits
         if self.identity_evolution:
             try:
-                identity_state = await self.identity_evolution.get_identity_state()
+                # Make sure we're calling the actual method, not a FunctionTool wrapper
+                if hasattr(self.identity_evolution, 'get_identity_state'):
+                    # Check if it's a method or a FunctionTool
+                    get_identity_state_method = getattr(self.identity_evolution, 'get_identity_state')
+                    
+                    # If it's wrapped in a FunctionTool, we might need to access it differently
+                    if callable(get_identity_state_method):
+                        identity_state = await get_identity_state_method()
+                    else:
+                        # If it's not directly callable, skip this section
+                        logger.warning("get_identity_state is not callable, skipping identity influences")
+                        identity_state = {}
+                else:
+                    identity_state = {}
                 
                 # Extract top traits and use them to influence motivation
                 if "top_traits" in identity_state:
