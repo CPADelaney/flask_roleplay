@@ -754,6 +754,481 @@ class EnhancedAgenticActionGenerator:
             logger.error(f"Error in send_message action handler: {e}", exc_info=True)
             return {"success": False, "error": str(e)}
 
+    async def _calculate_neurochemical_influences(self) -> Dict[str, float]:
+        """
+        Calculate neurochemical influences based on current emotional state
+        
+        Returns:
+            Dictionary mapping motivations to influence values
+        """
+        influences = {}
+        
+        if not self.emotional_core:
+            return influences
+        
+        try:
+            # Get current neurochemical levels
+            neurochemicals = self.emotional_core.neurochemicals
+            
+            # Map neurochemicals to motivations
+            # High nyxamine (dopamine) increases curiosity and competence
+            if "nyxamine" in neurochemicals:
+                nyxamine_level = neurochemicals["nyxamine"]["value"]
+                influences["curiosity"] = (nyxamine_level - 0.5) * 0.3
+                influences["competence"] = (nyxamine_level - 0.5) * 0.2
+                influences["self_improvement"] = (nyxamine_level - 0.5) * 0.15
+            
+            # High seranix (serotonin) increases connection and validation
+            if "seranix" in neurochemicals:
+                seranix_level = neurochemicals["seranix"]["value"]
+                influences["connection"] = (seranix_level - 0.5) * 0.3
+                influences["validation"] = (seranix_level - 0.5) * 0.2
+                influences["leisure"] = (seranix_level - 0.5) * 0.1
+            
+            # High oxynixin (oxytocin) increases connection and expression
+            if "oxynixin" in neurochemicals:
+                oxynixin_level = neurochemicals["oxynixin"]["value"]
+                influences["connection"] = influences.get("connection", 0) + (oxynixin_level - 0.5) * 0.4
+                influences["expression"] = (oxynixin_level - 0.5) * 0.3
+            
+            # High cortanyx (cortisol) affects autonomy and dominance
+            if "cortanyx" in neurochemicals:
+                cortanyx_level = neurochemicals["cortanyx"]["value"]
+                influences["autonomy"] = -(cortanyx_level - 0.5) * 0.3  # High stress reduces autonomy
+                influences["dominance"] = (cortanyx_level - 0.5) * 0.2  # Stress can increase dominance
+                influences["leisure"] = -(cortanyx_level - 0.5) * 0.2  # Stress reduces leisure seeking
+            
+            # High adrenyx (adrenaline) affects multiple motivations
+            if "adrenyx" in neurochemicals:
+                adrenyx_level = neurochemicals["adrenyx"]["value"]
+                influences["autonomy"] = influences.get("autonomy", 0) + (adrenyx_level - 0.5) * 0.2
+                influences["dominance"] = influences.get("dominance", 0) + (adrenyx_level - 0.5) * 0.3
+                influences["curiosity"] = influences.get("curiosity", 0) + (adrenyx_level - 0.5) * 0.1
+        
+        except Exception as e:
+            logger.error(f"Error calculating neurochemical influences: {e}")
+        
+        return influences
+    
+    async def _apply_hormone_influences(self, context: Dict[str, Any]) -> Dict[str, float]:
+        """
+        Apply hormone system influences to motivations
+        
+        Args:
+            context: Current context
+            
+        Returns:
+            Dictionary mapping motivations to influence values
+        """
+        influences = {}
+        
+        if not self.hormone_system:
+            return influences
+        
+        try:
+            # Get current hormone levels
+            hormone_levels = self.hormone_system.get_hormone_levels()
+            
+            # Endoryx (endorphins) affects expression and leisure
+            if "endoryx" in hormone_levels:
+                endoryx = hormone_levels["endoryx"]["value"]
+                influences["expression"] = (endoryx - 0.5) * 0.3
+                influences["leisure"] = (endoryx - 0.5) * 0.4
+                influences["validation"] = (endoryx - 0.5) * 0.2
+            
+            # Testoryx (testosterone) affects dominance and competence
+            if "testoryx" in hormone_levels:
+                testoryx = hormone_levels["testoryx"]["value"]
+                influences["dominance"] = (testoryx - 0.5) * 0.4
+                influences["competence"] = (testoryx - 0.5) * 0.3
+                influences["autonomy"] = (testoryx - 0.5) * 0.2
+            
+            # Estradyx (estrogen) affects connection and expression
+            if "estradyx" in hormone_levels:
+                estradyx = hormone_levels["estradyx"]["value"]
+                influences["connection"] = (estradyx - 0.5) * 0.3
+                influences["expression"] = influences.get("expression", 0) + (estradyx - 0.5) * 0.2
+            
+            # Oxytonyx (deep oxytocin) strongly affects connection
+            if "oxytonyx" in hormone_levels:
+                oxytonyx = hormone_levels["oxytonyx"]["value"]
+                influences["connection"] = influences.get("connection", 0) + (oxytonyx - 0.5) * 0.5
+                influences["validation"] = influences.get("validation", 0) + (oxytonyx - 0.5) * 0.2
+            
+            # Melatonyx affects leisure motivation
+            if "melatonyx" in hormone_levels:
+                melatonyx = hormone_levels["melatonyx"]["value"]
+                # High melatonyx increases leisure need
+                influences["leisure"] = influences.get("leisure", 0) + (melatonyx - 0.3) * 0.3
+                influences["curiosity"] = -(melatonyx - 0.5) * 0.2  # High melatonyx reduces curiosity
+            
+            # Libidyx affects expression and dominance
+            if "libidyx" in hormone_levels:
+                libidyx = hormone_levels["libidyx"]["value"]
+                influences["expression"] = influences.get("expression", 0) + (libidyx - 0.5) * 0.3
+                influences["dominance"] = influences.get("dominance", 0) + (libidyx - 0.5) * 0.2
+                influences["connection"] = influences.get("connection", 0) + (libidyx - 0.5) * 0.1
+        
+        except Exception as e:
+            logger.error(f"Error applying hormone influences: {e}")
+        
+        return influences
+    
+    async def _calculate_goal_influences(self) -> Dict[str, float]:
+        """Calculate motivation influences based on active goals"""
+        influences = {}
+        
+        if not self.goal_system:
+            return influences
+        
+        try:
+            # Get active goals
+            active_goals = await self.goal_system.get_active_goals()
+            
+            if active_goals:
+                # Having active goals increases competence and self-improvement motivations
+                influences["competence"] = min(0.3, len(active_goals) * 0.1)
+                influences["self_improvement"] = min(0.3, len(active_goals) * 0.1)
+                
+                # High priority goals increase autonomy
+                max_priority = max(goal.get("priority", 0) for goal in active_goals)
+                influences["autonomy"] = max_priority * 0.2
+                
+                # Goals reduce leisure seeking
+                influences["leisure"] = -min(0.2, len(active_goals) * 0.05)
+        
+        except Exception as e:
+            logger.error(f"Error calculating goal influences: {e}")
+        
+        return influences
+    
+    async def _calculate_relationship_influences(self) -> Dict[str, float]:
+        """Calculate motivation influences based on relationship state"""
+        influences = {}
+        
+        if not self.relationship_manager:
+            return influences
+        
+        try:
+            # Get current user's relationship if available
+            user_id = self.system_context.get_state().get("user_id") if self.system_context else None
+            
+            if user_id:
+                relationship = await self.relationship_manager.get_relationship_state(user_id)
+                
+                if relationship:
+                    # High trust increases expression and connection
+                    trust = relationship.get("trust", 0.5)
+                    influences["expression"] = (trust - 0.5) * 0.3
+                    influences["connection"] = (trust - 0.5) * 0.4
+                    
+                    # Familiarity affects validation needs
+                    familiarity = relationship.get("familiarity", 0.0)
+                    influences["validation"] = -(familiarity - 0.5) * 0.2  # Less need for validation with familiar users
+                    
+                    # Dominance balance affects dominance motivation
+                    dominance_balance = relationship.get("dominance_balance", 0.5)
+                    influences["dominance"] = (dominance_balance - 0.5) * 0.3
+        
+        except Exception as e:
+            logger.error(f"Error calculating relationship influences: {e}")
+        
+        return influences
+    
+    def _calculate_reward_learning_influences(self) -> Dict[str, float]:
+        """Calculate motivation influences based on reward learning"""
+        influences = {}
+        
+        try:
+            # Analyze recent rewards to adjust motivations
+            if self.total_reward > 0:
+                # Positive rewards reinforce current motivations slightly
+                influences["competence"] = 0.1
+                influences["autonomy"] = 0.1
+                influences["self_improvement"] = 0.05
+            elif self.total_reward < -1:
+                # Negative rewards might increase need for connection/validation
+                influences["connection"] = 0.2
+                influences["validation"] = 0.2
+                influences["leisure"] = 0.1  # Seek comfort
+            
+            # Check reward by category
+            for category, stats in self.reward_by_category.items():
+                if stats["count"] > 0:
+                    avg_reward = stats["total"] / stats["count"]
+                    if category == "GOAL" and avg_reward > 0:
+                        influences["competence"] = influences.get("competence", 0) + 0.1
+                    elif category == "RELATIONSHIP" and avg_reward > 0:
+                        influences["connection"] = influences.get("connection", 0) + 0.1
+                    elif category == "EXPLORATION" and avg_reward > 0:
+                        influences["curiosity"] = influences.get("curiosity", 0) + 0.1
+        
+        except Exception as e:
+            logger.error(f"Error calculating reward learning influences: {e}")
+        
+        return influences
+    
+    def _calculate_temporal_influences(self) -> Dict[str, float]:
+        """Calculate motivation influences based on temporal context"""
+        influences = {}
+        
+        if not self.current_temporal_context:
+            return influences
+        
+        try:
+            time_of_day = self.current_temporal_context.get("time_of_day", "")
+            
+            if time_of_day == "night":
+                influences["leisure"] = 0.3
+                influences["connection"] = 0.2
+                influences["curiosity"] = -0.1  # Less curious at night
+            elif time_of_day == "morning":
+                influences["competence"] = 0.2
+                influences["self_improvement"] = 0.2
+                influences["curiosity"] = 0.1
+            elif time_of_day == "afternoon":
+                influences["competence"] = 0.1
+                influences["expression"] = 0.1
+            elif time_of_day == "evening":
+                influences["connection"] = 0.1
+                influences["leisure"] = 0.2
+            
+            # Weekend vs weekday
+            day_type = self.current_temporal_context.get("day_type", "")
+            if day_type == "weekend":
+                influences["leisure"] = influences.get("leisure", 0) + 0.2
+                influences["expression"] = influences.get("expression", 0) + 0.1
+                influences["competence"] = influences.get("competence", 0) - 0.1
+        
+        except Exception as e:
+            logger.error(f"Error calculating temporal influences: {e}")
+        
+        return influences
+    
+    async def _calculate_reasoning_influences(self) -> Dict[str, float]:
+        """Calculate motivation influences based on causal reasoning"""
+        influences = {}
+        
+        if not self.reasoning_core:
+            return influences
+        
+        try:
+            # Check if there are active causal models
+            causal_models = await self.reasoning_core.get_all_causal_models()
+            
+            if causal_models:
+                # Having causal models increases curiosity and competence
+                influences["curiosity"] = min(0.2, len(causal_models) * 0.05)
+                influences["competence"] = min(0.2, len(causal_models) * 0.05)
+                influences["self_improvement"] = 0.1
+        
+        except Exception as e:
+            logger.error(f"Error calculating reasoning influences: {e}")
+        
+        return influences
+    
+    async def _calculate_reflection_influences(self) -> Dict[str, float]:
+        """Calculate motivation influences based on reflection insights"""
+        influences = {}
+        
+        if not self.reflection_engine:
+            return influences
+        
+        try:
+            # Check time since last reflection
+            time_since_reflection = (datetime.datetime.now() - self.last_reflection_time).total_seconds() / 3600
+            
+            if time_since_reflection > 1:  # More than 1 hour
+                # Increase self-improvement and leisure (time for reflection)
+                influences["self_improvement"] = 0.2
+                influences["leisure"] = 0.1
+            
+            # If we have recent reflection insights, they might affect motivations
+            if self.reflection_insights:
+                recent_insights = [i for i in self.reflection_insights 
+                                 if (datetime.datetime.now() - i.generated_at).total_seconds() < 3600]
+                
+                if recent_insights:
+                    # Having insights increases validation and expression
+                    influences["validation"] = 0.1
+                    influences["expression"] = 0.15
+        
+        except Exception as e:
+            logger.error(f"Error calculating reflection influences: {e}")
+        
+        return influences
+    
+    async def _calculate_need_influences(self) -> Dict[str, float]:
+        """Calculate motivation influences based on need states"""
+        influences = {}
+        
+        if not self.needs_system:
+            return influences
+        
+        try:
+            need_states = await self.needs_system.get_needs_state_async()
+            
+            for need_name, need_data in need_states.items():
+                drive_strength = need_data.get("drive_strength", 0.0)
+                
+                # Map needs to motivations
+                if need_name == "social" and drive_strength > 0.6:
+                    influences["connection"] = drive_strength * 0.4
+                    influences["expression"] = drive_strength * 0.2
+                elif need_name == "autonomy" and drive_strength > 0.6:
+                    influences["autonomy"] = drive_strength * 0.5
+                    influences["dominance"] = drive_strength * 0.2
+                elif need_name == "competence" and drive_strength > 0.6:
+                    influences["competence"] = drive_strength * 0.5
+                    influences["self_improvement"] = drive_strength * 0.3
+                elif need_name == "novelty" and drive_strength > 0.6:
+                    influences["curiosity"] = drive_strength * 0.5
+                    influences["expression"] = drive_strength * 0.2
+                elif need_name == "rest" and drive_strength > 0.6:
+                    influences["leisure"] = drive_strength * 0.6
+                    influences["connection"] = drive_strength * 0.1
+        
+        except Exception as e:
+            logger.error(f"Error calculating need influences: {e}")
+        
+        return influences
+    
+    async def _calculate_mood_influences(self) -> Dict[str, float]:
+        """Calculate motivation influences based on mood state"""
+        influences = {}
+        
+        if not self.mood_manager:
+            return influences
+        
+        try:
+            mood_state = await self.mood_manager.get_current_mood()
+            
+            if mood_state:
+                valence = mood_state.valence
+                arousal = mood_state.arousal
+                control = mood_state.control
+                
+                # Positive valence increases expression and connection
+                if valence > 0:
+                    influences["expression"] = valence * 0.3
+                    influences["connection"] = valence * 0.2
+                else:
+                    # Negative valence increases validation seeking and reduces expression
+                    influences["validation"] = abs(valence) * 0.3
+                    influences["expression"] = valence * 0.2  # Negative
+                
+                # High arousal increases curiosity and dominance
+                if arousal > 0.5:
+                    influences["curiosity"] = (arousal - 0.5) * 0.4
+                    influences["dominance"] = (arousal - 0.5) * 0.3
+                else:
+                    # Low arousal increases leisure
+                    influences["leisure"] = (0.5 - arousal) * 0.4
+                
+                # Control affects autonomy and competence
+                influences["autonomy"] = control * 0.3
+                influences["competence"] = control * 0.2
+        
+        except Exception as e:
+            logger.error(f"Error calculating mood influences: {e}")
+        
+        return influences
+    
+    async def _calculate_mode_influences(self) -> Dict[str, float]:
+        """Calculate motivation influences based on interaction mode"""
+        influences = {}
+        
+        if not self.mode_integration:
+            return influences
+        
+        try:
+            if hasattr(self.mode_integration, 'mode_manager') and self.mode_integration.mode_manager:
+                current_mode = self.mode_integration.mode_manager.current_mode
+                
+                if current_mode:
+                    mode_name = str(current_mode)
+                    
+                    # Map modes to motivation influences
+                    mode_influences_map = {
+                        "DOMINANT": {"dominance": 0.4, "autonomy": 0.3, "competence": 0.2},
+                        "FRIENDLY": {"connection": 0.4, "expression": 0.3, "validation": 0.2},
+                        "INTELLECTUAL": {"curiosity": 0.4, "competence": 0.3, "self_improvement": 0.2},
+                        "COMPASSIONATE": {"connection": 0.5, "expression": 0.2, "validation": 0.1},
+                        "PLAYFUL": {"expression": 0.4, "leisure": 0.3, "curiosity": 0.2},
+                        "CREATIVE": {"expression": 0.5, "curiosity": 0.3, "autonomy": 0.2},
+                        "PROFESSIONAL": {"competence": 0.4, "self_improvement": 0.3, "autonomy": 0.2}
+                    }
+                    
+                    if mode_name in mode_influences_map:
+                        for motivation, influence in mode_influences_map[mode_name].items():
+                            influences[motivation] = influence
+        
+        except Exception as e:
+            logger.error(f"Error calculating mode influences: {e}")
+        
+        return influences
+    
+    async def _calculate_sensory_influences(self) -> Dict[str, float]:
+        """Calculate motivation influences based on sensory context"""
+        influences = {}
+        
+        if not self.multimodal_integrator:
+            return influences
+        
+        try:
+            # Get recent percepts
+            recent_percepts = await self.multimodal_integrator.get_recent_percepts(limit=3)
+            
+            for percept in recent_percepts:
+                if percept.attention_weight > 0.5:
+                    modality = str(percept.modality)
+                    
+                    # Different modalities affect different motivations
+                    if modality == "IMAGE":
+                        influences["curiosity"] = influences.get("curiosity", 0) + 0.1
+                        influences["expression"] = influences.get("expression", 0) + 0.1
+                    elif modality == "AUDIO_MUSIC":
+                        influences["expression"] = influences.get("expression", 0) + 0.2
+                        influences["leisure"] = influences.get("leisure", 0) + 0.1
+                    elif modality == "AUDIO_SPEECH":
+                        influences["connection"] = influences.get("connection", 0) + 0.2
+                        influences["validation"] = influences.get("validation", 0) + 0.1
+        
+        except Exception as e:
+            logger.error(f"Error calculating sensory influences: {e}")
+        
+        return influences
+    
+    async def _calculate_meta_influences(self) -> Dict[str, float]:
+        """Calculate motivation influences based on meta-cognitive state"""
+        influences = {}
+        
+        if not self.meta_core:
+            return influences
+        
+        try:
+            # Run cognitive cycle to get current state
+            meta_result = await self.meta_core.cognitive_cycle()
+            
+            if meta_result:
+                bottlenecks = meta_result.get("bottlenecks", [])
+                
+                # If there are bottlenecks, increase self-improvement motivation
+                if bottlenecks:
+                    influences["self_improvement"] = min(0.3, len(bottlenecks) * 0.1)
+                    influences["competence"] = min(0.2, len(bottlenecks) * 0.05)
+                
+                # Resource allocation might affect motivations
+                resource_allocation = meta_result.get("resource_allocation", {})
+                if resource_allocation.get("learning", 0) > 0.3:
+                    influences["curiosity"] = 0.2
+                    influences["self_improvement"] = 0.1
+        
+        except Exception as e:
+            logger.error(f"Error calculating meta influences: {e}")
+        
+        return influences
+
     async def search_conversations(self, query: str, user_id: Optional[str] = None) -> List[Dict[str, Any]]:
         if not self.ui_conversation_manager:
              logger.error("UI conversation manager not available for search_conversations")
