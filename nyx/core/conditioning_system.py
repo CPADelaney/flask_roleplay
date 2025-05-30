@@ -445,7 +445,7 @@ class ConditioningSystem:
         
         logger.debug(f"[{tool_name}] Processed context_keys: {processed_context_keys}")
         
-        association_key = f"{conditioned_stimulus}→{response}"
+        association_key = f"{conditioned_stimulus}-->{response}"
         
         if association_key in ctx.context.classical_associations:
             # Update existing association
@@ -585,7 +585,7 @@ class ConditioningSystem:
             except:
                 processed_context_keys = []
         
-        association_key = f"{behavior}→{consequence_type}"
+        association_key = f"{behavior}-->{consequence_type}"
         
         is_reinforcement = "reinforcement" in consequence_type.lower()
         is_positive = "positive" in consequence_type.lower()
