@@ -22,7 +22,7 @@ from nyx.core.brain.global_workspace.adapters import build_gw_modules
 
 from nyx.core.integration.integration_manager import create_integration_manager
 
-from nyx.core.mood_manager import MoodState
+from typing import TYPE_CHECKING
 
 from nyx.core.brain.integration_layer import EnhancedNyxBrainMixin
 
@@ -59,6 +59,9 @@ from nyx.creative.capability_system import (
 from nyx.core.passive_observation import ObservationFilter
 
 from pydantic import BaseModel, Field
+
+if TYPE_CHECKING:
+    from nyx.core.mood_manager import MoodState
 
 logger = logging.getLogger(__name__)
 
