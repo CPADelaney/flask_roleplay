@@ -1718,7 +1718,21 @@ class EnhancedAgenticActionGenerator:
         
         try:
             mood = await self.mood_manager.get_current_mood()
-            return mood.dict() if hasattr(mood, "dict") else mood
+            if mood:
+                if hasattr(mood, "dict"):
+                    return mood.dict()
+                elif hasattr(mood, "model_dump"):
+                    return mood.model_dump()
+                else:
+                    # Manual conversion as fallback
+                    return {
+                        "valence": getattr(mood, "valence", 0.0),
+                        "arousal": getattr(mood, "arousal", 0.5),
+                        "control": getattr(mood, "control", 0.0),
+                        "dominant_mood": getattr(mood, "dominant_mood", "neutral"),
+                        "intensity": getattr(mood, "intensity", 0.5)
+                    }
+            return {"error": "No mood state available"}
         except Exception as e:
             logger.error(f"Error getting mood state: {e}")
             return {"error": str(e)}
@@ -2405,14 +2419,30 @@ class EnhancedAgenticActionGenerator:
             logger.error(f"Error getting need states: {e}")
             return {}
     
-    async def _get_current_mood_state(self) -> Optional[MoodState]:
+    async def _get_current_mood_state(self) -> Optional[Dict[str, Any]]:
         """Get current mood state from the mood manager"""
         if not self.mood_manager:
             return None
             
         try:
             # Get current mood
-            return await self.mood_manager.get_current_mood()
+            mood_state = await self.mood_manager.get_current_mood()
+            if mood_state:
+                # Convert MoodState object to dictionary
+                if hasattr(mood_state, "dict"):
+                    return mood_state.dict()
+                elif hasattr(mood_state, "model_dump"):
+                    return mood_state.model_dump()
+                else:
+                    # Fallback: try to convert manually
+                    return {
+                        "valence": getattr(mood_state, "valence", 0.0),
+                        "arousal": getattr(mood_state, "arousal", 0.5),
+                        "control": getattr(mood_state, "control", 0.0),
+                        "dominant_mood": getattr(mood_state, "dominant_mood", "neutral"),
+                        "intensity": getattr(mood_state, "intensity", 0.5)
+                    }
+            return None
         except Exception as e:
             logger.error(f"Error getting mood state: {e}")
             return None
