@@ -269,9 +269,11 @@ class ConditioningSystem:
             
             Focus on:
             1. Extracting 'behavior' and 'context' from the input JSON.
-            2. Analyzing relevant associations for the given behavior using '_get_behavior_associations'.
+            2. Analyzing relevant associations for the given behavior using '_get_behavior_associations' 
+               (pass the context as 'behavior_context' parameter).
             3. Predicting the likely consequences and calculating expected valence using '_calculate_expected_valence'.
-            4. Checking context relevance with '_check_context_relevance' and getting reinforcement history with '_get_reinforcement_history'.
+            4. Checking context relevance with '_check_context_relevance' (pass the context as 'current_context' parameter) 
+               and getting reinforcement history with '_get_reinforcement_history'.
             5. Calculating confidence levels for predictions.
             6. Making recommendations about approach or avoidance.
             7. Providing a clear explanation in your final output.
@@ -751,31 +753,30 @@ class ConditioningSystem:
     @function_tool
     async def _get_behavior_associations(
         ctx: RunContextWrapper,
-        behavior: str, # LLM extracts from JSON input
-        context: Dict[str, Any] # LLM extracts from JSON input, or constructs
+        behavior: str,
+        behavior_context: Dict[str, Any]  # Renamed from 'context'
     ) -> List[Dict[str, Any]]:
-        context = context or {}
+        behavior_context = behavior_context or {}  # Update variable name
         result = []
         behavior_lower = behavior.lower()
-
+    
         for key, assoc in ctx.context.operant_associations.items():
-            # Assuming assoc.stimulus stores the behavior for operant associations
             if assoc.stimulus.lower() == behavior_lower:
                 context_match = True
-                if assoc.context_keys: # If the association has specific context requirements
-                    if not context: # If no current context provided, it's a mismatch
+                if assoc.context_keys:
+                    if not behavior_context:  # Update variable name
                         context_match = False
                     else:
                         for req_key in assoc.context_keys:
-                            if req_key not in context: # Check if current context has the required key
+                            if req_key not in behavior_context:  # Update variable name
                                 context_match = False
                                 break
                 
                 if context_match:
                     result.append({
                         "key": key,
-                        "behavior": assoc.stimulus, # Original casing from association
-                        "consequence_type": assoc.response, # Consequence is stored in response field
+                        "behavior": assoc.stimulus,
+                        "consequence_type": assoc.response,
                         "strength": assoc.association_strength,
                         "valence": assoc.valence,
                         "reinforcement_count": assoc.reinforcement_count,
@@ -848,21 +849,22 @@ class ConditioningSystem:
 
     @staticmethod
     @function_tool
-    async def _check_context_relevance(ctx: RunContextWrapper,
-                                 context: Dict[str, Any], # Current context, LLM extracts/constructs
-                                 context_keys_list: List[List[str]]) -> Dict[str, Any]: # List of context key lists from associations
+    async def _check_context_relevance(
+        ctx: RunContextWrapper,
+        current_context: Dict[str, Any],  # Renamed from 'context'
+        context_keys_list: List[List[str]]
+    ) -> Dict[str, Any]:
         """
         Check relevance of current context to multiple sets of required context keys from associations.
         Args:
-            context: The current context to check (e.g. {"location": "home", "time": "night"})
+            current_context: The current context to check (e.g. {"location": "home", "time": "night"})
             context_keys_list: A list of lists, where each inner list contains required context keys for an association.
-                               e.g., [["location", "time"], ["user_mood"]]
         Returns:
             Relevance scores for each set of context keys.
         """
-        if not isinstance(context, dict):
-            logger.warning(f"_check_context_relevance: 'context' arg is not a dict: {type(context)}. Defaulting to empty.")
-            context = {}
+        if not isinstance(current_context, dict):  # Update variable name
+            logger.warning(f"_check_context_relevance: 'current_context' arg is not a dict: {type(current_context)}. Defaulting to empty.")
+            current_context = {}
         if not isinstance(context_keys_list, list) or not all(isinstance(sublist, list) for sublist in context_keys_list):
             logger.warning(f"_check_context_relevance: 'context_keys_list' arg is not a list of lists. Got: {type(context_keys_list)}. Returning empty scores.")
             return {"relevance_scores": [], "average_relevance": 0.0, "error": "Invalid context_keys_list format"}
