@@ -285,7 +285,7 @@ class ParallelProcessor(BaseProcessor):
             
             # Task 2: Generate emotional expression - using base class method
             tasks["emotional_expression"] = asyncio.create_task(
-                self._generate_emotional_expression(processing_result["emotional_state"])
+                self._generate_emotional_expression(processing_result.get("emotional_state", {}))
             )
             
             # Wait for main response content
