@@ -479,7 +479,7 @@ class ReflexiveSystem:
         
         # Initialize the agents
         self._init_agents()
-        self.decision_system = ReflexDecisionSystem(self)
+        self.decision_system = self.decision_system_agent
         
         logger.info("Reflexive system initialized with Agents SDK")
     
