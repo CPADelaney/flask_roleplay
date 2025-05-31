@@ -103,10 +103,12 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
         self._initializing_flag = False
         
         # Set attributes expected by mixins
-        self.nyx_id = NYX_ID  # Expected by EventLogMixin
-        self.instance_id = INSTANCE_ID  # Expected by EventLogMixin
-        self.NYX_ID = NYX_ID  # Alternative attribute name used by mixins
-        self.INSTANCE_ID = INSTANCE_ID  # Alternative attribute name used by mixins
+        import os
+        import uuid
+        self.nyx_id = os.getenv("NYX_ID", "nyx_v1")  # Expected by EventLogMixin
+        self.instance_id = os.getenv("NYX_INSTANCE_ID", str(uuid.uuid4()))  # Expected by EventLogMixin
+        self.NYX_ID = self.nyx_id  # Alternative attribute name used by mixins
+        self.INSTANCE_ID = self.instance_id  # Alternative attribute name used by mixins
         
         # Initialize workspace_engine to None since it might be accessed before initialize()
         self.workspace_engine = None
