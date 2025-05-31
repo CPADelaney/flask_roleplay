@@ -29,7 +29,7 @@ class BehaviorEvaluation(BaseModel):
     recommendation: str = Field(description="Approach or avoid recommendation")
     confidence: float = Field(description="Confidence in the recommendation (0.0-1.0)")
     reasoning: str = Field(description="Reasoning for the evaluation")
-    relevant_associations: List[Dict[str, Any]] = Field(default_factory=list, description="Relevant associations considered")
+    relevant_associations: Optional[List[Dict[str, Any]]] = Field(default=None, description="Relevant associations considered")
 
 class OperantConditioningResult(BaseModel):
     behavior: str = Field(description="Behavior being conditioned")
