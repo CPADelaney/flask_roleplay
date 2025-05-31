@@ -2432,6 +2432,32 @@ class MemoryCoreAgents:
         self.memory_maintenance_agent = self._create_maintenance_agent()
         self.experience_agent = self._create_experience_agent()
         self.narrative_agent = self._create_narrative_agent()
+
+
+    async def get_memory_stats(self):
+        """Get memory system statistics"""
+        result = await Runner.run(
+            self.memory_maintenance_agent,
+            "Get comprehensive memory statistics",
+            context=self.context
+        )
+        
+        return result.final_output
+    
+    async def detect_schema_from_memories(self, topic=None, min_memories=3):
+        """Detect a potential schema from memories"""
+        prompt = f"Detect schema patterns from memories"
+        if topic:
+            prompt += f" about topic: {topic}"
+        prompt += f" with minimum {min_memories} memories"
+        
+        result = await Runner.run(
+            self.memory_maintenance_agent,
+            prompt,
+            context=self.context
+        )
+        
+        return result.final_output
     
     def _create_retrieval_agent(self):
         """Create the memory retrieval agent"""
