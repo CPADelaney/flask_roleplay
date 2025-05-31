@@ -7,7 +7,7 @@ from typing import Dict, List, Any, Optional, Union
 from agents import Agent, Runner, trace, function_tool, handoff, FunctionTool, InputGuardrail, GuardrailFunctionOutput, RunConfig, RunContextWrapper
 from pydantic import BaseModel, Field
 
-from nyx.core.memory_core import MemoryCoreAgents, MemoryCoreContext, add_memory, get_memory, retrieve_memories_with_formatting, retrieve_relevant_experiences, update_memory, delete_memory, apply_memory_decay, retrieve_memories, create_reflection_from_memories, create_abstraction_from_memories, retrieve_relevant_experiences, generate_conversational_recall,construct_narrative_from_memories, consolidate_memory_clusters
+from nyx.core.memory_core import MemoryCoreAgents, MemoryCoreContext, add_memory, get_memory, retrieve_memories_with_formatting, retrieve_relevant_experiences, update_memory, delete_memory, apply_memory_decay, retrieve_memories, create_reflection_from_memories, create_abstraction_from_memories, retrieve_relevant_experiences, run_maintenance, generate_conversational_recall,construct_narrative_from_memories, consolidate_memory_clusters
 
 logger = logging.getLogger(__name__)
 
@@ -139,10 +139,9 @@ class MemoryOrchestrator:
             Nyx's memory system. Your role is to apply memory decay, consolidate similar
             memories, archive old memories, and ensure the overall system stays optimized.""",
             tools=[
-                # For methods on self.memory_core, we need to wrap them
-                function_tool(self.memory_core.run_maintenance),
-                apply_memory_decay,  # Already has @function_tool
-                consolidate_memory_clusters,  # Already has @function_tool
+                run_maintenance,
+                apply_memory_decay,  
+                consolidate_memory_clusters, 
                 function_tool(self.memory_core.get_memory_stats)
             ],
             output_type=Dict[str, Any]
