@@ -5,9 +5,53 @@ import asyncio
 import datetime
 from typing import Dict, List, Any, Optional
 
-from agents import trace, Runner
+# Import from agents SDK with fallback
+try:
+    from agents import (
+        trace, 
+        Runner,
+        InputGuardrailTripwireTriggered,
+        OutputGuardrailTripwireTriggered
+    )
+except ImportError as e:
+    # If specific guardrail exceptions aren't available, create fallbacks
+    logger.warning(f"Could not import all agents components: {e}")
+    
+    # Import what we can
+    try:
+        from agents import trace, Runner
+    except ImportError:
+        # Create no-op trace if not available
+        def trace(*args, **kwargs):
+            if args and callable(args[0]):
+                return args[0]
+            def decorator(func):
+                return func
+            return decorator
+        
+        # Runner will need to be handled differently if not available
+        Runner = None
+    
+    # Create fallback exception classes
+    class InputGuardrailTripwireTriggered(Exception):
+        """Fallback for when agent SDK doesn't have this exception"""
+        def __init__(self, message="Input guardrail triggered"):
+            super().__init__(message)
+            self.guardrail_result = None
+    
+    class OutputGuardrailTripwireTriggered(Exception):
+        """Fallback for when agent SDK doesn't have this exception"""
+        def __init__(self, message="Output guardrail triggered"):
+            super().__init__(message)
+            self.guardrail_result = None
 
 logger = logging.getLogger(__name__)
+
+class InputGuardrailTripwireTriggered(Exception):
+    pass
+
+class OutputGuardrailTripwireTriggered(Exception):
+    pass
 
 class AgentProcessor:
     """Handles agent-based processing of inputs"""
@@ -168,63 +212,83 @@ class AgentProcessor:
             
             # Generate response using the main agent
             if hasattr(self.brain, "nyx_main_agent") and hasattr(self.brain, "Runner") and hasattr(self.brain, "agent_context"):
-                # Run the main agent
-                result = await Runner.run(
-                    self.brain.nyx_main_agent,
-                    user_input,
-                    context=self.brain.agent_context,
-                    run_context=enhanced_context
-                )
-                
-                # Get structured output
-                if hasattr(result, "final_output_as") and hasattr(self.brain, "NarrativeResponse"):
-                    narrative_response = result.final_output_as(self.brain.NarrativeResponse)
+                try:
+                    # Run the main agent
+                    result = await Runner.run(
+                        self.brain.nyx_main_agent,
+                        user_input,
+                        context=self.brain.agent_context,
+                        run_context=enhanced_context
+                    )
                     
-                    # Filter and enhance response if available
-                    if hasattr(self.brain, "response_filter"):
-                        filtered_response = await self.brain.response_filter.filter_response(
-                            narrative_response.narrative,
-                            enhanced_context
-                        )
+                    # Get structured output
+                    if hasattr(result, "final_output_as") and hasattr(self.brain, "NarrativeResponse"):
+                        narrative_response = result.final_output_as(self.brain.NarrativeResponse)
                         
-                        # Update response with filtered version
-                        narrative_response.narrative = filtered_response
-                    
-                    # Add memory of this interaction
-                    if hasattr(self.brain, "add_memory") and hasattr(self.brain, "agent_context"):
-                        await self.brain.add_memory(
-                            self.brain.agent_context,
-                            f"User said: {user_input}\nI responded with: {narrative_response.narrative}",
-                            "observation",
-                            7
-                        )
-                    
-                    # Convert to dictionary
-                    if hasattr(narrative_response, "dict"):
-                        response_dict = narrative_response.dict()
-                    else:
-                        response_dict = {
-                            "narrative": narrative_response.narrative,
-                            "generate_image": getattr(narrative_response, "generate_image", False),
-                            "image_prompt": getattr(narrative_response, "image_prompt", None)
+                        # Filter and enhance response if available
+                        if hasattr(self.brain, "response_filter"):
+                            filtered_response = await self.brain.response_filter.filter_response(
+                                narrative_response.narrative,
+                                enhanced_context
+                            )
+                            
+                            # Update response with filtered version
+                            narrative_response.narrative = filtered_response
+                        
+                        # Add memory of this interaction
+                        if hasattr(self.brain, "add_memory") and hasattr(self.brain, "agent_context"):
+                            await self.brain.add_memory(
+                                self.brain.agent_context,
+                                f"User said: {user_input}\nI responded with: {narrative_response.narrative}",
+                                "observation",
+                                7
+                            )
+                        
+                        # Convert to dictionary
+                        if hasattr(narrative_response, "dict"):
+                            response_dict = narrative_response.dict()
+                        else:
+                            response_dict = {
+                                "narrative": narrative_response.narrative,
+                                "generate_image": getattr(narrative_response, "generate_image", False),
+                                "image_prompt": getattr(narrative_response, "image_prompt", None)
+                            }
+                        
+                        # Create result
+                        agent_result = {
+                            "success": True,
+                            "message": response_dict.get("narrative", ""),
+                            "response": response_dict,
+                            "has_experience": True,
+                            "memory_id": None,
+                            "emotional_state": emotional_state,
+                            "memories_used": memories if "memories" in locals() else [],
+                            "generate_image": response_dict.get("generate_image", False),
+                            "image_prompt": response_dict.get("image_prompt"),
+                            "user_input": user_input,
+                            "response_time": (datetime.datetime.now() - start_time).total_seconds()
                         }
+                        
+                        return agent_result
                     
-                    # Create result
-                    agent_result = {
-                        "success": True,
-                        "message": response_dict.get("narrative", ""),
-                        "response": response_dict,
-                        "has_experience": True,
-                        "memory_id": None,
-                        "emotional_state": emotional_state,
-                        "memories_used": memories if "memories" in locals() else [],
-                        "generate_image": response_dict.get("generate_image", False),
-                        "image_prompt": response_dict.get("image_prompt"),
+                except (InputGuardrailTripwireTriggered, OutputGuardrailTripwireTriggered) as guardrail_error:
+                    # Handle guardrail tripwire
+                    logger.warning(f"Guardrail triggered: {str(guardrail_error)}")
+                    
+                    # Extract guardrail result if available
+                    guardrail_result = getattr(guardrail_error, 'guardrail_result', None)
+                    
+                    return {
+                        "success": False,
+                        "tripwire_triggered": True,
+                        "message": "I cannot process this request as it violates safety guidelines.",
+                        "has_experience": False,
                         "user_input": user_input,
-                        "response_time": (datetime.datetime.now() - start_time).total_seconds()
+                        "emotional_state": emotional_state,
+                        "response_time": (datetime.datetime.now() - start_time).total_seconds(),
+                        "guardrail_type": type(guardrail_error).__name__,
+                        "guardrail_result": guardrail_result
                     }
-                    
-                    return agent_result
             
             # Fallback to simple response
             return {
@@ -234,6 +298,21 @@ class AgentProcessor:
                 "user_input": user_input,
                 "emotional_state": emotional_state,
                 "response_time": (datetime.datetime.now() - start_time).total_seconds()
+            }
+            
+        except (InputGuardrailTripwireTriggered, OutputGuardrailTripwireTriggered) as guardrail_error:
+            # Catch guardrail exceptions at the outer level too
+            logger.warning(f"Guardrail triggered during agent processing: {str(guardrail_error)}")
+            
+            return {
+                "success": False,
+                "tripwire_triggered": True,
+                "message": "I cannot process this request as it violates safety guidelines.",
+                "has_experience": False,
+                "user_input": user_input,
+                "emotional_state": emotional_state if 'emotional_state' in locals() else {},
+                "response_time": (datetime.datetime.now() - start_time).total_seconds(),
+                "error": str(guardrail_error)
             }
                 
         except Exception as e:
