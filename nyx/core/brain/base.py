@@ -717,22 +717,6 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
                 self.mood_manager = ContextAwareMoodManager(self.mood_manager)
                 logger.debug("Enhanced MoodManager with A2A context distribution")
             
-            original_reward_system = RewardSignalProcessor(
-                emotional_core=self.emotional_core, 
-                identity_evolution=self.identity_evolution, 
-                somatosensory_system=self.digital_somatosensory_system,
-                mood_manager=self.mood_manager,
-                needs_system=self.needs_system
-            )
-            
-            # Wrap with context-aware version if A2A enabled
-            if self.use_a2a_integration:
-                from nyx.core.a2a.context_aware_reward_system import ContextAwareRewardSystem
-                self.reward_system = ContextAwareRewardSystem(original_reward_system)
-                logger.debug("Enhanced RewardSignalProcessor with A2A context distribution")
-            else:
-                self.reward_system = original_reward_system
-            
             original_somatosensory_system = DigitalSomatosensorySystem(
                 memory_core=self.memory_core, 
                 emotional_core=self.emotional_core, 
@@ -757,9 +741,11 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
                 needs_system=self.needs_system
             )
             
-            # Wrap reward system
+            # Wrap with context-aware version if A2A enabled
             if self.use_a2a_integration:
+                from nyx.core.a2a.context_aware_reward_system import ContextAwareRewardSystem
                 self.reward_system = ContextAwareRewardSystem(original_reward_system)
+                logger.debug("Enhanced RewardSignalProcessor with A2A context distribution")
             else:
                 self.reward_system = original_reward_system
             
@@ -782,10 +768,10 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             
             # Initialize base conditioning system (keep existing)
             base_conditioning_system = ConditioningSystem(
-                reward_system=self.reward_system, 
-                emotional_core=self.emotional_core,
-                memory_core=self.memory_core, 
-                somatosensory_system=self.digital_somatosensory_system
+                reward_system=original_reward_system,  # Use original
+                emotional_core=original_emotional_core.original_system if hasattr(self.emotional_core, 'original_system') else self.emotional_core,
+                memory_core=self.memory_core.original_system if hasattr(self.memory_core, 'original_system') else self.memory_core,
+                somatosensory_system=original_somatosensory_system
             )
             
             # Store base system for reference if needed
@@ -805,7 +791,17 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
                 reward_system=self.reward_system
             )
             await self.conditioning_maintenance.start_maintenance_scheduler(run_immediately=False)
-            
+
+            personality_profile = await self.conditioning_config.get_personality_profile()
+            await ConditioningSystem.initialize_baseline_personality(
+                base_conditioning_system,  # Use base system, not wrapped
+                personality_profile
+            )
+
+            # After creating conditioning system
+            logger.debug(f"Conditioning context emotional_core type: {type(base_conditioning_system.context.emotional_core)}")
+            logger.debug(f"Has update_neurochemical: {hasattr(base_conditioning_system.context.emotional_core, 'update_neurochemical')}")
+                        
             original_mode_manager = InteractionModeManager(
                 context_system=self.context_system, 
                 emotional_core=self.emotional_core, 
