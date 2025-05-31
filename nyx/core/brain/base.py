@@ -452,6 +452,16 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             self.system_health_checker = SystemHealthChecker(self)
             self.checkpoint_planner = CheckpointingPlannerAgent()
             self.context_config = { "focus_limit": 4, "background_limit": 3, "zoom_in_limit": 2, "high_fidelity_threshold": 0.7, "med_fidelity_threshold": 0.5, "low_fidelity_threshold": 0.3, "max_context_tokens": 3500 }
+
+            if not self.event_bus:
+                try:
+                    from nyx.core.events.event_bus import EventBus
+                    self.event_bus = EventBus()
+                    await self.event_bus.initialize()
+                    logger.debug("Event bus initialized")
+                except ImportError:
+                    logger.warning("EventBus module not found - event system will be unavailable")
+                    self.event_bus = None
     
             # --- Step 3: Core Systems - Tier 1 ---
             logger.debug(f"NyxBrain Init Step 3: Core Systems - Tier 1 for {self.user_id}-{self.conversation_id}")
@@ -596,10 +606,15 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
                 self.reasoning_core = integrated_reasoning_agent
                 self.reasoning_triage_agent = reasoning_triage_agent 
             
+            original_internal_feedback = InternalFeedbackSystem()
+            
+            # Then wrap if A2A enabled
             if self.use_a2a_integration:
                 from nyx.core.a2a.context_aware_internal_feedback_system import ContextAwareInternalFeedbackSystem
-                self.internal_feedback = ContextAwareInternalFeedbackSystem(self.internal_feedback)
+                self.internal_feedback = ContextAwareInternalFeedbackSystem(original_internal_feedback)
                 logger.debug("Enhanced InternalFeedbackSystem with A2A context distribution")
+            else:
+                self.internal_feedback = original_internal_feedback
             
             # Create original dynamic adaptation system
             original_dynamic_adaptation = DynamicAdaptationSystem()
@@ -721,9 +736,8 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             original_somatosensory_system = DigitalSomatosensorySystem(
                 memory_core=self.memory_core, 
                 emotional_core=self.emotional_core, 
-                reward_system=self.reward_system,
-                hormone_system=self.hormone_system,  # Add this if DSS accepts it
-                needs_system=self.needs_system        # Add this if DSS accepts it
+                hormone_system=self.hormone_system,
+                needs_system=self.needs_system
             )
             await original_somatosensory_system.initialize()
             
@@ -734,10 +748,24 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             else:
                 self.digital_somatosensory_system = original_somatosensory_system
             
-            # Keep the existing back-references
-            self.reward_system.somatosensory_system = self.digital_somatosensory_system
-            if self.identity_evolution: 
-                self.identity_evolution.somatosensory_system = self.digital_somatosensory_system
+            # NOW create reward system with DSS reference
+            original_reward_system = RewardSignalProcessor(
+                emotional_core=self.emotional_core, 
+                identity_evolution=self.identity_evolution, 
+                somatosensory_system=self.digital_somatosensory_system,  # ✅ NOW IT EXISTS
+                mood_manager=self.mood_manager,
+                needs_system=self.needs_system
+            )
+            
+            # Wrap reward system
+            if self.use_a2a_integration:
+                self.reward_system = ContextAwareRewardSystem(original_reward_system)
+            else:
+                self.reward_system = original_reward_system
+            
+            # Set the back-reference
+            if hasattr(self.digital_somatosensory_system, 'set_reward_system'):
+                self.digital_somatosensory_system.set_reward_system(self.reward_system)
     
             # Initialize conditioning configuration (keep existing)
             self.conditioning_config = ConditioningConfiguration()
@@ -778,12 +806,25 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             )
             await self.conditioning_maintenance.start_maintenance_scheduler(run_immediately=False)
             
-            # Initialize input processor with the (possibly wrapped) conditioning system
+            original_mode_manager = InteractionModeManager(
+                context_system=self.context_system, 
+                emotional_core=self.emotional_core, 
+                reward_system=self.reward_system, 
+                goal_manager=self.goal_manager
+            )
+            
+            if self.use_a2a_integration:
+                from nyx.core.a2a.context_aware_interaction_mode_manager import ContextAwareInteractionModeManager
+                self.mode_manager = ContextAwareInteractionModeManager(original_mode_manager)
+            else:
+                self.mode_manager = original_mode_manager
+            
+            # Now create input processor with mode_manager
             self.conditioned_input_processor = BlendedInputProcessor(
                 conditioning_system=self.conditioning_system,
                 emotional_core=self.emotional_core, 
                 somatosensory_system=self.digital_somatosensory_system,
-                mode_manager=self.mode_manager 
+                mode_manager=self.mode_manager  # ✅ NOW EXISTS
             )
             
             # NEW: Wrap with context-aware version if A2A enabled
@@ -1381,20 +1422,6 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             # --- Step 8: Remaining Managers, Agents, and Final Integrations ---
             logger.debug(f"NyxBrain Init Step 8: Final Managers, Agents, Integrations for {self.user_id}-{self.conversation_id}")
             
-            original_mode_manager = InteractionModeManager(
-                context_system=self.context_system, 
-                emotional_core=self.emotional_core, 
-                reward_system=self.reward_system, 
-                goal_manager=self.goal_manager
-            )
-            
-            if self.use_a2a_integration:
-                from nyx.core.a2a.context_aware_interaction_mode_manager import ContextAwareInteractionModeManager
-                self.mode_manager = ContextAwareInteractionModeManager(original_mode_manager)
-                logger.debug("Enhanced InteractionModeManager with A2A context distribution")
-            else:
-                self.mode_manager = original_mode_manager
-            
             self.mode_integration = ModeIntegrationManager(nyx_brain=self)
             
             # Wrap with context-aware version if A2A enabled
@@ -1445,6 +1472,18 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
                 self.reflexive_system = None
     
             self.brain_agent = self._create_brain_agent()
+
+            if not self.integrated_tracer:
+                try:
+                    from nyx.core.integration.integrated_tracer import IntegratedTracer
+                    self.integrated_tracer = IntegratedTracer(
+                        brain_id=f"{self.user_id}_{self.conversation_id}",
+                        event_bus=self.event_bus  # If it uses event bus
+                    )
+                    logger.debug("Integrated tracer initialized")
+                except ImportError:
+                    logger.warning("IntegratedTracer module not found")
+                    self.integrated_tracer = None
     
             self.integration_manager = create_integration_manager(self)
             await self.integration_manager.initialize()
@@ -1457,6 +1496,39 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
                 logger.debug("Enhanced NyxSyncDaemon with A2A context distribution")
             else:
                 self.sync_daemon = original_sync_daemon
+            
+            # ADD STRATEGY CONTROLLER HERE
+            if not self.strategy_controller:
+                try:
+                    from nyx.core.sync.strategy_controller import StrategyController
+                    self.strategy_controller = StrategyController(
+                        sync_daemon=self.sync_daemon,
+                        brain_ref=self
+                    )
+                    await self.strategy_controller.initialize()
+                    logger.debug("Strategy controller initialized")
+                except ImportError:
+                    logger.warning("StrategyController module not found")
+                    self.strategy_controller = None
+            
+            # ADD NOISE FILTER HERE (if it's part of sync system)
+            if not self.noise_filter:
+                try:
+                    from nyx.core.sync.noise_filter import NoiseFilter
+                    self.noise_filter = NoiseFilter(
+                        sync_daemon=self.sync_daemon,
+                        strategy_controller=self.strategy_controller
+                    )
+                    logger.debug("Noise filter initialized")
+                except ImportError:
+                    # Might also be a standalone component
+                    try:
+                        from nyx.core.filters.noise_filter import NoiseFilter
+                        self.noise_filter = NoiseFilter()
+                        logger.debug("Noise filter initialized (standalone)")
+                    except ImportError:
+                        logger.warning("NoiseFilter module not found")
+                        self.noise_filter = None
     
             original_agent_evaluator = AgentEvaluator()
             
@@ -1467,10 +1539,15 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             else:
                 self.agent_evaluator = original_agent_evaluator
             
+            original_parallel_executor = ParallelToolExecutor()
+            
+            # Then wrap if A2A enabled
             if self.use_a2a_integration:
                 from nyx.core.a2a.context_aware_parallel import ContextAwareParallelExecutor
-                self.parallel_executor = ContextAwareParallelExecutor(self.parallel_executor)
+                self.parallel_executor = ContextAwareParallelExecutor(original_parallel_executor)
                 logger.debug("Enhanced ParallelToolExecutor with A2A context distribution")
+            else:
+                self.parallel_executor = original_parallel_executor
             
             self.thinking_tools = {
                 "should_use_extended_thinking": function_tool(should_use_extended_thinking),
@@ -1482,9 +1559,6 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             await self.integrate_procedural_memory_with_actions()
             if hasattr(self, "agentic_action_generator") and hasattr(self, "_register_creative_actions") and callable(self._register_creative_actions):
                  await self._register_creative_actions()
-    
-            self.processing_manager = ProcessingManager(self)
-            await self.processing_manager.initialize()
 
             logger.debug(f"NyxBrain Init Step 9: Creative and Tool Systems for {self.user_id}-{self.conversation_id}")
             
