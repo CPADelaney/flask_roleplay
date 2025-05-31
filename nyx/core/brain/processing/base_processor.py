@@ -409,8 +409,30 @@ class BaseProcessor:
         # Get safe error type
         error_type = self._get_safe_name(error)
         
+        # Check if this is a guardrail exception
+        is_guardrail = 'GuardrailTripwireTriggered' in error_type
+        
+        # Create base error result
+        error_result = {
+            "registered": False,
+            "error": str(error),
+            "error_type": error_type,
+            "component": class_name,
+            "context": context
+        }
+        
+        # Add guardrail-specific fields if applicable
+        if is_guardrail:
+            error_result["tripwire_triggered"] = True
+            error_result["guardrail_type"] = error_type
+            
+            # Try to extract guardrail result if available
+            if hasattr(error, 'guardrail_result'):
+                error_result["guardrail_result"] = error.guardrail_result
+        
         # Register with issue tracker if available
-        if hasattr(self.brain, "issue_tracker"):
+        if hasattr(self.brain, "issue_tracker") and not is_guardrail:
+            # Don't register guardrail triggers as issues
             issue_data = {
                 "title": f"Error in {self._get_safe_name(self)}",
                 "error_type": error_type,
@@ -420,6 +442,51 @@ class BaseProcessor:
                 "severity": "MEDIUM",
                 "context": context
             }
-            return await self.brain.issue_tracker.register_issue(issue_data)
+            issue_result = await self.brain.issue_tracker.register_issue(issue_data)
+            error_result["registered"] = issue_result.get("registered", False)
         
-        return {"registered": False, "error": str(error)}
+        return error_result
+    
+    # Also add a method to ensure all processor results have required fields:
+    
+    def _ensure_valid_result(self, result: Any, user_input: str) -> Dict[str, Any]:
+        """
+        Ensure the result is a valid dict with required fields
+        
+        Args:
+            result: The result to validate
+            user_input: The original user input
+            
+        Returns:
+            A valid result dict
+        """
+        # If result is not a dict, convert it
+        if not isinstance(result, dict):
+            logger.warning(f"Result is not a dict: {type(result)}")
+            result = {
+                "error": f"Invalid result type: {type(result)}",
+                "user_input": user_input
+            }
+        
+        # Ensure required fields are present
+        required_fields = {
+            "user_input": user_input,
+            "emotional_state": {},
+            "memories": [],
+            "memory_count": 0,
+            "has_experience": False,
+            "experience_response": None,
+            "cross_user_experience": False,
+            "memory_id": None,
+            "response_time": 0.0
+        }
+        
+        for field, default_value in required_fields.items():
+            if field not in result:
+                result[field] = default_value
+        
+        # Ensure tripwire_triggered is set
+        if "tripwire_triggered" not in result:
+            result["tripwire_triggered"] = False
+        
+        return result
