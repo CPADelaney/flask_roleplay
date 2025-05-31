@@ -916,7 +916,6 @@ class RewardSignalProcessor:
             except Exception as e:
                 logger.error(f"Error applying reward to identity: {e}")
 
-        # 3. Apply Somatic Effects 
         if self.somatosensory_system:
             try:
                 # Special case for dominance rewards
@@ -957,13 +956,28 @@ class RewardSignalProcessor:
                         effects["somatic"] = "pleasure_sensation"
                         logger.debug(f"Applied pleasure sensation (intensity {intensity:.2f}) for positive reward")
                     
-                    # For negative rewards
+                    # For negative rewards - FIX THIS SECTION
                     elif reward.value < 0:  
                         intensity = abs(reward.value) * 0.3
-                        # Increase general tension instead of specific pain
-                        current_tension = self.somatosensory_system.get_body_state().get("tension", 0.0)
+                        # FIX: Await the async call and handle the absence of set_body_state_variable
+                        body_state = await self.somatosensory_system.get_body_state()
+                        current_tension = body_state.get("tension", 0.0)
                         new_tension = min(1.0, current_tension + intensity * 0.2)
-                        await self.somatosensory_system.set_body_state_variable("tension", new_tension)
+                        
+                        # Since set_body_state_variable doesn't exist, we need to update tension differently
+                        # Option 1: Direct attribute access (if allowed)
+                        if hasattr(self.somatosensory_system, 'body_state'):
+                            self.somatosensory_system.body_state["tension"] = new_tension
+                        # Option 2: Use a stimulus to indirectly increase tension
+                        else:
+                            # Apply a mild pain stimulus which will increase tension
+                            await self.somatosensory_system.process_stimulus(
+                                stimulus_type="pain",
+                                body_region="core",
+                                intensity=intensity * 0.5,
+                                cause=f"Negative reward tension ({reward.source})"
+                            )
+                        
                         effects["somatic"] = "tension_sensation"
                         logger.debug(f"Applied tension sensation (intensity {intensity:.2f}) for negative reward")
             except Exception as e:
