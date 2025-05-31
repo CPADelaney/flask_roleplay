@@ -114,7 +114,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
         self.workspace_engine = None
         
         # The actual initialization will happen in the async initialize() method
-        logger.debug(f"NyxBrain instance created for user {user_id}, conversation {conversation_id} - awaiting initialization")
+        logger.debug(f"NyxBrain instance created for user {user_id}, conversation {conversation_id} - awaiting initialization"
     
     async def initialize(self):
         """
