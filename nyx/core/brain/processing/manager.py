@@ -71,6 +71,36 @@ class ProcessingManager:
             except Exception as inner_e:
                 logger.critical(f"Failed to initialize even fallback processor: {str(inner_e)}")
 
+    def _check_tripwire(self, result):
+        """
+        Safely check if tripwire was triggered in the result
+        
+        Args:
+            result: Either a dict or an object with tripwire_triggered attribute
+            
+        Returns:
+            bool: True if tripwire was triggered, False otherwise
+        """
+        if result is None:
+            return False
+            
+        # Check if it's a dict
+        if isinstance(result, dict):
+            return result.get('tripwire_triggered', False)
+        
+        # Check if it has the attribute
+        if hasattr(result, 'tripwire_triggered'):
+            return result.tripwire_triggered
+        
+        # Check if it's an exception type that indicates tripwire
+        if hasattr(result, '__class__'):
+            class_name = result.__class__.__name__
+            if 'GuardrailTripwireTriggered' in class_name:
+                return True
+        
+        return False
+
+
     def safe_get_attr(obj, attr_name, default=None):
         """Safely get an attribute from an object or dict"""
         if isinstance(obj, dict):
@@ -190,11 +220,11 @@ class ProcessingManager:
             processing_time = (end_time - start_time).total_seconds()
             
             # Check for tripwire or other security flags
-            if hasattr(result, 'tripwire_triggered') and result.tripwire_triggered:
-                # Handle tripwire case
+            # Check for tripwire or other security flags
+            if self._check_tripwire(result):
                 logger.warning("Tripwire triggered during processing")
-                result["tripwire_triggered"] = True
-            elif isinstance(result, dict) and result.get('tripwire_triggered', False):
+                if isinstance(result, dict):
+                    result["tripwire_triggered"] = True
                 # Handle dict case
                 logger.warning("Tripwire triggered during processing (dict result)")
             
@@ -259,7 +289,9 @@ class ProcessingManager:
                     "cross_user_experience": False,
                     "memory_id": None,
                     "response_time": 0.0,
-                    "tripwire_triggered": False
+                    "tripwire_triggered": False,
+                    "success": False,  # Add this
+                    "message": f"I apologize, but I encountered an error while processing your input."  # Add this
                 }
                 
                 # Try final fallback processing
@@ -273,9 +305,22 @@ class ProcessingManager:
                         
                         result = await processor.process_input(user_input, fallback_context)
                         
+                        # Ensure result is a dict and has required fields
                         if not isinstance(result, dict):
+                            logger.warning(f"Processor returned non-dict result: {type(result)}")
                             result = {"error": "Invalid result format", **fallback_result}
                         else:
+                            # Ensure required fields are present
+                            for key in ["user_input", "emotional_state", "memories", "has_experience"]:
+                                if key not in result:
+                                    result[key] = fallback_result.get(key)
+                            
+                            # Safely check and set tripwire status
+                            if self._check_tripwire(result):
+                                result["tripwire_triggered"] = True
+                            elif "tripwire_triggered" not in result:
+                                result["tripwire_triggered"] = False
+                            
                             result = {**fallback_result, **result}
                         
                         return result
