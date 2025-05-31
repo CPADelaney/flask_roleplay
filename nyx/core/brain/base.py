@@ -172,6 +172,43 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
         from nyx.core.interaction_mode_manager import InteractionModeManager
         from nyx.core.mood_manager import MoodManager
         
+        # Store module classes for later use
+        self._modules = {
+            'ModuleOptimizer': ModuleOptimizer,
+            'SystemHealthChecker': SystemHealthChecker,
+            'EmotionalCore': EmotionalCore,
+            'MemoryCoreAgents': MemoryCoreAgents,
+            'BrainMemoryCore': BrainMemoryCore,
+            'ReflectionEngine': ReflectionEngine,
+            'ExperienceInterface': ExperienceInterface,
+            'DynamicAdaptationSystem': DynamicAdaptationSystem,
+            'InternalFeedbackSystem': InternalFeedbackSystem,
+            'MetaCore': MetaCore,
+            'KnowledgeCoreAgents': KnowledgeCoreAgents,
+            'MemoryOrchestrator': MemoryOrchestrator,
+            'IdentityEvolutionSystem': IdentityEvolutionSystem,
+            'ExperienceConsolidationSystem': ExperienceConsolidationSystem,
+            'CrossUserExperienceManager': CrossUserExperienceManager,
+            'HormoneSystem': HormoneSystem,
+            'AttentionalController': AttentionalController,
+            'MultimodalIntegrator': MultimodalIntegrator,
+            'RewardSignalProcessor': RewardSignalProcessor,
+            'TemporalPerceptionSystem': TemporalPerceptionSystem,
+            'AgentEnhancedMemoryManager': AgentEnhancedMemoryManager,
+            'DigitalSomatosensorySystem': DigitalSomatosensorySystem,
+            'NeedsSystem': NeedsSystem,
+            'ConditioningSystem': ConditioningSystem,
+            'GoalManager': GoalManager,
+            'integrated_reasoning_agent': integrated_reasoning_agent,
+            'reasoning_triage_agent': reasoning_triage_agent,
+            'ReasoningCore': ReasoningCore,
+            'ProcessingManager': ProcessingManager,
+            'SelfConfigManager': SelfConfigManager,
+            'ContextAwarenessSystem': ContextAwarenessSystem,
+            'InteractionModeManager': InteractionModeManager,
+            'MoodManager': MoodManager
+        }
+        
         # Import A2A wrappers if needed
         if self.use_a2a_integration:
             from nyx.core.a2a.context_aware_emotional_core import ContextAwareEmotionalCore
@@ -212,9 +249,49 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             from nyx.core.a2a.context_aware_mode_integration import ContextAwareModeIntegration
             from nyx.core.a2a.context_aware_issue_tracking_system import ContextAwareIssueTrackingSystem
             from nyx.core.a2a.context_aware_reflexive_system import ContextAwareReflexiveSystem
+            
+            # Add A2A modules to the dictionary
+            self._modules.update({
+                'ContextAwareEmotionalCore': ContextAwareEmotionalCore,
+                'ContextAwareHormoneSystem': ContextAwareHormoneSystem,
+                'ContextAwareMemoryCore': ContextAwareMemoryCore,
+                'ContextAwareMemoryOrchestrator': ContextAwareMemoryOrchestrator,
+                'ContextAwareIdentityEvolution': ContextAwareIdentityEvolution,
+                'ContextAwareKnowledgeCore': ContextAwareKnowledgeCore,
+                'ContextAwareAttentionalController': ContextAwareAttentionalController,
+                'ContextAwareTemporalPerception': ContextAwareTemporalPerception,
+                'ContextAwareReasoningCore': ContextAwareReasoningCore,
+                'ContextAwareReasoningAgents': ContextAwareReasoningAgents,
+                'ContextAwareInternalFeedbackSystem': ContextAwareInternalFeedbackSystem,
+                'ContextAwareDynamicAdaptation': ContextAwareDynamicAdaptation,
+                'ContextAwareContextSystem': ContextAwareContextSystem,
+                'ContextAwareExperienceInterface': ContextAwareExperienceInterface,
+                'ContextAwareExperienceConsolidation': ContextAwareExperienceConsolidation,
+                'ContextAwareCrossUserExperience': ContextAwareCrossUserExperience,
+                'ContextAwareGoalManager': ContextAwareGoalManager,
+                'ContextAwareNeedsSystem': ContextAwareNeedsSystem,
+                'ContextAwareMoodManager': ContextAwareMoodManager,
+                'ContextAwareRewardSystem': ContextAwareRewardSystem,
+                'ContextAwareDigitalSomatosensorySystem': ContextAwareDigitalSomatosensorySystem,
+                'ContextAwareConditioningSystem': ContextAwareConditioningSystem,
+                'ContextAwareInteractionModeManager': ContextAwareInteractionModeManager,
+                'ContextAwareInputProcessor': ContextAwareInputProcessor,
+                'ContextAwareRelationshipManager': ContextAwareRelationshipManager,
+                'ContextAwareMultimodalIntegrator': ContextAwareMultimodalIntegrator,
+                'ContextAwareImaginationSimulator': ContextAwareImaginationSimulator,
+                'ContextAwareTheoryOfMind': ContextAwareTheoryOfMind,
+                'ContextAwareMetaCore': ContextAwareMetaCore,
+                'ContextAwareAgenticActionGenerator': ContextAwareAgenticActionGenerator,
+                'ContextAwareReflectionEngine': ContextAwareReflectionEngine,
+                'ContextAwarePassiveObservation': ContextAwarePassiveObservation,
+                'ContextAwareProactiveCommunication': ContextAwareProactiveCommunication,
+                'ContextAwareInternalThoughts': ContextAwareInternalThoughts,
+                'ContextAwarePredictionEngine': ContextAwarePredictionEngine,
+                'ContextAwareModeIntegration': ContextAwareModeIntegration,
+                'ContextAwareIssueTrackingSystem': ContextAwareIssueTrackingSystem,
+                'ContextAwareReflexiveSystem': ContextAwareReflexiveSystem
+            })
         
-        # Store module classes for later use
-        self._modules = locals()
         self._init_progress.append("import_modules_complete")
     
     async def _init_tier_0_infrastructure(self):
@@ -391,7 +468,8 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
         
         # Identity evolution (needs hormone system)
         from nyx.core.identity_evolution import IdentityEvolutionSystem
-        original_identity = IdentityEvolutionSystem(hormone_system=self.hormone_system)
+        hormone_ref = getattr(self, 'hormone_system', None) if self.config.hormone_system.enabled else None
+        original_identity = IdentityEvolutionSystem(hormone_system=hormone_ref)
         await original_identity.initialize()
         self.identity_evolution = await self._wrap_with_a2a(
             original_identity,
@@ -1446,14 +1524,149 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
         # Build module registry
         await self._build_internal_module_registry()
         
-        # Set default active modules
+        # Build default active modules list - organized by initialization tiers
+        default_modules_list = [
+            # Tier 0: Infrastructure
+            "workspace_engine",
+            "module_optimizer", 
+            "system_health_checker",
+            
+            # Tier 1: Foundation
+            "hormone_system",
+            "temporal_perception",
+            "knowledge_core",
+            "procedural_memory_manager",
+            "agent_enhanced_memory",
+            "internal_feedback",
+            "dynamic_adaptation",
+            
+            # Tier 2: Core Emotional/Memory
+            "emotional_core",
+            "memory_core",
+            "memory_orchestrator",
+            "identity_evolution",
+            
+            # Tier 3: Cognitive Systems
+            "reasoning_core",
+            "attentional_controller",
+            "context_system",
+            
+            # Tier 4: Integration Systems
+            "experience_interface",
+            "experience_consolidation",
+            "cross_user_manager",
+            "relationship_manager",
+            "multimodal_integrator",
+            "imagination_simulator",
+            
+            # Tier 5: Complex Systems
+            "goal_manager",
+            "needs_system",
+            "mood_manager",
+            "digital_somatosensory_system",
+            "reward_system",
+            "conditioning_system",
+            "mode_manager",
+            "theory_of_mind",
+            "relationship_reflection",
+            
+            # Tier 6: Action Generation
+            "meta_core",
+            "agentic_action_generator",
+            "passive_observation_system",
+            "proactive_communication_engine",
+            "reflection_engine",
+            "thoughts_manager",  # internal_thoughts
+            "prediction_engine",
+            "body_image",
+            "autobiographical_narrative",
+            
+            # Tier 7: Specialized Systems - FemDom
+            "femdom_coordinator",
+            "dominance_system",
+            "protocol_enforcement",
+            "body_service_system",
+            "psychological_dominance",
+            "orgasm_control_system",
+            "dominance_persona_manager",
+            "sadistic_response_system",
+            "submission_progression",
+            "task_assignment_system",
+            "femdom_integration_manager",
+            
+            # Tier 7: Specialized Systems - Creative
+            "creative_system",
+            "creative_memory",
+            "novelty_engine",
+            "recognition_memory",
+            "content_store",
+            "capability_assessor",
+            
+            # Tier 7: Specialized Systems - Spatial
+            "spatial_mapper",
+            "spatial_memory",
+            "map_visualization",
+            "navigator_agent",
+            
+            # Tier 7: Specialized Systems - Other
+            "mode_integration",
+            "issue_tracking_system",
+            "reflexive_system",
+            "general_dominance_ideation_agent",
+            "hard_dominance_ideation_agent",
+            
+            # Tier 8: Final Setup
+            "processing_manager",
+            "self_config_manager",
+            "brain_agent",
+            "integrated_tracer",
+            "integration_manager",
+            "sync_daemon",
+            "strategy_controller",
+            "noise_filter",
+            "agent_evaluator",
+            "parallel_executor",
+            
+            # Streaming Systems (conditional - only if ENABLE_STREAMING=true)
+            # "cross_game_knowledge",
+            # "game_vision",
+            # "game_processor",
+            # "gamer_girl",
+            # "game_state",
+            # "speech_recognition",
+            # "game_learning_manager",
+            # "game_multimodal_integrator",
+            # "audience_interaction",
+            # "streaming_core",
+            # "streaming_hormone_system",
+            # "streaming_reflection_engine",
+            # "streaming_integration",
+        ]
+        
+        # Filter to only include modules that were actually initialized
         self.default_active_modules = {
-            "attentional_controller", "emotional_core", "mode_integration", "memory_core",
-            "internal_thoughts", "agentic_action_generator", "relationship_manager",
-            "spatial_mapper", "spatial_memory", "spatial_navigator",
-            "sync_daemon", "agent_evaluator"
+            module for module in default_modules_list 
+            if hasattr(self, module) and getattr(self, module) is not None
         }
-        self.default_active_modules = {mod for mod in self.default_active_modules if hasattr(self, mod) and getattr(self, mod)}
+        
+        # Add streaming modules if they were initialized
+        if os.environ.get("ENABLE_STREAMING", "false").lower() == "true":
+            streaming_modules = [
+                "cross_game_knowledge",
+                "game_vision",
+                "gamer_girl",
+                "streaming_core",
+                "streaming_hormone_system", 
+                "streaming_reflection_engine",
+            ]
+            
+            # Add streaming_integration only if A2A is enabled
+            if self.use_a2a_integration and hasattr(self, 'streaming_integration'):
+                streaming_modules.append("streaming_integration")
+            
+            for module in streaming_modules:
+                if hasattr(self, module) and getattr(self, module) is not None:
+                    self.default_active_modules.add(module)
         
         # Initialize agent capabilities if enabled
         if os.environ.get("ENABLE_AGENT", "true").lower() == "true":
@@ -1558,17 +1771,18 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             self.audience_interaction = EnhancedAudienceInteraction(self.game_state)
             
             # Create the main streaming system
-            # Note: This is a placeholder structure since the actual GamerGirl class isn't shown
-            original_gamer_girl = type('GamerGirl', (), {
-                'game_state': self.game_state,
-                'speech_recognition': self.speech_recognition,
-                'learning_manager': self.game_learning_manager,
-                'multimodal_integrator': self.game_multimodal_integrator,
-                'audience_interaction': self.audience_interaction,
-                'cross_game_knowledge': self.cross_game_knowledge,
-                'game_vision': self.game_vision,
-                'hormone_system': self.hormone_system  # Use existing hormone system
-            })()
+            from nyx.streamer.gamer_girl import GamerGirl  # Add this import
+            # Then use:
+            original_gamer_girl = GamerGirl(
+                game_state: self.game_state,
+                speech_recognition: self.speech_recognition,
+                learning_manager: self.game_learning_manager,
+                multimodal_integrator: self.game_multimodal_integrator,
+                audience_interaction: self.audience_interaction,
+                cross_game_knowledge: self.cross_game_knowledge,
+                game_vision: self.game_vision,
+                hormone_system: self.hormone_system  
+            )
             
             # Wrap with context-aware version if A2A enabled
             if self.use_a2a_integration:
@@ -1700,7 +1914,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             
             # Create wrapped instance
             wrapped = wrapper_class(original_system)
-            logger.debug(f"Enhanced {system_name} with A2A context distribution")
+            logger.debug(f"Enhanced {wrapper_class_name} with A2A context distribution")
             return wrapped
             
         except Exception as e:
