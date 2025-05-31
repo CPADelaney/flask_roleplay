@@ -81,6 +81,38 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
     Central integration point for all Nyx systems.
     Uses composition to delegate to specialized components while managing their coordination.
     """
+
+    def __init__(self, user_id: int, conversation_id: int):
+        """
+        Initialize NyxBrain with user and conversation IDs.
+        Note: Actual system initialization happens in the async initialize() method.
+        
+        Args:
+            user_id: User ID for this brain instance
+            conversation_id: Conversation ID for this brain instance
+        """
+        # Call parent class __init__ methods (without arguments for cooperative inheritance)
+        super().__init__()
+        
+        # Store the basic identifiers
+        self.user_id = user_id
+        self.conversation_id = conversation_id
+        
+        # Set initialization flags
+        self.initialized = False
+        self._initializing_flag = False
+        
+        # Set attributes expected by mixins
+        self.nyx_id = NYX_ID  # Expected by EventLogMixin
+        self.instance_id = INSTANCE_ID  # Expected by EventLogMixin
+        self.NYX_ID = NYX_ID  # Alternative attribute name used by mixins
+        self.INSTANCE_ID = INSTANCE_ID  # Alternative attribute name used by mixins
+        
+        # Initialize workspace_engine to None since it might be accessed before initialize()
+        self.workspace_engine = None
+        
+        # The actual initialization will happen in the async initialize() method
+        logger.debug(f"NyxBrain instance created for user {user_id}, conversation {conversation_id} - awaiting initialization")
     
     async def initialize(self):
         """
