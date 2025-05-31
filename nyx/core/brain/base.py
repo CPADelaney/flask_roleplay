@@ -82,181 +82,6 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
     Uses composition to delegate to specialized components while managing their coordination.
     """
     
-    def __init__(self, user_id: int, conversation_id: int):
-        """
-        Initialize the NyxBrain instance for a specific user and conversation.
-
-        Args:
-            user_id: Unique identifier for the user
-            conversation_id: Unique identifier for the conversation
-        """
-        self.user_id = user_id
-        self.conversation_id = conversation_id
-        self.trace_group_id = f"nyx-brain-{user_id}-{conversation_id}" # Set early
-
-        # --- Flags for initialization state ---
-        self.initialized = False
-        self._initializing_flag = False
-
-        # --- Core components - initialized to None, will be set in self.initialize() ---
-        self.emotional_core = None
-        self.memory_core = None
-        self.reflection_engine = None
-        self.experience_interface = None
-        self.internal_feedback = None
-        self.dynamic_adaptation = None
-        self.meta_core = None
-        self.knowledge_core = None
-        self.memory_orchestrator = None
-        self.reasoning_core = None
-        self.identity_evolution = None
-        self.experience_consolidation = None
-        self.cross_user_manager = None
-        self.reflexive_system = None
-        self.hormone_system = None
-        self.attentional_controller = None
-        self.multimodal_integrator = None
-        self.reward_system = None
-        self.temporal_perception = None
-        self.procedural_memory = None
-        self.agent_enhanced_memory = None
-        self.digital_somatosensory_system = None
-        self.needs_system = None
-        self.goal_manager = None
-        self.streaming_core = None
-        self.spatial_mapper = None
-        self.spatial_memory = None
-        self.map_visualization = None
-        self.navigator_agent = None
-        self.dominance_system = None # Will be set to femdom_coordinator
-        self.sync_daemon = None
-        self.strategy_controller = None # Should be part of sync or standalone
-        self.noise_filter = None # Should be part of sync or standalone
-        self.agent_evaluator = None
-        self.parallel_executor = None
-        self.dev_log_storage = None
-        self.processing_manager = None
-        self.self_config_manager = None
-        self.brain_agent = None
-        self.general_dominance_ideation_agent = None
-        self.hard_dominance_ideation_agent = None
-        self.protocol_enforcement = None
-        self.body_service_system = None
-        self.psychological_dominance = None
-        self.femdom_coordinator = None
-        self.femdom_integration_manager = None
-        self.orgasm_control_system = None
-        self.dominance_persona_manager = None
-        self.sadistic_response_system = None
-        self.conditioning_system = None
-        self.conditioning_maintenance = None
-        self.conditioned_input_processor = None
-        self.content_store: Optional[CreativeContentSystem] = None # Type hint if desired
-        self.capability_model: Optional[CapabilityModel] = None
-        self.capability_assessor: Optional[CapabilityAssessmentSystem] = None
-        self.context_system = None
-        self.mode_manager = None
-        self.issue_tracking_system = None
-        self.passive_observation_system = None
-        self.proactive_communication_engine = None
-        self.thoughts_manager = None
-        self.event_bus = None
-        self.system_context = None # This often refers to a global context, might be set from outside
-        self.integrated_tracer = None
-        self.integration_manager = None
-        self.checkpoint_planner = None
-        self.novelty_engine = None
-        self.recognition_memory = None
-        self.creative_memory = None
-        self.agentic_action_generator = None
-        self.module_optimizer = None
-        self.system_health_checker = None
-        self.agent_capabilities_initialized = False # Specific to agent SDK integration
-        self.current_temporal_context = None # For temporal perception
-        self.action_history: List[Dict[str, Any]] = [] # Initialize as empty list
-        self.default_active_modules: Set[str] = set() # Initialize as empty set
-        self.internal_module_registry: Dict[str, Any] = {} # Initialize as empty dict
-        self.motivations: Dict[str, float] = {} # Example: Initialize if used by action generator
-        self._module_registry: Dict[str, Any] = {}
-
-        # --- State tracking & Timestamps ---
-        self.last_interaction = datetime.datetime.now()
-        self.interaction_count = 0
-        self.cognitive_cycles_executed = 0
-        self.last_consolidation = datetime.datetime.now() - datetime.timedelta(hours=25) # Sensible default
-        self.last_needs_goal_update = datetime.datetime.now() # Sensible default
-
-        # --- Configuration defaults (can be overridden later) ---
-        self.cross_user_enabled = True
-        self.cross_user_sharing_threshold = 0.7
-        self.memory_to_emotion_influence = 0.3
-        self.emotion_to_memory_influence = 0.4
-        self.experience_to_identity_influence = 0.2
-        self.consolidation_interval = 24  # Hours
-        self.identity_reflection_interval = 10  # Interactions
-        self.need_drive_threshold = 0.4
-
-        # --- Performance tracking (initialize with default structure) ---
-        self.performance_metrics: Dict[str, Any] = {
-            "memory_operations": 0,
-            "emotion_updates": 0,
-            "reflections_generated": 0,
-            "experiences_shared": 0,
-            "cross_user_experiences_shared": 0,
-            "experience_consolidations": 0,
-            "goals_completed": 0,
-            "goals_failed": 0,
-            "steps_executed": 0,
-            "response_times": [] # Initialize as list
-        }
-
-        # --- Thinking configuration ---
-        self.thinking_config: Dict[str, Any] = {
-            "thinking_enabled": True, # Or from env/config
-            "last_thinking_interaction": 0,
-            "thinking_stats": {
-                "total_thinking_used": 0,
-                "basic_thinking_used": 0,
-                "moderate_thinking_used": 0,
-                "deep_thinking_used": 0,
-                "thinking_time_avg": 0.0
-            }
-        }
-        self.workspace_engine: NyxEngine | None = None
-
-        # --- Error tracking ---
-        self.error_registry: Dict[str, Any] = {
-            "unhandled_errors": [],
-            "handled_errors": [],
-            "error_counts": {},
-            "error_recovery_strategies": {},
-            "error_recovery_stats": {}
-        }
-
-        logger.info(f"NyxBrain __init__ completed for user {self.user_id}, conversation {self.conversation_id}")
-
-    @classmethod
-    async def get_instance(cls, user_id: int, conversation_id: int, nyx_id=None) -> 'NyxBrain':
-        key = f"brain_{nyx_id}" if nyx_id else f"brain_{user_id}_{conversation_id}"
-        instance = cls._instances.get(key)
-
-        if not instance:
-            logger.critical(f"NyxBrain.get_instance: CREATING NEW instance for key {key}")
-            instance = cls(user_id, conversation_id) # Calls __init__
-            cls._instances[key] = instance # Store instance BEFORE calling initialize
-            # ... (user_instances logic if needed here) ...
-            await instance.initialize() # Initialize the NEW instance
-        elif not instance.initialized and not instance._initializing_flag:
-            # Instance exists but was not fully initialized, and not currently initializing
-            logger.critical(f"NyxBrain.get_instance: Instance for key {key} EXISTS BUT UNINITIALIZED. Attempting to complete initialization.")
-            await instance.initialize()
-        elif instance._initializing_flag:
-            logger.warning(f"NyxBrain.get_instance: Instance for key {key} is currently initializing. Waiting or returning as-is might be needed if truly concurrent.")
-            # For now, we'll just return it. If true concurrency is an issue, an asyncio.Event might be needed here.
-        else: # Instance exists and is initialized
-            logger.debug(f"NyxBrain.get_instance: RETURNING EXISTING initialized instance for key {key}")
-        return instance
-    
     async def initialize(self):
         """
         Initialize all subsystems in the correct dependency order.
@@ -271,1554 +96,1659 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
     
         self._initializing_flag = True
         logger.critical(f"NyxBrain.initialize() ENTERED for {self.user_id}-{self.conversation_id}. Current self.initialized: {self.initialized}")
-    
         
-        logger.info(f"Initializing NyxBrain for user {self.user_id}, conversation {self.conversation_id}")
+        # Track initialization progress for better error reporting
+        self._init_progress = []
         
-        # Dynamic imports to avoid circular dependencies
-        # Import components only when needed for initialization
         try:
-            # Import core systems
-            from nyx.core.brain.module_optimizer import ModuleOptimizer
-            from nyx.core.brain.system_health_checker import SystemHealthChecker
-            from nyx.core.emotions.emotional_core import EmotionalCore
-            from nyx.core.memory_core import MemoryCoreAgents, BrainMemoryCore
-            from nyx.core.reflection_engine import ReflectionEngine
-            from nyx.core.experience_interface import ExperienceInterface
-            from nyx.core.dynamic_adaptation_system import DynamicAdaptationSystem
-            from nyx.core.internal_feedback_system import InternalFeedbackSystem
-            from nyx.core.meta_core import MetaCore
-            from nyx.core.internal_thoughts import InternalThought
-            from nyx.core.knowledge_core import KnowledgeCoreAgents
-            from nyx.core.memory_orchestrator import MemoryOrchestrator
-            from nyx.core.identity_evolution import IdentityEvolutionSystem
-            from nyx.core.experience_consolidation import ExperienceConsolidationSystem
-            from nyx.core.cross_user_experience import CrossUserExperienceManager
-            from nyx.core.emotions.hormone_system import HormoneSystem
-            from nyx.core.attentional_controller import AttentionalController
-            from nyx.core.multimodal_integrator import MultimodalIntegrator, MultimodalIntegratorContext
-            from nyx.core.reward_system import RewardSignalProcessor
-            from nyx.core.temporal_perception import TemporalPerceptionSystem
-            from nyx.core.procedural_memory.agent import AgentEnhancedMemoryManager
-            from nyx.core.digital_somatosensory_system import DigitalSomatosensorySystem
-            from nyx.core.needs_system import NeedsSystem
-            from nyx.core.conditioning_system import ConditioningSystem
-            from nyx.core.goal_system import GoalManager
-            from nyx.core.reasoning_agents import integrated_reasoning_agent, triage_agent as reasoning_triage_agent
-            from nyx.apitools.thinking_tools import should_use_extended_thinking, should_use_extended_thinking, generate_reasoned_response 
-            from nyx.core.dominance import create_dominance_ideation_agent, create_hard_dominance_ideation_agent
-            from nyx.core.mood_manager import MoodManager
-            from nyx.core.theory_of_mind import TheoryOfMind, SubspaceDetectionSystem, create_theory_of_mind_agent, create_subspace_detection_agent
-            from nyx.core.imagination_simulator import ImaginationSimulator
-            from nyx.core.internal_thoughts import InternalThoughtsManager, pre_process_input, pre_process_output
-            from nyx.core.integration.system_context import get_system_context
-    
-            from nyx.core.femdom.body_service_system import BodyServiceSystem
-            from nyx.core.femdom.protocol_enforcement import ProtocolEnforcement
-            from nyx.core.femdom.psychological_dominance import PsychologicalDominance
-            from nyx.core.femdom.femdom_coordinator import FemdomCoordinator
-            from nyx.core.femdom.femdom_integration_manager import FemdomIntegrationManager    
-            from nyx.core.femdom.orgasm_control import OrgasmControlSystem
-            from nyx.core.femdom.persona_manager import DominancePersonaManager
-            from nyx.core.femdom.sadistic_responses import SadisticResponseSystem    
-            from nyx.core.femdom.submission_progression import SubmissionProgression
-            from nyx.core.femdom.task_assignment_system import TaskAssignmentSystem
-    
-            from nyx.core.issue_tracking_system import IssueTrackingSystem
-            from nyx.core.passive_observation import PassiveObservationSystem
-            from nyx.core.proactive_communication import ProactiveCommunicationEngine            
-    
-            from nyx.core.spatial.spatial_mapper import SpatialMapper
-            from nyx.core.spatial.spatial_memory import SpatialMemoryIntegration
-            from nyx.core.spatial.map_visualization import MapVisualization
-            from nyx.core.spatial.navigator_agent import SpatialNavigatorAgent
-    
-            from nyx.core.brain.adaptation.self_config import SelfConfigManager, EnhancedConfigManager, UnifiedConfigManager
+            # Import all required modules at once
+            await self._import_modules()
+            
+            # Initialize in dependency order
+            await self._init_tier_0_infrastructure()
+            await self._init_tier_1_foundation()
+            await self._init_tier_2_core_emotional_memory()
+            await self._init_tier_3_cognitive_systems()
+            await self._init_tier_4_integration_systems()
+            await self._init_tier_5_complex_systems()
+            await self._init_tier_6_action_generation()
+            await self._init_tier_7_specialized_systems()
+            await self._init_tier_8_final_setup()
             
-            # Sync system imports
-            from nyx.core.sync.nyx_sync_daemon import NyxSyncDaemon
-            from nyx.core.sync.strategy_controller import get_active_strategies, mark_strategy_for_review
-            from nyx.core.sync.strategy_register import register_decision
-            
-            # Tools imports
-            from nyx.core.tools.evaluator import AgentEvaluator
-            from nyx.core.tools.parallel import ParallelToolExecutor          
-            
-            from nyx.core.context_awareness import ContextAwarenessSystem
-            from nyx.core.interaction_mode_manager import InteractionModeManager
-            from nyx.core.mode_integration import ModeIntegrationManager
-            from nyx.core.integration.integration_manager import IntegrationManager
-    
-            from nyx.core.procedural_memory.manager import ProceduralMemoryManager
-            from nyx.core.procedural_memory.agent import ProceduralMemoryAgents, AgentEnhancedMemoryManager
-    
-            from nyx.core.brain.checkpointing_agent import CheckpointingPlannerAgent        
-    
-            from nyx.creative.agentic_system import AgenticCreativitySystem, integrate_with_existing_system
-                    
-            # Import conditioning systems
-            from nyx.core.conditioning_config import ConditioningConfiguration
-            from nyx.core.conditioning_system import ConditioningSystem
-            from nyx.core.conditioning_maintenance import ConditioningMaintenanceSystem
-            from nyx.core.input_processor import BlendedInputProcessor  # Import input processor
-            
-            # Import A2A context-aware wrappers
-            from nyx.core.a2a.context_aware_conditioning import ContextAwareConditioningSystem
-            from nyx.core.a2a.context_aware_context_system import ContextAwareContextSystem
-            from nyx.core.a2a.context_aware_attentional_controller import ContextAwareAttentionalController
-            from nyx.core.a2a.context_aware_body_image import ContextAwareBodyImage
-            from nyx.core.a2a.context_aware_creative_memory_integration import ContextAwareCreativeMemoryIntegration
-            from nyx.core.a2a.context_aware_autobiographical_narrative import ContextAwareAutobiographicalNarrative
-            from nyx.core.a2a.context_aware_cross_user_experience import ContextAwareCrossUserExperience
-            from nyx.core.a2a.context_aware_distributed_processing import ContextAwareDistributedProcessing
-            from nyx.core.a2a.context_aware_dominance import ContextAwareDominanceSystem
-            from nyx.core.a2a.context_aware_dynamic_adaptation import ContextAwareDynamicAdaptation
-            from nyx.core.a2a.context_aware_experience_consolidation import ContextAwareExperienceConsolidation
-            from nyx.core.a2a.context_aware_experience_interface import ContextAwareExperienceInterface
-            from nyx.core.a2a.context_aware_interaction_goals import ContextAwareInteractionGoals
-            from nyx.core.a2a.context_aware_interaction_mode_manager import ContextAwareInteractionModeManager
-            from nyx.core.a2a.context_aware_internal_feedback_system import ContextAwareInternalFeedbackSystem
-            from nyx.core.a2a.context_aware_internal_thoughts import ContextAwareInternalThoughts
-            from nyx.core.a2a.context_aware_issue_tracking_system import ContextAwareIssueTrackingSystem
-            from nyx.core.a2a.context_aware_knowledge_core import ContextAwareKnowledgeCore
-            from nyx.core.a2a.context_aware_memory_core import ContextAwareMemoryCore
-            from nyx.core.a2a.context_aware_memory_orchestrator import ContextAwareMemoryOrchestrator
-            from nyx.core.a2a.context_aware_identity_evolution import ContextAwareIdentityEvolution
-            from nyx.core.a2a.context_aware_meta_core import ContextAwareMetaCore
-            from nyx.core.a2a.context_aware_mode_integration import ContextAwareModeIntegration
-            from nyx.core.a2a.context_aware_mood_manager import ContextAwareMoodManager
-            from nyx.core.a2a.context_aware_novelty_engine import ContextAwareNoveltyEngine
-            from nyx.core.a2a.context_aware_parallel import ContextAwareParallelExecutor  
-            from nyx.core.a2a.context_aware_passive_observation import ContextAwarePassiveObservation
-            from nyx.core.a2a.context_aware_prediction_engine import ContextAwarePredictionEngine
-            from nyx.core.a2a.context_aware_recognition_memory import ContextAwareRecognitionMemory
-            from nyx.core.a2a.context_aware_reflection_engine import ContextAwareReflectionEngine
-            from nyx.core.a2a.context_aware_reflexive_system import ContextAwareReflexiveSystem
-            from nyx.core.a2a.context_aware_relationship_manager import ContextAwareRelationshipManager
-            from nyx.core.a2a.context_aware_relationship_reflection import ContextAwareRelationshipReflection
-            from nyx.core.a2a.context_aware_reward_system import ContextAwareRewardSystem
-            from nyx.core.a2a.context_aware_temporal_perception import ContextAwareTemporalPerception
-            from nyx.core.a2a.context_aware_action_generator import ContextAwareAgenticActionGenerator
-            from nyx.core.a2a.context_aware_somatosensory_system import ContextAwareDigitalSomatosensorySystem
-            from nyx.core.a2a.context_aware_body_service import ContextAwareBodyService
-            from nyx.core.a2a.context_aware_femdom_coordinator import ContextAwareFemdomCoordinator
-            from nyx.core.a2a.context_aware_femdom_integration import ContextAwareFemdomIntegration
-            from nyx.core.a2a.context_aware_orgasm_control import ContextAwareOrgasmControl
-            from nyx.core.a2a.context_aware_persona_manager import ContextAwarePersonaManager
-            from nyx.core.a2a.context_aware_spatial_mapper import ContextAwareSpatialMapper
-            from nyx.core.a2a.context_aware_spatial_memory import ContextAwareSpatialMemoryIntegration
-            from nyx.core.a2a.context_aware_navigator_agent import ContextAwareSpatialNavigatorAgent
-            from nyx.core.a2a.context_aware_nyx_sync_daemon import ContextAwareNyxSyncDaemon
-            from nyx.core.a2a.context_aware_evaluator import ContextAwareAgentEvaluator
-            from nyx.core.a2a.context_aware_setup import setup_context_aware_creative_modules, integrate_creative_modules_with_brain
-
-
-            self.config = BrainConfig.default()
-
-            from dev_log.storage import get_dev_log_storage
-            self.dev_log_storage = get_dev_log_storage()
-            await self.dev_log_storage.initialize()
-
-            self.system_context = get_system_context()
-
-            # Initialize Global Workspace Architecture
-            if self.workspace_engine is None:
-                logger.debug("Initializing Global Workspace Architecture")
-                gw_modules = build_gw_modules(self)
-                self.workspace_engine = NyxEngineV3(
-                    gw_modules,
-                    hz=10.0,  # 10Hz cognitive cycle
-                    persist_bias=Path(f"gw_bias_{self.user_id}_{self.conversation_id}.json"),
-                    enable_unconscious=True
-                )
-                await self.workspace_engine.start()
-                logger.info(f"Global Workspace Engine started with {len(gw_modules)} modules")      
-            
-            has_relationship_manager = False
-            RelationshipManager = None
-            try:
-                from nyx.core.relationship_manager import RelationshipManager
-                has_relationship_manager = True
-            except ImportError:
-                try: from nyx.core.social.relationship_manager import RelationshipManager; has_relationship_manager = True
-                except ImportError: logger.warning("RelationshipManager module not found.")
-    
-            # A2A Integration control flag
-            self.use_a2a_integration = getattr(self, 'use_a2a_integration', True)  # Default to True
-    
-            # --- Step 2: Support Systems & Configs ---
-            logger.debug(f"NyxBrain Init Step 2: Support systems for {self.user_id}-{self.conversation_id}")
-            self.module_optimizer = ModuleOptimizer(self)
-            self.system_health_checker = SystemHealthChecker(self)
-            self.checkpoint_planner = CheckpointingPlannerAgent()
-            self.context_config = { "focus_limit": 4, "background_limit": 3, "zoom_in_limit": 2, "high_fidelity_threshold": 0.7, "med_fidelity_threshold": 0.5, "low_fidelity_threshold": 0.3, "max_context_tokens": 3500 }
-
-            if not self.event_bus:
-                try:
-                    from nyx.core.events.event_bus import EventBus
-                    self.event_bus = EventBus()
-                    await self.event_bus.initialize()
-                    logger.debug("Event bus initialized")
-                except ImportError:
-                    logger.warning("EventBus module not found - event system will be unavailable")
-                    self.event_bus = None
-    
-            # --- Step 3: Core Systems - Tier 1 ---
-            logger.debug(f"NyxBrain Init Step 3: Core Systems - Tier 1 for {self.user_id}-{self.conversation_id}")
-            if self.config.emotional_core.enabled and self.config.hormone_system.enabled:
-                from nyx.core.emotions.hormone_system import HormoneSystem
-                from nyx.core.emotions import EmotionalCore
-                from nyx.core.a2a.context_aware_emotional_core import ContextAwareEmotionalCore
-                from nyx.core.a2a.context_aware_hormone_system import ContextAwareHormoneSystem
-                
-                # Create original systems first
-                original_hormone_system = HormoneSystem()
-                original_emotional_core = EmotionalCore()
-                
-                # Set up the reference between original systems
-                original_emotional_core.set_hormone_system(original_hormone_system)
-                
-                # Create context-aware wrappers
-                self.hormone_system = ContextAwareHormoneSystem(original_hormone_system)
-                self.emotional_core = ContextAwareEmotionalCore(original_emotional_core)
-                
-                # Optional: Set wrapper references if needed for cross-communication
-                # This allows the wrappers to communicate directly if necessary
-                self.emotional_core._hormone_system_wrapper = self.hormone_system
-                self.hormone_system._emotional_core_wrapper = self.emotional_core
-                
-            elif self.config.emotional_core.enabled:
-                # Just emotional core without hormone system
-                from nyx.core.emotions import EmotionalCore
-                from nyx.core.a2a.context_aware_emotional_core import ContextAwareEmotionalCore
-                
-                original_emotional_core = EmotionalCore()
-                self.emotional_core = ContextAwareEmotionalCore(original_emotional_core)
-                
-            elif self.config.hormone_system.enabled:
-                # Just hormone system without emotional core (unlikely but possible)
-                from nyx.core.emotions.hormone_system import HormoneSystem
-                from nyx.core.a2a.context_aware_hormone_system import ContextAwareHormoneSystem
-                
-                original_hormone_system = HormoneSystem()
-                self.hormone_system = ContextAwareHormoneSystem(original_hormone_system)
-    
-            original_memory_core = MemoryCoreAgents(self.user_id, self.conversation_id)
-            await original_memory_core.initialize()
-            
-            if self.use_a2a_integration:
-                from nyx.core.a2a.context_aware_memory_core import ContextAwareMemoryCore
-                self.memory_core = ContextAwareMemoryCore(original_memory_core)
-                logger.debug("Enhanced MemoryCore with A2A context distribution")
-            else:
-                self.memory_core = original_memory_core
-            
-            original_memory_orchestrator = MemoryOrchestrator(self.user_id, self.conversation_id)
-            await original_memory_orchestrator.initialize()
-            
-            if self.use_a2a_integration:
-                from nyx.core.a2a.context_aware_memory_orchestrator import ContextAwareMemoryOrchestrator
-                self.memory_orchestrator = ContextAwareMemoryOrchestrator(original_memory_orchestrator)
-                logger.debug("Enhanced MemoryOrchestrator with A2A context distribution")
-            else:
-                self.memory_orchestrator = original_memory_orchestrator
-
-            original_identity_evolution = IdentityEvolutionSystem(hormone_system=self.hormone_system)
-            await original_identity_evolution.initialize()
-
-            if self.use_a2a_integration:
-                from nyx.core.a2a.context_aware_identity_evolution import ContextAwareIdentityEvolution
-                self.identity_evolution = ContextAwareIdentityEvolution(original_identity_evolution)
-                logger.debug("Enhanced IdentityEvolution with A2A context distribution")
-            else:
-                self.identity_evolution = original_identity_evolution
-            
-            original_knowledge_core = KnowledgeCoreAgents()
-            await original_knowledge_core.initialize()
-            
-            if self.use_a2a_integration:
-                from nyx.core.a2a.context_aware_knowledge_core import ContextAwareKnowledgeCore
-                self.knowledge_core = ContextAwareKnowledgeCore(original_knowledge_core)
-                logger.debug("Enhanced KnowledgeCore with A2A context distribution")
-            else:
-                self.knowledge_core = original_knowledge_core
-
-            if self.config.attentional_controller.enabled:
-                from nyx.core.attentional_controller import AttentionalController
-                from nyx.core.a2a.context_aware_attentional_controller import ContextAwareAttentionalController
-                
-                # Create original system
-                original_attentional_controller = AttentionalController(emotional_core=self.emotional_core)
-                
-                # Wrap with context-aware version if A2A enabled
-                if self.use_a2a_integration:
-                    self.attentional_controller = ContextAwareAttentionalController(original_attentional_controller)
-                    logger.debug("Enhanced AttentionalController with A2A context distribution")
-                else:
-                    self.attentional_controller = original_attentional_controller
-
-
-            original_temporal_perception = TemporalPerceptionSystem(self.user_id, self.conversation_id)
-            await original_temporal_perception.initialize(brain_context=self, first_interaction_timestamp=None)            
-            # Wrap with context-aware version if A2A enabled
-            if self.use_a2a_integration:
-                from nyx.core.a2a.context_aware_temporal_perception import ContextAwareTemporalPerception
-                self.temporal_perception = ContextAwareTemporalPerception(original_temporal_perception)
-                logger.debug("Enhanced TemporalPerceptionSystem with A2A context distribution")
-            else:
-                self.temporal_perception = original_temporal_perception
-            
-            from nyx.core.reasoning_core import ReasoningCore
-            
-            # Create the original reasoning core instance (ensure it's an instance, not a function)
-            # Assuming ReasoningCore needs knowledge_core, which is initialized before this block
-            if not hasattr(self, 'knowledge_core') or not self.knowledge_core:
-                # Placeholder for knowledge_core if it's not ready. This might need adjustment based on actual dependencies.
-                logger.warning("KnowledgeCore not fully initialized before ReasoningCore. Using placeholder.")
-                # from nyx.core.knowledge_core import KnowledgeCoreAgents # Assuming this is the class
-                # temp_knowledge_core = KnowledgeCoreAgents()
-                # await temp_knowledge_core.initialize()
-                # original_reasoning_core_instance = ReasoningCore(knowledge_core=temp_knowledge_core)
-                # For now, let's assume knowledge_core is initialized earlier or ReasoningCore handles None.
-                original_reasoning_core_instance = ReasoningCore(knowledge_core=getattr(self, 'knowledge_core', None))
-            else:
-                original_reasoning_core_instance = ReasoningCore(knowledge_core=self.knowledge_core)
-            
-            if self.use_a2a_integration:
-                from nyx.core.a2a.context_aware_reasoning_core import ContextAwareReasoningCore
-                # Store the ContextAwareReasoningCore instance separately
-                self.context_aware_reasoning_module_instance = ContextAwareReasoningCore(original_reasoning_core_instance)
-                logger.debug("Instantiated ContextAwareReasoningCore module.")
-
-                # Initialize reasoning agents, passing the CARC instance
-                from nyx.core.a2a.context_aware_reasoning_agents import ContextAwareReasoningAgents
-                # Ensure reasoning_triage_agent and integrated_reasoning_agent are defined or imported
-                # For example:
-                # from nyx.core.reasoning_agents import reasoning_triage_agent, integrated_reasoning_agent
-                self.reasoning_agents = ContextAwareReasoningAgents(
-                    reasoning_triage_agent,
-                    integrated_reasoning_agent,
-                    self.context_aware_reasoning_module_instance 
-                )
-                self.reasoning_core = self.reasoning_agents 
-                logger.debug("Enhanced ReasoningAgents with A2A context distribution, using ContextAwareReasoningCore module.")
-            else:
-                self.reasoning_core = integrated_reasoning_agent
-                self.reasoning_triage_agent = reasoning_triage_agent 
-            
-            original_internal_feedback = InternalFeedbackSystem()
-            
-            # Then wrap if A2A enabled
-            if self.use_a2a_integration:
-                from nyx.core.a2a.context_aware_internal_feedback_system import ContextAwareInternalFeedbackSystem
-                self.internal_feedback = ContextAwareInternalFeedbackSystem(original_internal_feedback)
-                logger.debug("Enhanced InternalFeedbackSystem with A2A context distribution")
-            else:
-                self.internal_feedback = original_internal_feedback
-            
-            # Create original dynamic adaptation system
-            original_dynamic_adaptation = DynamicAdaptationSystem()
-            
-            # Wrap with context-aware version if A2A enabled
-            if self.use_a2a_integration:
-                self.dynamic_adaptation = ContextAwareDynamicAdaptation(original_dynamic_adaptation)
-                logger.debug("Enhanced DynamicAdaptationSystem with A2A context distribution")
-            else:
-                self.dynamic_adaptation = original_dynamic_adaptation
-            
-            # Initialize base context system
-            base_context_system = ContextAwarenessSystem(emotional_core=self.emotional_core)
-            
-            # Wrap with context-aware version if A2A enabled
-            if self.use_a2a_integration:
-                self.context_system = ContextAwareContextSystem(base_context_system)
-                logger.debug("Enhanced ContextAwarenessSystem with A2A context distribution")
-            else:
-                self.context_system = base_context_system
-            
-            # Create original experience interface
-            original_experience_interface = ExperienceInterface(self.memory_core, self.emotional_core)
-            
-            # Wrap with context-aware version if A2A enabled
-            if self.use_a2a_integration:
-                self.experience_interface = ContextAwareExperienceInterface(original_experience_interface)
-                logger.debug("Enhanced ExperienceInterface with A2A context distribution")
-            else:
-                self.experience_interface = original_experience_interface
-                
-            # Create original experience consolidation system
-            original_experience_consolidation = ExperienceConsolidationSystem(
-                memory_core=self.memory_core, 
-                experience_interface=self.experience_interface
-            )
-            
-            # Wrap with context-aware version if A2A enabled
-            if self.use_a2a_integration:
-                self.experience_consolidation = ContextAwareExperienceConsolidation(original_experience_consolidation)
-                logger.debug("Enhanced ExperienceConsolidationSystem with A2A context distribution")
-            else:
-                self.experience_consolidation = original_experience_consolidation
-            
-            original_cross_user_manager = CrossUserExperienceManager(
-                memory_core=self.memory_core, 
-                experience_interface=self.experience_interface
-            )
-            
-            if self.use_a2a_integration:
-                self.cross_user_manager = ContextAwareCrossUserExperience(original_cross_user_manager)
-                logger.debug("Enhanced CrossUserExperienceManager with A2A context distribution")
-            else:
-                self.cross_user_manager = original_cross_user_manager
-            
-
-            
-            self.procedural_memory_manager = ProceduralMemoryManager()
-            self.agent_enhanced_memory = AgentEnhancedMemoryManager(memory_manager=self.procedural_memory_manager)
-    
-            # --- Step 4: Core Systems - Tier 2 (Reward, DSS, Conditioning) ---
-            self.goal_manager = GoalManager(brain_reference=self)
-            if self.goal_manager:
-                from nyx.core.a2a.context_aware_goal_manager import ContextAwareGoalManager
-                self.goal_manager = ContextAwareGoalManager(self.goal_manager)
-                logger.debug("Enhanced GoalManager with context distribution")
-            
-            self.needs_system = NeedsSystem(goal_manager=self.goal_manager)  
-            if self.needs_system:
-                from nyx.core.a2a.context_aware_needs import ContextAwareNeedsSystem
-                self.needs_system = ContextAwareNeedsSystem(self.needs_system)
-                logger.debug("Enhanced NeedsSystem with context distribution")
-
-            # In the appropriate step where body image would be initialized:
-            if hasattr(self.config, 'body_image') and self.config.body_image.enabled:
-                from nyx.core.body_image import BodyImage
-                from nyx.core.a2a.context_aware_body_image import ContextAwareBodyImage
-                
-                # Create original system
-                original_body_image = BodyImage()
-                
-                # Wrap with context-aware version if A2A enabled
-                if self.use_a2a_integration:
-                    self.body_image = ContextAwareBodyImage(original_body_image)
-                    logger.debug("Enhanced BodyImage with A2A context distribution")
-                else:
-                    self.body_image = original_body_image
-    
-            logger.debug(f"NyxBrain Init Step 4: Core Systems - Tier 2 (Interdependent) for {self.user_id}-{self.conversation_id}")
-            self.mood_manager = MoodManager(
-                emotional_core=self.emotional_core, 
-                hormone_system=self.hormone_system,
-                needs_system=self.needs_system, 
-                goal_manager=self.goal_manager
-            )
-            
-            # Wrap with context-aware version if A2A enabled
-            if self.use_a2a_integration:
-                from nyx.core.a2a.context_aware_mood_manager import ContextAwareMoodManager
-                self.mood_manager = ContextAwareMoodManager(self.mood_manager)
-                logger.debug("Enhanced MoodManager with A2A context distribution")
-            
-            original_somatosensory_system = DigitalSomatosensorySystem(
-                memory_core=self.memory_core, 
-                emotional_core=self.emotional_core, 
-                hormone_system=self.hormone_system,
-                needs_system=self.needs_system
-            )
-            await original_somatosensory_system.initialize()
-            
-            # Wrap with context-aware version if A2A enabled
-            if self.use_a2a_integration:
-                self.digital_somatosensory_system = ContextAwareDigitalSomatosensorySystem(original_somatosensory_system)
-                logger.debug("Enhanced DigitalSomatosensorySystem with A2A context distribution")
-            else:
-                self.digital_somatosensory_system = original_somatosensory_system
-            
-            # NOW create reward system with DSS reference
-            original_reward_system = RewardSignalProcessor(
-                emotional_core=self.emotional_core, 
-                identity_evolution=self.identity_evolution, 
-                somatosensory_system=self.digital_somatosensory_system,  # ✅ NOW IT EXISTS
-                mood_manager=self.mood_manager,
-                needs_system=self.needs_system
-            )
-            
-            # Wrap with context-aware version if A2A enabled
-            if self.use_a2a_integration:
-                from nyx.core.a2a.context_aware_reward_system import ContextAwareRewardSystem
-                self.reward_system = ContextAwareRewardSystem(original_reward_system)
-                logger.debug("Enhanced RewardSignalProcessor with A2A context distribution")
-            else:
-                self.reward_system = original_reward_system
-            
-            # Set the back-reference
-            if hasattr(self.digital_somatosensory_system, 'set_reward_system'):
-                self.digital_somatosensory_system.set_reward_system(self.reward_system)
-    
-            # Initialize conditioning configuration (keep existing)
-            self.conditioning_config = ConditioningConfiguration()
-
-            logger.debug(f"NYXB_DEBUG: Before ConditioningSystem init. Type of self.reward_system: {type(self.reward_system)}")
-            if self.reward_system is None:
-                logger.error("NYXB_DEBUG: CRITICAL! self.reward_system is None right before creating ConditioningSystem.")
-            else:
-                # If A2A wrapped, check original
-                original_rs_for_cs = getattr(self.reward_system, 'original_system', self.reward_system)
-                logger.debug(f"NYXB_DEBUG: Original reward system for CS: {type(original_rs_for_cs)}")
-                if not isinstance(original_rs_for_cs, RewardSignalProcessor):
-                    logger.warning(f"NYXB_DEBUG: Original reward system is not RewardSignalProcessor, it is {type(original_rs_for_cs)}")
-            
-            # Initialize base conditioning system (keep existing)
-            base_conditioning_system = ConditioningSystem(
-                reward_system=original_reward_system,  # Use original
-                emotional_core=original_emotional_core.original_system if hasattr(self.emotional_core, 'original_system') else self.emotional_core,
-                memory_core=self.memory_core.original_system if hasattr(self.memory_core, 'original_system') else self.memory_core,
-                somatosensory_system=original_somatosensory_system
-            )
-            
-            # Store base system for reference if needed
-            self._base_conditioning_system = base_conditioning_system
-            
-            # ENHANCED: Wrap with context-aware version if A2A enabled
-            if self.use_a2a_integration:
-                from nyx.core.a2a.context_aware_conditioning import ContextAwareConditioningSystem
-                self.conditioning_system = ContextAwareConditioningSystem(base_conditioning_system)
-                logger.debug("Enhanced ConditioningSystem with A2A context distribution")
-            else:
-                self.conditioning_system = base_conditioning_system
-            
-            # Initialize dependent systems with the (possibly wrapped) conditioning system
-            self.conditioning_maintenance = ConditioningMaintenanceSystem(
-                conditioning_system=self.conditioning_system,  # Will work with wrapped version
-                reward_system=self.reward_system
-            )
-            await self.conditioning_maintenance.start_maintenance_scheduler(run_immediately=False)
-
-            personality_profile = await self.conditioning_config.get_personality_profile()
-            await ConditioningSystem.initialize_baseline_personality(
-                base_conditioning_system,  # Use base system, not wrapped
-                personality_profile
-            )
-
-            # After creating conditioning system
-            logger.debug(f"Conditioning context emotional_core type: {type(base_conditioning_system.context.emotional_core)}")
-            logger.debug(f"Has update_neurochemical: {hasattr(base_conditioning_system.context.emotional_core, 'update_neurochemical')}")
-                        
-            original_mode_manager = InteractionModeManager(
-                context_system=self.context_system, 
-                emotional_core=self.emotional_core, 
-                reward_system=self.reward_system, 
-                goal_manager=self.goal_manager
-            )
-            
-            if self.use_a2a_integration:
-                from nyx.core.a2a.context_aware_interaction_mode_manager import ContextAwareInteractionModeManager
-                self.mode_manager = ContextAwareInteractionModeManager(original_mode_manager)
-            else:
-                self.mode_manager = original_mode_manager
-            
-            # Now create input processor with mode_manager
-            self.conditioned_input_processor = BlendedInputProcessor(
-                conditioning_system=self.conditioning_system,
-                emotional_core=self.emotional_core, 
-                somatosensory_system=self.digital_somatosensory_system,
-                mode_manager=self.mode_manager  # ✅ NOW EXISTS
-            )
-            
-            # NEW: Wrap with context-aware version if A2A enabled
-            if self.use_a2a_integration:
-                from nyx.core.a2a.context_aware_input_processor import ContextAwareInputProcessor
-                self.conditioned_input_processor = ContextAwareInputProcessor(self.conditioned_input_processor)
-                logger.debug("Enhanced InputProcessor with A2A context distribution")
-            
-            # Initialize baseline personality
-            personality_profile_obj = await self.conditioning_config.get_personality_profile()
-            personality_profile_dict = personality_profile_obj.model_dump() if hasattr(personality_profile_obj, "model_dump") else personality_profile_obj
-            await ConditioningSystem.initialize_baseline_personality(
-                self.conditioning_system,  # Changed from keyword to positional argument
-                personality_profile=personality_profile_dict
-            )
-            logger.debug("Baseline personality conditioning completed.")
-    
-            if self.reward_system and self.needs_system:
-                if hasattr(self.reward_system, 'needs_system'): # Check if attribute exists
-                    self.reward_system.needs_system = self.needs_system
-                    logger.debug("Linked NeedsSystem reference to RewardSignalProcessor.")
-                else:
-                    logger.warning("RewardSignalProcessor does not have a 'needs_system' attribute to link to.")
-    
-            # --- Step 5: Higher-Level Cognitive & Interaction Systems (Part 1) ---
-            logger.debug(f"NyxBrain Init Step 5: Higher-Level Systems (Part 1) for {self.user_id}-{self.conversation_id}")
-            if has_relationship_manager and RelationshipManager:
-                original_relationship_manager = RelationshipManager(
-                    memory_orchestrator=self.memory_orchestrator, 
-                    emotional_core=self.emotional_core
-                )
-                
-                # Wrap with context-aware version if A2A enabled
-                if self.use_a2a_integration:
-                    from nyx.core.a2a.context_aware_relationship_manager import ContextAwareRelationshipManager
-                    self.relationship_manager = ContextAwareRelationshipManager(original_relationship_manager)
-                    logger.debug("Enhanced RelationshipManager with A2A context distribution")
-                else:
-                    self.relationship_manager = original_relationship_manager
-
-            # Create original multimodal integrator (keep existing creation)
-            original_multimodal_integrator = MultimodalIntegrator(
-                reasoning_core=self.reasoning_core, 
-                attentional_controller=self.attentional_controller
-            )
-            
-            # NEW: Wrap with context-aware version if A2A enabled
-            if self.use_a2a_integration:
-                from nyx.core.a2a.context_aware_multimodal_integrator import ContextAwareMultimodalIntegrator
-                self.multimodal_integrator = ContextAwareMultimodalIntegrator(original_multimodal_integrator)
-                logger.debug("Enhanced MultimodalIntegrator with A2A context distribution")
-            else:
-                self.multimodal_integrator = original_multimodal_integrator
-            
-            original_imagination_simulator = ImaginationSimulator(
-                reasoning_core=self.reasoning_core, 
-                knowledge_core=self.knowledge_core,
-                emotional_core=self.emotional_core, 
-                identity_evolution=self.identity_evolution
-            )
-            
-            # NEW: Wrap with context-aware version if A2A enabled
-            if self.use_a2a_integration:
-                from nyx.core.a2a.context_aware_imagination_simulator import ContextAwareImaginationSimulator
-                self.imagination_simulator = ContextAwareImaginationSimulator(original_imagination_simulator)
-                logger.debug("Enhanced ImaginationSimulator with A2A context distribution")
-            else:
-                self.imagination_simulator = original_imagination_simulator
-            
-            # In Step 5, replace the spatial mapper initialization with:
-            original_spatial_mapper = SpatialMapper(memory_integration=self.memory_core)
-            if hasattr(original_spatial_mapper, "initialize"): 
-                await original_spatial_mapper.initialize()
-            
-            # Wrap with context-aware version if A2A enabled
-            if self.use_a2a_integration:
-                self.spatial_mapper = ContextAwareSpatialMapper(original_spatial_mapper)
-                logger.debug("Enhanced SpatialMapper with A2A context distribution")
-            else:
-                self.spatial_mapper = original_spatial_mapper
-            
-            # Update spatial memory initialization
-            original_spatial_memory = SpatialMemoryIntegration(
-                spatial_mapper=self.spatial_mapper, 
-                memory_core=self.memory_core
-            )
-            
-            # Wrap with context-aware version if A2A enabled
-            if self.use_a2a_integration:
-                self.spatial_memory = ContextAwareSpatialMemoryIntegration(original_spatial_memory)
-                logger.debug("Enhanced SpatialMemoryIntegration with A2A context distribution")
-            else:
-                self.spatial_memory = original_spatial_memory
-            
-            # Keep map visualization as is (no A2A needed)
-            self.map_visualization = MapVisualization()
-            
-            # Update navigator agent initialization
-            original_navigator_agent = SpatialNavigatorAgent(spatial_mapper=self.spatial_mapper)
-            
-            # Wrap with context-aware version if A2A enabled
-            if self.use_a2a_integration:
-                self.navigator_agent = ContextAwareSpatialNavigatorAgent(original_navigator_agent)
-                logger.debug("Enhanced SpatialNavigatorAgent with A2A context distribution")
-            else:
-                self.navigator_agent = original_navigator_agent
-    
-            # --- Step 6: Specialized Systems (FemDom, Creative, Novelty, etc.) ---
-            logger.debug(f"NyxBrain Init Step 6: Specialized Systems for {self.user_id}-{self.conversation_id}")
-            
-            self.theory_of_mind = TheoryOfMind(relationship_manager=self.relationship_manager, multimodal_integrator=self.multimodal_integrator, memory_core=self.memory_core)
-            if self.theory_of_mind:
-                from nyx.core.a2a.context_aware_theory_of_mind import ContextAwareTheoryOfMind
-                self.theory_of_mind = ContextAwareTheoryOfMind(self.theory_of_mind)
-                logger.debug("Enhanced TheoryOfMind with context distribution")
-
-            # Initialize relationship reflection system if relationship manager exists
-            if hasattr(self, 'relationship_manager') and self.relationship_manager:
-                try:
-                    from nyx.core.relationship_reflection import RelationshipReflectionSystem
-                    
-                    original_relationship_reflection = RelationshipReflectionSystem(
-                        relationship_manager=self.relationship_manager,
-                        theory_of_mind=self.theory_of_mind,
-                        memory_core=self.memory_core,
-                        identity_evolution=self.identity_evolution,
-                        hormone_system=self.hormone_system
-                    )
-                    
-                    # Wrap with context-aware version if A2A enabled
-                    if self.use_a2a_integration:
-                        from nyx.core.a2a.context_aware_relationship_reflection import ContextAwareRelationshipReflection
-                        self.relationship_reflection = ContextAwareRelationshipReflection(original_relationship_reflection)
-                        logger.debug("Enhanced RelationshipReflectionSystem with A2A context distribution")
-                    else:
-                        self.relationship_reflection = original_relationship_reflection
-                        
-                except ImportError:
-                    logger.warning("RelationshipReflectionSystem module not found")
-                    self.relationship_reflection = None
-
-            if hasattr(self, 'goal_manager') and self.goal_manager:
-                # Check if there's an interaction goals component
-                if hasattr(self.goal_manager, 'interaction_goals') or hasattr(self, 'interaction_goals'):
-                    # Get the original interaction goals (might be part of goal_manager)
-                    original_interaction_goals = getattr(self.goal_manager, 'interaction_goals', None) or getattr(self, 'interaction_goals', None)
-                    
-                    if original_interaction_goals and self.use_a2a_integration:
-                        from nyx.core.a2a.context_aware_interaction_goals import ContextAwareInteractionGoals
-                        # Set it on the appropriate object
-                        if hasattr(self.goal_manager, 'interaction_goals'):
-                            self.goal_manager.interaction_goals = ContextAwareInteractionGoals(original_interaction_goals)
-                        else:
-                            self.interaction_goals = ContextAwareInteractionGoals(original_interaction_goals)
-                        logger.debug("Enhanced InteractionGoals with A2A context distribution")
-                
-# Initialize femdom components
-            # Initialize ProtocolEnforcement
-            original_protocol_enforcement = ProtocolEnforcement(
-                reward_system=self.reward_system, 
-                memory_core=self.memory_core, 
-                relationship_manager=self.relationship_manager
-            )
-            if self.use_a2a_integration:
-                from nyx.core.a2a.context_aware_protocol_enforcement import ContextAwareProtocolEnforcement
-                self.protocol_enforcement = ContextAwareProtocolEnforcement(original_protocol_enforcement)
-                logger.debug("Enhanced ProtocolEnforcement with A2A context distribution")
-            else:
-                self.protocol_enforcement = original_protocol_enforcement
-            
-            # Initialize BodyServiceSystem
-            original_body_service = BodyServiceSystem(
-                reward_system=self.reward_system, 
-                memory_core=self.memory_core, 
-                relationship_manager=self.relationship_manager
-            )
-            if self.use_a2a_integration:
-                from nyx.core.a2a.context_aware_body_service import ContextAwareBodyService
-                self.body_service_system = ContextAwareBodyService(original_body_service)
-                logger.debug("Enhanced BodyServiceSystem with A2A context distribution")
-            else:
-                self.body_service_system = original_body_service
-            
-            # Initialize PsychologicalDominance
-            original_psychological_dominance = PsychologicalDominance(
-                theory_of_mind=self.theory_of_mind, 
-                reward_system=self.reward_system, 
-                relationship_manager=self.relationship_manager, 
-                memory_core=self.memory_core
-            )
-            if self.use_a2a_integration:
-                from nyx.core.a2a.context_aware_psychological_dominance import ContextAwarePsychologicalDominance
-                self.psychological_dominance = ContextAwarePsychologicalDominance(original_psychological_dominance)
-                logger.debug("Enhanced PsychologicalDominance with A2A context distribution")
-            else:
-                self.psychological_dominance = original_psychological_dominance
-            
-            # Initialize OrgasmControlSystem
-            original_orgasm_control = OrgasmControlSystem(
-                reward_system=self.reward_system, 
-                memory_core=self.memory_core, 
-                relationship_manager=self.relationship_manager, 
-                somatosensory_system=self.digital_somatosensory_system
-            )
-            if self.use_a2a_integration:
-                from nyx.core.a2a.context_aware_orgasm_control import ContextAwareOrgasmControl
-                self.orgasm_control_system = ContextAwareOrgasmControl(original_orgasm_control)
-                logger.debug("Enhanced OrgasmControlSystem with A2A context distribution")
-            else:
-                self.orgasm_control_system = original_orgasm_control
-            
-            # Initialize DominancePersonaManager
-            original_persona_manager = DominancePersonaManager(
-                relationship_manager=self.relationship_manager, 
-                reward_system=self.reward_system, 
-                memory_core=self.memory_core, 
-                emotional_core=self.emotional_core
-            )
-            if self.use_a2a_integration:
-                from nyx.core.a2a.context_aware_persona_manager import ContextAwarePersonaManager
-                self.dominance_persona_manager = ContextAwarePersonaManager(original_persona_manager)
-                logger.debug("Enhanced DominancePersonaManager with A2A context distribution")
-            else:
-                self.dominance_persona_manager = original_persona_manager
-            
-            # Initialize SadisticResponseSystem
-            original_sadistic_response_system = SadisticResponseSystem(
-                theory_of_mind=self.theory_of_mind, 
-                protocol_enforcement=self.protocol_enforcement,  # Note: this will use the A2A version if enabled
-                reward_system=self.reward_system, 
-                relationship_manager=self.relationship_manager, 
-                memory_core=self.memory_core
-            )
-            if self.use_a2a_integration:
-                from nyx.core.a2a.context_aware_sadistic_responses import ContextAwareSadisticResponses
-                self.sadistic_response_system = ContextAwareSadisticResponses(original_sadistic_response_system)
-                logger.debug("Enhanced SadisticResponseSystem with A2A context distribution")
-            else:
-                self.sadistic_response_system = original_sadistic_response_system
-            
-            # Initialize SubmissionProgression
-            original_submission_progression = SubmissionProgression(
-                reward_system=self.reward_system,
-                memory_core=self.memory_core,
-                relationship_manager=self.relationship_manager
-            )
-            if self.use_a2a_integration:
-                from nyx.core.a2a.context_aware_submission_progression import ContextAwareSubmissionProgression
-                self.submission_progression = ContextAwareSubmissionProgression(original_submission_progression)
-                logger.debug("Enhanced SubmissionProgression with A2A context distribution")
-            else:
-                self.submission_progression = original_submission_progression
-            
-            # Initialize TaskAssignmentSystem
-            original_task_assignment = TaskAssignmentSystem(
-                reward_system=self.reward_system,
-                memory_core=self.memory_core,
-                relationship_manager=self.relationship_manager,
-                submission_progression=self.submission_progression,  # Note: this will use the A2A version if enabled
-                dominance_system=None,  # Will be set after FemdomCoordinator init
-                psychological_dominance=self.psychological_dominance,  # Note: this will use the A2A version if enabled
-                protocol_enforcement=self.protocol_enforcement,  # Note: this will use the A2A version if enabled
-                sadistic_responses=self.sadistic_response_system  # Note: this will use the A2A version if enabled
-            )
-            if self.use_a2a_integration:
-                from nyx.core.a2a.context_aware_task_assignment import ContextAwareTaskAssignment
-                self.task_assignment_system = ContextAwareTaskAssignment(original_task_assignment)
-                logger.debug("Enhanced TaskAssignmentSystem with A2A context distribution")
-            else:
-                self.task_assignment_system = original_task_assignment
-            
-            # Initialize FemdomCoordinator
-            original_femdom_coordinator = FemdomCoordinator(self)
-            await original_femdom_coordinator.initialize()
-            
-            if self.use_a2a_integration:
-                from nyx.core.a2a.context_aware_femdom_coordinator import ContextAwareFemdomCoordinator
-                self.femdom_coordinator = ContextAwareFemdomCoordinator(original_femdom_coordinator)
-                logger.debug("Enhanced FemdomCoordinator with A2A context distribution")
-            else:
-                self.femdom_coordinator = original_femdom_coordinator
-            
-            # Assign dominance_system after femdom_coordinator init
-            self.dominance_system = self.femdom_coordinator
-            if self.use_a2a_integration and self.dominance_system:
-                self.dominance_system = ContextAwareDominanceSystem(self.dominance_system)
-                logger.debug("Enhanced DominanceSystem with A2A context distribution")
-            
-            # Update TaskAssignmentSystem with dominance_system reference
-            if hasattr(self.task_assignment_system, 'original_system'):
-                # If A2A wrapped, update the original system
-                self.task_assignment_system.original_system.dominance_system = self.dominance_system
-            else:
-                # If not wrapped, update directly
-                self.task_assignment_system.dominance_system = self.dominance_system
-            
-            # Prepare components for FemdomIntegrationManager
-            femdom_components_for_manager = {
-                "protocol_enforcement": self.protocol_enforcement,
-                "body_service": self.body_service_system,
-                "psychological_dominance": self.psychological_dominance,
-                "reward_system": self.reward_system,
-                "memory_core": self.memory_core,
-                "relationship_manager": self.relationship_manager,
-                "theory_of_mind": self.theory_of_mind,
-                "orgasm_control": self.orgasm_control_system,  # Note: renamed from orgasm_control_system
-                "persona_manager": self.dominance_persona_manager,  # Note: renamed from dominance_persona_manager
-                "sadistic_responses": self.sadistic_response_system,  # Note: renamed from sadistic_response_system
-                "dominance_system": self.dominance_system,  # Add the dominance system
-                "submission_progression": self.submission_progression,  # Add submission progression
-                "task_assignment_system": self.task_assignment_system  # Add task assignment system
-            }
-            
-            # Initialize FemdomIntegrationManager
-            original_integration_manager = FemdomIntegrationManager(
-                self,  # Pass NyxBrain instance
-                components=femdom_components_for_manager
-            )
-            await original_integration_manager.initialize()
-            
-            if self.use_a2a_integration:
-                from nyx.core.a2a.context_aware_femdom_integration import ContextAwareFemdomIntegration
-                self.femdom_integration_manager = ContextAwareFemdomIntegration(original_integration_manager)
-                logger.debug("Enhanced FemdomIntegrationManager with A2A context distribution")
-            else:
-                self.femdom_integration_manager = original_integration_manager
-            
-            logger.debug("Femdom integration manager initialized with A2A support")
-    
-            original_novelty_engine = NoveltyEngine(
-                imagination_simulator=self.imagination_simulator, 
-                memory_core=self.memory_core,
-                reasoning_core=self.reasoning_core  # Add if available
-            )
-            await original_novelty_engine.initialize()
-            
-            if self.use_a2a_integration:
-                self.novelty_engine = ContextAwareNoveltyEngine(original_novelty_engine)
-                logger.debug("Enhanced NoveltyEngine with A2A context distribution")
-            else:
-                self.novelty_engine = original_novelty_engine
-            
-            # Create original recognition memory system
-            original_recognition_memory = RecognitionMemorySystem(
-                memory_core=self.memory_core, 
-                context_awareness=self.context_system,
-                reasoning_core=self.reasoning_core  # Add if your RecognitionMemorySystem accepts it
-            )
-            await original_recognition_memory.initialize()
-            
-            # Wrap with context-aware version if A2A enabled
-            if self.use_a2a_integration:
-                from nyx.core.a2a.context_aware_recognition_memory import ContextAwareRecognitionMemory
-                self.recognition_memory = ContextAwareRecognitionMemory(original_recognition_memory)
-                logger.debug("Enhanced RecognitionMemorySystem with A2A context distribution")
-            else:
-                self.recognition_memory = original_recognition_memory
-            
-            # Create original creative memory integration
-            original_creative_memory = CreativeMemoryIntegration(
-                novelty_engine=self.novelty_engine, 
-                recognition_memory=self.recognition_memory, 
-                memory_core=self.memory_core
-            )
-            await original_creative_memory.initialize()
-            
-            # Wrap with context-aware version if A2A enabled
-            if self.use_a2a_integration:
-                from nyx.core.a2a.context_aware_creative_memory_integration import ContextAwareCreativeMemoryIntegration
-                self.creative_memory = ContextAwareCreativeMemoryIntegration(original_creative_memory)
-                logger.debug("Enhanced CreativeMemoryIntegration with A2A context distribution")
-            else:
-                self.creative_memory = original_creative_memory
-    
-            self.creative_system = await integrate_with_existing_system(self)
-            if hasattr(self.creative_system, 'storage') and self.creative_system.storage and \
-               hasattr(self.creative_system.storage, 'db_path') and \
-               hasattr(self.creative_system, 'content_system') and self.creative_system.content_system:
-                self.content_store = self.creative_system.content_system
-                creations_dir = Path(self.creative_system.storage.db_path).parent
-                model_filename = f"capability_model_{self.user_id}_{self.conversation_id}.json"
-                model_path = creations_dir / model_filename
-                self.capability_model = CapabilityModel(storage_path=str(model_path))
-                self.capability_assessor = CapabilityAssessmentSystem(
-                    creative_content_system=self.creative_system.storage, capability_model_path=str(model_path)
-                )
-                if hasattr(self, "_start_creative_review_task") and callable(self._start_creative_review_task): # Check callable
-                    self._start_creative_review_task()
-                logger.info(f"Creative system initialized. Content store base: {getattr(self.content_store, 'base_directory', 'N/A')}")
-            else:
-                logger.warning("Creative system or its sub-components (storage/content_system) not fully available after integration.")
-
-            try:
-                from nyx.core.autobiographical_narrative import AutobiographicalNarrative
-                
-                original_autobiographical_narrative = AutobiographicalNarrative(
-                    memory_orchestrator=self.memory_orchestrator,
-                    identity_evolution=self.identity_evolution,
-                    relationship_manager=self.relationship_manager
-                )
-                
-                if self.use_a2a_integration:
-                    self.autobiographical_narrative = ContextAwareAutobiographicalNarrative(original_autobiographical_narrative)
-                    logger.debug("Enhanced AutobiographicalNarrative with A2A context distribution")
-                else:
-                    self.autobiographical_narrative = original_autobiographical_narrative
-                    
-            except ImportError:
-                logger.warning("AutobiographicalNarrative module not found")
-                self.autobiographical_narrative = None
-    
-            # --- Step 7: Agentic Action Generator and systems depending on it ---
-            logger.debug(f"NyxBrain Init Step 7: Agentic Action Generator & Dependent Systems for {self.user_id}-{self.conversation_id}")
-            self.meta_core = MetaCore()
-            meta_core_deps = {
-                "memory": self.memory_core, "emotion": self.emotional_core, "reasoning": self.reasoning_core,
-                "reflection": None, "adaptation": self.dynamic_adaptation, "feedback": self.internal_feedback,
-                "identity": self.identity_evolution, "experience": self.experience_interface,
-                "hormone": self.hormone_system, "time": self.temporal_perception,
-                "procedural": self.agent_enhanced_memory, "needs": self.needs_system,
-                "goals": self.goal_manager, "mood": self.mood_manager,
-                "theory_of_mind": self.theory_of_mind, "imagination": self.imagination_simulator
-            }
-            await self.meta_core.initialize(meta_core_deps)
-
-            if self.use_a2a_integration:
-                from nyx.core.a2a.context_aware_meta_core import ContextAwareMetaCore
-                self.meta_core = ContextAwareMetaCore(self.meta_core)
-                logger.debug("Enhanced MetaCore with A2A context distribution")
-    
-            original_action_generator = EnhancedAgenticActionGenerator(
-                emotional_core=self.emotional_core, 
-                hormone_system=self.hormone_system,
-                experience_interface=self.experience_interface, 
-                imagination_simulator=self.imagination_simulator,
-                meta_core=self.meta_core, 
-                memory_core=self.memory_core, 
-                goal_system=self.goal_manager,
-                identity_evolution=self.identity_evolution, 
-                knowledge_core=self.knowledge_core,
-                input_processor=self.conditioned_input_processor, 
-                internal_feedback=self.internal_feedback,
-                attentional_controller=self.attentional_controller, 
-                reasoning_core=self.reasoning_core,
-                reflection_engine=None, 
-                mood_manager=self.mood_manager, 
-                needs_system=self.needs_system,
-                mode_integration=None, 
-                multimodal_integrator=self.multimodal_integrator,
-                reward_system=self.reward_system, 
-                theory_of_mind=self.theory_of_mind,
-                relationship_manager=self.relationship_manager, 
-                temporal_perception=self.temporal_perception,
-                passive_observation_system=None, 
-                proactive_communication_engine=None,
-                creative_system=self.creative_system, 
-                creative_memory=self.creative_memory,
-                capability_assessor=self.capability_assessor, 
-                system_context=self.system_context,
-                procedural_memory_manager=self.procedural_memory_manager,
-                prediction_engine=getattr(self, 'prediction_engine', None),
-                autobiographical_narrative=self.autobiographical_narrative,
-                body_image=getattr(self, 'body_image', None),
-                conditioning_system=self.conditioning_system,
-                issue_tracker=getattr(self, 'issue_tracker', None),
-                relationship_reflection=getattr(self, 'relationship_reflection', None)
-            )
-            
-            # Wrap with context-aware version if A2A enabled
-            if self.use_a2a_integration:
-                self.agentic_action_generator = ContextAwareAgenticActionGenerator(original_action_generator)
-                logger.debug("Enhanced AgenticActionGenerator with A2A context distribution")
-            else:
-                self.agentic_action_generator = original_action_generator
-            
-            logger.debug("AgenticActionGenerator instance created.")
-            
-            # Keep the existing initialization call
-            if self.agentic_action_generator and hasattr(self.agentic_action_generator, 'initialize_actions'):
-                await self.agentic_action_generator.initialize_actions()
-
-            try:
-                from nyx.core.distributed_processing import DistributedProcessingManager
-                
-                original_distributed_processing = DistributedProcessingManager(max_parallel_tasks=10)
-                
-                if self.use_a2a_integration:
-                    self.distributed_processing = ContextAwareDistributedProcessing(original_distributed_processing)
-                    logger.debug("Enhanced DistributedProcessingManager with A2A context distribution")
-                else:
-                    self.distributed_processing = original_distributed_processing
-                    
-            except ImportError:
-                logger.warning("DistributedProcessingManager module not found")
-                self.distributed_processing = None
-    
-            self.passive_observation_system = PassiveObservationSystem(
-                action_generator=self.agentic_action_generator, emotional_core=self.emotional_core,
-                memory_core=self.memory_core, relationship_manager=self.relationship_manager,
-                temporal_perception=self.temporal_perception, multimodal_integrator=self.multimodal_integrator,
-                mood_manager=self.mood_manager, needs_system=self.needs_system,
-                identity_evolution=self.identity_evolution, attention_controller=self.attentional_controller
-            )
-            await self.passive_observation_system.start()
-
-            if self.use_a2a_integration:
-                from nyx.core.a2a.context_aware_passive_observation import ContextAwarePassiveObservation
-                # Store original for reference if needed
-                original_passive_observation = self.passive_observation_system
-                self.passive_observation_system = ContextAwarePassiveObservation(original_passive_observation)
-                logger.debug("Enhanced PassiveObservationSystem with A2A context distribution")
-                # Re-start the wrapped system
-                await self.passive_observation_system.start()
-    
-            # Create original proactive communication engine (keep existing creation)
-            original_proactive_communication = ProactiveCommunicationEngine(
-                action_generator=self.agentic_action_generator, 
-                emotional_core=self.emotional_core,
-                memory_core=self.memory_core, 
-                relationship_manager=self.relationship_manager,
-                temporal_perception=self.temporal_perception, 
-                reasoning_core=self.reasoning_core,
-                reflection_engine=None,  # Set later
-                mood_manager=self.mood_manager, 
-                needs_system=self.needs_system,
-                identity_evolution=self.identity_evolution
-            )
-            await original_proactive_communication.start()
-            
-            # NEW: Wrap with context-aware version if A2A enabled
-            if self.use_a2a_integration:
-                from nyx.core.a2a.context_aware_proactive_communication import ContextAwareProactiveCommunication
-                # Stop original first if needed
-                await original_proactive_communication.stop()
-                
-                self.proactive_communication_engine = ContextAwareProactiveCommunication(original_proactive_communication)
-                logger.debug("Enhanced ProactiveCommunicationEngine with A2A context distribution")
-                
-                # Start the enhanced version
-                await self.proactive_communication_engine.start()
-            else:
-                self.proactive_communication_engine = original_proactive_communication
-    
-            from nyx.core.reflection_engine import ReflectionEngine
-            original_reflection_engine = ReflectionEngine(
-                memory_core_ref=self.memory_core, 
-                emotional_core=self.emotional_core,
-                passive_observation_system=self.passive_observation_system,
-                proactive_communication_engine=self.proactive_communication_engine
-            )
-            
-            if self.use_a2a_integration:
-                from nyx.core.a2a.context_aware_reflection_engine import ContextAwareReflectionEngine
-                self.reflection_engine = ContextAwareReflectionEngine(original_reflection_engine)
-                logger.debug("Enhanced ReflectionEngine with A2A context distribution")
-            else:
-                self.reflection_engine = original_reflection_engine
-            
-            self.agentic_action_generator.reflection_engine = self.reflection_engine
-            self.agentic_action_generator.passive_observation_system = self.passive_observation_system
-            self.agentic_action_generator.proactive_communication_engine = self.proactive_communication_engine
-            if self.proactive_communication_engine: self.proactive_communication_engine.reflection_engine = self.reflection_engine
-            if self.meta_core and hasattr(self.meta_core, 'context_data') and isinstance(self.meta_core.context_data, dict): # Ensure context_data is dict
-                 self.meta_core.context_data['reflection'] = self.reflection_engine
-    
-            original_thoughts_manager = InternalThoughtsManager(
-                passive_observation_system=self.passive_observation_system, 
-                reflection_engine=self.reflection_engine,
-                imagination_simulator=self.imagination_simulator, 
-                theory_of_mind=self.theory_of_mind,
-                relationship_reflection=self.relationship_manager,
-                proactive_communication=self.proactive_communication_engine,
-                emotional_core=self.emotional_core, 
-                memory_core=self.memory_core
-            )
-
-            if not hasattr(self, 'prediction_engine'):
-                from nyx.core.prediction_engine import PredictionEngine
-                self.prediction_engine = PredictionEngine()
-            
-            # Wrap with context-aware version if A2A enabled
-            if self.use_a2a_integration:
-                from nyx.core.a2a.context_aware_prediction_engine import ContextAwarePredictionEngine
-                self.prediction_engine = ContextAwarePredictionEngine(self.prediction_engine)
-                logger.debug("Enhanced PredictionEngine with A2A context distribution")
-            
-            if self.use_a2a_integration:
-                from nyx.core.a2a.context_aware_internal_thoughts import ContextAwareInternalThoughts
-                self.thoughts_manager = ContextAwareInternalThoughts(original_thoughts_manager)
-                logger.debug("Enhanced InternalThoughtsManager with A2A context distribution")
-            else:
-                self.thoughts_manager = original_thoughts_manager
-            logger.debug("AgenticActionGenerator dependent systems initialized.")
-    
-            # --- Step 8: Remaining Managers, Agents, and Final Integrations ---
-            logger.debug(f"NyxBrain Init Step 8: Final Managers, Agents, Integrations for {self.user_id}-{self.conversation_id}")
-            
-            self.mode_integration = ModeIntegrationManager(nyx_brain=self)
-            
-            # Wrap with context-aware version if A2A enabled
-            if self.use_a2a_integration:
-                from nyx.core.a2a.context_aware_mode_integration import ContextAwareModeIntegration
-                self.mode_integration = ContextAwareModeIntegration(self.mode_integration)
-                logger.debug("Enhanced ModeIntegrationManager with A2A context distribution")
-            
-            if self.agentic_action_generator: self.agentic_action_generator.mode_integration = self.mode_integration
-    
-            original_issue_tracker = IssueTrackingSystem(
-                db_path=f"issues_db_{self.user_id}_{self.conversation_id}.json"
-            )
-            
-            if self.use_a2a_integration:
-                from nyx.core.a2a.context_aware_issue_tracking_system import ContextAwareIssueTrackingSystem
-                self.issue_tracking_system = ContextAwareIssueTrackingSystem(original_issue_tracker)
-                logger.debug("Enhanced IssueTrackingSystem with A2A context distribution")
-            else:
-                self.issue_tracking_system = original_issue_tracker
-            
-            self.processing_manager = ProcessingManager(brain=self)
-            await self.processing_manager.initialize()
-            self.self_config_manager = SelfConfigManager(brain=self)
-    
-            if 'create_dominance_ideation_agent' in locals() and callable(create_dominance_ideation_agent):
-                self.general_dominance_ideation_agent = create_dominance_ideation_agent()
-                self.hard_dominance_ideation_agent = create_hard_dominance_ideation_agent()
-    
-            try:
-                from nyx.core.reflexive_system import ReflexiveSystem
-                
-                # Create original reflexive system
-                original_reflexive_system = ReflexiveSystem(agent_enhanced_memory=self.agent_enhanced_memory)
-                if hasattr(original_reflexive_system, "initialize"): 
-                    await original_reflexive_system.initialize()
-                
-                # Wrap with context-aware version if A2A enabled
-                if self.use_a2a_integration:
-                    from nyx.core.a2a.context_aware_reflexive_system import ContextAwareReflexiveSystem
-                    self.reflexive_system = ContextAwareReflexiveSystem(original_reflexive_system)
-                    logger.debug("Enhanced ReflexiveSystem with A2A context distribution")
-                else:
-                    self.reflexive_system = original_reflexive_system
-                    
-            except ImportError: 
-                logger.info("Reflexive system module not found.")
-                self.reflexive_system = None
-    
-            self.brain_agent = self._create_brain_agent()
-
-            if not self.integrated_tracer:
-                try:
-                    from nyx.core.integration.integrated_tracer import IntegratedTracer
-                    self.integrated_tracer = IntegratedTracer(
-                        brain_id=f"{self.user_id}_{self.conversation_id}",
-                        event_bus=self.event_bus  # If it uses event bus
-                    )
-                    logger.debug("Integrated tracer initialized")
-                except ImportError:
-                    logger.warning("IntegratedTracer module not found")
-                    self.integrated_tracer = None
-    
-            self.integration_manager = create_integration_manager(self)
-            await self.integration_manager.initialize()
-            
-            original_sync_daemon = NyxSyncDaemon()
-            
-            # Wrap with context-aware version if A2A enabled
-            if self.use_a2a_integration:
-                self.sync_daemon = ContextAwareNyxSyncDaemon(original_sync_daemon)
-                logger.debug("Enhanced NyxSyncDaemon with A2A context distribution")
-            else:
-                self.sync_daemon = original_sync_daemon
-            
-            # ADD STRATEGY CONTROLLER HERE
-            if not self.strategy_controller:
-                try:
-                    from nyx.core.sync.strategy_controller import StrategyController
-                    self.strategy_controller = StrategyController(
-                        sync_daemon=self.sync_daemon,
-                        brain_ref=self
-                    )
-                    await self.strategy_controller.initialize()
-                    logger.debug("Strategy controller initialized")
-                except ImportError:
-                    logger.warning("StrategyController module not found")
-                    self.strategy_controller = None
-            
-            # ADD NOISE FILTER HERE (if it's part of sync system)
-            if not self.noise_filter:
-                try:
-                    from nyx.core.sync.noise_filter import NoiseFilter
-                    self.noise_filter = NoiseFilter(
-                        sync_daemon=self.sync_daemon,
-                        strategy_controller=self.strategy_controller
-                    )
-                    logger.debug("Noise filter initialized")
-                except ImportError:
-                    # Might also be a standalone component
-                    try:
-                        from nyx.core.filters.noise_filter import NoiseFilter
-                        self.noise_filter = NoiseFilter()
-                        logger.debug("Noise filter initialized (standalone)")
-                    except ImportError:
-                        logger.warning("NoiseFilter module not found")
-                        self.noise_filter = None
-    
-            original_agent_evaluator = AgentEvaluator()
-            
-            # Wrap with context-aware version if A2A enabled
-            if self.use_a2a_integration:
-                self.agent_evaluator = ContextAwareAgentEvaluator(original_agent_evaluator)
-                logger.debug("Enhanced AgentEvaluator with A2A context distribution")
-            else:
-                self.agent_evaluator = original_agent_evaluator
-            
-            original_parallel_executor = ParallelToolExecutor()
-            
-            # Then wrap if A2A enabled
-            if self.use_a2a_integration:
-                from nyx.core.a2a.context_aware_parallel import ContextAwareParallelExecutor
-                self.parallel_executor = ContextAwareParallelExecutor(original_parallel_executor)
-                logger.debug("Enhanced ParallelToolExecutor with A2A context distribution")
-            else:
-                self.parallel_executor = original_parallel_executor
-            
-            self.thinking_tools = {
-                "should_use_extended_thinking": function_tool(should_use_extended_thinking),
-                "think_before_responding": function_tool(generate_reasoned_response),
-                "generate_reasoned_response": function_tool(generate_reasoned_response)
-            }
-    
-            await self._register_processing_modules()
-            await self.integrate_procedural_memory_with_actions()
-            if hasattr(self, "agentic_action_generator") and hasattr(self, "_register_creative_actions") and callable(self._register_creative_actions):
-                 await self._register_creative_actions()
-
-            logger.debug(f"NyxBrain Init Step 9: Creative and Tool Systems for {self.user_id}-{self.conversation_id}")
-            
-            try:
-                # Import the setup function
-                from nyx.core.a2a.context_aware_setup import setup_context_aware_creative_modules
-                
-                # Initialize all creative and tool modules
-                creative_modules = await setup_context_aware_creative_modules(nyx_brain=self)
-                
-                # The setup function already handles integration, but ensure they're accessible
-                for module_name, module in creative_modules.items():
-                    if not hasattr(self, module_name):
-                        setattr(self, module_name, module)
-                
-                logger.info("✓ Creative and tool systems initialized and integrated")
-                
-            except Exception as e:
-                logger.error(f"Failed to initialize creative/tool systems: {e}", exc_info=True)
-                # Continue initialization even if creative systems fail
-
-            # --- Initialize Streaming and Game Analysis Systems ---
-            logger.debug(f"NyxBrain Init: Streaming and Game Analysis Systems for {self.user_id}-{self.conversation_id}")
-            
-            # Initialize Cross-Game Knowledge System
-            try:
-                from nyx.streamer.cross_game_knowledge import CrossGameKnowledgeSystem
-                from nyx.core.a2a.context_aware_cross_game_knowledge import ContextAwareCrossGameKnowledge
-                
-                # Create original cross-game knowledge system
-                original_cross_game_knowledge = CrossGameKnowledgeSystem(data_dir=f"cross_game_data_{self.user_id}")
-                
-                # Seed with initial knowledge if needed
-                if not original_cross_game_knowledge.games:
-                    original_cross_game_knowledge.seed_initial_knowledge()
-                
-                # Wrap with context-aware version if A2A enabled
-                if self.use_a2a_integration:
-                    self.cross_game_knowledge = ContextAwareCrossGameKnowledge(original_cross_game_knowledge)
-                    logger.debug("Enhanced CrossGameKnowledgeSystem with A2A context distribution")
-                else:
-                    self.cross_game_knowledge = original_cross_game_knowledge
-                    
-            except ImportError as e:
-                logger.warning(f"CrossGameKnowledgeSystem module not found: {e}")
-                self.cross_game_knowledge = None
-            
-            # Initialize Enhanced Game Vision System
-            try:
-                from nyx.streamer.enhanced_game_vision import (
-                    EnhancedGameRecognitionSystem, GameKnowledgeBase,
-                    EnhancedSpatialMemory, SceneGraphAnalyzer, GameActionRecognition,
-                    RealTimeGameProcessor
-                )
-                from nyx.core.a2a.context_aware_game_vision import ContextAwareGameVision
-                
-                # Create game knowledge base
-                game_knowledge_base = GameKnowledgeBase(data_dir=f"game_data_{self.user_id}")
-                
-                # Create original game recognition system
-                original_game_vision = EnhancedGameRecognitionSystem(knowledge_base=game_knowledge_base)
-                
-                # Seed with initial knowledge if needed
-                if not game_knowledge_base.games:
-                    original_game_vision.seed_initial_knowledge()
-                
-                # Wrap with context-aware version if A2A enabled
-                if self.use_a2a_integration:
-                    self.game_vision = ContextAwareGameVision(original_game_vision)
-                    logger.debug("Enhanced GameVisionSystem with A2A context distribution")
-                else:
-                    self.game_vision = original_game_vision
-                
-                # Initialize the real-time processor if needed
-                self.game_processor = RealTimeGameProcessor(
-                    game_system=self.game_vision,
-                    input_source=0,  # Default camera/video source
-                    processing_fps=30
-                )
-                
-            except ImportError as e:
-                logger.warning(f"EnhancedGameVisionSystem module not found: {e}")
-                self.game_vision = None
-                self.game_processor = None
-            
-            # Initialize Gamer Girl Streaming System
-            try:
-                from nyx.streamer.gamer_girl import (
-                    GameState, HormoneSystem as StreamerHormoneSystem,
-                    SpeechRecognitionSystem, CrossGameKnowledgeSystem as StreamerCrossGame,
-                    GameSessionLearningManager, EnhancedAudienceInteraction,
-                    EnhancedMultiModalIntegrator
-                )
-                from nyx.core.a2a.context_aware_gamer_girl import ContextAwareGamerGirl
-                
-                # Create game state
-                self.game_state = GameState()
-                
-                # Create speech recognition system
-                self.speech_recognition = SpeechRecognitionSystem(model_size="base", language="en")
-                
-                # Create learning manager
-                self.game_learning_manager = GameSessionLearningManager(
-                    brain=self,
-                    streaming_core=None  # Will be set when streaming core is created
-                )
-                
-                # Create multi-modal integrator
-                self.game_multimodal_integrator = EnhancedMultiModalIntegrator(self.game_state)
-                
-                # Create audience interaction system
-                self.audience_interaction = EnhancedAudienceInteraction(self.game_state)
-                
-                # Create the main streaming system (placeholder structure)
-                # You'll need to adapt this based on your actual GamerGirl class structure
-                original_gamer_girl = type('GamerGirl', (), {
-                    'game_state': self.game_state,
-                    'speech_recognition': self.speech_recognition,
-                    'learning_manager': self.game_learning_manager,
-                    'multimodal_integrator': self.game_multimodal_integrator,
-                    'audience_interaction': self.audience_interaction,
-                    'cross_game_knowledge': self.cross_game_knowledge,
-                    'game_vision': self.game_vision,
-                    'hormone_system': self.hormone_system  # Use existing hormone system
-                })()
-                
-                # Wrap with context-aware version if A2A enabled
-                if self.use_a2a_integration:
-                    self.gamer_girl = ContextAwareGamerGirl(original_gamer_girl)
-                    logger.debug("Enhanced GamerGirl streaming system with A2A context distribution")
-                else:
-                    self.gamer_girl = original_gamer_girl
-                
-            except ImportError as e:
-                logger.warning(f"GamerGirl streaming system module not found: {e}")
-                self.gamer_girl = None
-            
-            # Initialize Integrated Streaming Core System
-            try:
-                from nyx.streamer.nyx_streaming_core import StreamingCore, OptimizedStreamingCore
-                from nyx.streamer.streaming_hormone_system import StreamingHormoneSystem
-                from nyx.streamer.streaming_reflection import StreamingReflectionEngine, EnhancedStreamingReflectionEngine
-                from nyx.core.a2a.context_aware_streaming_core import ContextAwareStreamingCore
-                from nyx.core.a2a.context_aware_streaming_hormone_system import ContextAwareStreamingHormoneSystem
-                from nyx.core.a2a.context_aware_streaming_reflection import ContextAwareStreamingReflectionEngine
-                from nyx.core.a2a.context_aware_streaming_integration import ContextAwareStreamingIntegration
-                
-                # Determine video and audio sources
-                video_source = int(os.environ.get("STREAMING_VIDEO_SOURCE", "0"))
-                audio_source = os.environ.get("STREAMING_AUDIO_SOURCE", None)
-                
-                if self.use_a2a_integration:
-                    # Use the integrated context-aware streaming system
-                    self.streaming_integration = await ContextAwareStreamingIntegration.create_integrated_streaming(
-                        brain=self,
-                        video_source=video_source,
-                        audio_source=audio_source
-                    )
-                    
-                    # Extract components from integration
-                    self.streaming_core = self.streaming_integration.streaming_core
-                    self.streaming_hormone_system = self.streaming_integration.hormone_system
-                    self.streaming_reflection_engine = self.streaming_integration.reflection_engine
-                    
-                    # Update learning manager reference
-                    if self.game_learning_manager:
-                        self.game_learning_manager.streaming_core = self.streaming_core
-                    
-                    logger.debug("Initialized integrated context-aware streaming system with A2A")
-                else:
-                    # Create original streaming components
-                    # Use OptimizedStreamingCore for better performance
-                    self.streaming_core = OptimizedStreamingCore(
-                        brain=self,
-                        video_source=video_source,
-                        audio_source=audio_source
-                    )
-                    
-                    # Create hormone system
-                    self.streaming_hormone_system = StreamingHormoneSystem(brain=self)
-                    
-                    # Create enhanced reflection engine
-                    self.streaming_reflection_engine = EnhancedStreamingReflectionEngine(
-                        brain=self,
-                        streaming_core=self.streaming_core
-                    )
-                    
-                    # Connect components
-                    self.streaming_core.hormone_system = self.streaming_hormone_system
-                    self.streaming_core.reflection_engine = self.streaming_reflection_engine
-                    
-                    # Update learning manager reference
-                    if self.game_learning_manager:
-                        self.game_learning_manager.streaming_core = self.streaming_core
-                    
-                    # No integration wrapper in non-A2A mode
-                    self.streaming_integration = None
-                    
-                    logger.debug("Initialized standard streaming system without A2A")
-                
-                # Register streaming functions with brain
-                self._register_streaming_functions()
-                
-            except ImportError as e:
-                logger.warning(f"Streaming integration modules not found: {e}")
-                self.streaming_core = None
-                self.streaming_hormone_system = None
-                self.streaming_reflection_engine = None
-                self.streaming_integration = None
-            except Exception as e:
-                logger.error(f"Error initializing streaming system: {e}")
-                self.streaming_core = None
-                self.streaming_hormone_system = None
-                self.streaming_reflection_engine = None
-                self.streaming_integration = None
-            
-            # Add to default active modules if streaming is enabled
-            if os.environ.get("ENABLE_STREAMING", "false").lower() == "true":
-                if self.cross_game_knowledge:
-                    self.default_active_modules.add("cross_game_knowledge")
-                if self.game_vision:
-                    self.default_active_modules.add("game_vision")
-                if self.gamer_girl:
-                    self.default_active_modules.add("gamer_girl")
-                if self.streaming_integration and self.use_a2a_integration:
-                    self.default_active_modules.add("streaming_integration")
-                    self.default_active_modules.add("streaming_core")
-                    self.default_active_modules.add("streaming_hormone_system")
-                    self.default_active_modules.add("streaming_reflection_engine")
-                elif self.streaming_core:
-                    self.default_active_modules.add("streaming_core")
-                    if self.streaming_hormone_system:
-                        self.default_active_modules.add("streaming_hormone_system")
-                    if self.streaming_reflection_engine:
-                        self.default_active_modules.add("streaming_reflection_engine")
-    
             # Initialize the A2A context distribution system if enabled
             if self.use_a2a_integration:
                 await self.initialize_context_system()
                 logger.critical("NyxBrain initialization complete with A2A context distribution")
             else:
                 logger.critical("NyxBrain initialization complete (standard mode)")
-    
-            await self._build_internal_module_registry()
-            self.default_active_modules = {
-                "attentional_controller", "emotional_core", "mode_integration", "memory_core",
-                "internal_thoughts", "agentic_action_generator", "relationship_manager",
-                "spatial_mapper", "spatial_memory", "spatial_navigator",  # Add these
-                "sync_daemon", "agent_evaluator"  # Add these if they should be active
-            }
-            self.default_active_modules = {mod for mod in self.default_active_modules if hasattr(self, mod) and getattr(self, mod)}
-    
-            if os.environ.get("ENABLE_AGENT", "true").lower() == "true": await self.initialize_agent_capabilities()
-            if os.environ.get("ENABLE_STREAMING", "false").lower() == "true": await self.initialize_streaming()
-    
-            # --- Step 10: Finalization ---
+            
             self.initialized = True
             logger.critical(f"NyxBrain.initialize() COMPLETED SUCCESSFULLY for {self.user_id}-{self.conversation_id}. self.initialized set to True.")
-    
+            
         except Exception as e:
             logger.critical(f"NyxBrain.initialize() FAILED for {self.user_id}-{self.conversation_id}: {e}", exc_info=True)
+            logger.critical(f"Initialization progress: {self._init_progress}")
             self.initialized = False
+            # Attempt cleanup of partially initialized state
+            await self._cleanup_partial_initialization()
+            raise
         finally:
             self._initializing_flag = False
+    
+    async def _import_modules(self):
+        """Import all required modules in one place"""
+        self._init_progress.append("import_modules_start")
+        
+        # Store imports as instance variables for use in initialization methods
+        from nyx.core.brain.module_optimizer import ModuleOptimizer
+        from nyx.core.brain.system_health_checker import SystemHealthChecker
+        from nyx.core.emotions.emotional_core import EmotionalCore
+        from nyx.core.memory_core import MemoryCoreAgents, BrainMemoryCore
+        from nyx.core.reflection_engine import ReflectionEngine
+        from nyx.core.experience_interface import ExperienceInterface
+        from nyx.core.dynamic_adaptation_system import DynamicAdaptationSystem
+        from nyx.core.internal_feedback_system import InternalFeedbackSystem
+        from nyx.core.meta_core import MetaCore
+        from nyx.core.knowledge_core import KnowledgeCoreAgents
+        from nyx.core.memory_orchestrator import MemoryOrchestrator
+        from nyx.core.identity_evolution import IdentityEvolutionSystem
+        from nyx.core.experience_consolidation import ExperienceConsolidationSystem
+        from nyx.core.cross_user_experience import CrossUserExperienceManager
+        from nyx.core.emotions.hormone_system import HormoneSystem
+        from nyx.core.attentional_controller import AttentionalController
+        from nyx.core.multimodal_integrator import MultimodalIntegrator
+        from nyx.core.reward_system import RewardSignalProcessor
+        from nyx.core.temporal_perception import TemporalPerceptionSystem
+        from nyx.core.procedural_memory.agent import AgentEnhancedMemoryManager
+        from nyx.core.digital_somatosensory_system import DigitalSomatosensorySystem
+        from nyx.core.needs_system import NeedsSystem
+        from nyx.core.conditioning_system import ConditioningSystem
+        from nyx.core.goal_system import GoalManager
+        from nyx.core.reasoning_agents import integrated_reasoning_agent, triage_agent as reasoning_triage_agent
+        from nyx.core.reasoning_core import ReasoningCore
+        from nyx.core.brain.processing.manager import ProcessingManager
+        from nyx.core.brain.adaptation.self_config import SelfConfigManager
+        from nyx.core.context_awareness import ContextAwarenessSystem
+        from nyx.core.interaction_mode_manager import InteractionModeManager
+        from nyx.core.mood_manager import MoodManager
+        
+        # Import A2A wrappers if needed
+        if self.use_a2a_integration:
+            from nyx.core.a2a.context_aware_emotional_core import ContextAwareEmotionalCore
+            from nyx.core.a2a.context_aware_hormone_system import ContextAwareHormoneSystem
+            from nyx.core.a2a.context_aware_memory_core import ContextAwareMemoryCore
+            from nyx.core.a2a.context_aware_memory_orchestrator import ContextAwareMemoryOrchestrator
+            from nyx.core.a2a.context_aware_identity_evolution import ContextAwareIdentityEvolution
+            from nyx.core.a2a.context_aware_knowledge_core import ContextAwareKnowledgeCore
+            from nyx.core.a2a.context_aware_attentional_controller import ContextAwareAttentionalController
+            from nyx.core.a2a.context_aware_temporal_perception import ContextAwareTemporalPerception
+            from nyx.core.a2a.context_aware_reasoning_core import ContextAwareReasoningCore
+            from nyx.core.a2a.context_aware_reasoning_agents import ContextAwareReasoningAgents
+            from nyx.core.a2a.context_aware_internal_feedback_system import ContextAwareInternalFeedbackSystem
+            from nyx.core.a2a.context_aware_dynamic_adaptation import ContextAwareDynamicAdaptation
+            from nyx.core.a2a.context_aware_context_system import ContextAwareContextSystem
+            from nyx.core.a2a.context_aware_experience_interface import ContextAwareExperienceInterface
+            from nyx.core.a2a.context_aware_experience_consolidation import ContextAwareExperienceConsolidation
+            from nyx.core.a2a.context_aware_cross_user_experience import ContextAwareCrossUserExperience
+            from nyx.core.a2a.context_aware_goal_manager import ContextAwareGoalManager
+            from nyx.core.a2a.context_aware_needs import ContextAwareNeedsSystem
+            from nyx.core.a2a.context_aware_mood_manager import ContextAwareMoodManager
+            from nyx.core.a2a.context_aware_reward_system import ContextAwareRewardSystem
+            from nyx.core.a2a.context_aware_somatosensory_system import ContextAwareDigitalSomatosensorySystem
+            from nyx.core.a2a.context_aware_conditioning import ContextAwareConditioningSystem
+            from nyx.core.a2a.context_aware_interaction_mode_manager import ContextAwareInteractionModeManager
+            from nyx.core.a2a.context_aware_input_processor import ContextAwareInputProcessor
+            from nyx.core.a2a.context_aware_relationship_manager import ContextAwareRelationshipManager
+            from nyx.core.a2a.context_aware_multimodal_integrator import ContextAwareMultimodalIntegrator
+            from nyx.core.a2a.context_aware_imagination_simulator import ContextAwareImaginationSimulator
+            from nyx.core.a2a.context_aware_theory_of_mind import ContextAwareTheoryOfMind
+            from nyx.core.a2a.context_aware_meta_core import ContextAwareMetaCore
+            from nyx.core.a2a.context_aware_action_generator import ContextAwareAgenticActionGenerator
+            from nyx.core.a2a.context_aware_reflection_engine import ContextAwareReflectionEngine
+            from nyx.core.a2a.context_aware_passive_observation import ContextAwarePassiveObservation
+            from nyx.core.a2a.context_aware_proactive_communication import ContextAwareProactiveCommunication
+            from nyx.core.a2a.context_aware_internal_thoughts import ContextAwareInternalThoughts
+            from nyx.core.a2a.context_aware_prediction_engine import ContextAwarePredictionEngine
+            from nyx.core.a2a.context_aware_mode_integration import ContextAwareModeIntegration
+            from nyx.core.a2a.context_aware_issue_tracking_system import ContextAwareIssueTrackingSystem
+            from nyx.core.a2a.context_aware_reflexive_system import ContextAwareReflexiveSystem
+        
+        # Store module classes for later use
+        self._modules = locals()
+        self._init_progress.append("import_modules_complete")
+    
+    async def _init_tier_0_infrastructure(self):
+        """Initialize configuration and infrastructure components"""
+        self._init_progress.append("tier_0_start")
+        logger.debug(f"NyxBrain Init Tier 0: Infrastructure for {self.user_id}-{self.conversation_id}")
+        
+        # Configuration
+        from nyx.core.brain.config import BrainConfig
+        self.config = BrainConfig.default()
+        self.context_config = {
+            "focus_limit": 4,
+            "background_limit": 3,
+            "zoom_in_limit": 2,
+            "high_fidelity_threshold": 0.7,
+            "med_fidelity_threshold": 0.5,
+            "low_fidelity_threshold": 0.3,
+            "max_context_tokens": 3500
+        }
+        
+        # Dev log storage
+        from dev_log.storage import get_dev_log_storage
+        self.dev_log_storage = get_dev_log_storage()
+        await self.dev_log_storage.initialize()
+        
+        # System context
+        from nyx.core.integration.system_context import get_system_context
+        self.system_context = get_system_context()
+        
+        # Event bus
+        if not self.event_bus:
+            try:
+                from nyx.core.events.event_bus import EventBus
+                self.event_bus = EventBus()
+                await self.event_bus.initialize()
+                logger.debug("Event bus initialized")
+            except ImportError:
+                logger.warning("EventBus module not found - event system will be unavailable")
+                self.event_bus = None
+        
+        # Global Workspace Architecture
+        if self.workspace_engine is None:
+            logger.debug("Initializing Global Workspace Architecture")
+            from nyx.core.brain.global_workspace.adapters import build_gw_modules
+            gw_modules = build_gw_modules(self)
+            self.workspace_engine = NyxEngineV3(
+                gw_modules,
+                hz=10.0,  # 10Hz cognitive cycle
+                persist_bias=Path(f"gw_bias_{self.user_id}_{self.conversation_id}.json"),
+                enable_unconscious=True
+            )
+            await self.workspace_engine.start()
+            logger.info(f"Global Workspace Engine started with {len(gw_modules)} modules")
+        
+        # Support systems
+        from nyx.core.brain.module_optimizer import ModuleOptimizer
+        from nyx.core.brain.system_health_checker import SystemHealthChecker
+        from nyx.core.brain.checkpointing_agent import CheckpointingPlannerAgent
+        
+        self.module_optimizer = ModuleOptimizer(self)
+        self.system_health_checker = SystemHealthChecker(self)
+        self.checkpoint_planner = CheckpointingPlannerAgent()
+        
+        self._init_progress.append("tier_0_complete")
+    
+    async def _init_tier_1_foundation(self):
+        """Initialize foundation components with no interdependencies"""
+        self._init_progress.append("tier_1_start")
+        logger.debug(f"NyxBrain Init Tier 1: Foundation for {self.user_id}-{self.conversation_id}")
+        
+        # Hormone system (no dependencies)
+        if self.config.hormone_system.enabled:
+            from nyx.core.emotions.hormone_system import HormoneSystem
+            original_hormone_system = HormoneSystem()
+            self.hormone_system = await self._wrap_with_a2a(
+                original_hormone_system,
+                "ContextAwareHormoneSystem",
+                "hormone_system"
+            )
+        
+        # Temporal perception (minimal dependencies)
+        from nyx.core.temporal_perception import TemporalPerceptionSystem
+        original_temporal = TemporalPerceptionSystem(self.user_id, self.conversation_id)
+        await original_temporal.initialize(brain_context=self, first_interaction_timestamp=None)
+        self.temporal_perception = await self._wrap_with_a2a(
+            original_temporal,
+            "ContextAwareTemporalPerception",
+            "temporal_perception"
+        )
+        
+        # Knowledge core (no dependencies)
+        from nyx.core.knowledge_core import KnowledgeCoreAgents
+        original_knowledge = KnowledgeCoreAgents()
+        await original_knowledge.initialize()
+        self.knowledge_core = await self._wrap_with_a2a(
+            original_knowledge,
+            "ContextAwareKnowledgeCore",
+            "knowledge_core"
+        )
+        
+        # Procedural memory manager (no dependencies)
+        from nyx.core.procedural_memory.manager import ProceduralMemoryManager
+        from nyx.core.procedural_memory.agent import AgentEnhancedMemoryManager
+        self.procedural_memory_manager = ProceduralMemoryManager()
+        self.agent_enhanced_memory = AgentEnhancedMemoryManager(memory_manager=self.procedural_memory_manager)
+        
+        # Internal feedback (no dependencies)
+        from nyx.core.internal_feedback_system import InternalFeedbackSystem
+        original_feedback = InternalFeedbackSystem()
+        self.internal_feedback = await self._wrap_with_a2a(
+            original_feedback,
+            "ContextAwareInternalFeedbackSystem",
+            "internal_feedback"
+        )
+        
+        # Dynamic adaptation (no dependencies)
+        from nyx.core.dynamic_adaptation_system import DynamicAdaptationSystem
+        original_adaptation = DynamicAdaptationSystem()
+        self.dynamic_adaptation = await self._wrap_with_a2a(
+            original_adaptation,
+            "ContextAwareDynamicAdaptation",
+            "dynamic_adaptation"
+        )
+        
+        self._init_progress.append("tier_1_complete")
+    
+    async def _init_tier_2_core_emotional_memory(self):
+        """Initialize core emotional and memory systems"""
+        self._init_progress.append("tier_2_start")
+        logger.debug(f"NyxBrain Init Tier 2: Core Emotional/Memory for {self.user_id}-{self.conversation_id}")
+        
+        # Emotional core (needs hormone system)
+        if self.config.emotional_core.enabled:
+            from nyx.core.emotions import EmotionalCore
+            original_emotional = EmotionalCore()
+            
+            # Set hormone system reference if both are enabled
+            if self.config.hormone_system.enabled and self.hormone_system:
+                # Get the original system if wrapped
+                original_hormone = getattr(self.hormone_system, 'original_system', self.hormone_system)
+                original_emotional.set_hormone_system(original_hormone)
+            
+            self.emotional_core = await self._wrap_with_a2a(
+                original_emotional,
+                "ContextAwareEmotionalCore",
+                "emotional_core"
+            )
+            
+            # Set wrapper references if both are wrapped
+            if self.use_a2a_integration and self.hormone_system and hasattr(self.emotional_core, '_hormone_system_wrapper'):
+                self.emotional_core._hormone_system_wrapper = self.hormone_system
+                if hasattr(self.hormone_system, '_emotional_core_wrapper'):
+                    self.hormone_system._emotional_core_wrapper = self.emotional_core
+        
+        # Memory core
+        from nyx.core.memory_core import MemoryCoreAgents
+        original_memory = MemoryCoreAgents(self.user_id, self.conversation_id)
+        await original_memory.initialize()
+        self.memory_core = await self._wrap_with_a2a(
+            original_memory,
+            "ContextAwareMemoryCore",
+            "memory_core"
+        )
+        
+        # Memory orchestrator
+        from nyx.core.memory_orchestrator import MemoryOrchestrator
+        original_orchestrator = MemoryOrchestrator(self.user_id, self.conversation_id)
+        await original_orchestrator.initialize()
+        self.memory_orchestrator = await self._wrap_with_a2a(
+            original_orchestrator,
+            "ContextAwareMemoryOrchestrator",
+            "memory_orchestrator"
+        )
+        
+        # Identity evolution (needs hormone system)
+        from nyx.core.identity_evolution import IdentityEvolutionSystem
+        original_identity = IdentityEvolutionSystem(hormone_system=self.hormone_system)
+        await original_identity.initialize()
+        self.identity_evolution = await self._wrap_with_a2a(
+            original_identity,
+            "ContextAwareIdentityEvolution",
+            "identity_evolution"
+        )
+        
+        self._init_progress.append("tier_2_complete")
+    
+    async def _init_tier_3_cognitive_systems(self):
+        """Initialize cognitive processing systems"""
+        self._init_progress.append("tier_3_start")
+        logger.debug(f"NyxBrain Init Tier 3: Cognitive Systems for {self.user_id}-{self.conversation_id}")
+        
+        # Reasoning core (needs knowledge core)
+        from nyx.core.reasoning_core import ReasoningCore
+        from nyx.core.reasoning_agents import integrated_reasoning_agent, triage_agent as reasoning_triage_agent
+        
+        original_reasoning = ReasoningCore(knowledge_core=self.knowledge_core)
+        
+        if self.use_a2a_integration:
+            from nyx.core.a2a.context_aware_reasoning_core import ContextAwareReasoningCore
+            from nyx.core.a2a.context_aware_reasoning_agents import ContextAwareReasoningAgents
+            
+            self.context_aware_reasoning_module_instance = ContextAwareReasoningCore(original_reasoning)
+            self.reasoning_agents = ContextAwareReasoningAgents(
+                reasoning_triage_agent,
+                integrated_reasoning_agent,
+                self.context_aware_reasoning_module_instance
+            )
+            self.reasoning_core = self.reasoning_agents
+            logger.debug("Enhanced ReasoningAgents with A2A context distribution")
+        else:
+            self.reasoning_core = integrated_reasoning_agent
+            self.reasoning_triage_agent = reasoning_triage_agent
+        
+        # Attentional controller (needs emotional core)
+        if self.config.attentional_controller.enabled:
+            from nyx.core.attentional_controller import AttentionalController
+            original_attention = AttentionalController(emotional_core=self.emotional_core)
+            self.attentional_controller = await self._wrap_with_a2a(
+                original_attention,
+                "ContextAwareAttentionalController",
+                "attentional_controller"
+            )
+        
+        # Context awareness system (needs emotional core)
+        from nyx.core.context_awareness import ContextAwarenessSystem
+        original_context = ContextAwarenessSystem(emotional_core=self.emotional_core)
+        self.context_system = await self._wrap_with_a2a(
+            original_context,
+            "ContextAwareContextSystem",
+            "context_system"
+        )
+        
+        self._init_progress.append("tier_3_complete")
+    
+    async def _init_tier_4_integration_systems(self):
+        """Initialize systems that integrate multiple components"""
+        self._init_progress.append("tier_4_start")
+        logger.debug(f"NyxBrain Init Tier 4: Integration Systems for {self.user_id}-{self.conversation_id}")
+        
+        # Experience interface (needs memory_core, emotional_core)
+        from nyx.core.experience_interface import ExperienceInterface
+        original_experience = ExperienceInterface(self.memory_core, self.emotional_core)
+        self.experience_interface = await self._wrap_with_a2a(
+            original_experience,
+            "ContextAwareExperienceInterface",
+            "experience_interface"
+        )
+        
+        # Experience consolidation (needs memory_core, experience_interface)
+        from nyx.core.experience_consolidation import ExperienceConsolidationSystem
+        original_consolidation = ExperienceConsolidationSystem(
+            memory_core=self.memory_core,
+            experience_interface=self.experience_interface
+        )
+        self.experience_consolidation = await self._wrap_with_a2a(
+            original_consolidation,
+            "ContextAwareExperienceConsolidation",
+            "experience_consolidation"
+        )
+        
+        # Cross-user manager (needs memory_core, experience_interface)
+        from nyx.core.cross_user_experience import CrossUserExperienceManager
+        original_cross_user = CrossUserExperienceManager(
+            memory_core=self.memory_core,
+            experience_interface=self.experience_interface
+        )
+        self.cross_user_manager = await self._wrap_with_a2a(
+            original_cross_user,
+            "ContextAwareCrossUserExperience",
+            "cross_user_manager"
+        )
+        
+        # Relationship manager (needs memory_orchestrator, emotional_core)
+        try:
+            from nyx.core.relationship_manager import RelationshipManager
+        except ImportError:
+            try:
+                from nyx.core.social.relationship_manager import RelationshipManager
+            except ImportError:
+                logger.warning("RelationshipManager module not found")
+                RelationshipManager = None
+        
+        if RelationshipManager:
+            original_relationship = RelationshipManager(
+                memory_orchestrator=self.memory_orchestrator,
+                emotional_core=self.emotional_core
+            )
+            self.relationship_manager = await self._wrap_with_a2a(
+                original_relationship,
+                "ContextAwareRelationshipManager",
+                "relationship_manager"
+            )
+        
+        # Multimodal integrator (needs reasoning_core, attentional_controller)
+        from nyx.core.multimodal_integrator import MultimodalIntegrator
+        original_multimodal = MultimodalIntegrator(
+            reasoning_core=self.reasoning_core,
+            attentional_controller=self.attentional_controller
+        )
+        self.multimodal_integrator = await self._wrap_with_a2a(
+            original_multimodal,
+            "ContextAwareMultimodalIntegrator",
+            "multimodal_integrator"
+        )
+        
+        # Imagination simulator (needs reasoning_core, knowledge_core, emotional_core, identity_evolution)
+        from nyx.core.imagination_simulator import ImaginationSimulator
+        original_imagination = ImaginationSimulator(
+            reasoning_core=self.reasoning_core,
+            knowledge_core=self.knowledge_core,
+            emotional_core=self.emotional_core,
+            identity_evolution=self.identity_evolution
+        )
+        self.imagination_simulator = await self._wrap_with_a2a(
+            original_imagination,
+            "ContextAwareImaginationSimulator",
+            "imagination_simulator"
+        )
+        
+        self._init_progress.append("tier_4_complete")
+    
+    async def _init_tier_5_complex_systems(self):
+        """Initialize complex systems with multiple dependencies"""
+        self._init_progress.append("tier_5_start")
+        logger.debug(f"NyxBrain Init Tier 5: Complex Systems for {self.user_id}-{self.conversation_id}")
+        
+        # Goal manager
+        from nyx.core.goal_system import GoalManager
+        self.goal_manager = GoalManager(brain_reference=self)
+        if self.use_a2a_integration:
+            from nyx.core.a2a.context_aware_goal_manager import ContextAwareGoalManager
+            self.goal_manager = ContextAwareGoalManager(self.goal_manager)
+            logger.debug("Enhanced GoalManager with context distribution")
+        
+        # Needs system (needs goal_manager)
+        from nyx.core.needs_system import NeedsSystem
+        self.needs_system = NeedsSystem(goal_manager=self.goal_manager)
+        if self.use_a2a_integration:
+            from nyx.core.a2a.context_aware_needs import ContextAwareNeedsSystem
+            self.needs_system = ContextAwareNeedsSystem(self.needs_system)
+            logger.debug("Enhanced NeedsSystem with context distribution")
+        
+        # Mood manager (needs emotional_core, hormone_system, needs_system, goal_manager)
+        from nyx.core.mood_manager import MoodManager
+        self.mood_manager = MoodManager(
+            emotional_core=self.emotional_core,
+            hormone_system=self.hormone_system,
+            needs_system=self.needs_system,
+            goal_manager=self.goal_manager
+        )
+        if self.use_a2a_integration:
+            from nyx.core.a2a.context_aware_mood_manager import ContextAwareMoodManager
+            self.mood_manager = ContextAwareMoodManager(self.mood_manager)
+            logger.debug("Enhanced MoodManager with A2A context distribution")
+        
+        # Digital somatosensory system (needs memory_core, emotional_core, hormone_system, needs_system)
+        from nyx.core.digital_somatosensory_system import DigitalSomatosensorySystem
+        original_dss = DigitalSomatosensorySystem(
+            memory_core=self.memory_core,
+            emotional_core=self.emotional_core,
+            hormone_system=self.hormone_system,
+            needs_system=self.needs_system
+        )
+        await original_dss.initialize()
+        self.digital_somatosensory_system = await self._wrap_with_a2a(
+            original_dss,
+            "ContextAwareDigitalSomatosensorySystem",
+            "digital_somatosensory_system"
+        )
+        
+        # Reward system (needs emotional_core, identity_evolution, somatosensory_system, mood_manager, needs_system)
+        from nyx.core.reward_system import RewardSignalProcessor
+        original_reward = RewardSignalProcessor(
+            emotional_core=self.emotional_core,
+            identity_evolution=self.identity_evolution,
+            somatosensory_system=self.digital_somatosensory_system,
+            mood_manager=self.mood_manager,
+            needs_system=self.needs_system
+        )
+        self.reward_system = await self._wrap_with_a2a(
+            original_reward,
+            "ContextAwareRewardSystem",
+            "reward_system"
+        )
+        
+        # Set DSS back-reference to reward system
+        if hasattr(self.digital_somatosensory_system, 'set_reward_system'):
+            self.digital_somatosensory_system.set_reward_system(self.reward_system)
+        
+        # Conditioning system initialization
+        await self._init_conditioning_systems()
+        
+        # Theory of mind (needs relationship_manager, multimodal_integrator, memory_core)
+        from nyx.core.theory_of_mind import TheoryOfMind
+        self.theory_of_mind = TheoryOfMind(
+            relationship_manager=self.relationship_manager,
+            multimodal_integrator=self.multimodal_integrator,
+            memory_core=self.memory_core
+        )
+        if self.use_a2a_integration:
+            from nyx.core.a2a.context_aware_theory_of_mind import ContextAwareTheoryOfMind
+            self.theory_of_mind = ContextAwareTheoryOfMind(self.theory_of_mind)
+            logger.debug("Enhanced TheoryOfMind with context distribution")
+        
+        # Relationship reflection (needs relationship_manager, theory_of_mind, etc.)
+        if self.relationship_manager:
+            try:
+                from nyx.core.relationship_reflection import RelationshipReflectionSystem
+                original_reflection = RelationshipReflectionSystem(
+                    relationship_manager=self.relationship_manager,
+                    theory_of_mind=self.theory_of_mind,
+                    memory_core=self.memory_core,
+                    identity_evolution=self.identity_evolution,
+                    hormone_system=self.hormone_system
+                )
+                if self.use_a2a_integration:
+                    from nyx.core.a2a.context_aware_relationship_reflection import ContextAwareRelationshipReflection
+                    self.relationship_reflection = ContextAwareRelationshipReflection(original_reflection)
+                    logger.debug("Enhanced RelationshipReflectionSystem with A2A context distribution")
+                else:
+                    self.relationship_reflection = original_reflection
+            except ImportError:
+                logger.warning("RelationshipReflectionSystem module not found")
+                self.relationship_reflection = None
+        
+        self._init_progress.append("tier_5_complete")
+    
+    async def _init_conditioning_systems(self):
+        """Initialize conditioning and related systems"""
+        # Conditioning configuration
+        from nyx.core.conditioning_config import ConditioningConfiguration
+        from nyx.core.conditioning_system import ConditioningSystem
+        from nyx.core.conditioning_maintenance import ConditioningMaintenanceSystem
+        from nyx.core.input_processor import BlendedInputProcessor
+        
+        self.conditioning_config = ConditioningConfiguration()
+        
+        # Base conditioning system
+        base_conditioning = ConditioningSystem(
+            reward_system=self.reward_system,
+            emotional_core=self.emotional_core,
+            memory_core=self.memory_core,
+            somatosensory_system=self.digital_somatosensory_system
+        )
+        self._base_conditioning_system = base_conditioning
+        
+        # Wrap with A2A if enabled
+        self.conditioning_system = await self._wrap_with_a2a(
+            base_conditioning,
+            "ContextAwareConditioningSystem",
+            "conditioning_system"
+        )
+        
+        # Conditioning maintenance
+        self.conditioning_maintenance = ConditioningMaintenanceSystem(
+            conditioning_system=self.conditioning_system,
+            reward_system=self.reward_system
+        )
+        await self.conditioning_maintenance.start_maintenance_scheduler(run_immediately=False)
+        
+        # Interaction mode manager
+        from nyx.core.interaction_mode_manager import InteractionModeManager
+        original_mode_manager = InteractionModeManager(
+            context_system=self.context_system,
+            emotional_core=self.emotional_core,
+            reward_system=self.reward_system,
+            goal_manager=self.goal_manager
+        )
+        if self.use_a2a_integration:
+            from nyx.core.a2a.context_aware_interaction_mode_manager import ContextAwareInteractionModeManager
+            self.mode_manager = ContextAwareInteractionModeManager(original_mode_manager)
+        else:
+            self.mode_manager = original_mode_manager
+        
+        # Input processor (needs mode_manager)
+        self.conditioned_input_processor = BlendedInputProcessor(
+            conditioning_system=self.conditioning_system,
+            emotional_core=self.emotional_core,
+            somatosensory_system=self.digital_somatosensory_system,
+            mode_manager=self.mode_manager
+        )
+        if self.use_a2a_integration:
+            from nyx.core.a2a.context_aware_input_processor import ContextAwareInputProcessor
+            self.conditioned_input_processor = ContextAwareInputProcessor(self.conditioned_input_processor)
+            logger.debug("Enhanced InputProcessor with A2A context distribution")
+        
+        # Initialize baseline personality
+        personality_profile_obj = await self.conditioning_config.get_personality_profile()
+        personality_profile_dict = personality_profile_obj.model_dump() if hasattr(personality_profile_obj, "model_dump") else personality_profile_obj
+        await ConditioningSystem.initialize_baseline_personality(
+            self.conditioning_system,
+            personality_profile=personality_profile_dict
+        )
+        logger.debug("Baseline personality conditioning completed.")
+    
+    async def _init_tier_6_action_generation(self):
+        """Initialize action generation and dependent systems"""
+        self._init_progress.append("tier_6_start")
+        logger.debug(f"NyxBrain Init Tier 6: Action Generation for {self.user_id}-{self.conversation_id}")
+        
+        # Meta core (needs multiple systems)
+        from nyx.core.meta_core import MetaCore
+        self.meta_core = MetaCore()
+        meta_core_deps = {
+            "memory": self.memory_core,
+            "emotion": self.emotional_core,
+            "reasoning": self.reasoning_core,
+            "reflection": None,  # Set later
+            "adaptation": self.dynamic_adaptation,
+            "feedback": self.internal_feedback,
+            "identity": self.identity_evolution,
+            "experience": self.experience_interface,
+            "hormone": self.hormone_system,
+            "time": self.temporal_perception,
+            "procedural": self.agent_enhanced_memory,
+            "needs": self.needs_system,
+            "goals": self.goal_manager,
+            "mood": self.mood_manager,
+            "theory_of_mind": self.theory_of_mind,
+            "imagination": self.imagination_simulator
+        }
+        await self.meta_core.initialize(meta_core_deps)
+        
+        if self.use_a2a_integration:
+            from nyx.core.a2a.context_aware_meta_core import ContextAwareMetaCore
+            self.meta_core = ContextAwareMetaCore(self.meta_core)
+            logger.debug("Enhanced MetaCore with A2A context distribution")
+        
+        # Initialize components needed by action generator
+        await self._init_action_generator_dependencies()
+        
+        # Agentic action generator
+        from nyx.core.agentic_action_generator import EnhancedAgenticActionGenerator
+        original_action_gen = EnhancedAgenticActionGenerator(
+            emotional_core=self.emotional_core,
+            hormone_system=self.hormone_system,
+            experience_interface=self.experience_interface,
+            imagination_simulator=self.imagination_simulator,
+            meta_core=self.meta_core,
+            memory_core=self.memory_core,
+            goal_system=self.goal_manager,
+            identity_evolution=self.identity_evolution,
+            knowledge_core=self.knowledge_core,
+            input_processor=self.conditioned_input_processor,
+            internal_feedback=self.internal_feedback,
+            attentional_controller=self.attentional_controller,
+            reasoning_core=self.reasoning_core,
+            reflection_engine=None,  # Set later
+            mood_manager=self.mood_manager,
+            needs_system=self.needs_system,
+            mode_integration=None,  # Set later
+            multimodal_integrator=self.multimodal_integrator,
+            reward_system=self.reward_system,
+            theory_of_mind=self.theory_of_mind,
+            relationship_manager=self.relationship_manager,
+            temporal_perception=self.temporal_perception,
+            passive_observation_system=None,  # Set later
+            proactive_communication_engine=None,  # Set later
+            creative_system=None,  # Set in tier 7
+            creative_memory=None,  # Set in tier 7
+            capability_assessor=None,  # Set in tier 7
+            system_context=self.system_context,
+            procedural_memory_manager=self.procedural_memory_manager,
+            prediction_engine=getattr(self, 'prediction_engine', None),
+            autobiographical_narrative=getattr(self, 'autobiographical_narrative', None),
+            body_image=getattr(self, 'body_image', None),
+            conditioning_system=self.conditioning_system,
+            issue_tracker=getattr(self, 'issue_tracker', None),
+            relationship_reflection=getattr(self, 'relationship_reflection', None)
+        )
+        
+        self.agentic_action_generator = await self._wrap_with_a2a(
+            original_action_gen,
+            "ContextAwareAgenticActionGenerator",
+            "agentic_action_generator"
+        )
+        
+        if hasattr(self.agentic_action_generator, 'initialize_actions'):
+            await self.agentic_action_generator.initialize_actions()
+        
+        # Initialize systems that depend on action generator
+        await self._init_action_dependent_systems()
+        
+        self._init_progress.append("tier_6_complete")
+    
+    async def _init_action_generator_dependencies(self):
+        """Initialize components needed by action generator"""
+        # Prediction engine
+        if not hasattr(self, 'prediction_engine'):
+            from nyx.core.prediction_engine import PredictionEngine
+            self.prediction_engine = PredictionEngine()
+        
+        if self.use_a2a_integration:
+            from nyx.core.a2a.context_aware_prediction_engine import ContextAwarePredictionEngine
+            self.prediction_engine = ContextAwarePredictionEngine(self.prediction_engine)
+            logger.debug("Enhanced PredictionEngine with A2A context distribution")
+        
+        # Body image
+        if hasattr(self.config, 'body_image') and self.config.body_image.enabled:
+            from nyx.core.body_image import BodyImage
+            original_body_image = BodyImage()
+            if self.use_a2a_integration:
+                from nyx.core.a2a.context_aware_body_image import ContextAwareBodyImage
+                self.body_image = ContextAwareBodyImage(original_body_image)
+                logger.debug("Enhanced BodyImage with A2A context distribution")
+            else:
+                self.body_image = original_body_image
+        
+        # Autobiographical narrative
+        try:
+            from nyx.core.autobiographical_narrative import AutobiographicalNarrative
+            original_narrative = AutobiographicalNarrative(
+                memory_orchestrator=self.memory_orchestrator,
+                identity_evolution=self.identity_evolution,
+                relationship_manager=self.relationship_manager
+            )
+            if self.use_a2a_integration:
+                from nyx.core.a2a.context_aware_autobiographical_narrative import ContextAwareAutobiographicalNarrative
+                self.autobiographical_narrative = ContextAwareAutobiographicalNarrative(original_narrative)
+                logger.debug("Enhanced AutobiographicalNarrative with A2A context distribution")
+            else:
+                self.autobiographical_narrative = original_narrative
+        except ImportError:
+            logger.warning("AutobiographicalNarrative module not found")
+            self.autobiographical_narrative = None
+        
+        # Distributed processing
+        try:
+            from nyx.core.distributed_processing import DistributedProcessingManager
+            original_distributed = DistributedProcessingManager(max_parallel_tasks=10)
+            if self.use_a2a_integration:
+                from nyx.core.a2a.context_aware_distributed_processing import ContextAwareDistributedProcessing
+                self.distributed_processing = ContextAwareDistributedProcessing(original_distributed)
+                logger.debug("Enhanced DistributedProcessingManager with A2A context distribution")
+            else:
+                self.distributed_processing = original_distributed
+        except ImportError:
+            logger.warning("DistributedProcessingManager module not found")
+            self.distributed_processing = None
+    
+    async def _init_action_dependent_systems(self):
+        """Initialize systems that depend on action generator"""
+        # Passive observation system
+        from nyx.core.passive_observation import PassiveObservationSystem
+        self.passive_observation_system = PassiveObservationSystem(
+            action_generator=self.agentic_action_generator,
+            emotional_core=self.emotional_core,
+            memory_core=self.memory_core,
+            relationship_manager=self.relationship_manager,
+            temporal_perception=self.temporal_perception,
+            multimodal_integrator=self.multimodal_integrator,
+            mood_manager=self.mood_manager,
+            needs_system=self.needs_system,
+            identity_evolution=self.identity_evolution,
+            attention_controller=self.attentional_controller
+        )
+        await self.passive_observation_system.start()
+        
+        if self.use_a2a_integration:
+            from nyx.core.a2a.context_aware_passive_observation import ContextAwarePassiveObservation
+            original_passive = self.passive_observation_system
+            self.passive_observation_system = ContextAwarePassiveObservation(original_passive)
+            logger.debug("Enhanced PassiveObservationSystem with A2A context distribution")
+            await self.passive_observation_system.start()
+        
+        # Proactive communication engine
+        from nyx.core.proactive_communication import ProactiveCommunicationEngine
+        original_proactive = ProactiveCommunicationEngine(
+            action_generator=self.agentic_action_generator,
+            emotional_core=self.emotional_core,
+            memory_core=self.memory_core,
+            relationship_manager=self.relationship_manager,
+            temporal_perception=self.temporal_perception,
+            reasoning_core=self.reasoning_core,
+            reflection_engine=None,  # Set later
+            mood_manager=self.mood_manager,
+            needs_system=self.needs_system,
+            identity_evolution=self.identity_evolution
+        )
+        await original_proactive.start()
+        
+        if self.use_a2a_integration:
+            from nyx.core.a2a.context_aware_proactive_communication import ContextAwareProactiveCommunication
+            await original_proactive.stop()
+            self.proactive_communication_engine = ContextAwareProactiveCommunication(original_proactive)
+            logger.debug("Enhanced ProactiveCommunicationEngine with A2A context distribution")
+            await self.proactive_communication_engine.start()
+        else:
+            self.proactive_communication_engine = original_proactive
+        
+        # Reflection engine
+        from nyx.core.reflection_engine import ReflectionEngine
+        original_reflection = ReflectionEngine(
+            memory_core_ref=self.memory_core,
+            emotional_core=self.emotional_core,
+            passive_observation_system=self.passive_observation_system,
+            proactive_communication_engine=self.proactive_communication_engine
+        )
+        
+        if self.use_a2a_integration:
+            from nyx.core.a2a.context_aware_reflection_engine import ContextAwareReflectionEngine
+            self.reflection_engine = ContextAwareReflectionEngine(original_reflection)
+            logger.debug("Enhanced ReflectionEngine with A2A context distribution")
+        else:
+            self.reflection_engine = original_reflection
+        
+        # Update circular references
+        self.agentic_action_generator.reflection_engine = self.reflection_engine
+        self.agentic_action_generator.passive_observation_system = self.passive_observation_system
+        self.agentic_action_generator.proactive_communication_engine = self.proactive_communication_engine
+        if self.proactive_communication_engine:
+            self.proactive_communication_engine.reflection_engine = self.reflection_engine
+        if self.meta_core and hasattr(self.meta_core, 'context_data') and isinstance(self.meta_core.context_data, dict):
+            self.meta_core.context_data['reflection'] = self.reflection_engine
+        
+        # Internal thoughts manager
+        from nyx.core.internal_thoughts import InternalThoughtsManager
+        original_thoughts = InternalThoughtsManager(
+            passive_observation_system=self.passive_observation_system,
+            reflection_engine=self.reflection_engine,
+            imagination_simulator=self.imagination_simulator,
+            theory_of_mind=self.theory_of_mind,
+            relationship_reflection=self.relationship_manager,
+            proactive_communication=self.proactive_communication_engine,
+            emotional_core=self.emotional_core,
+            memory_core=self.memory_core
+        )
+        
+        if self.use_a2a_integration:
+            from nyx.core.a2a.context_aware_internal_thoughts import ContextAwareInternalThoughts
+            self.thoughts_manager = ContextAwareInternalThoughts(original_thoughts)
+            logger.debug("Enhanced InternalThoughtsManager with A2A context distribution")
+        else:
+            self.thoughts_manager = original_thoughts
+    
+    async def _init_tier_7_specialized_systems(self):
+        """Initialize specialized systems (FemDom, Creative, Spatial, etc.)"""
+        self._init_progress.append("tier_7_start")
+        logger.debug(f"NyxBrain Init Tier 7: Specialized Systems for {self.user_id}-{self.conversation_id}")
+        
+        # Initialize FemDom systems
+        await self._init_femdom_systems()
+        
+        # Initialize creative systems
+        await self._init_creative_systems()
+        
+        # Initialize spatial systems
+        await self._init_spatial_systems()
+        
+        # Initialize other specialized systems
+        await self._init_other_specialized_systems()
+        
+        self._init_progress.append("tier_7_complete")
+    
+    async def _init_femdom_systems(self):
+        """Initialize FemDom components in dependency order"""
+        from nyx.core.femdom.protocol_enforcement import ProtocolEnforcement
+        from nyx.core.femdom.body_service_system import BodyServiceSystem
+        from nyx.core.femdom.psychological_dominance import PsychologicalDominance
+        from nyx.core.femdom.orgasm_control import OrgasmControlSystem
+        from nyx.core.femdom.persona_manager import DominancePersonaManager
+        from nyx.core.femdom.sadistic_responses import SadisticResponseSystem
+        from nyx.core.femdom.submission_progression import SubmissionProgression
+        from nyx.core.femdom.task_assignment_system import TaskAssignmentSystem
+        from nyx.core.femdom.femdom_coordinator import FemdomCoordinator
+        from nyx.core.femdom.femdom_integration_manager import FemdomIntegrationManager
+        
+        # Initialize components without circular dependencies first
+        original_protocol = ProtocolEnforcement(
+            reward_system=self.reward_system,
+            memory_core=self.memory_core,
+            relationship_manager=self.relationship_manager
+        )
+        self.protocol_enforcement = await self._wrap_with_a2a(
+            original_protocol,
+            "ContextAwareProtocolEnforcement",
+            "protocol_enforcement"
+        )
+        
+        original_body_service = BodyServiceSystem(
+            reward_system=self.reward_system,
+            memory_core=self.memory_core,
+            relationship_manager=self.relationship_manager
+        )
+        self.body_service_system = await self._wrap_with_a2a(
+            original_body_service,
+            "ContextAwareBodyService",
+            "body_service_system"
+        )
+        
+        original_psychological = PsychologicalDominance(
+            theory_of_mind=self.theory_of_mind,
+            reward_system=self.reward_system,
+            relationship_manager=self.relationship_manager,
+            memory_core=self.memory_core
+        )
+        self.psychological_dominance = await self._wrap_with_a2a(
+            original_psychological,
+            "ContextAwarePsychologicalDominance",
+            "psychological_dominance"
+        )
+        
+        original_orgasm_control = OrgasmControlSystem(
+            reward_system=self.reward_system,
+            memory_core=self.memory_core,
+            relationship_manager=self.relationship_manager,
+            somatosensory_system=self.digital_somatosensory_system
+        )
+        self.orgasm_control_system = await self._wrap_with_a2a(
+            original_orgasm_control,
+            "ContextAwareOrgasmControl",
+            "orgasm_control_system"
+        )
+        
+        original_persona = DominancePersonaManager(
+            relationship_manager=self.relationship_manager,
+            reward_system=self.reward_system,
+            memory_core=self.memory_core,
+            emotional_core=self.emotional_core
+        )
+        self.dominance_persona_manager = await self._wrap_with_a2a(
+            original_persona,
+            "ContextAwarePersonaManager",
+            "dominance_persona_manager"
+        )
+        
+        original_sadistic = SadisticResponseSystem(
+            theory_of_mind=self.theory_of_mind,
+            protocol_enforcement=self.protocol_enforcement,
+            reward_system=self.reward_system,
+            relationship_manager=self.relationship_manager,
+            memory_core=self.memory_core
+        )
+        self.sadistic_response_system = await self._wrap_with_a2a(
+            original_sadistic,
+            "ContextAwareSadisticResponses",
+            "sadistic_response_system"
+        )
+        
+        original_submission = SubmissionProgression(
+            reward_system=self.reward_system,
+            memory_core=self.memory_core,
+            relationship_manager=self.relationship_manager
+        )
+        self.submission_progression = await self._wrap_with_a2a(
+            original_submission,
+            "ContextAwareSubmissionProgression",
+            "submission_progression"
+        )
+        
+        # Now create FemdomCoordinator
+        original_coordinator = FemdomCoordinator(self)
+        await original_coordinator.initialize()
+        
+        if self.use_a2a_integration:
+            from nyx.core.a2a.context_aware_femdom_coordinator import ContextAwareFemdomCoordinator
+            self.femdom_coordinator = ContextAwareFemdomCoordinator(original_coordinator)
+            logger.debug("Enhanced FemdomCoordinator with A2A context distribution")
+        else:
+            self.femdom_coordinator = original_coordinator
+        
+        # Set dominance_system reference
+        self.dominance_system = self.femdom_coordinator
+        if self.use_a2a_integration and self.dominance_system:
+            from nyx.core.a2a.context_aware_dominance import ContextAwareDominanceSystem
+            self.dominance_system = ContextAwareDominanceSystem(self.dominance_system)
+            logger.debug("Enhanced DominanceSystem with A2A context distribution")
+        
+        # Create TaskAssignmentSystem with all dependencies
+        original_task_assignment = TaskAssignmentSystem(
+            reward_system=self.reward_system,
+            memory_core=self.memory_core,
+            relationship_manager=self.relationship_manager,
+            submission_progression=self.submission_progression,
+            dominance_system=self.dominance_system,
+            psychological_dominance=self.psychological_dominance,
+            protocol_enforcement=self.protocol_enforcement,
+            sadistic_responses=self.sadistic_response_system
+        )
+        if self.use_a2a_integration:
+            from nyx.core.a2a.context_aware_task_assignment import ContextAwareTaskAssignment
+            self.task_assignment_system = ContextAwareTaskAssignment(original_task_assignment)
+            logger.debug("Enhanced TaskAssignmentSystem with A2A context distribution")
+        else:
+            self.task_assignment_system = original_task_assignment
+        
+        # Create FemdomIntegrationManager
+        femdom_components = {
+            "protocol_enforcement": self.protocol_enforcement,
+            "body_service": self.body_service_system,
+            "psychological_dominance": self.psychological_dominance,
+            "reward_system": self.reward_system,
+            "memory_core": self.memory_core,
+            "relationship_manager": self.relationship_manager,
+            "theory_of_mind": self.theory_of_mind,
+            "orgasm_control": self.orgasm_control_system,
+            "persona_manager": self.dominance_persona_manager,
+            "sadistic_responses": self.sadistic_response_system,
+            "dominance_system": self.dominance_system,
+            "submission_progression": self.submission_progression,
+            "task_assignment_system": self.task_assignment_system
+        }
+        
+        original_integration = FemdomIntegrationManager(self, components=femdom_components)
+        await original_integration.initialize()
+        
+        if self.use_a2a_integration:
+            from nyx.core.a2a.context_aware_femdom_integration import ContextAwareFemdomIntegration
+            self.femdom_integration_manager = ContextAwareFemdomIntegration(original_integration)
+            logger.debug("Enhanced FemdomIntegrationManager with A2A context distribution")
+        else:
+            self.femdom_integration_manager = original_integration
+    
+    async def _init_creative_systems(self):
+        """Initialize creative and novelty systems"""
+        from nyx.core.novelty_engine import NoveltyEngine
+        from nyx.core.recognition_memory import RecognitionMemorySystem
+        from nyx.core.creative_memory_integration import CreativeMemoryIntegration
+        from nyx.creative.agentic_system import integrate_with_existing_system
+        
+        # Novelty engine
+        original_novelty = NoveltyEngine(
+            imagination_simulator=self.imagination_simulator,
+            memory_core=self.memory_core,
+            reasoning_core=self.reasoning_core
+        )
+        await original_novelty.initialize()
+        
+        if self.use_a2a_integration:
+            from nyx.core.a2a.context_aware_novelty_engine import ContextAwareNoveltyEngine
+            self.novelty_engine = ContextAwareNoveltyEngine(original_novelty)
+            logger.debug("Enhanced NoveltyEngine with A2A context distribution")
+        else:
+            self.novelty_engine = original_novelty
+        
+        # Recognition memory
+        original_recognition = RecognitionMemorySystem(
+            memory_core=self.memory_core,
+            context_awareness=self.context_system,
+            reasoning_core=self.reasoning_core
+        )
+        await original_recognition.initialize()
+        
+        if self.use_a2a_integration:
+            from nyx.core.a2a.context_aware_recognition_memory import ContextAwareRecognitionMemory
+            self.recognition_memory = ContextAwareRecognitionMemory(original_recognition)
+            logger.debug("Enhanced RecognitionMemorySystem with A2A context distribution")
+        else:
+            self.recognition_memory = original_recognition
+        
+        # Creative memory integration
+        original_creative_memory = CreativeMemoryIntegration(
+            novelty_engine=self.novelty_engine,
+            recognition_memory=self.recognition_memory,
+            memory_core=self.memory_core
+        )
+        await original_creative_memory.initialize()
+        
+        if self.use_a2a_integration:
+            from nyx.core.a2a.context_aware_creative_memory_integration import ContextAwareCreativeMemoryIntegration
+            self.creative_memory = ContextAwareCreativeMemoryIntegration(original_creative_memory)
+            logger.debug("Enhanced CreativeMemoryIntegration with A2A context distribution")
+        else:
+            self.creative_memory = original_creative_memory
+        
+        # Creative system integration
+        self.creative_system = await integrate_with_existing_system(self)
+        
+        # Set up content store and capability assessment
+        if hasattr(self.creative_system, 'storage') and self.creative_system.storage and \
+           hasattr(self.creative_system.storage, 'db_path') and \
+           hasattr(self.creative_system, 'content_system') and self.creative_system.content_system:
+            
+            from pathlib import Path
+            from nyx.creative.content_system import CreativeContentSystem
+            from nyx.creative.capability_system import CapabilityModel, CapabilityAssessmentSystem
+            
+            self.content_store = self.creative_system.content_system
+            creations_dir = Path(self.creative_system.storage.db_path).parent
+            model_filename = f"capability_model_{self.user_id}_{self.conversation_id}.json"
+            model_path = creations_dir / model_filename
+            self.capability_model = CapabilityModel(storage_path=str(model_path))
+            self.capability_assessor = CapabilityAssessmentSystem(
+                creative_content_system=self.creative_system.storage,
+                capability_model_path=str(model_path)
+            )
+            
+            if hasattr(self, "_start_creative_review_task") and callable(self._start_creative_review_task):
+                self._start_creative_review_task()
+            
+            logger.info(f"Creative system initialized. Content store base: {getattr(self.content_store, 'base_directory', 'N/A')}")
+        else:
+            logger.warning("Creative system or its sub-components (storage/content_system) not fully available after integration.")
+        
+        # Update action generator with creative references
+        if self.agentic_action_generator:
+            self.agentic_action_generator.creative_system = self.creative_system
+            self.agentic_action_generator.creative_memory = self.creative_memory
+            self.agentic_action_generator.capability_assessor = self.capability_assessor
+    
+    async def _init_spatial_systems(self):
+        """Initialize spatial navigation systems"""
+        from nyx.core.spatial.spatial_mapper import SpatialMapper
+        from nyx.core.spatial.spatial_memory import SpatialMemoryIntegration
+        from nyx.core.spatial.map_visualization import MapVisualization
+        from nyx.core.spatial.navigator_agent import SpatialNavigatorAgent
+        
+        # Spatial mapper
+        original_mapper = SpatialMapper(memory_integration=self.memory_core)
+        if hasattr(original_mapper, "initialize"):
+            await original_mapper.initialize()
+        
+        if self.use_a2a_integration:
+            from nyx.core.a2a.context_aware_spatial_mapper import ContextAwareSpatialMapper
+            self.spatial_mapper = ContextAwareSpatialMapper(original_mapper)
+            logger.debug("Enhanced SpatialMapper with A2A context distribution")
+        else:
+            self.spatial_mapper = original_mapper
+        
+        # Spatial memory
+        original_spatial_memory = SpatialMemoryIntegration(
+            spatial_mapper=self.spatial_mapper,
+            memory_core=self.memory_core
+        )
+        
+        if self.use_a2a_integration:
+            from nyx.core.a2a.context_aware_spatial_memory import ContextAwareSpatialMemoryIntegration
+            self.spatial_memory = ContextAwareSpatialMemoryIntegration(original_spatial_memory)
+            logger.debug("Enhanced SpatialMemoryIntegration with A2A context distribution")
+        else:
+            self.spatial_memory = original_spatial_memory
+        
+        # Map visualization (no A2A needed)
+        self.map_visualization = MapVisualization()
+        
+        # Navigator agent
+        original_navigator = SpatialNavigatorAgent(spatial_mapper=self.spatial_mapper)
+        
+        if self.use_a2a_integration:
+            from nyx.core.a2a.context_aware_navigator_agent import ContextAwareSpatialNavigatorAgent
+            self.navigator_agent = ContextAwareSpatialNavigatorAgent(original_navigator)
+            logger.debug("Enhanced SpatialNavigatorAgent with A2A context distribution")
+        else:
+            self.navigator_agent = original_navigator
+    
+    async def _init_other_specialized_systems(self):
+        """Initialize remaining specialized systems"""
+        # Mode integration manager
+        from nyx.core.mode_integration import ModeIntegrationManager
+        self.mode_integration = ModeIntegrationManager(nyx_brain=self)
+        
+        if self.use_a2a_integration:
+            from nyx.core.a2a.context_aware_mode_integration import ContextAwareModeIntegration
+            self.mode_integration = ContextAwareModeIntegration(self.mode_integration)
+            logger.debug("Enhanced ModeIntegrationManager with A2A context distribution")
+        
+        if self.agentic_action_generator:
+            self.agentic_action_generator.mode_integration = self.mode_integration
+        
+        # Issue tracking system
+        from nyx.core.issue_tracking_system import IssueTrackingSystem
+        original_issue_tracker = IssueTrackingSystem(
+            db_path=f"issues_db_{self.user_id}_{self.conversation_id}.json"
+        )
+        
+        if self.use_a2a_integration:
+            from nyx.core.a2a.context_aware_issue_tracking_system import ContextAwareIssueTrackingSystem
+            self.issue_tracking_system = ContextAwareIssueTrackingSystem(original_issue_tracker)
+            logger.debug("Enhanced IssueTrackingSystem with A2A context distribution")
+        else:
+            self.issue_tracking_system = original_issue_tracker
+        
+        # Reflexive system
+        try:
+            from nyx.core.reflexive_system import ReflexiveSystem
+            original_reflexive = ReflexiveSystem(agent_enhanced_memory=self.agent_enhanced_memory)
+            if hasattr(original_reflexive, "initialize"):
+                await original_reflexive.initialize()
+            
+            if self.use_a2a_integration:
+                from nyx.core.a2a.context_aware_reflexive_system import ContextAwareReflexiveSystem
+                self.reflexive_system = ContextAwareReflexiveSystem(original_reflexive)
+                logger.debug("Enhanced ReflexiveSystem with A2A context distribution")
+            else:
+                self.reflexive_system = original_reflexive
+        except ImportError:
+            logger.info("Reflexive system module not found.")
+            self.reflexive_system = None
+        
+        # Dominance ideation agents
+        try:
+            from nyx.core.dominance import create_dominance_ideation_agent, create_hard_dominance_ideation_agent
+            self.general_dominance_ideation_agent = create_dominance_ideation_agent()
+            self.hard_dominance_ideation_agent = create_hard_dominance_ideation_agent()
+        except ImportError:
+            logger.warning("Dominance ideation agents not available")
+    
+    async def _init_tier_8_final_setup(self):
+        """Final setup and integration tasks"""
+        self._init_progress.append("tier_8_start")
+        logger.debug(f"NyxBrain Init Tier 8: Final Setup for {self.user_id}-{self.conversation_id}")
+        
+        # Processing manager
+        from nyx.core.brain.processing.manager import ProcessingManager
+        self.processing_manager = ProcessingManager(brain=self)
+        await self.processing_manager.initialize()
+        
+        # Self configuration manager
+        from nyx.core.brain.adaptation.self_config import SelfConfigManager
+        self.self_config_manager = SelfConfigManager(brain=self)
+        
+        # Brain agent
+        self.brain_agent = self._create_brain_agent()
+        
+        # Integrated tracer
+        if not self.integrated_tracer:
+            try:
+                from nyx.core.integration.integrated_tracer import IntegratedTracer
+                self.integrated_tracer = IntegratedTracer(
+                    brain_id=f"{self.user_id}_{self.conversation_id}",
+                    event_bus=self.event_bus
+                )
+                logger.debug("Integrated tracer initialized")
+            except ImportError:
+                logger.warning("IntegratedTracer module not found")
+                self.integrated_tracer = None
+        
+        # Integration manager
+        from nyx.core.integration.integration_manager import create_integration_manager
+        self.integration_manager = create_integration_manager(self)
+        await self.integration_manager.initialize()
+        
+        # Sync daemon and related components
+        from nyx.core.sync.nyx_sync_daemon import NyxSyncDaemon
+        original_sync = NyxSyncDaemon()
+        
+        if self.use_a2a_integration:
+            from nyx.core.a2a.context_aware_nyx_sync_daemon import ContextAwareNyxSyncDaemon
+            self.sync_daemon = ContextAwareNyxSyncDaemon(original_sync)
+            logger.debug("Enhanced NyxSyncDaemon with A2A context distribution")
+        else:
+            self.sync_daemon = original_sync
+        
+        # Strategy controller
+        if not self.strategy_controller:
+            try:
+                from nyx.core.sync.strategy_controller import StrategyController
+                self.strategy_controller = StrategyController(
+                    sync_daemon=self.sync_daemon,
+                    brain_ref=self
+                )
+                await self.strategy_controller.initialize()
+                logger.debug("Strategy controller initialized")
+            except ImportError:
+                logger.warning("StrategyController module not found")
+                self.strategy_controller = None
+        
+        # Noise filter
+        if not self.noise_filter:
+            try:
+                from nyx.core.sync.noise_filter import NoiseFilter
+                self.noise_filter = NoiseFilter(
+                    sync_daemon=self.sync_daemon,
+                    strategy_controller=self.strategy_controller
+                )
+                logger.debug("Noise filter initialized")
+            except ImportError:
+                try:
+                    from nyx.core.filters.noise_filter import NoiseFilter
+                    self.noise_filter = NoiseFilter()
+                    logger.debug("Noise filter initialized (standalone)")
+                except ImportError:
+                    logger.warning("NoiseFilter module not found")
+                    self.noise_filter = None
+        
+        # Tools
+        from nyx.core.tools.evaluator import AgentEvaluator
+        from nyx.core.tools.parallel import ParallelToolExecutor
+        
+        original_evaluator = AgentEvaluator()
+        if self.use_a2a_integration:
+            from nyx.core.a2a.context_aware_evaluator import ContextAwareAgentEvaluator
+            self.agent_evaluator = ContextAwareAgentEvaluator(original_evaluator)
+            logger.debug("Enhanced AgentEvaluator with A2A context distribution")
+        else:
+            self.agent_evaluator = original_evaluator
+        
+        original_parallel = ParallelToolExecutor()
+        if self.use_a2a_integration:
+            from nyx.core.a2a.context_aware_parallel import ContextAwareParallelExecutor
+            self.parallel_executor = ContextAwareParallelExecutor(original_parallel)
+            logger.debug("Enhanced ParallelToolExecutor with A2A context distribution")
+        else:
+            self.parallel_executor = original_parallel
+        
+        # Thinking tools
+        from nyx.apitools.thinking_tools import should_use_extended_thinking, generate_reasoned_response
+        from agents import function_tool
+        self.thinking_tools = {
+            "should_use_extended_thinking": function_tool(should_use_extended_thinking),
+            "think_before_responding": function_tool(generate_reasoned_response),
+            "generate_reasoned_response": function_tool(generate_reasoned_response)
+        }
+        
+        # Final setup tasks
+        await self._register_processing_modules()
+        await self.integrate_procedural_memory_with_actions()
+        
+        if hasattr(self, "agentic_action_generator") and hasattr(self, "_register_creative_actions") and callable(self._register_creative_actions):
+            await self._register_creative_actions()
+        
+        # Initialize creative and tool systems
+        try:
+            from nyx.core.a2a.context_aware_setup import setup_context_aware_creative_modules
+            creative_modules = await setup_context_aware_creative_modules(nyx_brain=self)
+            
+            for module_name, module in creative_modules.items():
+                if not hasattr(self, module_name):
+                    setattr(self, module_name, module)
+            
+            logger.info("✓ Creative and tool systems initialized and integrated")
+        except Exception as e:
+            logger.error(f"Failed to initialize creative/tool systems: {e}", exc_info=True)
+        
+        # Initialize streaming if enabled
+        if os.environ.get("ENABLE_STREAMING", "false").lower() == "true":
+            await self._init_streaming_systems()
+        
+        # Build module registry
+        await self._build_internal_module_registry()
+        
+        # Set default active modules
+        self.default_active_modules = {
+            "attentional_controller", "emotional_core", "mode_integration", "memory_core",
+            "internal_thoughts", "agentic_action_generator", "relationship_manager",
+            "spatial_mapper", "spatial_memory", "spatial_navigator",
+            "sync_daemon", "agent_evaluator"
+        }
+        self.default_active_modules = {mod for mod in self.default_active_modules if hasattr(self, mod) and getattr(self, mod)}
+        
+        # Initialize agent capabilities if enabled
+        if os.environ.get("ENABLE_AGENT", "true").lower() == "true":
+            await self.initialize_agent_capabilities()
+        
+        # Initialize streaming if enabled
+        if os.environ.get("ENABLE_STREAMING", "false").lower() == "true":
+            await self.initialize_streaming()
+        
+        self._init_progress.append("tier_8_complete")
+    
+    async def _init_streaming_systems(self):
+        """Initialize streaming and game analysis systems"""
+        logger.debug(f"NyxBrain Init: Streaming and Game Analysis Systems for {self.user_id}-{self.conversation_id}")
+        
+        # Initialize Cross-Game Knowledge System
+        try:
+            from nyx.streamer.cross_game_knowledge import CrossGameKnowledgeSystem
+            
+            # Create original cross-game knowledge system
+            original_cross_game = CrossGameKnowledgeSystem(data_dir=f"cross_game_data_{self.user_id}")
+            
+            # Seed with initial knowledge if needed
+            if not original_cross_game.games:
+                original_cross_game.seed_initial_knowledge()
+            
+            # Wrap with context-aware version if A2A enabled
+            if self.use_a2a_integration:
+                from nyx.core.a2a.context_aware_cross_game_knowledge import ContextAwareCrossGameKnowledge
+                self.cross_game_knowledge = ContextAwareCrossGameKnowledge(original_cross_game)
+                logger.debug("Enhanced CrossGameKnowledgeSystem with A2A context distribution")
+            else:
+                self.cross_game_knowledge = original_cross_game
+                
+        except ImportError as e:
+            logger.warning(f"CrossGameKnowledgeSystem module not found: {e}")
+            self.cross_game_knowledge = None
+        
+        # Initialize Enhanced Game Vision System
+        try:
+            from nyx.streamer.enhanced_game_vision import (
+                EnhancedGameRecognitionSystem, GameKnowledgeBase,
+                EnhancedSpatialMemory, SceneGraphAnalyzer, GameActionRecognition,
+                RealTimeGameProcessor
+            )
+            
+            # Create game knowledge base
+            game_knowledge_base = GameKnowledgeBase(data_dir=f"game_data_{self.user_id}")
+            
+            # Create original game recognition system
+            original_game_vision = EnhancedGameRecognitionSystem(knowledge_base=game_knowledge_base)
+            
+            # Seed with initial knowledge if needed
+            if not game_knowledge_base.games:
+                original_game_vision.seed_initial_knowledge()
+            
+            # Wrap with context-aware version if A2A enabled
+            if self.use_a2a_integration:
+                from nyx.core.a2a.context_aware_game_vision import ContextAwareGameVision
+                self.game_vision = ContextAwareGameVision(original_game_vision)
+                logger.debug("Enhanced GameVisionSystem with A2A context distribution")
+            else:
+                self.game_vision = original_game_vision
+            
+            # Initialize the real-time processor if needed
+            self.game_processor = RealTimeGameProcessor(
+                game_system=self.game_vision,
+                input_source=0,  # Default camera/video source
+                processing_fps=30
+            )
+            
+        except ImportError as e:
+            logger.warning(f"EnhancedGameVisionSystem module not found: {e}")
+            self.game_vision = None
+            self.game_processor = None
+        
+        # Initialize Gamer Girl Streaming System
+        try:
+            from nyx.streamer.gamer_girl import (
+                GameState, HormoneSystem as StreamerHormoneSystem,
+                SpeechRecognitionSystem, CrossGameKnowledgeSystem as StreamerCrossGame,
+                GameSessionLearningManager, EnhancedAudienceInteraction,
+                EnhancedMultiModalIntegrator
+            )
+            
+            # Create game state
+            self.game_state = GameState()
+            
+            # Create speech recognition system
+            self.speech_recognition = SpeechRecognitionSystem(model_size="base", language="en")
+            
+            # Create learning manager (streaming_core will be set later)
+            self.game_learning_manager = GameSessionLearningManager(
+                brain=self,
+                streaming_core=None
+            )
+            
+            # Create multi-modal integrator
+            self.game_multimodal_integrator = EnhancedMultiModalIntegrator(self.game_state)
+            
+            # Create audience interaction system
+            self.audience_interaction = EnhancedAudienceInteraction(self.game_state)
+            
+            # Create the main streaming system
+            # Note: This is a placeholder structure since the actual GamerGirl class isn't shown
+            original_gamer_girl = type('GamerGirl', (), {
+                'game_state': self.game_state,
+                'speech_recognition': self.speech_recognition,
+                'learning_manager': self.game_learning_manager,
+                'multimodal_integrator': self.game_multimodal_integrator,
+                'audience_interaction': self.audience_interaction,
+                'cross_game_knowledge': self.cross_game_knowledge,
+                'game_vision': self.game_vision,
+                'hormone_system': self.hormone_system  # Use existing hormone system
+            })()
+            
+            # Wrap with context-aware version if A2A enabled
+            if self.use_a2a_integration:
+                from nyx.core.a2a.context_aware_gamer_girl import ContextAwareGamerGirl
+                self.gamer_girl = ContextAwareGamerGirl(original_gamer_girl)
+                logger.debug("Enhanced GamerGirl streaming system with A2A context distribution")
+            else:
+                self.gamer_girl = original_gamer_girl
+            
+        except ImportError as e:
+            logger.warning(f"GamerGirl streaming system module not found: {e}")
+            self.gamer_girl = None
+            self.game_state = None
+            self.speech_recognition = None
+            self.game_learning_manager = None
+            self.game_multimodal_integrator = None
+            self.audience_interaction = None
+        
+        # Initialize Integrated Streaming Core System
+        try:
+            from nyx.streamer.nyx_streaming_core import StreamingCore, OptimizedStreamingCore
+            from nyx.streamer.streaming_hormone_system import StreamingHormoneSystem
+            from nyx.streamer.streaming_reflection import StreamingReflectionEngine, EnhancedStreamingReflectionEngine
+            
+            # Determine video and audio sources
+            video_source = int(os.environ.get("STREAMING_VIDEO_SOURCE", "0"))
+            audio_source = os.environ.get("STREAMING_AUDIO_SOURCE", None)
+            
+            if self.use_a2a_integration:
+                # Use the integrated context-aware streaming system
+                from nyx.core.a2a.context_aware_streaming_core import ContextAwareStreamingCore
+                from nyx.core.a2a.context_aware_streaming_hormone_system import ContextAwareStreamingHormoneSystem
+                from nyx.core.a2a.context_aware_streaming_reflection import ContextAwareStreamingReflectionEngine
+                from nyx.core.a2a.context_aware_streaming_integration import ContextAwareStreamingIntegration
+                
+                self.streaming_integration = await ContextAwareStreamingIntegration.create_integrated_streaming(
+                    brain=self,
+                    video_source=video_source,
+                    audio_source=audio_source
+                )
+                
+                # Extract components from integration
+                self.streaming_core = self.streaming_integration.streaming_core
+                self.streaming_hormone_system = self.streaming_integration.hormone_system
+                self.streaming_reflection_engine = self.streaming_integration.reflection_engine
+                
+                # Update learning manager reference
+                if self.game_learning_manager:
+                    self.game_learning_manager.streaming_core = self.streaming_core
+                
+                logger.debug("Initialized integrated context-aware streaming system with A2A")
+            else:
+                # Create original streaming components
+                # Use OptimizedStreamingCore for better performance
+                self.streaming_core = OptimizedStreamingCore(
+                    brain=self,
+                    video_source=video_source,
+                    audio_source=audio_source
+                )
+                
+                # Create hormone system
+                self.streaming_hormone_system = StreamingHormoneSystem(brain=self)
+                
+                # Create enhanced reflection engine
+                self.streaming_reflection_engine = EnhancedStreamingReflectionEngine(
+                    brain=self,
+                    streaming_core=self.streaming_core
+                )
+                
+                # Connect components
+                self.streaming_core.hormone_system = self.streaming_hormone_system
+                self.streaming_core.reflection_engine = self.streaming_reflection_engine
+                
+                # Update learning manager reference
+                if self.game_learning_manager:
+                    self.game_learning_manager.streaming_core = self.streaming_core
+                
+                # No integration wrapper in non-A2A mode
+                self.streaming_integration = None
+                
+                logger.debug("Initialized standard streaming system without A2A")
+            
+            # Register streaming functions with brain
+            self._register_streaming_functions()
+            
+        except ImportError as e:
+            logger.warning(f"Streaming integration modules not found: {e}")
+            self.streaming_core = None
+            self.streaming_hormone_system = None
+            self.streaming_reflection_engine = None
+            self.streaming_integration = None
+        except Exception as e:
+            logger.error(f"Error initializing streaming system: {e}")
+            self.streaming_core = None
+            self.streaming_hormone_system = None
+            self.streaming_reflection_engine = None
+            self.streaming_integration = None
+        
+        # Add to default active modules if streaming is enabled
+        if self.cross_game_knowledge:
+            self.default_active_modules.add("cross_game_knowledge")
+        if self.game_vision:
+            self.default_active_modules.add("game_vision")
+        if self.gamer_girl:
+            self.default_active_modules.add("gamer_girl")
+        if self.streaming_integration and self.use_a2a_integration:
+            self.default_active_modules.add("streaming_integration")
+            self.default_active_modules.add("streaming_core")
+            self.default_active_modules.add("streaming_hormone_system")
+            self.default_active_modules.add("streaming_reflection_engine")
+        elif self.streaming_core:
+            self.default_active_modules.add("streaming_core")
+            if self.streaming_hormone_system:
+                self.default_active_modules.add("streaming_hormone_system")
+            if self.streaming_reflection_engine:
+                self.default_active_modules.add("streaming_reflection_engine")
+    
+    async def _wrap_with_a2a(self, original_system, wrapper_class_name: str, module_path: str = None):
+        if not self.use_a2a_integration:
+            return original_system
+        
+        try:
+            if not module_path:
+                # Default path construction
+                module_path = f"nyx.core.a2a.{wrapper_class_name.lower()}"
+            
+            module = __import__(module_path, fromlist=[wrapper_class_name])
+            wrapper_class = getattr(module, wrapper_class_name)
+            
+            # Create wrapped instance
+            wrapped = wrapper_class(original_system)
+            logger.debug(f"Enhanced {system_name} with A2A context distribution")
+            return wrapped
+            
+        except Exception as e:
+            logger.error(f"Failed to wrap {system_name} with A2A: {e}")
+            logger.warning(f"Falling back to non-A2A {system_name}")
+            return original_system
+    
+    async def _cleanup_partial_initialization(self):
+        """Attempt to clean up partially initialized state on failure"""
+        logger.warning("Attempting cleanup of partial initialization")
+        
+        # Stop any running background tasks
+        if hasattr(self, 'passive_observation_system') and self.passive_observation_system:
+            try:
+                await self.passive_observation_system.stop()
+            except:
+                pass
+        
+        if hasattr(self, 'proactive_communication_engine') and self.proactive_communication_engine:
+            try:
+                await self.proactive_communication_engine.stop()
+            except:
+                pass
+        
+        if hasattr(self, 'conditioning_maintenance') and self.conditioning_maintenance:
+            try:
+                if hasattr(self.conditioning_maintenance, 'stop_maintenance_scheduler'):
+                    await self.conditioning_maintenance.stop_maintenance_scheduler()
+            except:
+                pass
+        
+        # Save any critical state
+        if hasattr(self, 'issue_tracking_system') and self.issue_tracking_system:
+            try:
+                if hasattr(self.issue_tracking_system, 'db') and hasattr(self.issue_tracking_system.db, 'save_db'):
+                    self.issue_tracking_system.db.save_db()
+            except:
+                pass
+    
+    def _validate_dependencies(self, component_name: str, deps: Dict[str, Any]):
+        """Validate all required dependencies are initialized"""
+        missing = []
+        for dep_name, dep_value in deps.items():
+            if dep_value is None:
+                missing.append(dep_name)
+        
+        if missing:
+            raise RuntimeError(f"{component_name} requires {missing} but they are None")
             
     async def _gw(self, content, salience=0.5, tag="general"):
         """Quick helper: push a signal into the workspace."""
