@@ -1774,14 +1774,14 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             from nyx.streamer.gamer_girl import GamerGirl  # Add this import
             # Then use:
             original_gamer_girl = GamerGirl(
-                game_state: self.game_state,
-                speech_recognition: self.speech_recognition,
-                learning_manager: self.game_learning_manager,
-                multimodal_integrator: self.game_multimodal_integrator,
-                audience_interaction: self.audience_interaction,
-                cross_game_knowledge: self.cross_game_knowledge,
-                game_vision: self.game_vision,
-                hormone_system: self.hormone_system  
+                game_state=self.game_state,
+                speech_recognition=self.speech_recognition,
+                learning_manager=self.game_learning_manager,
+                multimodal_integrator=self.game_multimodal_integrator,
+                audience_interaction=self.audience_interaction,
+                cross_game_knowledge=self.cross_game_knowledge,
+                game_vision=self.game_vision,
+                hormone_system=self.hormone_system  
             )
             
             # Wrap with context-aware version if A2A enabled
