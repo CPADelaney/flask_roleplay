@@ -1781,9 +1781,24 @@ class ConditioningSystem:
             determined_valence = valence_override
             if determined_valence is None: # If not overridden, determine from emotion
                 emotion_lower = emotion.lower()
-                if emotion_lower in ["joy", "satisfaction", "amusement", "contentment", "trust", "love", "excitement", "hope"]: determined_valence = 0.7
-                elif emotion_lower in ["frustration", "anger", "sadness", "fear", "disgust", "shame", "guilt", "anxiety"]: determined_valence = -0.7
-                else: determined_valence = 0.0 # Neutral or unknown
+                # Positive emotions
+                if emotion_lower in ["joy", "satisfaction", "amusement", "contentment", "trust", "love", "excitement", "hope", 
+                                     "pride", "gratitude", "relief", "confidence", "curiosity"]: 
+                    determined_valence = 0.7
+                # Negative emotions
+                elif emotion_lower in ["frustration", "anger", "sadness", "fear", "disgust", "shame", "guilt", "anxiety",
+                                       "disappointment", "jealousy", "resentment", "boredom", "irritation"]: 
+                    determined_valence = -0.7
+                # Special compound/situational emotions
+                elif "patience" in emotion_lower or emotion_lower == "patience_test":
+                    determined_valence = -0.3  # Mild negative - testing patience
+                elif "stress" in emotion_lower:
+                    determined_valence = -0.5
+                elif "anticipation" in emotion_lower:
+                    determined_valence = 0.3  # Mild positive
+                else: 
+                    determined_valence = 0.0 # Neutral or unknown
+                    logger.warning(f"[{method_name}] Unrecognized emotion '{emotion}' - using neutral valence. Consider adding to emotion lists.")
             
             # Use classical conditioning to associate the trigger with an emotional response
             # The "response" is a descriptor of the emotional reaction
