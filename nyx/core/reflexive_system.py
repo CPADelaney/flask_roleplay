@@ -556,6 +556,69 @@ class ReflexiveSystem:
             ],
             model_settings=ModelSettings(temperature=0.4)
         )
+
+    # Add this method to the ReflexiveSystem class in nyx/core/reflexive_system.py
+
+    async def should_use_reflex(self, stimulus: Dict[str, Any], context: Dict[str, Any] = None, pattern: Any = None) -> Tuple[bool, float]:
+        """
+        Determine whether to use reflexive response or deliberate thinking
+        
+        Args:
+            stimulus: The stimulus data
+            context: Additional context information
+            pattern: Optional pattern information (not used in this implementation)
+            
+        Returns:
+            Tuple of (should_use_reflex, confidence)
+        """
+        if not self._is_active:
+            return False, 0.0
+        
+        # Quick checks for reflexive indicators
+        confidence = 0.0
+        
+        # Check if we have any matching patterns
+        patterns_to_check = self.reflex_patterns
+        if context and "domain" in context and context["domain"] in self.domain_libraries:
+            patterns_to_check = self.domain_libraries[context["domain"]]
+        
+        if not patterns_to_check:
+            return False, 0.0
+        
+        # Quick pattern scan
+        highest_match = 0.0
+        for name, pattern in patterns_to_check.items():
+            # Do a quick similarity check without full matching
+            pattern_keys = set(pattern.pattern_data.keys())
+            stimulus_keys = set(stimulus.get("text", {}).keys()) if isinstance(stimulus.get("text"), dict) else set()
+            
+            # If stimulus is just text, check for key phrases
+            if isinstance(stimulus.get("text"), str):
+                text = stimulus["text"].lower()
+                # Check for common reflex triggers
+                reflex_triggers = ["quick", "fast", "urgent", "immediately", "now", "react", "reflex"]
+                if any(trigger in text for trigger in reflex_triggers):
+                    confidence = max(confidence, 0.7)
+            
+            # Key overlap check for dict stimuli
+            if pattern_keys and stimulus_keys:
+                overlap = len(pattern_keys & stimulus_keys) / len(pattern_keys)
+                if overlap > 0.5:
+                    highest_match = max(highest_match, overlap)
+        
+        # Combine factors
+        confidence = max(confidence, highest_match * 0.8)
+        
+        # Check response mode
+        if self.response_mode == "hyper":
+            confidence = min(1.0, confidence * 1.2)  # Increase confidence in hyper mode
+        elif self.response_mode == "relaxed":
+            confidence = confidence * 0.8  # Decrease confidence in relaxed mode
+        
+        # Decision threshold
+        should_use = confidence > 0.5
+        
+        return should_use, confidence
     
     @function_tool
     async def register_reflex(self, 
