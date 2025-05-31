@@ -125,7 +125,7 @@ class EnhancedNyxBrainMixin:
     """
     
     def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+        super().__init__()
         self.context_distribution = None
         self._module_registry: Dict[str, ContextAwareModule] = {}
     
