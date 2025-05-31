@@ -125,7 +125,7 @@ class ModeSelector:
         
         # 1. Check for reflexive pattern match if available
         if hasattr(self.brain, "reflexive_system") and self.brain.reflexive_system:
-            should_use_reflex, confidence = self.brain.reflexive_system.decision_system.should_use_reflex(
+            should_use_reflex, confidence = await self.brain.reflexive_system.should_use_reflex(
                 {"text": user_input}, context, None
             )
             
