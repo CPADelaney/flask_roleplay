@@ -1996,8 +1996,11 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
         
         try:
             if not module_path:
-                # Default path construction
-                module_path = f"nyx.core.a2a.{wrapper_class_name.lower()}"
+                # Convert CamelCase to snake_case for module name
+                # ContextAwareHormoneSystem -> context_aware_hormone_system
+                import re
+                snake_case = re.sub('(?<!^)(?=[A-Z])', '_', wrapper_class_name).lower()
+                module_path = f"nyx.core.a2a.{snake_case}"
             
             module = __import__(module_path, fromlist=[wrapper_class_name])
             wrapper_class = getattr(module, wrapper_class_name)
@@ -2008,8 +2011,8 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             return wrapped
             
         except Exception as e:
-            logger.error(f"Failed to wrap {system_name} with A2A: {e}")
-            logger.warning(f"Falling back to non-A2A {system_name}")
+            logger.error(f"Failed to wrap {wrapper_class_name} with A2A: {e}")
+            logger.warning(f"Falling back to non-A2A {wrapper_class_name}")
             return original_system
     
     async def _cleanup_partial_initialization(self):
