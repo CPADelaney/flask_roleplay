@@ -154,10 +154,8 @@ class IssueDatabase:
         """Save the database to file"""
         try:
             data = {
-                "categories": {k: asdict(v) if hasattr(v, "__dict__") else v.dict() 
-                              for k, v in self.categories.items()},
-                "issues": {k: asdict(v) if hasattr(v, "__dict__") else v.dict() 
-                          for k, v in self.issues.items()}
+                "categories": {k: v.dict() for k, v in self.categories.items()},
+                "issues": {k: v.dict() for k, v in self.issues.items()}
             }
             
             with open(self.db_path, 'w') as f:
