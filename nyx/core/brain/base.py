@@ -349,7 +349,6 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             from nyx.core.a2a.context_aware_mode_integration import ContextAwareModeIntegration
             from nyx.core.a2a.context_aware_issue_tracking_system import ContextAwareIssueTrackingSystem
             from nyx.core.a2a.context_aware_reflexive_system import ContextAwareReflexiveSystem
-            from nyx.core.a2a.context_aware_agentic_action_generator import ContextAwareAgenticActionGenerator  
             from nyx.core.a2a.context_aware_protocol_enforcement import ContextAwareProtocolEnforcement
             from nyx.core.a2a.context_aware_body_service import ContextAwareBodyService
             from nyx.core.a2a.context_aware_psychological_dominance import ContextAwarePsychologicalDominance
