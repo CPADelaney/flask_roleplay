@@ -1563,8 +1563,67 @@ class ConditioningMaintenanceSystem:
             model_settings=ModelSettings(temperature=0.2)
         )
 
+    # Add this method to the ConditioningMaintenanceSystem class in conditioning_maintenance.py
+    
+    def _create_agent_tool_wrapper(self, agent: Agent, tool_name: str, tool_description: str) -> FunctionTool:
+        """
+        Create a function tool that wraps an agent call.
+        This is a workaround for the missing as_tool() method.
+        """
+        async def agent_wrapper_impl(ctx: RunContextWrapper) -> Dict[str, Any]:
+            """Wrapper function to call the agent"""
+            try:
+                # Run the agent with empty JSON input
+                result = await Runner.run(
+                    agent,
+                    json.dumps({}),
+                    context=ctx.context
+                )
+                
+                # Return the agent's output as a dictionary
+                if hasattr(result.final_output, 'model_dump'):
+                    return result.final_output.model_dump()
+                else:
+                    return {"result": str(result.final_output)}
+            except Exception as e:
+                logger.error(f"Error running {agent.name}: {e}")
+                return {"error": str(e)}
+        
+        return function_tool(
+            agent_wrapper_impl,
+            name_override=tool_name,
+            description_override=tool_description
+        )
+    
+    # Replace the existing _create_maintenance_orchestrator method with this:
     def _create_maintenance_orchestrator(self) -> Agent:
         """Create orchestrator agent for maintenance processes"""
+        
+        # Create wrapper tools for the agents
+        balance_analysis_tool = self._create_agent_tool_wrapper(
+            self.balance_analysis_agent,
+            "analyze_personality_balance",
+            "Analyze personality trait and behavior balance"
+        )
+        
+        trait_maintenance_tool = self._create_agent_tool_wrapper(
+            self.trait_maintenance_agent,
+            "maintain_traits",
+            "Maintain and reinforce personality traits"
+        )
+        
+        association_maintenance_tool = self._create_agent_tool_wrapper(
+            self.association_maintenance_agent,
+            "maintain_associations",
+            "Maintain conditioning associations"
+        )
+        
+        consolidation_tool = self._create_agent_tool_wrapper(
+            self.consolidation_agent,
+            "consolidate_associations",
+            "Consolidate similar associations"
+        )
+        
         return Agent(
             name="Maintenance_Orchestrator",
             instructions="""
@@ -1588,6 +1647,10 @@ class ConditioningMaintenanceSystem:
             - _record_maintenance_history REQUIRES a 'maintenance_record' dictionary parameter
             - The maintenance_record should include: timestamp, tasks_performed, results, etc.
             
+            When using the agent tools (analyze_personality_balance, maintain_traits, etc.):
+            - These tools don't take any parameters - just call them directly
+            - They will return dictionaries with the results
+            
             IMPORTANT OUTPUT REQUIREMENT:
             You MUST produce a MaintenanceSummaryOutput with ALL fields populated at the end of execution:
             - tasks_performed: List of task dictionaries
@@ -1607,23 +1670,11 @@ class ConditioningMaintenanceSystem:
                 _record_maintenance_history_tool,
                 _analyze_system_efficiency,
                 _create_maintenance_schedule,
-                # Agent tools...
-                self.balance_analysis_agent.as_tool(
-                    tool_name="analyze_personality_balance",
-                    tool_description="Analyze personality trait and behavior balance"
-                ),
-                self.trait_maintenance_agent.as_tool(
-                    tool_name="maintain_traits",
-                    tool_description="Maintain and reinforce personality traits"
-                ),
-                self.association_maintenance_agent.as_tool(
-                    tool_name="maintain_associations",
-                    tool_description="Maintain conditioning associations"
-                ),
-                self.consolidation_agent.as_tool(
-                    tool_name="consolidate_associations",
-                    tool_description="Consolidate similar associations"
-                )
+                # Use the wrapper tools instead of agent.as_tool()
+                balance_analysis_tool,
+                trait_maintenance_tool,
+                association_maintenance_tool,
+                consolidation_tool
             ],
             output_type=MaintenanceSummaryOutput,
             model_settings=ModelSettings(temperature=0.3)
