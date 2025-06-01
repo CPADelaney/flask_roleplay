@@ -56,15 +56,15 @@ class SensoryExpression(BaseModel):
 
 class BodyStateOutput(BaseModel):
     """Complete body state output"""
-    dominant_sensation: str = Field(..., description="The dominant sensation type")
-    dominant_region: str = Field(..., description="The dominant body region")
-    dominant_intensity: float = Field(..., description="Intensity of dominant sensation")
-    comfort_level: float = Field(..., description="Overall comfort level (-1.0 to 1.0)")
-    posture_effect: str = Field(..., description="Effect on posture description")
-    movement_quality: str = Field(..., description="Quality of movement description")
-    behavioral_impact: str = Field(..., description="Impact on behavior")
-    regions_summary: Dict[str, Dict[str, float]] = Field(..., description="Summary of region states")
-    pleasure_index: float = Field(..., description="Level of pleasure felt (-1.0 to 1.0)")    
+    dominant_sensation: str = Field(default="neutral", description="The dominant sensation type")
+    dominant_region: str = Field(default="body", description="The dominant body region")
+    dominant_intensity: float = Field(default=0.0, description="Intensity of dominant sensation")
+    comfort_level: float = Field(default=0.5, description="Overall comfort level (-1.0 to 1.0)")
+    posture_effect: str = Field(default="Neutral posture", description="Effect on posture description")
+    movement_quality: str = Field(default="Natural movements", description="Quality of movement description")
+    behavioral_impact: str = Field(default="No significant impact", description="Impact on behavior")
+    regions_summary: Dict[str, Dict[str, float]] = Field(default_factory=dict, description="Summary of region states")
+    pleasure_index: float = Field(default=0.0, description="Level of pleasure felt (-1.0 to 1.0)")
 
 class TemperatureEffect(BaseModel):
     """Effects of temperature on expression and behavior"""
@@ -2959,43 +2959,48 @@ class DigitalSomatosensorySystem:
                 logger.error(f"Error in direct body state analysis fallback: {e2}")
 
             # Extreme fallback: Generate minimal state manually
+            # Extreme fallback: Generate minimal state manually
             logger.warning("Falling back to manual body state generation.")
             try:
                 tool_ctx_wrapper = RunContextWrapper(context=context_obj)
-                comfort = await DigitalSomatosensorySystem._calculate_overall_comfort(tool_ctx_wrapper) # Call static tool
-
+                comfort = await DigitalSomatosensorySystem._calculate_overall_comfort(tool_ctx_wrapper)
+            
                 max_region, max_sensation, max_value = None, None, 0.0
-                for name, region in self.body_regions.items(): # Instance attribute
-                    dominant = self._get_dominant_sensation(region) # Instance method
+                for name, region in self.body_regions.items():
+                    dominant = self._get_dominant_sensation(region)
                     value = 0.0
-                    if dominant == "temperature": value = abs(region.temperature - 0.5) * 2.0
-                    elif dominant != "neutral": value = getattr(region, dominant, 0.0)
-                    if value > max_value: max_value, max_sensation, max_region = value, dominant, name
-                if not max_region: max_region, max_sensation, max_value = "overall body", "neutral", 0.0
-
-                # Calculate pleasure index (instance attributes)
-                pleasure_zones = [...] # As defined before
+                    if dominant == "temperature": 
+                        value = abs(region.temperature - 0.5) * 2.0
+                    elif dominant != "neutral": 
+                        value = getattr(region, dominant, 0.0)
+                    if value > max_value: 
+                        max_value, max_sensation, max_region = value, dominant, name
+                if not max_region: 
+                    max_region, max_sensation, max_value = "overall body", "neutral", 0.0
+            
+                # Calculate pleasure index
+                pleasure_zones = ["genitals", "inner_thighs", "breasts_nipples", "lips", "butt_cheeks", "anus", "toes", "armpits", "neck", "feet"]
                 total, count = 0.0, 0
                 for region_name in pleasure_zones:
                     if region_name in self.body_regions:
-                         r = self.body_regions[region_name]
-                         total += (r.pleasure + r.tingling) * r.erogenous_level
-                         count += 1
+                        r = self.body_regions[region_name]
+                        total += (r.pleasure + r.tingling) * r.erogenous_level
+                        count += 1
                 pleasure_index = min(1.0, total / max(1, count))
                 
                 # Optionally notify reward system
                 if self.reward_system and pleasure_index > 0.3:
-                     asyncio.create_task(self.reward_system.process_reward_signal(RewardSignal(
-                         value=pleasure_index * 0.15,
-                         source="somatic_pleasure_index",
-                    context={
-                        "pleasure_index": pleasure_index,
-                        "dominant_region": max_region,
-                        "dominant_sensation": max_sensation,
-                        "body_state_source": "get_body_state_fallback"
-                    }
-                )))
-                        
+                    asyncio.create_task(self.reward_system.process_reward_signal(RewardSignal(
+                        value=pleasure_index * 0.15,
+                        source="somatic_pleasure_index",
+                        context={
+                            "pleasure_index": pleasure_index,
+                            "dominant_region": max_region,
+                            "dominant_sensation": max_sensation,
+                            "body_state_source": "get_body_state_fallback"
+                        }
+                    )))
+                
                 return {
                     "dominant_sensation": max_sensation,
                     "dominant_region": max_region,
@@ -3004,12 +3009,12 @@ class DigitalSomatosensorySystem:
                     "posture_effect": "Neutral posture",
                     "movement_quality": "Natural movements",
                     "behavioral_impact": "Minimal impact on behavior",
-                    "regions_summary": {},
+                    "regions_summary": {},  # Empty dict instead of trying to generate full summary
                     "pleasure_index": pleasure_index
                 }
             except Exception as e3:
-                 logger.error(f"Error during extreme fallback for get_body_state: {e3}")
-                 return {"error": "Failed to generate body state"}
+                logger.error(f"Error during extreme fallback for get_body_state: {e3}")
+                return {"error": "Failed to generate body state"}
     
     async def get_temperature_effects(self) -> Dict[str, Any]:
         """
