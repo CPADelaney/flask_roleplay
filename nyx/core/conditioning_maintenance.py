@@ -8,7 +8,7 @@ import json
 import math
 from typing import Dict, List, Any, Optional, Tuple
 
-from agents import Agent, Runner, trace, function_tool, RunContextWrapper, ModelSettings, handoff
+from agents import Agent, Runner, trace, FunctionTool, function_tool, RunContextWrapper, ModelSettings, handoff
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
