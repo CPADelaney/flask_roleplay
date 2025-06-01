@@ -2018,6 +2018,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
                 self.default_active_modules.add("streaming_reflection_engine")
     
     async def _wrap_with_a2a(self, original_system, wrapper_class_name: str, module_path: str = None):
+        """Wrap a system with its A2A context-aware version if enabled"""
         if not self.use_a2a_integration:
             return original_system
         
@@ -2025,17 +2026,94 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             if not module_path:
                 # Complete mapping of wrapper class names to their actual module file names
                 module_name_map = {
-                    # Mismatched names
+                    # Core emotional/memory systems
+                    'ContextAwareHormoneSystem': 'context_aware_hormone_system',
+                    'ContextAwareTemporalPerception': 'context_aware_temporal_perception',
+                    'ContextAwareKnowledgeCore': 'context_aware_knowledge_core',
+                    'ContextAwareInternalFeedbackSystem': 'context_aware_internal_feedback_system',
+                    'ContextAwareDynamicAdaptation': 'context_aware_dynamic_adaptation',
+                    'ContextAwareEmotionalCore': 'context_aware_emotional_core',
+                    'ContextAwareMemoryCore': 'context_aware_memory_core',
+                    'ContextAwareMemoryOrchestrator': 'context_aware_memory_orchestrator',
+                    'ContextAwareIdentityEvolution': 'context_aware_identity_evolution',
+                    
+                    # Cognitive systems
+                    'ContextAwareAttentionalController': 'context_aware_attentional_controller',
+                    'ContextAwareContextSystem': 'context_aware_context_system',
+                    'ContextAwareExperienceInterface': 'context_aware_experience_interface',
+                    'ContextAwareExperienceConsolidation': 'context_aware_experience_consolidation',
+                    'ContextAwareCrossUserExperience': 'context_aware_cross_user_experience',
+                    'ContextAwareRelationshipManager': 'context_aware_relationship_manager',
+                    'ContextAwareMultimodalIntegrator': 'context_aware_multimodal_integrator',
+                    'ContextAwareImaginationSimulator': 'context_aware_imagination_simulator',
+                    
+                    # Complex systems
+                    'ContextAwareGoalManager': 'context_aware_goal_manager',
                     'ContextAwareNeedsSystem': 'context_aware_needs',
+                    'ContextAwareMoodManager': 'context_aware_mood_manager',
                     'ContextAwareDigitalSomatosensorySystem': 'context_aware_somatosensory_system',
+                    'ContextAwareRewardSystem': 'context_aware_reward_system',
                     'ContextAwareConditioningSystem': 'context_aware_conditioning',
+                    'ContextAwareTheoryOfMind': 'context_aware_theory_of_mind',
+                    
+                    # Action and meta systems
+                    'ContextAwareMetaCore': 'context_aware_meta_core',
                     'ContextAwareAgenticActionGenerator': 'context_aware_action_generator',
+                    'ContextAwareReflectionEngine': 'context_aware_reflection_engine',
+                    'ContextAwarePassiveObservation': 'context_aware_passive_observation',
+                    'ContextAwareProactiveCommunication': 'context_aware_proactive_communication',
+                    'ContextAwareInternalThoughts': 'context_aware_internal_thoughts',
+                    'ContextAwarePredictionEngine': 'context_aware_prediction_engine',
+                    'ContextAwareModeIntegration': 'context_aware_mode_integration',
+                    'ContextAwareIssueTrackingSystem': 'context_aware_issue_tracking_system',
+                    'ContextAwareReflexiveSystem': 'context_aware_reflexive_system',
+                    
+                    # FemDom systems
+                    'ContextAwareProtocolEnforcement': 'context_aware_protocol_enforcement',
+                    'ContextAwareBodyService': 'context_aware_body_service',
+                    'ContextAwarePsychologicalDominance': 'context_aware_psychological_dominance',
+                    'ContextAwareOrgasmControl': 'context_aware_orgasm_control',
+                    'ContextAwarePersonaManager': 'context_aware_persona_manager',
+                    'ContextAwareSadisticResponses': 'context_aware_sadistic_responses',
+                    'ContextAwareSubmissionProgression': 'context_aware_submission_progression',
+                    'ContextAwareFemdomCoordinator': 'context_aware_femdom_coordinator',
                     'ContextAwareDominanceSystem': 'context_aware_dominance',
+                    'ContextAwareTaskAssignment': 'context_aware_task_assignment',
+                    'ContextAwareFemdomIntegration': 'context_aware_femdom_integration',
+                    
+                    # Creative/novelty systems
+                    'ContextAwareNoveltyEngine': 'context_aware_novelty_engine',
+                    'ContextAwareRecognitionMemory': 'context_aware_recognition_memory',
+                    'ContextAwareCreativeMemoryIntegration': 'context_aware_creative_memory_integration',
+                    
+                    # Spatial systems
+                    'ContextAwareSpatialMapper': 'context_aware_spatial_mapper',
                     'ContextAwareSpatialMemoryIntegration': 'context_aware_spatial_memory',
                     'ContextAwareSpatialNavigatorAgent': 'context_aware_navigator_agent',
+                    
+                    # Tool systems
                     'ContextAwareAgentEvaluator': 'context_aware_evaluator',
                     'ContextAwareParallelExecutor': 'context_aware_parallel',
+                    
+                    # Sync/streaming systems
+                    'ContextAwareNyxSyncDaemon': 'context_aware_nyx_sync_daemon',
+                    'ContextAwareStreamingCore': 'context_aware_streaming_core',
+                    'ContextAwareStreamingHormoneSystem': 'context_aware_streaming_hormone_system',
                     'ContextAwareStreamingReflectionEngine': 'context_aware_streaming_reflection',
+                    'ContextAwareStreamingIntegration': 'context_aware_streaming_integration',
+                    'ContextAwareCrossGameKnowledge': 'context_aware_cross_game_knowledge',
+                    'ContextAwareGameVision': 'context_aware_game_vision',
+                    'ContextAwareGamerGirl': 'context_aware_gamer_girl',
+                    
+                    # Other systems
+                    'ContextAwareInteractionModeManager': 'context_aware_interaction_mode_manager',
+                    'ContextAwareInputProcessor': 'context_aware_input_processor',
+                    'ContextAwareAutobiographicalNarrative': 'context_aware_autobiographical_narrative',
+                    'ContextAwareDistributedProcessing': 'context_aware_distributed_processing',
+                    'ContextAwareBodyImage': 'context_aware_body_image',
+                    'ContextAwareRelationshipReflection': 'context_aware_relationship_reflection',
+                    'ContextAwareReasoningCore': 'context_aware_reasoning_core',
+                    'ContextAwareReasoningAgents': 'context_aware_reasoning_agents',
                 }
                 
                 if wrapper_class_name in module_name_map:
@@ -2058,26 +2136,77 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
                 
                 module_path = f"nyx.core.a2a.{module_name}"
             
-            # Use importlib for cleaner imports
+            # Use importlib for cleaner imports with better error handling
             import importlib
+            import sys
+            
             try:
-                module = importlib.import_module(module_path)
+                # First, try to import the module
+                logger.debug(f"Attempting to import A2A module: {module_path}")
+                
+                # Force reload if module was already imported (helps with development)
+                if module_path in sys.modules:
+                    importlib.reload(sys.modules[module_path])
+                    module = sys.modules[module_path]
+                else:
+                    module = importlib.import_module(module_path)
+                
+                # Get the wrapper class
+                if not hasattr(module, wrapper_class_name):
+                    # List available classes for debugging
+                    available_classes = [name for name in dir(module) if name.startswith('ContextAware')]
+                    logger.error(f"Class {wrapper_class_name} not found in {module_path}. Available: {available_classes}")
+                    raise AttributeError(f"Class {wrapper_class_name} not found in module {module_path}")
+                
                 wrapper_class = getattr(module, wrapper_class_name)
-            except (ImportError, AttributeError) as e:
-                # Log the actual module path attempted for debugging
-                logger.error(f"Failed to import {wrapper_class_name} from {module_path}: {e}")
-                raise
-            
-            # Create wrapped instance
-            wrapped = wrapper_class(original_system)
-            logger.debug(f"Enhanced {wrapper_class_name} with A2A context distribution")
-            return wrapped
-            
+                
+                # Create wrapped instance
+                logger.debug(f"Creating {wrapper_class_name} wrapper for {type(original_system).__name__}")
+                wrapped = wrapper_class(original_system)
+                
+                # Set context distribution reference if available
+                if hasattr(self, 'context_distribution') and self.context_distribution:
+                    if hasattr(wrapped, 'set_context_distribution'):
+                        wrapped.set_context_distribution(self.context_distribution)
+                        logger.debug(f"Set context distribution for {wrapper_class_name}")
+                
+                logger.debug(f"Successfully wrapped {type(original_system).__name__} with {wrapper_class_name}")
+                return wrapped
+                
+            except ImportError as e:
+                # More detailed error information
+                import traceback
+                tb_str = traceback.format_exc()
+                
+                # Check if it's a missing dependency within the A2A module
+                if "No module named" in str(e) and module_path not in str(e):
+                    # The A2A module exists but has a missing import
+                    logger.error(f"A2A module {module_path} has missing dependencies: {e}")
+                    logger.debug(f"Full traceback:\n{tb_str}")
+                    
+                    # Try to identify which import is failing
+                    if tb_str:
+                        lines = tb_str.split('\n')
+                        for line in lines:
+                            if 'import' in line and 'from' in line:
+                                logger.error(f"Problematic import statement: {line.strip()}")
+                else:
+                    # The A2A module itself doesn't exist
+                    logger.error(f"A2A module not found: {module_path}")
+                
+                logger.warning(f"Falling back to non-A2A {type(original_system).__name__}")
+                return original_system
+                
+            except AttributeError as e:
+                logger.error(f"Failed to get {wrapper_class_name} from {module_path}: {e}")
+                logger.warning(f"Falling back to non-A2A {type(original_system).__name__}")
+                return original_system
+                
         except Exception as e:
-            logger.error(f"Failed to wrap {wrapper_class_name} with A2A: {e}")
-            logger.warning(f"Falling back to non-A2A {wrapper_class_name}")
+            logger.error(f"Unexpected error wrapping {wrapper_class_name} with A2A: {e}")
+            logger.warning(f"Falling back to non-A2A {type(original_system).__name__}")
             return original_system
-    
+        
     async def _cleanup_partial_initialization(self):
         """Attempt to clean up partially initialized state on failure"""
         logger.warning("Attempting cleanup of partial initialization")
