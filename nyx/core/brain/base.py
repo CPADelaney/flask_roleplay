@@ -1504,13 +1504,20 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
         if not self.integrated_tracer:
             try:
                 from nyx.core.integration.integrated_tracer import IntegratedTracer
-                self.integrated_tracer = IntegratedTracer(
-                    brain_id=f"{self.user_id}_{self.conversation_id}",
-                    event_bus=self.event_bus
-                )
+                # Check what parameters IntegratedTracer actually accepts
+                # It might just need no parameters or different ones
+                self.integrated_tracer = IntegratedTracer()
+                # Set any needed attributes after creation
+                if hasattr(self.integrated_tracer, 'brain_id'):
+                    self.integrated_tracer.brain_id = f"{self.user_id}_{self.conversation_id}"
+                if hasattr(self.integrated_tracer, 'event_bus'):
+                    self.integrated_tracer.event_bus = self.event_bus
                 logger.debug("Integrated tracer initialized")
             except ImportError:
                 logger.warning("IntegratedTracer module not found")
+                self.integrated_tracer = None
+            except Exception as e:
+                logger.error(f"Error initializing IntegratedTracer: {e}")
                 self.integrated_tracer = None
         
         # Integration manager
