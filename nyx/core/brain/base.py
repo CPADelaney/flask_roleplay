@@ -2017,124 +2017,132 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             if self.streaming_reflection_engine:
                 self.default_active_modules.add("streaming_reflection_engine")
     
-    async def _wrap_with_a2a(self, original_system, wrapper_class_name: str, module_path: str = None):
-        """Wrap a system with its A2A context-aware version if enabled"""
+    async def _wrap_with_a2a(self, original_system, wrapper_class_name: str, attribute_name: str = None):
+        """
+        Wrap a system with its A2A context-aware version if enabled
+        
+        Args:
+            original_system: The original system to wrap
+            wrapper_class_name: Name of the wrapper class (e.g., "ContextAwareHormoneSystem")
+            attribute_name: Optional attribute name for logging (not used for import path)
+        """
         if not self.use_a2a_integration:
             return original_system
         
         try:
-            if not module_path:
-                # Complete mapping of wrapper class names to their actual module file names
-                module_name_map = {
-                    # Core emotional/memory systems
-                    'ContextAwareHormoneSystem': 'context_aware_hormone_system',
-                    'ContextAwareTemporalPerception': 'context_aware_temporal_perception',
-                    'ContextAwareKnowledgeCore': 'context_aware_knowledge_core',
-                    'ContextAwareInternalFeedbackSystem': 'context_aware_internal_feedback_system',
-                    'ContextAwareDynamicAdaptation': 'context_aware_dynamic_adaptation',
-                    'ContextAwareEmotionalCore': 'context_aware_emotional_core',
-                    'ContextAwareMemoryCore': 'context_aware_memory_core',
-                    'ContextAwareMemoryOrchestrator': 'context_aware_memory_orchestrator',
-                    'ContextAwareIdentityEvolution': 'context_aware_identity_evolution',
-                    
-                    # Cognitive systems
-                    'ContextAwareAttentionalController': 'context_aware_attentional_controller',
-                    'ContextAwareContextSystem': 'context_aware_context_system',
-                    'ContextAwareExperienceInterface': 'context_aware_experience_interface',
-                    'ContextAwareExperienceConsolidation': 'context_aware_experience_consolidation',
-                    'ContextAwareCrossUserExperience': 'context_aware_cross_user_experience',
-                    'ContextAwareRelationshipManager': 'context_aware_relationship_manager',
-                    'ContextAwareMultimodalIntegrator': 'context_aware_multimodal_integrator',
-                    'ContextAwareImaginationSimulator': 'context_aware_imagination_simulator',
-                    
-                    # Complex systems
-                    'ContextAwareGoalManager': 'context_aware_goal_manager',
-                    'ContextAwareNeedsSystem': 'context_aware_needs',
-                    'ContextAwareMoodManager': 'context_aware_mood_manager',
-                    'ContextAwareDigitalSomatosensorySystem': 'context_aware_somatosensory_system',
-                    'ContextAwareRewardSystem': 'context_aware_reward_system',
-                    'ContextAwareConditioningSystem': 'context_aware_conditioning',
-                    'ContextAwareTheoryOfMind': 'context_aware_theory_of_mind',
-                    
-                    # Action and meta systems
-                    'ContextAwareMetaCore': 'context_aware_meta_core',
-                    'ContextAwareAgenticActionGenerator': 'context_aware_action_generator',
-                    'ContextAwareReflectionEngine': 'context_aware_reflection_engine',
-                    'ContextAwarePassiveObservation': 'context_aware_passive_observation',
-                    'ContextAwareProactiveCommunication': 'context_aware_proactive_communication',
-                    'ContextAwareInternalThoughts': 'context_aware_internal_thoughts',
-                    'ContextAwarePredictionEngine': 'context_aware_prediction_engine',
-                    'ContextAwareModeIntegration': 'context_aware_mode_integration',
-                    'ContextAwareIssueTrackingSystem': 'context_aware_issue_tracking_system',
-                    'ContextAwareReflexiveSystem': 'context_aware_reflexive_system',
-                    
-                    # FemDom systems
-                    'ContextAwareProtocolEnforcement': 'context_aware_protocol_enforcement',
-                    'ContextAwareBodyService': 'context_aware_body_service',
-                    'ContextAwarePsychologicalDominance': 'context_aware_psychological_dominance',
-                    'ContextAwareOrgasmControl': 'context_aware_orgasm_control',
-                    'ContextAwarePersonaManager': 'context_aware_persona_manager',
-                    'ContextAwareSadisticResponses': 'context_aware_sadistic_responses',
-                    'ContextAwareSubmissionProgression': 'context_aware_submission_progression',
-                    'ContextAwareFemdomCoordinator': 'context_aware_femdom_coordinator',
-                    'ContextAwareDominanceSystem': 'context_aware_dominance',
-                    'ContextAwareTaskAssignment': 'context_aware_task_assignment',
-                    'ContextAwareFemdomIntegration': 'context_aware_femdom_integration',
-                    
-                    # Creative/novelty systems
-                    'ContextAwareNoveltyEngine': 'context_aware_novelty_engine',
-                    'ContextAwareRecognitionMemory': 'context_aware_recognition_memory',
-                    'ContextAwareCreativeMemoryIntegration': 'context_aware_creative_memory_integration',
-                    
-                    # Spatial systems
-                    'ContextAwareSpatialMapper': 'context_aware_spatial_mapper',
-                    'ContextAwareSpatialMemoryIntegration': 'context_aware_spatial_memory',
-                    'ContextAwareSpatialNavigatorAgent': 'context_aware_navigator_agent',
-                    
-                    # Tool systems
-                    'ContextAwareAgentEvaluator': 'context_aware_evaluator',
-                    'ContextAwareParallelExecutor': 'context_aware_parallel',
-                    
-                    # Sync/streaming systems
-                    'ContextAwareNyxSyncDaemon': 'context_aware_nyx_sync_daemon',
-                    'ContextAwareStreamingCore': 'context_aware_streaming_core',
-                    'ContextAwareStreamingHormoneSystem': 'context_aware_streaming_hormone_system',
-                    'ContextAwareStreamingReflectionEngine': 'context_aware_streaming_reflection',
-                    'ContextAwareStreamingIntegration': 'context_aware_streaming_integration',
-                    'ContextAwareCrossGameKnowledge': 'context_aware_cross_game_knowledge',
-                    'ContextAwareGameVision': 'context_aware_game_vision',
-                    'ContextAwareGamerGirl': 'context_aware_gamer_girl',
-                    
-                    # Other systems
-                    'ContextAwareInteractionModeManager': 'context_aware_interaction_mode_manager',
-                    'ContextAwareInputProcessor': 'context_aware_input_processor',
-                    'ContextAwareAutobiographicalNarrative': 'context_aware_autobiographical_narrative',
-                    'ContextAwareDistributedProcessing': 'context_aware_distributed_processing',
-                    'ContextAwareBodyImage': 'context_aware_body_image',
-                    'ContextAwareRelationshipReflection': 'context_aware_relationship_reflection',
-                    'ContextAwareReasoningCore': 'context_aware_reasoning_core',
-                    'ContextAwareReasoningAgents': 'context_aware_reasoning_agents',
-                }
+            # Complete mapping of wrapper class names to their actual module file names
+            module_name_map = {
+                # Core emotional/memory systems
+                'ContextAwareHormoneSystem': 'context_aware_hormone_system',
+                'ContextAwareTemporalPerception': 'context_aware_temporal_perception',
+                'ContextAwareKnowledgeCore': 'context_aware_knowledge_core',
+                'ContextAwareInternalFeedbackSystem': 'context_aware_internal_feedback_system',
+                'ContextAwareDynamicAdaptation': 'context_aware_dynamic_adaptation',
+                'ContextAwareEmotionalCore': 'context_aware_emotional_core',
+                'ContextAwareMemoryCore': 'context_aware_memory_core',
+                'ContextAwareMemoryOrchestrator': 'context_aware_memory_orchestrator',
+                'ContextAwareIdentityEvolution': 'context_aware_identity_evolution',
                 
-                if wrapper_class_name in module_name_map:
-                    module_name = module_name_map[wrapper_class_name]
-                else:
-                    # Default conversion: remove 'ContextAware' prefix and convert to snake_case
-                    import re
-                    # Remove ContextAware prefix if present
-                    class_name = wrapper_class_name
-                    if class_name.startswith('ContextAware'):
-                        class_name = class_name[12:]  # Remove 'ContextAware'
-                    
-                    # Convert to snake_case
-                    snake_case = re.sub('(.)([A-Z][a-z]+)', r'\1_\2', class_name)
-                    snake_case = re.sub('([a-z0-9])([A-Z])', r'\1_\2', snake_case)
-                    snake_case = snake_case.lower()
-                    
-                    # Add context_aware prefix back
-                    module_name = f"context_aware_{snake_case}"
+                # Cognitive systems
+                'ContextAwareAttentionalController': 'context_aware_attentional_controller',
+                'ContextAwareContextSystem': 'context_aware_context_system',
+                'ContextAwareExperienceInterface': 'context_aware_experience_interface',
+                'ContextAwareExperienceConsolidation': 'context_aware_experience_consolidation',
+                'ContextAwareCrossUserExperience': 'context_aware_cross_user_experience',
+                'ContextAwareRelationshipManager': 'context_aware_relationship_manager',
+                'ContextAwareMultimodalIntegrator': 'context_aware_multimodal_integrator',
+                'ContextAwareImaginationSimulator': 'context_aware_imagination_simulator',
                 
-                module_path = f"nyx.core.a2a.{module_name}"
+                # Complex systems
+                'ContextAwareGoalManager': 'context_aware_goal_manager',
+                'ContextAwareNeedsSystem': 'context_aware_needs',
+                'ContextAwareMoodManager': 'context_aware_mood_manager',
+                'ContextAwareDigitalSomatosensorySystem': 'context_aware_somatosensory_system',
+                'ContextAwareRewardSystem': 'context_aware_reward_system',
+                'ContextAwareConditioningSystem': 'context_aware_conditioning',
+                'ContextAwareTheoryOfMind': 'context_aware_theory_of_mind',
+                
+                # Action and meta systems
+                'ContextAwareMetaCore': 'context_aware_meta_core',
+                'ContextAwareAgenticActionGenerator': 'context_aware_action_generator',
+                'ContextAwareReflectionEngine': 'context_aware_reflection_engine',
+                'ContextAwarePassiveObservation': 'context_aware_passive_observation',
+                'ContextAwareProactiveCommunication': 'context_aware_proactive_communication',
+                'ContextAwareInternalThoughts': 'context_aware_internal_thoughts',
+                'ContextAwarePredictionEngine': 'context_aware_prediction_engine',
+                'ContextAwareModeIntegration': 'context_aware_mode_integration',
+                'ContextAwareIssueTrackingSystem': 'context_aware_issue_tracking_system',
+                'ContextAwareReflexiveSystem': 'context_aware_reflexive_system',
+                
+                # FemDom systems
+                'ContextAwareProtocolEnforcement': 'context_aware_protocol_enforcement',
+                'ContextAwareBodyService': 'context_aware_body_service',
+                'ContextAwarePsychologicalDominance': 'context_aware_psychological_dominance',
+                'ContextAwareOrgasmControl': 'context_aware_orgasm_control',
+                'ContextAwarePersonaManager': 'context_aware_persona_manager',
+                'ContextAwareSadisticResponses': 'context_aware_sadistic_responses',
+                'ContextAwareSubmissionProgression': 'context_aware_submission_progression',
+                'ContextAwareFemdomCoordinator': 'context_aware_femdom_coordinator',
+                'ContextAwareDominanceSystem': 'context_aware_dominance',
+                'ContextAwareTaskAssignment': 'context_aware_task_assignment',
+                'ContextAwareFemdomIntegration': 'context_aware_femdom_integration',
+                
+                # Creative/novelty systems
+                'ContextAwareNoveltyEngine': 'context_aware_novelty_engine',
+                'ContextAwareRecognitionMemory': 'context_aware_recognition_memory',
+                'ContextAwareCreativeMemoryIntegration': 'context_aware_creative_memory_integration',
+                
+                # Spatial systems
+                'ContextAwareSpatialMapper': 'context_aware_spatial_mapper',
+                'ContextAwareSpatialMemoryIntegration': 'context_aware_spatial_memory',
+                'ContextAwareSpatialNavigatorAgent': 'context_aware_navigator_agent',
+                
+                # Tool systems
+                'ContextAwareAgentEvaluator': 'context_aware_evaluator',
+                'ContextAwareParallelExecutor': 'context_aware_parallel',
+                
+                # Sync/streaming systems
+                'ContextAwareNyxSyncDaemon': 'context_aware_nyx_sync_daemon',
+                'ContextAwareStreamingCore': 'context_aware_streaming_core',
+                'ContextAwareStreamingHormoneSystem': 'context_aware_streaming_hormone_system',
+                'ContextAwareStreamingReflectionEngine': 'context_aware_streaming_reflection',
+                'ContextAwareStreamingIntegration': 'context_aware_streaming_integration',
+                'ContextAwareCrossGameKnowledge': 'context_aware_cross_game_knowledge',
+                'ContextAwareGameVision': 'context_aware_game_vision',
+                'ContextAwareGamerGirl': 'context_aware_gamer_girl',
+                
+                # Other systems
+                'ContextAwareInteractionModeManager': 'context_aware_interaction_mode_manager',
+                'ContextAwareInputProcessor': 'context_aware_input_processor',
+                'ContextAwareAutobiographicalNarrative': 'context_aware_autobiographical_narrative',
+                'ContextAwareDistributedProcessing': 'context_aware_distributed_processing',
+                'ContextAwareBodyImage': 'context_aware_body_image',
+                'ContextAwareRelationshipReflection': 'context_aware_relationship_reflection',
+                'ContextAwareReasoningCore': 'context_aware_reasoning_core',
+                'ContextAwareReasoningAgents': 'context_aware_reasoning_agents',
+            }
+            
+            # Get the module name from the mapping
+            if wrapper_class_name in module_name_map:
+                module_name = module_name_map[wrapper_class_name]
+            else:
+                # Default conversion: remove 'ContextAware' prefix and convert to snake_case
+                import re
+                # Remove ContextAware prefix if present
+                class_name = wrapper_class_name
+                if class_name.startswith('ContextAware'):
+                    class_name = class_name[12:]  # Remove 'ContextAware'
+                
+                # Convert to snake_case
+                snake_case = re.sub('(.)([A-Z][a-z]+)', r'\1_\2', class_name)
+                snake_case = re.sub('([a-z0-9])([A-Z])', r'\1_\2', snake_case)
+                snake_case = snake_case.lower()
+                
+                # Add context_aware prefix back
+                module_name = f"context_aware_{snake_case}"
+            
+            # Always construct the full module path
+            module_path = f"nyx.core.a2a.{module_name}"
             
             # Use importlib for cleaner imports with better error handling
             import importlib
