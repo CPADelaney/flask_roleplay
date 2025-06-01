@@ -2023,15 +2023,40 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
         
         try:
             if not module_path:
-                # Convert CamelCase to snake_case for module name
-                import re
-                # First, insert underscores before capital letters (except the first)
-                snake_case = re.sub('(.)([A-Z][a-z]+)', r'\1_\2', wrapper_class_name)
-                # Then handle sequences of capitals
-                snake_case = re.sub('([a-z0-9])([A-Z])', r'\1_\2', snake_case)
-                # Convert to lowercase
-                snake_case = snake_case.lower()
-                module_path = f"nyx.core.a2a.{snake_case}"
+                # Complete mapping of wrapper class names to their actual module file names
+                module_name_map = {
+                    # Mismatched names
+                    'ContextAwareNeedsSystem': 'context_aware_needs',
+                    'ContextAwareDigitalSomatosensorySystem': 'context_aware_somatosensory_system',
+                    'ContextAwareConditioningSystem': 'context_aware_conditioning',
+                    'ContextAwareAgenticActionGenerator': 'context_aware_action_generator',
+                    'ContextAwareDominanceSystem': 'context_aware_dominance',
+                    'ContextAwareSpatialMemoryIntegration': 'context_aware_spatial_memory',
+                    'ContextAwareSpatialNavigatorAgent': 'context_aware_navigator_agent',
+                    'ContextAwareAgentEvaluator': 'context_aware_evaluator',
+                    'ContextAwareParallelExecutor': 'context_aware_parallel',
+                    'ContextAwareStreamingReflectionEngine': 'context_aware_streaming_reflection',
+                }
+                
+                if wrapper_class_name in module_name_map:
+                    module_name = module_name_map[wrapper_class_name]
+                else:
+                    # Default conversion: remove 'ContextAware' prefix and convert to snake_case
+                    import re
+                    # Remove ContextAware prefix if present
+                    class_name = wrapper_class_name
+                    if class_name.startswith('ContextAware'):
+                        class_name = class_name[12:]  # Remove 'ContextAware'
+                    
+                    # Convert to snake_case
+                    snake_case = re.sub('(.)([A-Z][a-z]+)', r'\1_\2', class_name)
+                    snake_case = re.sub('([a-z0-9])([A-Z])', r'\1_\2', snake_case)
+                    snake_case = snake_case.lower()
+                    
+                    # Add context_aware prefix back
+                    module_name = f"context_aware_{snake_case}"
+                
+                module_path = f"nyx.core.a2a.{module_name}"
             
             # Use importlib for cleaner imports
             import importlib
@@ -2039,10 +2064,9 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
                 module = importlib.import_module(module_path)
                 wrapper_class = getattr(module, wrapper_class_name)
             except (ImportError, AttributeError) as e:
-                # Try alternative import method
-                parts = module_path.split('.')
-                module = __import__(module_path, globals(), locals(), [wrapper_class_name], 0)
-                wrapper_class = getattr(module, wrapper_class_name)
+                # Log the actual module path attempted for debugging
+                logger.error(f"Failed to import {wrapper_class_name} from {module_path}: {e}")
+                raise
             
             # Create wrapped instance
             wrapped = wrapper_class(original_system)
