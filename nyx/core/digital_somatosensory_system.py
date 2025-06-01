@@ -63,7 +63,8 @@ class BodyStateOutput(BaseModel):
     posture_effect: str = Field(default="Neutral posture", description="Effect on posture description")
     movement_quality: str = Field(default="Natural movements", description="Quality of movement description")
     behavioral_impact: str = Field(default="No significant impact", description="Impact on behavior")
-    regions_summary: Dict[str, Dict[str, float]] = Field(default_factory=dict, description="Summary of region states")
+    # Changed: Make regions_summary Optional with None default instead of using default_factory
+    regions_summary: Optional[Dict[str, Dict[str, float]]] = Field(default=None, description="Summary of region states")
     pleasure_index: float = Field(default=0.0, description="Level of pleasure felt (-1.0 to 1.0)")
 
 class TemperatureEffect(BaseModel):
