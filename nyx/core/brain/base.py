@@ -349,6 +349,16 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             from nyx.core.a2a.context_aware_mode_integration import ContextAwareModeIntegration
             from nyx.core.a2a.context_aware_issue_tracking_system import ContextAwareIssueTrackingSystem
             from nyx.core.a2a.context_aware_reflexive_system import ContextAwareReflexiveSystem
+            from nyx.core.a2a.context_aware_conditioning_system import ContextAwareConditioningSystem
+            from nyx.core.a2a.context_aware_agentic_action_generator import ContextAwareAgenticActionGenerator  
+            from nyx.core.a2a.context_aware_protocol_enforcement import ContextAwareProtocolEnforcement
+            from nyx.core.a2a.context_aware_body_service import ContextAwareBodyService
+            from nyx.core.a2a.context_aware_psychological_dominance import ContextAwarePsychologicalDominance
+            from nyx.core.a2a.context_aware_orgasm_control import ContextAwareOrgasmControl
+            from nyx.core.a2a.context_aware_persona_manager import ContextAwarePersonaManager
+            from nyx.core.a2a.context_aware_sadistic_responses import ContextAwareSadisticResponses
+            from nyx.core.a2a.context_aware_submission_progression import ContextAwareSubmissionProgression
+                        
             
             # Add A2A modules to the dictionary
             self._modules.update({
@@ -389,7 +399,16 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
                 'ContextAwarePredictionEngine': ContextAwarePredictionEngine,
                 'ContextAwareModeIntegration': ContextAwareModeIntegration,
                 'ContextAwareIssueTrackingSystem': ContextAwareIssueTrackingSystem,
-                'ContextAwareReflexiveSystem': ContextAwareReflexiveSystem
+                'ContextAwareReflexiveSystem': ContextAwareReflexiveSystem,
+                'ContextAwareConditioningSystem': ContextAwareConditioningSystem,
+                'ContextAwareAgenticActionGenerator': ContextAwareAgenticActionGenerator,
+                'ContextAwareProtocolEnforcement': ContextAwareProtocolEnforcement,
+                'ContextAwareBodyService': ContextAwareBodyService,
+                'ContextAwarePsychologicalDominance': ContextAwarePsychologicalDominance,
+                'ContextAwareOrgasmControl': ContextAwareOrgasmControl,
+                'ContextAwarePersonaManager': ContextAwarePersonaManager,
+                'ContextAwareSadisticResponses': ContextAwareSadisticResponses,
+                'ContextAwareSubmissionProgression': ContextAwareSubmissionProgression,
             })
         
         self._init_progress.append("import_modules_complete")
@@ -2007,7 +2026,6 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
         try:
             if not module_path:
                 # Convert CamelCase to snake_case for module name
-                # ContextAwareHormoneSystem -> context_aware_hormone_system
                 import re
                 # First, insert underscores before capital letters (except the first)
                 snake_case = re.sub('(.)([A-Z][a-z]+)', r'\1_\2', wrapper_class_name)
@@ -2017,8 +2035,16 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
                 snake_case = snake_case.lower()
                 module_path = f"nyx.core.a2a.{snake_case}"
             
-            module = __import__(module_path, fromlist=[wrapper_class_name])
-            wrapper_class = getattr(module, wrapper_class_name)
+            # Use importlib for cleaner imports
+            import importlib
+            try:
+                module = importlib.import_module(module_path)
+                wrapper_class = getattr(module, wrapper_class_name)
+            except (ImportError, AttributeError) as e:
+                # Try alternative import method
+                parts = module_path.split('.')
+                module = __import__(module_path, globals(), locals(), [wrapper_class_name], 0)
+                wrapper_class = getattr(module, wrapper_class_name)
             
             # Create wrapped instance
             wrapped = wrapper_class(original_system)
