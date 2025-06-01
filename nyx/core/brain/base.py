@@ -1351,6 +1351,9 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
         # Creative system integration
         self.creative_system = await integrate_with_existing_system(self)
         
+        # Initialize capability_assessor to None first
+        self.capability_assessor = None
+        
         # Set up content store and capability assessment
         if hasattr(self.creative_system, 'storage') and self.creative_system.storage and \
            hasattr(self.creative_system.storage, 'db_path') and \
@@ -1377,7 +1380,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
         else:
             logger.warning("Creative system or its sub-components (storage/content_system) not fully available after integration.")
         
-        # Update action generator with creative references
+        # Update action generator with creative references AFTER they're created
         if self.agentic_action_generator:
             self.agentic_action_generator.creative_system = self.creative_system
             self.agentic_action_generator.creative_memory = self.creative_memory
@@ -1999,7 +2002,12 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
                 # Convert CamelCase to snake_case for module name
                 # ContextAwareHormoneSystem -> context_aware_hormone_system
                 import re
-                snake_case = re.sub('(?<!^)(?=[A-Z])', '_', wrapper_class_name).lower()
+                # First, insert underscores before capital letters (except the first)
+                snake_case = re.sub('(.)([A-Z][a-z]+)', r'\1_\2', wrapper_class_name)
+                # Then handle sequences of capitals
+                snake_case = re.sub('([a-z0-9])([A-Z])', r'\1_\2', snake_case)
+                # Convert to lowercase
+                snake_case = snake_case.lower()
                 module_path = f"nyx.core.a2a.{snake_case}"
             
             module = __import__(module_path, fromlist=[wrapper_class_name])
