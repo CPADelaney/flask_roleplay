@@ -113,6 +113,72 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
         # Initialize workspace_engine to None since it might be accessed before initialize()
         self.workspace_engine = None
         
+        # Load configuration and set config attributes
+        from nyx.core.brain.config import BrainConfig
+        self.config = BrainConfig.default()
+        
+        # Set A2A integration flag from config
+        self.use_a2a_integration = self.config.use_a2a_integration
+        
+        # Set performance & behavior settings from config
+        self.cross_user_enabled = self.config.cross_user_enabled
+        self.cross_user_sharing_threshold = self.config.cross_user_sharing_threshold
+        self.memory_to_emotion_influence = self.config.memory_to_emotion_influence
+        self.emotion_to_memory_influence = self.config.emotion_to_memory_influence
+        self.experience_to_identity_influence = self.config.experience_to_identity_influence
+        self.consolidation_interval = self.config.consolidation_interval
+        self.identity_reflection_interval = self.config.identity_reflection_interval
+        self.need_drive_threshold = self.config.need_drive_threshold
+        
+        # Set context configuration
+        self.context_config = self.config.context_config
+        
+        # Set thinking configuration
+        self.thinking_config = self.config.thinking_config
+        
+        # Initialize empty registry and module sets
+        self.internal_module_registry = {}
+        self.default_active_modules = set()
+        
+        # Initialize performance metrics
+        self.performance_metrics = {
+            "memory_operations": 0,
+            "emotion_updates": 0,
+            "reflections_generated": 0,
+            "experiences_shared": 0,
+            "cross_user_experiences_shared": 0,
+            "response_times": [],
+            "goals_completed": 0,
+            "goals_failed": 0,
+            "steps_executed": 0,
+            "experience_consolidations": 0
+        }
+        
+        # Initialize other tracking attributes
+        self.cognitive_cycles_executed = 0
+        self.action_history = []
+        self.motivations = {}
+        self.procedural_activity_metrics = {}
+        self.current_temporal_context = None
+        
+        # Initialize error registry
+        self.error_registry = {
+            "error_counts": {},
+            "error_recovery_strategies": {},
+            "error_recovery_stats": {},
+            "handled_errors": [],
+            "unhandled_errors": []
+        }
+        
+        # Initialize misc attributes that might be accessed
+        self.trace_group_id = f"{self.user_id}_{self.conversation_id}"
+        self.event_bus = None
+        self.integrated_tracer = None
+        self.strategy_controller = None
+        self.noise_filter = None
+        self.context_distribution = None
+        self.agent_capabilities_initialized = False
+        
         # The actual initialization will happen in the async initialize() method
         logger.debug(f"NyxBrain instance created for user {user_id}, conversation {conversation_id} - awaiting initialization")
     
@@ -333,18 +399,8 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
         self._init_progress.append("tier_0_start")
         logger.debug(f"NyxBrain Init Tier 0: Infrastructure for {self.user_id}-{self.conversation_id}")
         
-        # Configuration
-        from nyx.core.brain.config import BrainConfig
-        self.config = BrainConfig.default()
-        self.context_config = {
-            "focus_limit": 4,
-            "background_limit": 3,
-            "zoom_in_limit": 2,
-            "high_fidelity_threshold": 0.7,
-            "med_fidelity_threshold": 0.5,
-            "low_fidelity_threshold": 0.3,
-            "max_context_tokens": 3500
-        }
+        # Configuration is already loaded in __init__
+        # No need to reload it here
         
         # Dev log storage
         from dev_log.storage import get_dev_log_storage
