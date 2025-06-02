@@ -399,25 +399,22 @@ class MemoryOrchestrator:
         if not self.initialized:
             await self.initialize()
         
-        # Call the memory core directly, skip the agent wrapper
         try:
-            # Direct call to the memory retrieval function
-            from nyx.core.memory_core import retrieve_memories
+            from nyx.core.memory_core import _retrieve_memories_internal
             from agents import RunContextWrapper
             
-            result = await retrieve_memories(
+            result = await _retrieve_memories_internal(
                 RunContextWrapper(context=self.memory_core.context),
                 query=query,
-                memory_types=memory_types or ["observation", "experience", "reflection"],
+                memory_types=memory_types,
                 limit=limit
             )
             
-            # Make sure we return a list
             return result if isinstance(result, list) else []
             
         except Exception as e:
             logger.error(f"Memory retrieval error: {e}")
-            return []  # Always return empty list on error
+            return []
     
     async def create_memory(self, memory_text: str, memory_type: str = "observation", 
                           tags: List[str] = None, significance: int = 5) -> str:
