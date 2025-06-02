@@ -312,6 +312,55 @@ class EmotionalCore:
         # Track active agent runs
         self.active_runs = {}
 
+    async def get_emotional_state(self) -> Dict[str, Any]:
+        """
+        Get the current emotional state
+        
+        Returns:
+            Current emotional state including neurochemicals and derived emotions
+        """
+        try:
+            # Apply decay first
+            self.apply_decay()
+            
+            # Get emotional state matrix
+            emotional_matrix = self._get_emotional_state_matrix_sync()
+            
+            # Get neurochemical state
+            neurochemical_state = {
+                chemical: {
+                    "value": data["value"],
+                    "baseline": data["baseline"],
+                    "decay_rate": data["decay_rate"]
+                }
+                for chemical, data in self.neurochemicals.items()
+            }
+            
+            # Combine into complete state
+            return {
+                "emotional_state_matrix": emotional_matrix,
+                "neurochemical_state": neurochemical_state,
+                "timestamp": datetime.datetime.now().isoformat()
+            }
+            
+        except Exception as e:
+            logger.error(f"Error getting emotional state: {e}")
+            return {
+                "error": str(e),
+                "emotional_state_matrix": {
+                    "primary_emotion": {
+                        "name": "Neutral",
+                        "intensity": 0.5,
+                        "valence": 0.0,
+                        "arousal": 0.5
+                    },
+                    "secondary_emotions": {},
+                    "valence": 0.0,
+                    "arousal": 0.5
+                },
+                "neurochemical_state": {}
+            }
+
     async def analyze_patterns_wrapper(self, ctx: RunContextWrapper[EmotionalContext]) -> Dict[str, Any]:
         """Wrapper method for analyze_emotional_patterns that can be used as a tool"""
         return await analyze_emotional_patterns(ctx, self)
