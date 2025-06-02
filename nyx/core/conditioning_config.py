@@ -5,7 +5,7 @@ import logging
 import os
 from typing import Dict, List, Any, Optional
 
-from agents import Agent, Runner, ModelSettings, trace
+from agents import Agent, Runner, ModelSettings, trace, function_tool, FunctionTool
 from nyx.core.conditioning_models import *
 from nyx.core.conditioning_tools import check_trait_balance
 
