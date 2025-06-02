@@ -80,7 +80,64 @@ class Memory(BaseModel):
     is_consolidated: bool = False
     relevance: float = 0.0
 
+# ==================== Input/Output Models ====================
 
+class MemoryCreateParams(BaseModel):
+    """Input model for creating memories"""
+    memory_text: str
+    memory_type: Optional[str] = "observation"
+    memory_scope: Optional[str] = "game"
+    significance: Optional[int] = 5
+    tags: Optional[List[str]] = Field(default_factory=list)
+    metadata: Optional[Dict[str, Any]] = Field(default_factory=dict)
+    memory_level: Optional[Literal['detail', 'summary', 'abstraction']] = "detail"
+    source_memory_ids: Optional[List[str]] = None
+    fidelity: Optional[float] = 1.0
+    summary_of: Optional[str] = None
+
+class MemoryUpdateParams(BaseModel):
+    """Input model for updating memories"""
+    memory_id: str
+    updates: Optional[Dict[str, Any]] = Field(default_factory=dict)
+
+class MemoryQuery(BaseModel):
+    """Input model for retrieving memories"""
+    query: str
+    memory_types: Optional[List[str]] = None
+    scopes: Optional[List[str]] = None
+    limit: Optional[int] = 10
+    min_significance: Optional[int] = 3
+    include_archived: Optional[bool] = False
+    entities: Optional[List[str]] = None
+    emotional_state: Optional[Dict[str, Any]] = None
+    tags: Optional[List[str]] = None
+    retrieval_level: Optional[Literal['detail', 'summary', 'abstraction', 'auto']] = "auto"
+    min_fidelity: Optional[float] = 0.0
+
+class MemoryRetrieveResult(BaseModel):
+    """Structured result for retrieval"""
+    memory_id: str
+    memory_text: str
+    memory_type: str
+    significance: int
+    relevance: float
+    confidence_marker: Optional[str] = None
+    memory_level: Literal['detail', 'summary', 'abstraction']
+    source_memory_ids: Optional[List[str]] = None
+    fidelity: float
+    summary_of: Optional[str] = None
+
+class MemoryMaintenanceResult(BaseModel):
+    """Result of maintenance operations"""
+    memories_decayed: int
+    clusters_consolidated: int
+    memories_archived: int
+
+class NarrativeResult(BaseModel):
+    """Result of narrative construction"""
+    narrative: str
+    confidence: float
+    experience_count: int
 
 # ==================== Memory Storage ====================
 
@@ -162,14 +219,12 @@ class MemoryStorage:
     def add(self, memory: Memory) -> str:
         """Add a memory and update all indices"""
         self.memories[memory.id] = memory
-
-        # main indices
+        
+        # Update indices
         self.type_index[memory.memory_type].add(memory.id)
         self.scope_index[memory.memory_scope].add(memory.id)
         self.level_index[memory.metadata.memory_level].add(memory.id)
-
-        sig_bucket = _sig_bucket(memory.significance)      # ← clamp
-        self.significance_index[sig_bucket].add(memory.id)
+        self.significance_index[memory.significance].add(memory.id)
         
         for tag in memory.tags:
             self.tag_index[tag].add(memory.id)
@@ -239,9 +294,7 @@ class MemoryStorage:
         self.type_index[memory.memory_type].discard(memory.id)
         self.scope_index[memory.memory_scope].discard(memory.id)
         self.level_index[memory.metadata.memory_level].discard(memory.id)
-
-        sig_bucket = _sig_bucket(memory.significance)      # ← clamp
-        self.significance_index[sig_bucket].discard(memory.id)
+        self.significance_index[memory.significance].discard(memory.id)
         
         for tag in memory.tags:
             self.tag_index[tag].discard(memory.id)
@@ -261,13 +314,11 @@ class MemoryStorage:
         self.consolidated_memories.discard(memory.id)
     
     def _add_to_indices(self, memory: Memory):
-        """Add memory to all indices (after update)"""
+        """Add memory to all indices"""
         self.type_index[memory.memory_type].add(memory.id)
         self.scope_index[memory.memory_scope].add(memory.id)
         self.level_index[memory.metadata.memory_level].add(memory.id)
-
-        sig_bucket = _sig_bucket(memory.significance)      # ← clamp
-        self.significance_index[sig_bucket].add(memory.id)
+        self.significance_index[memory.significance].add(memory.id)
         
         for tag in memory.tags:
             self.tag_index[tag].add(memory.id)
@@ -311,6 +362,18 @@ class MemoryContext(BaseModel):
         """Get the storage instance for this context"""
         return get_storage(self.user_id, self.conversation_id)
 
+# ==================== Default Context ====================
+# For backward compatibility with direct imports
+
+_default_context: Optional[MemoryContext] = None
+
+def get_default_context() -> MemoryContext:
+    """Get or create default context for standalone functions"""
+    global _default_context
+    if _default_context is None:
+        _default_context = MemoryContext()
+    return _default_context
+
 # ==================== Utility Functions ====================
 
 def _generate_embedding(text: str, embed_dim: int = 1536) -> List[float]:
@@ -319,10 +382,6 @@ def _generate_embedding(text: str, embed_dim: int = 1536) -> List[float]:
     hash_val = int(hashlib.md5(text.encode()).hexdigest(), 16)
     random.seed(hash_val)
     return [random.uniform(-1, 1) for _ in range(embed_dim)]
-
-def _sig_bucket(significance: int) -> int:
-    """Clamp arbitrary significance into the 1‑10 index range."""
-    return max(1, min(10, int(significance)))
 
 def _cosine_similarity(vec1: List[float], vec2: List[float]) -> float:
     """Calculate cosine similarity"""
@@ -1797,8 +1856,6 @@ class MemoryCoreAgents:
                     metadata=metadata
                 )
 
-consolidate_memory_clusters = consolidate_memories
-
 # ==================== Brain Memory Core ====================
 
 class BrainMemoryCore(MemoryCoreAgents):
@@ -1807,3 +1864,126 @@ class BrainMemoryCore(MemoryCoreAgents):
     def __init__(self):
         super().__init__(user_id=None, conversation_id=None)
         self.omniscient = True
+
+# ==================== Standalone Function Wrappers ====================
+# These allow direct imports without needing to use the agent pattern
+
+async def add_memory(
+    memory_text: str,
+    memory_type: str = "observation",
+    memory_scope: str = "game",
+    significance: int = 5,
+    tags: List[str] = None,
+    metadata: Dict[str, Any] = None,
+    user_id: Optional[int] = None,
+    conversation_id: Optional[int] = None
+) -> str:
+    """Standalone wrapper for add_memory that can be imported directly"""
+    # Create a temporary context
+    context = MemoryContext(user_id=user_id, conversation_id=conversation_id)
+    ctx = RunContextWrapper(context=context)
+    
+    # Extract metadata fields
+    meta = metadata or {}
+    
+    # Call the tool function
+    result = await create_memory(
+        ctx,
+        memory_text=memory_text,
+        memory_type=memory_type,
+        memory_scope=memory_scope,
+        significance=significance,
+        tags=tags,
+        emotional_context=meta.get('emotional_context'),
+        memory_level=meta.get('memory_level', 'detail'),
+        source_memory_ids=meta.get('source_memory_ids'),
+        entities=meta.get('entities', [])
+    )
+    
+    return result.get("memory_id", "")
+
+async def retrieve_memories(
+    query: str,
+    memory_types: List[str] = None,
+    scopes: List[str] = None,
+    limit: int = 10,
+    min_significance: int = 3,
+    include_archived: bool = False,
+    tags: List[str] = None,
+    entities: List[str] = None,
+    emotional_state: Dict[str, Any] = None,
+    retrieval_level: str = "auto",
+    min_fidelity: float = 0.0,
+    user_id: Optional[int] = None,
+    conversation_id: Optional[int] = None
+) -> List[Dict[str, Any]]:
+    """Standalone wrapper for retrieve_memories"""
+    context = MemoryContext(user_id=user_id, conversation_id=conversation_id)
+    ctx = RunContextWrapper(context=context)
+    
+    return await search_memories(
+        ctx,
+        query=query,
+        memory_types=memory_types,
+        scopes=scopes,
+        limit=limit,
+        min_significance=min_significance,
+        include_archived=include_archived,
+        tags=tags,
+        entities=entities,
+        emotional_state=emotional_state,
+        retrieval_level=retrieval_level,
+        min_fidelity=min_fidelity
+    )
+
+# ==================== Module Exports ====================
+# Make sure all commonly imported items are available
+
+__all__ = [
+    # Classes
+    'MemoryCoreAgents',
+    'BrainMemoryCore',
+    'Memory',
+    'MemoryMetadata',
+    'EmotionalMemoryContext',
+    'MemorySchema',
+    'MemoryContext',
+    'MemoryStorage',
+    
+    # Input/Output Models
+    'MemoryCreateParams',
+    'MemoryUpdateParams',
+    'MemoryQuery',
+    'MemoryRetrieveResult',
+    'MemoryMaintenanceResult',
+    'NarrativeResult',
+    
+    # Standalone functions
+    'add_memory',
+    'retrieve_memories',
+    
+    # Tool functions
+    'create_memory',
+    'search_memories',
+    'update_memory',
+    'delete_memory',
+    'get_memory',
+    'get_memory_details',
+    'archive_memory',
+    'unarchive_memory',
+    'crystallize_memory',
+    'mark_as_consolidated',
+    'create_reflection',
+    'create_abstraction',
+    'create_semantic_memory',
+    'apply_decay',
+    'consolidate_memories',
+    'get_memory_stats',
+    'generate_conversational_recall',
+    'construct_narrative',
+    'run_maintenance',
+    'retrieve_memories_with_formatting',
+    'retrieve_relevant_experiences',
+    'detect_schema_from_memories',
+    'reflect_on_memories',
+]
