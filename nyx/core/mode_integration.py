@@ -112,12 +112,7 @@ class ModeIntegrationManager:
         logger.info("ModeIntegrationManager initialized")
     
     def initialize_from_brain(self) -> bool:
-        """
-        Initialize components from the brain reference
-        
-        Returns:
-            Success status
-        """
+        """Initialize components from the brain reference"""
         try:
             # Get references to existing components
             self.emotional_core = getattr(self.brain, 'emotional_core', None)
@@ -126,32 +121,42 @@ class ModeIntegrationManager:
             self.reward_system = getattr(self.brain, 'reward_system', None)
             self.autobiographical_narrative = getattr(self.brain, 'autobiographical_narrative', None)
             
-            # Initialize mode components
-            self.context_system = ContextAwarenessSystem(emotional_core=self.emotional_core)
+            # Use existing context_system from brain instead of creating new one
+            self.context_system = getattr(self.brain, 'context_system', None)
             
-            self.mode_manager = InteractionModeManager(
-                context_system=self.context_system,
-                emotional_core=self.emotional_core,
-                reward_system=self.reward_system,
-                goal_manager=self.goal_manager
-            )
+            # Use existing mode_manager if already initialized
+            existing_mode_manager = getattr(self.brain, 'mode_manager', None)
+            if existing_mode_manager:
+                self.mode_manager = existing_mode_manager
+            else:
+                # Only create if not exists (shouldn't happen if brain is properly initialized)
+                logger.warning("mode_manager not found in brain, creating new instance")
+                self.mode_manager = InteractionModeManager(
+                    context_system=self.context_system,
+                    emotional_core=self.emotional_core,
+                    reward_system=self.reward_system,
+                    goal_manager=self.goal_manager
+                )
             
+            # Initialize other components that aren't in brain
             self.goal_selector = GoalSelector(
                 mode_manager=self.mode_manager,
                 goal_manager=self.goal_manager
             )
             
-            self.input_processor = BlendedInputProcessor(
-                mode_manager=self.mode_manager,
-                emotional_core=self.emotional_core
-            )
+            # Use existing input processor if available
+            existing_processor = getattr(self.brain, 'conditioned_input_processor', None)
+            if existing_processor and hasattr(existing_processor, 'mode_manager'):
+                self.input_processor = existing_processor
+            else:
+                self.input_processor = BlendedInputProcessor(
+                    mode_manager=self.mode_manager,
+                    emotional_core=self.emotional_core
+                )
             
-            # Add references to the brain
+            # Update brain references
             if self.brain:
-                setattr(self.brain, 'context_system', self.context_system)
-                setattr(self.brain, 'mode_manager', self.mode_manager)
                 setattr(self.brain, 'goal_selector', self.goal_selector)
-                setattr(self.brain, 'input_processor', self.input_processor)
                 setattr(self.brain, 'mode_integration', self)
             
             logger.info("ModeIntegrationManager successfully initialized from brain")
