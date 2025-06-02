@@ -232,6 +232,10 @@ class EmotionalResponseOutput(BaseModel):
     valence: confloat(ge=-1.0, le=1.0) = Field(..., description="Overall valence")
     arousal: confloat(ge=0.0, le=1.0) = Field(..., description="Overall arousal")
     
+    class Config:
+        # This ensures all fields are included in the schema
+        extra = "forbid"
+    
     @property
     def valence_category(self) -> EmotionValence:
         """Get the valence category for this response"""
@@ -243,7 +247,7 @@ class EmotionalResponseOutput(BaseModel):
         return EmotionArousal.from_value(self.arousal)
         
     @model_validator(mode="after")
-    def validate_emotional_state(cls, self):
+    def validate_emotional_state(self):
         """
         Ensure consistency between primary emotion and overall valence/arousal.
         This runs *after* normal field validation, with 'self' being the model instance.
@@ -268,11 +272,11 @@ class NeurochemicalRequest(BaseModel):
     update_chemicals: bool = Field(True, description="Whether to update chemicals")
     
     @model_validator(mode="after")
-    def check_trigger_data(cls, self):
+    def check_trigger_data(self):
         """Ensure either input_text or dominant_emotion is provided"""
-        if not values.get('input_text') and not values.get('dominant_emotion'):
+        if not self.input_text and not self.dominant_emotion:
             raise ValueError("Either input_text or dominant_emotion must be provided")
-        return values
+        return self
 
 class NeurochemicalResponse(BaseModel):
     """Schema for handoff response from the neurochemical agent"""
