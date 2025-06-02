@@ -87,11 +87,13 @@ def create_maintenance_agent(memory_core: MemoryCoreAgents) -> Agent:
     @function_tool
     async def run_memory_decay(ctx) -> Dict[str, Any]:
         """Run memory decay"""
-        return await apply_memory_decay(ctx)
+        from nyx.core.memory_core import apply_decay
+        return await apply_decay(ctx)
     
     @function_tool
     async def run_consolidation(ctx) -> Dict[str, Any]:
         """Run memory consolidation"""
+        from nyx.core.memory_core import consolidate_memories
         return await consolidate_memories(ctx)
     
     return Agent(
