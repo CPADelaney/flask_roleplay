@@ -643,6 +643,36 @@ async def _detect_memory_pattern(ctx: RunContextWrapper[MemoryCoreContext], memo
         "attributes": attributes
     }
 
+# Create internal implementation functions that aren't decorated with @function_tool
+async def _internal_retrieve_memories(
+    ctx: RunContextWrapper[MemoryCoreContext],
+    query: str,
+    memory_types: Optional[List[str]] = None,
+    scopes: Optional[List[str]] = None,
+    limit: Optional[int] = None,
+    min_significance: Optional[int] = None,
+    include_archived: Optional[bool] = None,
+    entities: Optional[List[str]] = None,
+    emotional_state: Optional[Dict[str, Any]] = None,
+    tags: Optional[List[str]] = None,
+    retrieval_level: Optional[Literal['detail', 'summary', 'abstraction', 'auto']] = None,
+    min_fidelity: Optional[float] = None
+) -> List[Dict[str, Any]]:
+    """Internal version of retrieve_memories that can be called from other functions"""
+    return await retrieve_memories(
+        ctx, query, memory_types, scopes, limit, min_significance,
+        include_archived, entities, emotional_state, tags,
+        retrieval_level, min_fidelity
+    )
+
+async def _internal_detect_schema_from_memories(
+    ctx: RunContextWrapper[MemoryCoreContext],
+    topic: str = None, 
+    min_memories: int = 3
+) -> Optional[Dict[str, Any]]:
+    """Internal version of detect_schema_from_memories"""
+    return await detect_schema_from_memories(ctx, topic, min_memories)
+
 async def _check_for_patterns(ctx: RunContextWrapper[MemoryCoreContext], tags: List[str]) -> None:
     """Check if there are patterns that should be identified as schemas"""
     memory_core = ctx.context
@@ -653,8 +683,8 @@ async def _check_for_patterns(ctx: RunContextWrapper[MemoryCoreContext], tags: L
     
     # Check each tag for potential patterns
     for tag in tags:
-        # Get memories with this tag
-        tagged_memories = await retrieve_memories(
+        # Get memories with this tag - use internal version
+        tagged_memories = await _internal_retrieve_memories(
             ctx,
             query="",
             memory_types=["observation", "experience"],
@@ -668,9 +698,29 @@ async def _check_for_patterns(ctx: RunContextWrapper[MemoryCoreContext], tags: L
         
         # Check if there might be a schema
         if tag not in [s.name.lower() for s in memory_core.schemas.values()]:
-            # Create schema detection task
-            asyncio.create_task(detect_schema_from_memories(ctx, tag))
+            # Create schema detection task - use internal version
+            asyncio.create_task(_internal_detect_schema_from_memories(ctx, tag))
 
+async def _check_for_schema_creation(ctx: RunContextWrapper[MemoryCoreContext]) -> None:
+    """Periodically check for new schemas that could be created"""
+    memory_core = ctx.context
+    
+    # Get common tags
+    tag_counts = {}
+    for tag, memory_ids in memory_core.tag_index.items():
+        tag_counts[tag] = len(memory_ids)
+    
+    # Find tags with many memories but no schema
+    potential_schema_tags = []
+    for tag, count in tag_counts.items():
+        if count >= 5:  # At least 5 memories with this tag
+            # Check if tag is not already a schema name
+            if not any(s.name.lower() == tag.lower() for s in memory_core.schemas.values()):
+                potential_schema_tags.append(tag)
+    
+    # Process top potential schema tags
+    for tag in potential_schema_tags[:3]:  # Process up to 3 potential schemas
+        await _internal_detect_schema_from_memories(ctx, tag)
 
 # Memory operations function tools
 
@@ -1536,7 +1586,7 @@ async def apply_memory_decay(
     ctx: RunContextWrapper[MemoryCoreContext],
 ) -> Dict[str, Any]:
     """
-    Decay episodic memories’ significance / fidelity and optionally archive them.
+    Decay episodic memories' significance / fidelity and optionally archive them.
     """
     mc = ctx.context
     if not mc.initialized:
@@ -1690,20 +1740,20 @@ async def consolidate_memory_clusters(
                 memory_texts = []
                 for memory_id in cluster:
                     if memory_id in memory_core.memories:
-                        memory_texts.append(memory_core.memories[memory_id]["memory_text"])
+                        memory_texts.append(memory_core.memories[memory_id].memory_text)
                 
                 # Generate consolidated text
                 consolidated_text = await _generate_consolidated_text(ctx, memory_texts)
                 
                 # Calculate average significance (weighted by individual memory significance)
-                total_significance = sum(memory_core.memories[mid]["significance"] for mid in cluster if mid in memory_core.memories)
+                total_significance = sum(memory_core.memories[mid].significance for mid in cluster if mid in memory_core.memories)
                 avg_significance = total_significance / len(cluster)
                 
                 # Combine tags
                 all_tags = set()
                 for memory_id in cluster:
                     if memory_id in memory_core.memories:
-                        all_tags.update(memory_core.memories[memory_id].get("tags", []))
+                        all_tags.update(memory_core.memories[memory_id].tags)
                 
                 # Create consolidated memory
                 consolidated_id = await add_memory(
@@ -1766,13 +1816,13 @@ async def run_maintenance(
                 continue
             
             # Skip non-observation memories
-            if memory["memory_type"] not in ["observation", "experience"]:
+            if memory.memory_type not in ["observation", "experience"]:
                 continue
             
-            times_recalled = memory.get("times_recalled", 0)
+            times_recalled = memory.times_recalled
             
             # Get age
-            timestamp_str = memory.get("metadata", {}).get("timestamp", memory_core.init_time.isoformat())
+            timestamp_str = memory.metadata.timestamp
             timestamp = datetime.datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
             days_old = (datetime.datetime.now() - timestamp).days
             
@@ -1848,7 +1898,7 @@ async def get_memory_stats(
         
         # Get average significance
         if total_memories > 0:
-            avg_significance = sum(m["significance"] for m in memory_core.memories.values()) / total_memories
+            avg_significance = sum(m.significance for m in memory_core.memories.values()) / total_memories
         else:
             avg_significance = 0
         
@@ -1856,7 +1906,7 @@ async def get_memory_stats(
         now = datetime.datetime.now()
         ages = []
         for memory in memory_core.memories.values():
-            timestamp_str = memory.get("metadata", {}).get("timestamp", memory_core.init_time.isoformat())
+            timestamp_str = memory.metadata.timestamp
             timestamp = datetime.datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
             age_days = (now - timestamp).days
             ages.append(age_days)
@@ -1866,7 +1916,7 @@ async def get_memory_stats(
         avg_age = sum(ages) / len(ages) if ages else 0
         
         # Calculate average fidelity
-        fidelities = [m.get("metadata", {}).get("fidelity", 1.0) for m in memory_core.memories.values()]
+        fidelities = [m.metadata.fidelity for m in memory_core.memories.values()]
         avg_fidelity = sum(fidelities) / len(fidelities) if fidelities else 1.0
         
         return {
@@ -2215,7 +2265,11 @@ async def detect_schema_from_memories(
             })
             
             await update_memory(
-                ctx, memory_id, {"metadata": metadata}
+                ctx, 
+                params=MemoryUpdateParams(
+                    memory_id=memory_id,
+                    updates={"metadata": metadata}
+                )
             )
     
     return {
@@ -2224,27 +2278,6 @@ async def detect_schema_from_memories(
         "description": pattern["description"],
         "memory_count": len(schema.example_memory_ids)
     }
-
-async def _check_for_schema_creation(ctx: RunContextWrapper[MemoryCoreContext]) -> None:
-    """Periodically check for new schemas that could be created"""
-    memory_core = ctx.context
-    
-    # Get common tags
-    tag_counts = {}
-    for tag, memory_ids in memory_core.tag_index.items():
-        tag_counts[tag] = len(memory_ids)
-    
-    # Find tags with many memories but no schema
-    potential_schema_tags = []
-    for tag, count in tag_counts.items():
-        if count >= 5:  # At least 5 memories with this tag
-            # Check if tag is not already a schema name
-            if not any(s.name.lower() == tag.lower() for s in memory_core.schemas.values()):
-                potential_schema_tags.append(tag)
-    
-    # Process top potential schema tags
-    for tag in potential_schema_tags[:3]:  # Process up to 3 potential schemas
-        await detect_schema_from_memories(ctx, tag)
 
 @function_tool
 async def crystallize_memory(
@@ -2293,10 +2326,16 @@ async def crystallize_memory(
     metadata["fidelity"] = max(metadata.get("fidelity", 1.0), min_fidelity)
     
     # Update the memory
-    success = await update_memory(ctx, memory_id, {
-        "metadata": metadata,
-        "significance": max(memory.get("significance", 5), 8)  # Ensure high significance
-    })
+    success = await update_memory(
+        ctx, 
+        params=MemoryUpdateParams(
+            memory_id=memory_id,
+            updates={
+                "metadata": metadata,
+                "significance": max(memory.get("significance", 5), 8)  # Ensure high significance
+            }
+        )
+    )
     
     return success
 
