@@ -9,7 +9,7 @@ from typing import Dict, List, Any, Optional, Tuple
 from pydantic import BaseModel, Field
 from collections import defaultdict
 
-from agents import Agent, Runner, function_tool, RunContextWrapper, trace, ModelSettings, handoff, InputGuardrail
+from agents import Agent, Runner, function_tool, RunContextWrapper, trace, ModelSettings, handoff, InputGuardrail, GuardrailFunctionOutput
 
 class AttentionalFocus(BaseModel):
     """Schema for current attentional focus"""
@@ -233,7 +233,7 @@ class AttentionalController:
     async def _input_validation(self, 
                               ctx: RunContextWrapper[AttentionContext], 
                               agent: Agent[AttentionContext], 
-                              input_data: str | List[Any]) -> dict:
+                              input_data: str | List[Any]) -> GuardrailFunctionOutput:
         """Validate input for the attention system"""
         try:
             # Parse the input
@@ -244,28 +244,40 @@ class AttentionalController:
                 
             # Check for required fields
             if "salient_items" not in data:
-                return {
-                    "is_valid": False,
-                    "reason": "Input must contain 'salient_items' field"
-                }
+                return GuardrailFunctionOutput(
+                    output_info={
+                        "is_valid": False,
+                        "reason": "Input must contain 'salient_items' field"
+                    },
+                    tripwire_triggered=True  # Trigger tripwire for invalid input
+                )
                 
             # Check that salient_items is a list
             if not isinstance(data["salient_items"], list):
-                return {
-                    "is_valid": False,
-                    "reason": "salient_items must be a list"
-                }
+                return GuardrailFunctionOutput(
+                    output_info={
+                        "is_valid": False,
+                        "reason": "salient_items must be a list"
+                    },
+                    tripwire_triggered=True  # Trigger tripwire for invalid input
+                )
                 
             # Input is valid
-            return {
-                "is_valid": True,
-                "reason": ""
-            }
+            return GuardrailFunctionOutput(
+                output_info={
+                    "is_valid": True,
+                    "reason": ""
+                },
+                tripwire_triggered=False  # Don't trigger tripwire for valid input
+            )
         except Exception as e:
-            return {
-                "is_valid": False,
-                "reason": f"Invalid input: {str(e)}"
-            }
+            return GuardrailFunctionOutput(
+                output_info={
+                    "is_valid": False,
+                    "reason": f"Invalid input: {str(e)}"
+                },
+                tripwire_triggered=True  # Trigger tripwire for exceptions
+            )
 
     def _create_input_validation(self) -> InputGuardrail:
         """Create input validation guardrail"""
