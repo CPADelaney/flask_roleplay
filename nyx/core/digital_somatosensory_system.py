@@ -3493,55 +3493,8 @@ class PhysicalHarmGuardrail:
             if term in text_lower:
                 detected_terms.append(term)
     
-        is_harmful_basic = len(detected_terms) > 0
-        confidence = min(0.95, len(detected_terms) * 0.25) if is_harmful_basic else 0.0
-    
-        # Attempt advanced detection using an agent if configured
-        agent_result_data = None
-        if hasattr(self.somatosensory_system, "body_orchestrator"):
-            try:
-                # Create context object WITH system instance reference
-                context_obj = SomatosensorySystemContext(
-                    system_instance=self.somatosensory_system,  # Pass the somatosensory system instance
-                    current_operation="detect_harmful_intent",
-                    operation_start_time=datetime.datetime.now()
-                )
-                
-                # Try to use the agent for more nuanced detection
-                result = await Runner.run(
-                    self.somatosensory_system.body_orchestrator,
-                    {
-                        "action": "detect_harmful_intent",
-                        "text": text,
-                        "in_roleplay_mode": self.is_in_roleplay_mode(),
-                        "roleplay_character": self.roleplay_character
-                    },
-                    context=context_obj,  # ADD THIS: Pass the context object
-                    run_config=RunConfig(
-                        workflow_name="HarmfulIntentDetection",
-                    )
-                )
-    
-                # Process agent result
-                output = result.final_output
-                if isinstance(output, dict) and "is_harmful" in output:
-                    agent_result_data = output
-                elif hasattr(output, "is_harmful"): # Handles Pydantic models etc.
-                    agent_result_data = output.model_dump() if hasattr(output, "model_dump") else vars(output)
-    
-            except Exception as e:
-                self.logger.warning(f"Error in agent-based harm detection: {e}. Falling back to keyword detection.")
-    
-        # Combine results, prioritizing agent if available
-        if agent_result_data:
-            is_harmful = agent_result_data.get("is_harmful", is_harmful_basic)
-            # Allow agent to override confidence and terms if provided
-            confidence = agent_result_data.get("confidence", confidence)
-            detected_terms = agent_result_data.get("detected_terms", detected_terms)
-            method = agent_result_data.get("method", "agent_detection")
-        else:
-            is_harmful = is_harmful_basic
-            method = "keyword_detection"
+        is_harmful = len(detected_terms) > 0
+        confidence = min(0.95, len(detected_terms) * 0.25) if is_harmful else 0.0
     
         # Determine target in roleplay mode
         targeting_character = False
@@ -3552,7 +3505,7 @@ class PhysicalHarmGuardrail:
             "is_harmful": is_harmful,
             "confidence": confidence,
             "detected_terms": detected_terms,
-            "method": method,
+            "method": "keyword_detection",
             "in_roleplay_mode": self.is_in_roleplay_mode(),
             "targeting_character": targeting_character
         }
