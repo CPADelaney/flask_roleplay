@@ -1940,42 +1940,39 @@ class DigitalSomatosensorySystem:
         ctx: RunContextWrapper[SomatosensorySystemContext],
         physical_arousal: Optional[float] = None,
         cognitive_arousal: Optional[float] = None,
-        # --- CHANGED: Made Optional with None default ---
-        reset: Optional[bool] = None,
-        trigger_orgasm: Optional[bool] = None
-        # ----------------------------------------------
+        reset: bool = False,  # Change back to non-optional with False default
+        trigger_orgasm: bool = False  # Change back to non-optional with False default
     ) -> Dict[str, Any]:
         """Update the arousal state"""
-        """Update the arousal state"""
         system_instance = ctx.context.system_instance
-        if not system_instance: return {"error": "System instance missing"}
-
-        old_state_dict = { # Renamed for clarity
+        if not system_instance: 
+            return {"error": "System instance missing"}
+    
+        old_state_dict = {
             "arousal_level": system_instance.arousal_state.arousal_level,
             "physical_arousal": system_instance.arousal_state.physical_arousal,
             "cognitive_arousal": system_instance.arousal_state.cognitive_arousal
         }
-
-        # --- CHANGED: Explicitly check for True ---
-        if reset is True:
+    
+        # Check for True values explicitly
+        if reset:  # Instead of reset is True
             system_instance.arousal_state.physical_arousal = 0.0
             system_instance.arousal_state.cognitive_arousal = 0.0
-            # system_instance.arousal_state.arousal_level = 0.0 # Will be set by update_global_arousal
-            system_instance.update_global_arousal() # Update global after resetting components
+            system_instance.update_global_arousal()
             system_instance.arousal_state.last_update = datetime.datetime.now()
-
+    
             return {
                 "operation": "reset",
                 "old_state": old_state_dict,
-                "new_state": await DigitalSomatosensorySystem._get_arousal_state(ctx) # Call static method
+                "new_state": await DigitalSomatosensorySystem._get_arousal_state(ctx)
             }
-
-        if trigger_orgasm is True:
+    
+        if trigger_orgasm:  # Instead of trigger_orgasm is True
             system_instance.process_orgasm()
             return {
                 "operation": "orgasm",
                 "old_state": old_state_dict,
-                "new_state": await DigitalSomatosensorySystem._get_arousal_state(ctx) # Call static method
+                "new_state": await DigitalSomatosensorySystem._get_arousal_state(ctx)
             }
         # --- END CHANGED ---
 
