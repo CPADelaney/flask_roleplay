@@ -38,6 +38,11 @@ class BalanceAnalysisOutput(BaseModel):
     behavior_recommendations: List[Dict[str, Any]] = Field(default_factory=list, description="Behavior recommendations")
     balance_score: float = Field(default=0.0, description="Overall balance score (0.0-1.0)")
     analysis: str = Field(default="", description="Analysis of personality balance")
+    
+    class Config:
+        schema_extra = {
+            "required": ["is_balanced", "imbalances", "trait_recommendations", "behavior_recommendations", "balance_score", "analysis"]
+        }
 
 class AssociationConsolidationOutput(BaseModel):
     """Output schema for association consolidation"""
@@ -46,6 +51,11 @@ class AssociationConsolidationOutput(BaseModel):
     strengthened_keys: List[str] = Field(default_factory=list, description="Association keys strengthened")
     efficiency_gain: float = Field(default=0.0, description="Efficiency gain from consolidation (0.0-1.0)")
     reasoning: str = Field(default="", description="Reasoning for consolidations")
+    
+    class Config:
+        schema_extra = {
+            "required": ["consolidations", "removed_keys", "strengthened_keys", "efficiency_gain", "reasoning"]
+        }
 
 class MaintenanceSummaryOutput(BaseModel):
     """Output schema for maintenance run summary"""
@@ -77,7 +87,11 @@ class MaintenanceSummaryOutput(BaseModel):
         default="",
         description="Recommendation for the next maintenance run"
     )
-
+    
+    class Config:
+        schema_extra = {
+            "required": ["tasks_performed", "time_taken_seconds", "associations_modified", "traits_adjusted", "extinction_count", "improvements", "next_maintenance_recommendation"]
+        }
 
 
 class MaintenanceContext:
