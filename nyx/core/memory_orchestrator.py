@@ -391,17 +391,33 @@ class MemoryOrchestrator:
         
         # Limit to requested number
         return combined_memories[:limit]
+        
+    # In memory_orchestrator.py, replace the retrieve_memories method with this:
     
     async def retrieve_memories(self, query: str, memory_types: List[str] = None, limit: int = 5) -> List[Dict[str, Any]]:
         """Retrieve memories matching a query"""
-        params = {
-            "query": query,
-            "memory_types": memory_types,
-            "limit": limit
-        }
-        with trace(workflow_name="Retrieve Memories", group_id=self.trace_group_id):
-            result = await self.process_memory_request("retrieve", params)
-            return result.get("memories", [])
+        if not self.initialized:
+            await self.initialize()
+        
+        # Call the memory core directly, skip the agent wrapper
+        try:
+            # Direct call to the memory retrieval function
+            from nyx.core.memory_core import retrieve_memories
+            from agents import RunContextWrapper
+            
+            result = await retrieve_memories(
+                RunContextWrapper(context=self.memory_core.context),
+                query=query,
+                memory_types=memory_types or ["observation", "experience", "reflection"],
+                limit=limit
+            )
+            
+            # Make sure we return a list
+            return result if isinstance(result, list) else []
+            
+        except Exception as e:
+            logger.error(f"Memory retrieval error: {e}")
+            return []  # Always return empty list on error
     
     async def create_memory(self, memory_text: str, memory_type: str = "observation", 
                           tags: List[str] = None, significance: int = 5) -> str:
