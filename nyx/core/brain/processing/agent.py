@@ -225,12 +225,23 @@ class AgentProcessor:
             # Generate response using the main agent
             if hasattr(self.brain, "nyx_main_agent") and hasattr(self.brain, "Runner") and hasattr(self.brain, "agent_context"):
                 try:
-                    # Run the main agent
+                    # FIXED: Merge agent_context and enhanced_context properly
+                    # The SDK expects a single context parameter
+                    merged_context = self.brain.agent_context.copy() if hasattr(self.brain.agent_context, 'copy') else {}
+                    
+                    # If agent_context is a dict, merge with enhanced_context
+                    if isinstance(self.brain.agent_context, dict):
+                        merged_context.update(enhanced_context)
+                    else:
+                        # If agent_context is a custom object, we'll pass it as-is
+                        # and store enhanced_context separately if needed
+                        merged_context = self.brain.agent_context
+                    
+                    # Run the main agent with correct parameters
                     result = await self.brain.Runner.run(
                         self.brain.nyx_main_agent,
                         user_input,
-                        context=self.brain.agent_context,
-                        run_context=enhanced_context
+                        context=merged_context  # FIXED: Use only 'context' parameter
                     )
                     
                     # Get structured output
