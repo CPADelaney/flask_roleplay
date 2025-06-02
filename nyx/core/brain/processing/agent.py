@@ -47,12 +47,6 @@ except ImportError as e:
 
 logger = logging.getLogger(__name__)
 
-class InputGuardrailTripwireTriggered(Exception):
-    pass
-
-class OutputGuardrailTripwireTriggered(Exception):
-    pass
-
 class AgentProcessor:
     """Handles agent-based processing of inputs"""
     
@@ -195,26 +189,44 @@ class AgentProcessor:
             # Get memories to enhance context
             enhanced_context = context.copy() if context else {}
             
-            if hasattr(self.brain, "agent_context") and hasattr(self.brain, "retrieve_memories"):
-                memories = await self.brain.retrieve_memories(self.brain.agent_context, user_input)
-                enhanced_context["relevant_memories"] = memories
+            # Fixed memory retrieval - use memory orchestrator if available
+            memories = []
+            if hasattr(self.brain, "memory_orchestrator") and self.brain.memory_orchestrator:
+                try:
+                    # Use the memory orchestrator's retrieve_memories method
+                    memories = await self.brain.memory_orchestrator.retrieve_memories(
+                        query=user_input,
+                        memory_types=["observation", "experience", "reflection"],
+                        limit=5
+                    )
+                    enhanced_context["relevant_memories"] = memories
+                except Exception as e:
+                    logger.error(f"Error retrieving memories: {str(e)}")
+                    memories = []
             
             # Get user model guidance if available
             if hasattr(self.brain, "get_user_model_guidance") and hasattr(self.brain, "agent_context"):
-                user_guidance = await self.brain.get_user_model_guidance(self.brain.agent_context)
-                enhanced_context["user_guidance"] = user_guidance
+                try:
+                    user_guidance = await self.brain.get_user_model_guidance(self.brain.agent_context)
+                    enhanced_context["user_guidance"] = user_guidance
+                except Exception as e:
+                    logger.error(f"Error getting user model guidance: {str(e)}")
             
             # Handle emotional state
             emotional_state = {}
-            if hasattr(self.brain, "emotional_core"):
-                emotional_state = self.brain.emotional_core.get_emotional_state()
+            if hasattr(self.brain, "emotional_core") and self.brain.emotional_core:
+                try:
+                    emotional_state = self.brain.emotional_core.get_emotional_state()
+                except Exception as e:
+                    logger.error(f"Error getting emotional state: {str(e)}")
+                    emotional_state = {}
             enhanced_context["emotional_state"] = emotional_state
             
             # Generate response using the main agent
             if hasattr(self.brain, "nyx_main_agent") and hasattr(self.brain, "Runner") and hasattr(self.brain, "agent_context"):
                 try:
                     # Run the main agent
-                    result = await Runner.run(
+                    result = await self.brain.Runner.run(
                         self.brain.nyx_main_agent,
                         user_input,
                         context=self.brain.agent_context,
@@ -235,14 +247,16 @@ class AgentProcessor:
                             # Update response with filtered version
                             narrative_response.narrative = filtered_response
                         
-                        # Add memory of this interaction
-                        if hasattr(self.brain, "add_memory") and hasattr(self.brain, "agent_context"):
-                            await self.brain.add_memory(
-                                self.brain.agent_context,
-                                f"User said: {user_input}\nI responded with: {narrative_response.narrative}",
-                                "observation",
-                                7
-                            )
+                        # Add memory of this interaction if memory orchestrator is available
+                        if hasattr(self.brain, "memory_orchestrator") and self.brain.memory_orchestrator:
+                            try:
+                                await self.brain.memory_orchestrator.create_memory(
+                                    memory_text=f"User said: {user_input}\nI responded with: {narrative_response.narrative}",
+                                    memory_type="observation",
+                                    significance=7
+                                )
+                            except Exception as e:
+                                logger.error(f"Error creating memory: {str(e)}")
                         
                         # Convert to dictionary
                         if hasattr(narrative_response, "dict"):
@@ -262,7 +276,7 @@ class AgentProcessor:
                             "has_experience": True,
                             "memory_id": None,
                             "emotional_state": emotional_state,
-                            "memories_used": memories if "memories" in locals() else [],
+                            "memories_used": memories,
                             "generate_image": response_dict.get("generate_image", False),
                             "image_prompt": response_dict.get("image_prompt"),
                             "user_input": user_input,
