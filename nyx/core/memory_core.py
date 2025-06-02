@@ -10,6 +10,8 @@ import random
 from typing import Dict, List, Any, Optional, Tuple, Set, Union, Literal
 from collections import defaultdict
 import numpy as np
+import hashlib
+import copy 
 
 from pydantic import BaseModel, Field
 from agents import Agent, Runner, function_tool, RunContextWrapper, trace, custom_span
@@ -256,23 +258,22 @@ class MemoryStorage:
         """Get a memory by ID"""
         return self.memories.get(memory_id)
     
-    def update(self, memory: Memory) -> bool:
-        """Update an existing memory"""
+    def update(self, memory: "Memory") -> bool:   # quotes for forward ref
+        """
+        Update an existing memory without corrupting indices:
+        1. snapshot the *old* object,
+        2. remove indices that refer to the snapshot,
+        3. write the new object,
+        4. re‑index the fresh data.
+        """
         if memory.id not in self.memories:
             return False
-            
-        # Get old memory for index cleanup
-        old_memory = self.memories[memory.id]
-        
-        # Remove from old indices
-        self._remove_from_indices(old_memory)
-        
-        # Update memory
+
+        old_snapshot = copy.deepcopy(self.memories[memory.id])
+        self._remove_from_indices(old_snapshot)
+
         self.memories[memory.id] = memory
-        
-        # Add to new indices
         self._add_to_indices(memory)
-        
         return True
     
     def delete(self, memory_id: str) -> bool:
@@ -376,12 +377,28 @@ def get_default_context() -> MemoryContext:
 
 # ==================== Utility Functions ====================
 
+def _mk_cache_key(**parts) -> str:
+    """
+    Deterministic, order‑insensitive cache key based on JSON.
+    Lists are converted to sorted tuples so ['a','b']==['b','a'].
+    """
+    def _norm(v):
+        if isinstance(v, list):
+            return tuple(sorted(v))
+        return v
+    clean = {k: _norm(v) for k, v in parts.items() if v is not None}
+    return json.dumps(clean, sort_keys=True)
+
 def _generate_embedding(text: str, embed_dim: int = 1536) -> List[float]:
-    """Generate embedding for text with correct dimension"""
-    import hashlib
+    """
+    Generate a pseudo‑embedding that is
+    • deterministic for identical `text`
+    • correct dimension
+    • does NOT touch the process‑wide random seed.
+    """
     hash_val = int(hashlib.md5(text.encode()).hexdigest(), 16)
-    random.seed(hash_val)
-    return [random.uniform(-1, 1) for _ in range(embed_dim)]
+    rng = random.Random(hash_val)          # local RNG instance
+    return [rng.uniform(-1, 1) for _ in range(embed_dim)]
 
 def _cosine_similarity(vec1: List[float], vec2: List[float]) -> float:
     """Calculate cosine similarity"""
@@ -501,6 +518,603 @@ def _detect_memory_pattern(memories: List[Memory]) -> Optional[Dict[str, Any]]:
         }
     }
 
+# ==================== Core Memory Functions ====================
+# These are the actual implementations that both tools and standalone functions use
+
+async def _create_memory_impl(
+    storage: MemoryStorage,
+    memory_text: str,
+    memory_type: str = "observation",
+    memory_scope: str = "game",
+    significance: int = 5,
+    tags: List[str] = None,
+    emotional_context: Dict[str, Any] = None,
+    memory_level: str = "detail",
+    source_memory_ids: List[str] = None,
+    entities: List[str] = None
+) -> Dict[str, Any]:
+    """Core implementation of create_memory"""
+    # Create metadata
+    metadata = MemoryMetadata(
+        memory_level=memory_level,
+        source_memory_ids=source_memory_ids,
+        entities=entities or [],
+        original_form=memory_text
+    )
+    
+    if emotional_context:
+        metadata.emotional_context = EmotionalMemoryContext(**emotional_context)
+    
+    # Create memory
+    memory = Memory(
+        memory_text=memory_text,
+        memory_type=memory_type,
+        memory_scope=memory_scope,
+        significance=significance,
+        tags=tags or [],
+        metadata=metadata,
+        embedding=_generate_embedding(memory_text, storage.embed_dim)
+    )
+    
+    # Store
+    memory_id = storage.add(memory)
+    storage.embeddings[memory_id] = memory.embedding
+    
+    # Clear cache
+    storage.query_cache.clear()
+    
+    # Check for pattern creation
+    if memory_type == "observation" and tags:
+        # Check if we should create a schema
+        for tag in tags:
+            tag_memories = [
+                storage.get(mid) for mid in storage.tag_index.get(tag, set())
+                if storage.get(mid)
+            ]
+            if len(tag_memories) >= 5:
+                pattern = _detect_memory_pattern(tag_memories)
+                if pattern and tag not in [s.name.lower() for s in storage.schemas.values()]:
+                    schema = MemorySchema(
+                        name=pattern["name"],
+                        description=pattern["description"],
+                        category=pattern["category"],
+                        attributes=pattern["attributes"],
+                        example_memory_ids=[m.id for m in tag_memories[:3]]
+                    )
+                    storage.schemas[schema.id] = schema
+                    
+                    # Link schema back to memories
+                    for mem in tag_memories:
+                        if not any(s.get("schema_id") == schema.id for s in mem.metadata.schemas):
+                            mem.metadata.schemas.append({
+                                "schema_id": schema.id,
+                                "relevance": 1.0
+                            })
+                            storage.update(mem)
+    
+    return {
+        "memory_id": memory_id,
+        "memory": memory.dict()
+    }
+
+async def _search_memories_impl(
+    storage: MemoryStorage,
+    query: str,
+    memory_types: List[str] = None,
+    scopes: List[str] = None,
+    limit: int = 10,
+    min_significance: int = 3,
+    include_archived: bool = False,
+    tags: List[str] = None,
+    entities: List[str] = None,
+    emotional_state: Dict[str, Any] = None,
+    retrieval_level: str = "auto",
+    min_fidelity: float = 0.0
+) -> List[Dict[str, Any]]:
+    """Core implementation of search_memories"""
+    # Check cache
+    cache_key = _mk_cache_key(
+        q=query,
+        types=memory_types,
+        scopes=scopes,
+        limit=limit,
+        min_sig=min_significance,
+        tags=tags,
+        entities=entities,
+        level=retrieval_level
+    )
+    if cache_key in storage.query_cache:
+        timestamp, memory_ids = storage.query_cache[cache_key]
+        if (datetime.datetime.now() - timestamp).seconds < storage.cache_ttl:
+            # Return cached results
+            results = []
+            for memory_id in memory_ids:
+                memory = storage.get(memory_id)
+                if memory:
+                    memory.times_recalled += 1
+                    memory.metadata.last_recalled = datetime.datetime.now().isoformat()
+                    storage.update(memory)
+                    result = memory.dict()
+                    result["confidence_marker"] = _get_confidence_marker(storage, memory.relevance)
+                    results.append(result)
+            return results
+    
+    # Get candidates
+    candidate_ids = set(storage.memories.keys())
+    
+    # Filter by type
+    if memory_types:
+        type_ids = set()
+        for mt in memory_types:
+            type_ids.update(storage.type_index.get(mt, set()))
+        candidate_ids &= type_ids
+    
+    # Filter by scope
+    if scopes:
+        scope_ids = set()
+        for s in scopes:
+            scope_ids.update(storage.scope_index.get(s, set()))
+        candidate_ids &= scope_ids
+    
+    # Filter by tags
+    if tags:
+        for tag in tags:
+            candidate_ids &= storage.tag_index.get(tag, set())
+    
+    # Filter by entities
+    if entities:
+        entity_ids = set()
+        for entity in entities:
+            entity_ids.update(storage.entity_index.get(entity, set()))
+        candidate_ids &= entity_ids
+    
+    # Filter by significance
+    sig_ids = set()
+    for sig in range(min_significance, 11):
+        sig_ids.update(storage.significance_index.get(sig, set()))
+    candidate_ids &= sig_ids
+    
+    # Filter archived
+    if not include_archived:
+        candidate_ids -= storage.archived_memories
+    
+    # Generate query embedding
+    query_embedding = _generate_embedding(query, storage.embed_dim)
+    
+    # Score memories
+    scored_memories = []
+    
+    for memory_id in candidate_ids:
+        memory = storage.get(memory_id)
+        if not memory:
+            continue
+        
+        # Check level and fidelity
+        if retrieval_level != "auto" and memory.metadata.memory_level != retrieval_level:
+            continue
+        
+        if memory.metadata.fidelity < min_fidelity:
+            continue
+        
+        # Calculate relevance
+        if memory_id in storage.embeddings:
+            relevance = _cosine_similarity(query_embedding, storage.embeddings[memory_id])
+        else:
+            relevance = 0.0
+        
+        # Apply boosts
+        entity_boost = 0.0
+        if entities and memory.metadata.entities:
+            common = set(entities) & set(memory.metadata.entities)
+            entity_boost = min(0.2, len(common) * 0.05)
+        
+        emotional_boost = _calculate_emotional_relevance(
+            memory.metadata.emotional_context,
+            emotional_state
+        )
+        
+        schema_boost = min(0.1, len(memory.metadata.schemas) * 0.05)
+        
+        # Temporal boost
+        days_old = (datetime.datetime.now() - 
+                   datetime.datetime.fromisoformat(memory.created_at)).days
+        temporal_boost = max(0.0, 0.15 * math.exp(-0.1 * days_old))
+        
+        # Level boost
+        level_boost = 0.0
+        if retrieval_level == "auto" and memory.metadata.memory_level == "detail":
+            level_boost = 0.1
+        
+        # Fidelity factor
+        fidelity_factor = 0.7 + (0.3 * memory.metadata.fidelity)
+        
+        # Final score
+        final_relevance = min(1.0, (relevance + entity_boost + emotional_boost + 
+                                   schema_boost + temporal_boost + level_boost) * 
+                                   fidelity_factor)
+        
+        memory.relevance = final_relevance
+        scored_memories.append(memory)
+    
+    # Sort by relevance
+    scored_memories.sort(key=lambda m: m.relevance, reverse=True)
+    
+    # Apply reconsolidation to top results
+    results = []
+    result_ids = []
+    
+    for memory in scored_memories[:limit]:
+        # Update recall
+        memory.times_recalled += 1
+        memory.metadata.last_recalled = datetime.datetime.now().isoformat()
+        
+        # Maybe reconsolidate
+        if (random.random() < storage.reconsolidation_probability and
+            memory.memory_type not in ["semantic", "consolidated"]):
+            
+            # Skip recent memories
+            days_old = (datetime.datetime.now() - 
+                       datetime.datetime.fromisoformat(memory.created_at)).days
+            
+            if days_old >= 7:
+                # Add to history
+                memory.metadata.reconsolidation_history.append({
+                    "previous_text": memory.memory_text,
+                    "timestamp": datetime.datetime.now().isoformat()
+                })
+                
+                # Keep only last 3
+                memory.metadata.reconsolidation_history = memory.metadata.reconsolidation_history[-3:]
+                
+                # Alter text
+                memory.memory_text = _alter_memory_text(
+                    memory.memory_text,
+                    storage.reconsolidation_strength
+                )
+                
+                # Reduce fidelity
+                memory.metadata.fidelity = max(0.3, 
+                    memory.metadata.fidelity - (storage.reconsolidation_strength * 0.1))
+                
+                # Regenerate embedding for altered text
+                memory.embedding = _generate_embedding(memory.memory_text, storage.embed_dim)
+                storage.embeddings[memory.id] = memory.embedding
+        
+        storage.update(memory)
+        
+        # Add to results
+        result = memory.dict()
+        result["confidence_marker"] = _get_confidence_marker(storage, memory.relevance)
+        results.append(result)
+        result_ids.append(memory.id)
+    
+    # Cache results
+    storage.query_cache[cache_key] = (datetime.datetime.now(), result_ids)
+    
+    return results
+
+async def _update_memory_impl(
+    storage: MemoryStorage,
+    memory_id: str,
+    updates: Dict[str, Any]
+) -> Dict[str, Any]:
+    """Core implementation of update_memory"""
+    memory = storage.get(memory_id)
+    if not memory:
+        return {"success": False, "error": "Memory not found"}
+    
+    # Save old state for index updates
+    old_source_ids = set(memory.metadata.source_memory_ids or [])
+    
+    # Apply updates
+    for key, value in updates.items():
+        if key == "metadata" and isinstance(value, dict):
+            # Merge metadata
+            current_meta = memory.metadata.dict()
+            current_meta.update(value)
+            memory.metadata = MemoryMetadata(**current_meta)
+        elif hasattr(memory, key):
+            setattr(memory, key, value)
+    
+    # Update embedding if text changed
+    if "memory_text" in updates:
+        memory.embedding = _generate_embedding(memory.memory_text, storage.embed_dim)
+        storage.embeddings[memory.id] = memory.embedding
+    
+    # Update summary links if source_memory_ids changed
+    new_source_ids = set(memory.metadata.source_memory_ids or [])
+    if old_source_ids != new_source_ids:
+        # Remove old links
+        for old_id in old_source_ids - new_source_ids:
+            if memory.id in storage.summary_links.get(old_id, []):
+                storage.summary_links[old_id].remove(memory.id)
+                if not storage.summary_links[old_id]:
+                    del storage.summary_links[old_id]
+        
+        # Add new links
+        for new_id in new_source_ids - old_source_ids:
+            storage.summary_links[new_id].append(memory.id)
+    
+    storage.update(memory)
+    
+    # Clear cache
+    storage.query_cache.clear()
+    
+    return {"success": True, "memory": memory.dict()}
+
+async def _create_reflection_impl(
+    storage: MemoryStorage,
+    topic: str = None,
+    memory_ids: List[str] = None
+) -> Dict[str, Any]:
+    """Core implementation of create_reflection"""
+    # Get memories
+    if memory_ids:
+        memories = [storage.get(mid) for mid in memory_ids if storage.get(mid)]
+    else:
+        # Need to search for memories
+        search_results = await _search_memories_impl(
+            storage=storage,
+            query=topic or "recent experiences",
+            memory_types=["observation", "experience"],
+            limit=5
+        )
+        memories = [Memory(**m) for m in search_results]
+    
+    if not memories:
+        return {"error": "No memories to reflect on"}
+    
+    # Generate reflection (simplified)
+    memory_texts = [m.memory_text for m in memories]
+    reflection_text = f"Reflecting on {topic or 'experiences'}: {' '.join(memory_texts[:3])}"
+    
+    # Create reflection
+    result = await _create_memory_impl(
+        storage=storage,
+        memory_text=reflection_text,
+        memory_type="reflection",
+        significance=7,
+        tags=["reflection"] + ([topic] if topic else []),
+        source_memory_ids=[m.id for m in memories]
+    )
+    
+    return result
+
+async def _apply_decay_impl(storage: MemoryStorage) -> Dict[str, Any]:
+    """Core implementation of apply_decay"""
+    decayed = 0
+    archived = 0
+    now = datetime.datetime.now()
+    
+    for memory in list(storage.memories.values()):
+        if memory.is_archived or memory.memory_type != "observation":
+            continue
+        
+        # Calculate age
+        created = datetime.datetime.fromisoformat(memory.created_at)
+        days_old = (now - created).days
+        
+        # Decay parameters
+        base_rate = storage.decay_rate
+        decay_rate = base_rate / memory.metadata.decay_resistance if memory.metadata.is_crystallized else base_rate
+        min_fidelity = 0.85 if memory.metadata.is_crystallized else 0.30
+        
+        age_factor = min(1.0, days_old / 30.0)
+        recall_factor = max(0.0, 1.0 - (memory.times_recalled / 10.0))
+        
+        decay_amount = decay_rate * age_factor * recall_factor
+        
+        if memory.times_recalled == 0 and days_old > 7:
+            decay_amount *= 1.5
+        
+        if decay_amount < 0.05:
+            continue
+        
+        # Apply decay
+        new_significance = max(1, memory.significance - decay_amount)
+        new_significance = int(round(min(10, new_significance)))   # clamp 1‑10, round
+        new_fidelity    = max(min_fidelity,
+                              memory.metadata.fidelity - (decay_amount * 0.2))
+        
+        if abs(new_significance - memory.significance) >= 0.5:
+            memory.significance = int(new_significance)
+            memory.metadata.fidelity = new_fidelity
+            memory.metadata.last_decay = now.isoformat()
+            memory.metadata.decay_amount = decay_amount
+            
+            if not memory.metadata.original_significance:
+                memory.metadata.original_significance = memory.significance
+            
+            storage.update(memory)
+            decayed += 1
+        
+        # Archive if too weak
+        if new_significance < 2 and days_old > 30:
+            memory.is_archived = True
+            storage.update(memory)
+            archived += 1
+    
+    # Clear cache after decay
+    storage.query_cache.clear()
+    
+    return {
+        "decayed_count": decayed,
+        "archived_count": archived
+    }
+
+async def _consolidate_memories_impl(storage: MemoryStorage) -> Dict[str, Any]:
+    """Core implementation of consolidate_memories"""
+    # Find clusters
+    clusters = []
+    candidate_ids = set()
+    
+    for memory_type in ["observation", "experience"]:
+        candidate_ids.update(storage.type_index.get(memory_type, set()))
+    
+    candidate_ids -= storage.consolidated_memories
+    candidate_ids -= storage.archived_memories
+    
+    # Simple clustering
+    unclustered = list(candidate_ids)
+    
+    while unclustered:
+        seed_id = unclustered.pop(0)
+        seed_embedding = storage.embeddings.get(seed_id)
+        
+        if not seed_embedding:
+            continue
+        
+        cluster = [seed_id]
+        
+        i = 0
+        while i < len(unclustered):
+            memory_id = unclustered[i]
+            embedding = storage.embeddings.get(memory_id)
+            
+            if embedding:
+                similarity = _cosine_similarity(seed_embedding, embedding)
+                if similarity > storage.consolidation_threshold:
+                    cluster.append(memory_id)
+                    unclustered.pop(i)
+                    continue
+            
+            i += 1
+        
+        if len(cluster) >= 3:
+            clusters.append(cluster)
+    
+    # Consolidate clusters
+    consolidated_count = 0
+    
+    for cluster in clusters:
+        memories = [storage.get(mid) for mid in cluster if storage.get(mid)]
+        
+        if len(memories) < 3:
+            continue
+        
+        # Create consolidated memory
+        texts = [m.memory_text for m in memories]
+        consolidated_text = f"Pattern observed across {len(memories)} memories: {texts[0][:50]}..."
+        
+        avg_significance = sum(m.significance for m in memories) / len(memories)
+        all_tags = set()
+        for m in memories:
+            all_tags.update(m.tags)
+        
+        # Create consolidated memory using implementation
+        result = await _create_memory_impl(
+            storage=storage,
+            memory_text=consolidated_text,
+            memory_type="consolidated",
+            significance=min(10, int(avg_significance) + 1),
+            tags=list(all_tags) + ["consolidated"],
+            source_memory_ids=cluster
+        )
+        
+        # Mark originals as consolidated
+        for memory in memories:
+            memory.is_consolidated = True
+            memory.metadata.consolidated_into = result["memory_id"]
+            memory.metadata.consolidation_date = datetime.datetime.now().isoformat()
+            storage.update(memory)
+        
+        consolidated_count += 1
+    
+    # Clear cache after consolidation
+    storage.query_cache.clear()
+    
+    return {
+        "clusters_consolidated": consolidated_count,
+        "memories_affected": sum(len(c) for c in clusters)
+    }
+
+async def _get_memory_stats_impl(storage: MemoryStorage) -> Dict[str, Any]:
+    """Core implementation of get_memory_stats"""
+    total = len(storage.memories)
+    
+    type_counts = {t: len(ids) for t, ids in storage.type_index.items()}
+    scope_counts = {s: len(ids) for s, ids in storage.scope_index.items()}
+    
+    # Top tags
+    tag_counts = [(tag, len(ids)) for tag, ids in storage.tag_index.items()]
+    top_tags = dict(sorted(tag_counts, key=lambda x: x[1], reverse=True)[:10])
+    
+    # Schema stats
+    schema_counts = defaultdict(int)
+    for schema in storage.schemas.values():
+        schema_counts[schema.category] += 1
+    
+    # Age stats
+    if storage.temporal_index:
+        oldest = (datetime.datetime.now() - storage.temporal_index[0][0]).days
+        newest = (datetime.datetime.now() - storage.temporal_index[-1][0]).days
+    else:
+        oldest = newest = 0
+    
+    # Fidelity stats
+    fidelities = [m.metadata.fidelity for m in storage.memories.values()]
+    avg_fidelity = sum(fidelities) / len(fidelities) if fidelities else 1.0
+    
+    return {
+        "total_memories": total,
+        "type_counts": type_counts,
+        "scope_counts": scope_counts,
+        "top_tags": top_tags,
+        "archived_count": len(storage.archived_memories),
+        "consolidated_count": len(storage.consolidated_memories),
+        "schema_counts": dict(schema_counts),
+        "total_schemas": len(storage.schemas),
+        "oldest_memory_days": oldest,
+        "newest_memory_days": newest,
+        "avg_fidelity": avg_fidelity
+    }
+
+async def _generate_conversational_recall_impl(
+    storage: MemoryStorage,
+    memory_id: str,
+    context: Dict[str, Any] = None
+) -> Dict[str, Any]:
+    """Core implementation of generate_conversational_recall"""
+    memory = storage.get(memory_id)
+    if not memory:
+        return {"error": "Memory not found"}
+    
+    # Get template based on emotion
+    emotional_tone = "standard"
+    if memory.metadata.emotional_context:
+        emotion = memory.metadata.emotional_context.primary_emotion
+        if emotion in ["Joy", "Love"]:
+            emotional_tone = "positive"
+        elif emotion in ["Anger", "Fear"]:
+            emotional_tone = "negative"
+    
+    # Get template
+    templates = storage.recall_templates.get(emotional_tone, storage.recall_templates["standard"])
+    template = random.choice(templates)
+    
+    # Generate recall
+    timeframe = _get_timeframe_text(memory.created_at)
+    brief_summary = memory.memory_text[:30]
+    detail = memory.memory_text[30:60] if len(memory.memory_text) > 30 else "the details"
+    reflection = "It was quite memorable"
+    
+    recall_text = template.format(
+        timeframe=timeframe,
+        brief_summary=brief_summary,
+        detail=detail,
+        reflection=reflection
+    )
+    
+    # Add fidelity qualifier
+    if memory.metadata.fidelity < 0.7:
+        recall_text += " Though I'm not entirely certain about all the details."
+    
+    return {
+        "recall_text": recall_text,
+        "tone": emotional_tone,
+        "confidence": memory.relevance * memory.metadata.fidelity
+    }
+
 # ==================== Memory Tools ====================
 
 @function_tool
@@ -519,69 +1133,18 @@ async def create_memory(
     """Create a new memory with full metadata"""
     with custom_span("create_memory", {"memory_type": memory_type, "memory_level": memory_level}):
         storage = ctx.context.storage
-        
-        # Create metadata
-        metadata = MemoryMetadata(
-            memory_level=memory_level,
-            source_memory_ids=source_memory_ids,
-            entities=entities or [],
-            original_form=memory_text
-        )
-        
-        if emotional_context:
-            metadata.emotional_context = EmotionalMemoryContext(**emotional_context)
-        
-        # Create memory
-        memory = Memory(
+        return await _create_memory_impl(
+            storage=storage,
             memory_text=memory_text,
             memory_type=memory_type,
             memory_scope=memory_scope,
             significance=significance,
-            tags=tags or [],
-            metadata=metadata,
-            embedding=_generate_embedding(memory_text, storage.embed_dim)
+            tags=tags,
+            emotional_context=emotional_context,
+            memory_level=memory_level,
+            source_memory_ids=source_memory_ids,
+            entities=entities
         )
-        
-        # Store
-        memory_id = storage.add(memory)
-        storage.embeddings[memory_id] = memory.embedding
-        
-        # Clear cache
-        storage.query_cache.clear()
-        
-        # Check for pattern creation
-        if memory_type == "observation" and tags:
-            # Check if we should create a schema
-            for tag in tags:
-                tag_memories = [
-                    storage.get(mid) for mid in storage.tag_index.get(tag, set())
-                    if storage.get(mid)
-                ]
-                if len(tag_memories) >= 5:
-                    pattern = _detect_memory_pattern(tag_memories)
-                    if pattern and tag not in [s.name.lower() for s in storage.schemas.values()]:
-                        schema = MemorySchema(
-                            name=pattern["name"],
-                            description=pattern["description"],
-                            category=pattern["category"],
-                            attributes=pattern["attributes"],
-                            example_memory_ids=[m.id for m in tag_memories[:3]]
-                        )
-                        storage.schemas[schema.id] = schema
-                        
-                        # Link schema back to memories
-                        for mem in tag_memories:
-                            if not any(s.get("schema_id") == schema.id for s in mem.metadata.schemas):
-                                mem.metadata.schemas.append({
-                                    "schema_id": schema.id,
-                                    "relevance": 1.0
-                                })
-                                storage.update(mem)
-        
-        return {
-            "memory_id": memory_id,
-            "memory": memory.dict()
-        }
 
 @function_tool
 async def search_memories(
@@ -601,178 +1164,20 @@ async def search_memories(
     """Search memories with enhanced filtering and relevance"""
     with custom_span("search_memories", {"query": query, "limit": limit}):
         storage = ctx.context.storage
-        
-        # Check cache
-        cache_key = f"{query}:{memory_types}:{scopes}:{limit}:{min_significance}:{tags}:{entities}:{retrieval_level}"
-        if cache_key in storage.query_cache:
-            timestamp, memory_ids = storage.query_cache[cache_key]
-            if (datetime.datetime.now() - timestamp).seconds < storage.cache_ttl:
-                # Return cached results
-                results = []
-                for memory_id in memory_ids:
-                    memory = storage.get(memory_id)
-                    if memory:
-                        memory.times_recalled += 1
-                        memory.metadata.last_recalled = datetime.datetime.now().isoformat()
-                        storage.update(memory)
-                        result = memory.dict()
-                        result["confidence_marker"] = _get_confidence_marker(storage, memory.relevance)
-                        results.append(result)
-                return results
-        
-        # Get candidates
-        candidate_ids = set(storage.memories.keys())
-        
-        # Filter by type
-        if memory_types:
-            type_ids = set()
-            for mt in memory_types:
-                type_ids.update(storage.type_index.get(mt, set()))
-            candidate_ids &= type_ids
-        
-        # Filter by scope
-        if scopes:
-            scope_ids = set()
-            for s in scopes:
-                scope_ids.update(storage.scope_index.get(s, set()))
-            candidate_ids &= scope_ids
-        
-        # Filter by tags
-        if tags:
-            for tag in tags:
-                candidate_ids &= storage.tag_index.get(tag, set())
-        
-        # Filter by entities
-        if entities:
-            entity_ids = set()
-            for entity in entities:
-                entity_ids.update(storage.entity_index.get(entity, set()))
-            candidate_ids &= entity_ids
-        
-        # Filter by significance
-        sig_ids = set()
-        for sig in range(min_significance, 11):
-            sig_ids.update(storage.significance_index.get(sig, set()))
-        candidate_ids &= sig_ids
-        
-        # Filter archived
-        if not include_archived:
-            candidate_ids -= storage.archived_memories
-        
-        # Generate query embedding
-        query_embedding = _generate_embedding(query, storage.embed_dim)
-        
-        # Score memories
-        scored_memories = []
-        
-        for memory_id in candidate_ids:
-            memory = storage.get(memory_id)
-            if not memory:
-                continue
-            
-            # Check level and fidelity
-            if retrieval_level != "auto" and memory.metadata.memory_level != retrieval_level:
-                continue
-            
-            if memory.metadata.fidelity < min_fidelity:
-                continue
-            
-            # Calculate relevance
-            if memory_id in storage.embeddings:
-                relevance = _cosine_similarity(query_embedding, storage.embeddings[memory_id])
-            else:
-                relevance = 0.0
-            
-            # Apply boosts
-            entity_boost = 0.0
-            if entities and memory.metadata.entities:
-                common = set(entities) & set(memory.metadata.entities)
-                entity_boost = min(0.2, len(common) * 0.05)
-            
-            emotional_boost = _calculate_emotional_relevance(
-                memory.metadata.emotional_context,
-                emotional_state
-            )
-            
-            schema_boost = min(0.1, len(memory.metadata.schemas) * 0.05)
-            
-            # Temporal boost
-            days_old = (datetime.datetime.now() - 
-                       datetime.datetime.fromisoformat(memory.created_at)).days
-            temporal_boost = max(0.0, 0.15 * math.exp(-0.1 * days_old))
-            
-            # Level boost
-            level_boost = 0.0
-            if retrieval_level == "auto" and memory.metadata.memory_level == "detail":
-                level_boost = 0.1
-            
-            # Fidelity factor
-            fidelity_factor = 0.7 + (0.3 * memory.metadata.fidelity)
-            
-            # Final score
-            final_relevance = min(1.0, (relevance + entity_boost + emotional_boost + 
-                                       schema_boost + temporal_boost + level_boost) * 
-                                       fidelity_factor)
-            
-            memory.relevance = final_relevance
-            scored_memories.append(memory)
-        
-        # Sort by relevance
-        scored_memories.sort(key=lambda m: m.relevance, reverse=True)
-        
-        # Apply reconsolidation to top results
-        results = []
-        result_ids = []
-        
-        for memory in scored_memories[:limit]:
-            # Update recall
-            memory.times_recalled += 1
-            memory.metadata.last_recalled = datetime.datetime.now().isoformat()
-            
-            # Maybe reconsolidate
-            if (random.random() < storage.reconsolidation_probability and
-                memory.memory_type not in ["semantic", "consolidated"]):
-                
-                # Skip recent memories
-                days_old = (datetime.datetime.now() - 
-                           datetime.datetime.fromisoformat(memory.created_at)).days
-                
-                if days_old >= 7:
-                    # Add to history
-                    memory.metadata.reconsolidation_history.append({
-                        "previous_text": memory.memory_text,
-                        "timestamp": datetime.datetime.now().isoformat()
-                    })
-                    
-                    # Keep only last 3
-                    memory.metadata.reconsolidation_history = memory.metadata.reconsolidation_history[-3:]
-                    
-                    # Alter text
-                    memory.memory_text = _alter_memory_text(
-                        memory.memory_text,
-                        storage.reconsolidation_strength
-                    )
-                    
-                    # Reduce fidelity
-                    memory.metadata.fidelity = max(0.3, 
-                        memory.metadata.fidelity - (storage.reconsolidation_strength * 0.1))
-                    
-                    # Regenerate embedding for altered text
-                    memory.embedding = _generate_embedding(memory.memory_text, storage.embed_dim)
-                    storage.embeddings[memory.id] = memory.embedding
-            
-            storage.update(memory)
-            
-            # Add to results
-            result = memory.dict()
-            result["confidence_marker"] = _get_confidence_marker(storage, memory.relevance)
-            results.append(result)
-            result_ids.append(memory.id)
-        
-        # Cache results
-        storage.query_cache[cache_key] = (datetime.datetime.now(), result_ids)
-        
-        return results
+        return await _search_memories_impl(
+            storage=storage,
+            query=query,
+            memory_types=memory_types,
+            scopes=scopes,
+            limit=limit,
+            min_significance=min_significance,
+            include_archived=include_archived,
+            tags=tags,
+            entities=entities,
+            emotional_state=emotional_state,
+            retrieval_level=retrieval_level,
+            min_fidelity=min_fidelity
+        )
 
 @function_tool
 async def update_memory(
@@ -782,50 +1187,7 @@ async def update_memory(
 ) -> Dict[str, Any]:
     """Update an existing memory"""
     with custom_span("update_memory", {"memory_id": memory_id}):
-        storage = ctx.context.storage
-        
-        memory = storage.get(memory_id)
-        if not memory:
-            return {"success": False, "error": "Memory not found"}
-        
-        # Save old state for index updates
-        old_source_ids = set(memory.metadata.source_memory_ids or [])
-        
-        # Apply updates
-        for key, value in updates.items():
-            if key == "metadata" and isinstance(value, dict):
-                # Merge metadata
-                current_meta = memory.metadata.dict()
-                current_meta.update(value)
-                memory.metadata = MemoryMetadata(**current_meta)
-            elif hasattr(memory, key):
-                setattr(memory, key, value)
-        
-        # Update embedding if text changed
-        if "memory_text" in updates:
-            memory.embedding = _generate_embedding(memory.memory_text, storage.embed_dim)
-            storage.embeddings[memory.id] = memory.embedding
-        
-        # Update summary links if source_memory_ids changed
-        new_source_ids = set(memory.metadata.source_memory_ids or [])
-        if old_source_ids != new_source_ids:
-            # Remove old links
-            for old_id in old_source_ids - new_source_ids:
-                if memory.id in storage.summary_links.get(old_id, []):
-                    storage.summary_links[old_id].remove(memory.id)
-                    if not storage.summary_links[old_id]:
-                        del storage.summary_links[old_id]
-            
-            # Add new links
-            for new_id in new_source_ids - old_source_ids:
-                storage.summary_links[new_id].append(memory.id)
-        
-        storage.update(memory)
-        
-        # Clear cache
-        storage.query_cache.clear()
-        
-        return {"success": True, "memory": memory.dict()}
+        return await _update_memory_impl(ctx.context.storage, memory_id, updates)
 
 @function_tool
 async def delete_memory(
@@ -901,8 +1263,9 @@ async def retrieve_memories_with_formatting(
     min_significance: int = 3
 ) -> List[Dict[str, Any]]:
     """Retrieve memories with formatted results for agent consumption"""
-    memories = await search_memories(
-        ctx,
+    # Call implementation directly instead of search_memories tool
+    memories = await _search_memories_impl(
+        storage=ctx.context.storage,
         query=query,
         memory_types=memory_types,
         limit=limit,
@@ -941,9 +1304,9 @@ async def retrieve_relevant_experiences(
     if scenario_type:
         tags.append(scenario_type.lower())
     
-    # Search
-    experiences = await search_memories(
-        ctx,
+    # Search using implementation
+    experiences = await _search_memories_impl(
+        storage=ctx.context.storage,
         query=query,
         memory_types=["experience"],
         tags=tags if tags else None,
@@ -956,9 +1319,9 @@ async def retrieve_relevant_experiences(
     results = []
     for exp in experiences:
         if exp.get("relevance", 0) >= min_relevance:
-            # Add recall text
-            recall_data = await generate_conversational_recall(
-                ctx,
+            # Add recall text using implementation
+            recall_data = await _generate_conversational_recall_impl(
+                ctx.context.storage,
                 memory_id=exp["id"]
             )
             
@@ -1006,8 +1369,9 @@ async def mark_as_consolidated(
     consolidated_into: str
 ) -> Dict[str, Any]:
     """Mark a memory as consolidated into another"""
-    return await update_memory(
-        ctx,
+    # Use implementation directly
+    return await _update_memory_impl(
+        storage=ctx.context.storage,
         memory_id=memory_id,
         updates={
             "is_consolidated": True,
@@ -1042,9 +1406,9 @@ async def create_semantic_memory(
     else:
         semantic_text = f"Pattern recognized: {texts[0][:50]}..."
     
-    # Create semantic memory
-    result = await create_memory(
-        ctx,
+    # Create semantic memory using implementation
+    result = await _create_memory_impl(
+        storage=storage,
         memory_text=semantic_text,
         memory_type="semantic",
         memory_level="abstraction",
@@ -1068,9 +1432,9 @@ async def detect_schema_from_memories(
     min_memories: int = 3
 ) -> Optional[Dict[str, Any]]:
     """Detect potential schema from memories"""
-    # Search for relevant memories
-    memories = await search_memories(
-        ctx,
+    # Search for relevant memories using implementation
+    memories = await _search_memories_impl(
+        storage=ctx.context.storage,
         query=topic if topic else "important memory",
         limit=10
     )
@@ -1165,11 +1529,12 @@ async def reflect_on_memories(
         
         # Crystallize if important
         if importance_score > 0.7:
-            await crystallize_memory(
-                ctx,
-                memory_id=memory.id,
-                reason="cognitive_importance"
-            )
+            memory.metadata.is_crystallized = True
+            memory.metadata.crystallization_reason = "cognitive_importance"
+            memory.metadata.crystallization_date = datetime.datetime.now().isoformat()
+            memory.metadata.decay_resistance = 8.0
+            memory.significance = max(memory.significance, 8)
+            storage.update(memory)
             crystallized_count += 1
     
     return {
@@ -1224,38 +1589,7 @@ async def create_reflection(
     memory_ids: List[str] = None
 ) -> Dict[str, Any]:
     """Create a reflection from memories"""
-    storage = ctx.context.storage
-    
-    # Get memories
-    if memory_ids:
-        memories = [storage.get(mid) for mid in memory_ids if storage.get(mid)]
-    else:
-        memories = await search_memories(
-            ctx,
-            query=topic or "recent experiences",
-            memory_types=["observation", "experience"],
-            limit=5
-        )
-        memories = [Memory(**m) for m in memories]
-    
-    if not memories:
-        return {"error": "No memories to reflect on"}
-    
-    # Generate reflection (simplified)
-    memory_texts = [m.memory_text for m in memories]
-    reflection_text = f"Reflecting on {topic or 'experiences'}: {' '.join(memory_texts[:3])}"
-    
-    # Create reflection
-    result = await create_memory(
-        ctx,
-        memory_text=reflection_text,
-        memory_type="reflection",
-        significance=7,
-        tags=["reflection"] + ([topic] if topic else []),
-        source_memory_ids=[m.id for m in memories]
-    )
-    
-    return result
+    return await _create_reflection_impl(ctx.context.storage, topic, memory_ids)
 
 @function_tool
 async def create_abstraction(
@@ -1275,9 +1609,9 @@ async def create_abstraction(
     texts = [m.memory_text for m in memories]
     abstraction_text = f"Pattern observed in {pattern_type}: {' '.join(texts[:2])}"
     
-    # Create abstraction memory
-    result = await create_memory(
-        ctx,
+    # Create abstraction memory using implementation
+    result = await _create_memory_impl(
+        storage=storage,
         memory_text=abstraction_text,
         memory_type="abstraction",
         memory_level="abstraction",
@@ -1289,208 +1623,21 @@ async def create_abstraction(
     return result
 
 @function_tool
-async def apply_decay(
-    ctx: RunContextWrapper[MemoryContext]
-) -> Dict[str, Any]:
+async def apply_decay(ctx: RunContextWrapper[MemoryContext]) -> Dict[str, Any]:
     """Apply memory decay"""
     with custom_span("apply_decay"):
-        storage = ctx.context.storage
-        
-        decayed = 0
-        archived = 0
-        now = datetime.datetime.now()
-        
-        for memory in list(storage.memories.values()):
-            if memory.is_archived or memory.memory_type != "observation":
-                continue
-            
-            # Calculate age
-            created = datetime.datetime.fromisoformat(memory.created_at)
-            days_old = (now - created).days
-            
-            # Decay parameters
-            base_rate = storage.decay_rate
-            decay_rate = base_rate / memory.metadata.decay_resistance if memory.metadata.is_crystallized else base_rate
-            min_fidelity = 0.85 if memory.metadata.is_crystallized else 0.30
-            
-            age_factor = min(1.0, days_old / 30.0)
-            recall_factor = max(0.0, 1.0 - (memory.times_recalled / 10.0))
-            
-            decay_amount = decay_rate * age_factor * recall_factor
-            
-            if memory.times_recalled == 0 and days_old > 7:
-                decay_amount *= 1.5
-            
-            if decay_amount < 0.05:
-                continue
-            
-            # Apply decay
-            new_significance = max(1, memory.significance - decay_amount)
-            new_fidelity = max(min_fidelity, memory.metadata.fidelity - (decay_amount * 0.2))
-            
-            if abs(new_significance - memory.significance) >= 0.5:
-                memory.significance = int(new_significance)
-                memory.metadata.fidelity = new_fidelity
-                memory.metadata.last_decay = now.isoformat()
-                memory.metadata.decay_amount = decay_amount
-                
-                if not memory.metadata.original_significance:
-                    memory.metadata.original_significance = memory.significance
-                
-                storage.update(memory)
-                decayed += 1
-            
-            # Archive if too weak
-            if new_significance < 2 and days_old > 30:
-                memory.is_archived = True
-                storage.update(memory)
-                archived += 1
-        
-        # Clear cache after decay
-        storage.query_cache.clear()
-        
-        return {
-            "decayed_count": decayed,
-            "archived_count": archived
-        }
+        return await _apply_decay_impl(ctx.context.storage)
 
 @function_tool
-async def consolidate_memories(
-    ctx: RunContextWrapper[MemoryContext]
-) -> Dict[str, Any]:
+async def consolidate_memories(ctx: RunContextWrapper[MemoryContext]) -> Dict[str, Any]:
     """Consolidate similar memories"""
     with custom_span("consolidate_memories"):
-        storage = ctx.context.storage
-        
-        # Find clusters
-        clusters = []
-        candidate_ids = set()
-        
-        for memory_type in ["observation", "experience"]:
-            candidate_ids.update(storage.type_index.get(memory_type, set()))
-        
-        candidate_ids -= storage.consolidated_memories
-        candidate_ids -= storage.archived_memories
-        
-        # Simple clustering
-        unclustered = list(candidate_ids)
-        
-        while unclustered:
-            seed_id = unclustered.pop(0)
-            seed_embedding = storage.embeddings.get(seed_id)
-            
-            if not seed_embedding:
-                continue
-            
-            cluster = [seed_id]
-            
-            i = 0
-            while i < len(unclustered):
-                memory_id = unclustered[i]
-                embedding = storage.embeddings.get(memory_id)
-                
-                if embedding:
-                    similarity = _cosine_similarity(seed_embedding, embedding)
-                    if similarity > storage.consolidation_threshold:
-                        cluster.append(memory_id)
-                        unclustered.pop(i)
-                        continue
-                
-                i += 1
-            
-            if len(cluster) >= 3:
-                clusters.append(cluster)
-        
-        # Consolidate clusters
-        consolidated_count = 0
-        
-        for cluster in clusters:
-            memories = [storage.get(mid) for mid in cluster if storage.get(mid)]
-            
-            if len(memories) < 3:
-                continue
-            
-            # Create consolidated memory
-            texts = [m.memory_text for m in memories]
-            consolidated_text = f"Pattern observed across {len(memories)} memories: {texts[0][:50]}..."
-            
-            avg_significance = sum(m.significance for m in memories) / len(memories)
-            all_tags = set()
-            for m in memories:
-                all_tags.update(m.tags)
-            
-            # Create consolidated memory
-            result = await create_memory(
-                ctx,
-                memory_text=consolidated_text,
-                memory_type="consolidated",
-                significance=min(10, int(avg_significance) + 1),
-                tags=list(all_tags) + ["consolidated"],
-                source_memory_ids=cluster
-            )
-            
-            # Mark originals as consolidated
-            for memory in memories:
-                memory.is_consolidated = True
-                memory.metadata.consolidated_into = result["memory_id"]
-                memory.metadata.consolidation_date = datetime.datetime.now().isoformat()
-                storage.update(memory)
-            
-            consolidated_count += 1
-        
-        # Clear cache after consolidation
-        storage.query_cache.clear()
-        
-        return {
-            "clusters_consolidated": consolidated_count,
-            "memories_affected": sum(len(c) for c in clusters)
-        }
+        return await _consolidate_memories_impl(ctx.context.storage)
 
 @function_tool
-async def get_memory_stats(
-    ctx: RunContextWrapper[MemoryContext]
-) -> Dict[str, Any]:
+async def get_memory_stats(ctx: RunContextWrapper[MemoryContext]) -> Dict[str, Any]:
     """Get memory statistics"""
-    storage = ctx.context.storage
-    
-    total = len(storage.memories)
-    
-    type_counts = {t: len(ids) for t, ids in storage.type_index.items()}
-    scope_counts = {s: len(ids) for s, ids in storage.scope_index.items()}
-    
-    # Top tags
-    tag_counts = [(tag, len(ids)) for tag, ids in storage.tag_index.items()]
-    top_tags = dict(sorted(tag_counts, key=lambda x: x[1], reverse=True)[:10])
-    
-    # Schema stats
-    schema_counts = defaultdict(int)
-    for schema in storage.schemas.values():
-        schema_counts[schema.category] += 1
-    
-    # Age stats
-    if storage.temporal_index:
-        oldest = (datetime.datetime.now() - storage.temporal_index[0][0]).days
-        newest = (datetime.datetime.now() - storage.temporal_index[-1][0]).days
-    else:
-        oldest = newest = 0
-    
-    # Fidelity stats
-    fidelities = [m.metadata.fidelity for m in storage.memories.values()]
-    avg_fidelity = sum(fidelities) / len(fidelities) if fidelities else 1.0
-    
-    return {
-        "total_memories": total,
-        "type_counts": type_counts,
-        "scope_counts": scope_counts,
-        "top_tags": top_tags,
-        "archived_count": len(storage.archived_memories),
-        "consolidated_count": len(storage.consolidated_memories),
-        "schema_counts": dict(schema_counts),
-        "total_schemas": len(storage.schemas),
-        "oldest_memory_days": oldest,
-        "newest_memory_days": newest,
-        "avg_fidelity": avg_fidelity
-    }
+    return await _get_memory_stats_impl(ctx.context.storage)
 
 @function_tool
 async def generate_conversational_recall(
@@ -1500,47 +1647,7 @@ async def generate_conversational_recall(
 ) -> Dict[str, Any]:
     """Generate natural recall of a memory"""
     with custom_span("generate_conversational_recall", {"memory_id": memory_id}):
-        storage = ctx.context.storage
-        
-        memory = storage.get(memory_id)
-        if not memory:
-            return {"error": "Memory not found"}
-        
-        # Get template based on emotion
-        emotional_tone = "standard"
-        if memory.metadata.emotional_context:
-            emotion = memory.metadata.emotional_context.primary_emotion
-            if emotion in ["Joy", "Love"]:
-                emotional_tone = "positive"
-            elif emotion in ["Anger", "Fear"]:
-                emotional_tone = "negative"
-        
-        # Get template
-        templates = storage.recall_templates.get(emotional_tone, storage.recall_templates["standard"])
-        template = random.choice(templates)
-        
-        # Generate recall
-        timeframe = _get_timeframe_text(memory.created_at)
-        brief_summary = memory.memory_text[:30]
-        detail = memory.memory_text[30:60] if len(memory.memory_text) > 30 else "the details"
-        reflection = "It was quite memorable"
-        
-        recall_text = template.format(
-            timeframe=timeframe,
-            brief_summary=brief_summary,
-            detail=detail,
-            reflection=reflection
-        )
-        
-        # Add fidelity qualifier
-        if memory.metadata.fidelity < 0.7:
-            recall_text += " Though I'm not entirely certain about all the details."
-        
-        return {
-            "recall_text": recall_text,
-            "tone": emotional_tone,
-            "confidence": memory.relevance * memory.metadata.fidelity
-        }
+        return await _generate_conversational_recall_impl(ctx.context.storage, memory_id, context)
 
 @function_tool
 async def construct_narrative(
@@ -1550,8 +1657,9 @@ async def construct_narrative(
     limit: int = 5
 ) -> Dict[str, Any]:
     """Construct narrative from memories"""
-    memories = await search_memories(
-        ctx,
+    # Use implementation directly
+    memories = await _search_memories_impl(
+        storage=ctx.context.storage,
         query=topic,
         memory_types=["observation", "experience"],
         limit=limit
@@ -1594,10 +1702,10 @@ async def run_maintenance(
 ) -> Dict[str, Any]:
     """Run full memory maintenance cycle"""
     # Apply decay
-    decay_result = await apply_decay(ctx)
+    decay_result = await _apply_decay_impl(ctx.context.storage)
     
     # Consolidate memories
-    consolidate_result = await consolidate_memories(ctx)
+    consolidate_result = await _consolidate_memories_impl(ctx.context.storage)
     
     # Archive old memories
     storage = ctx.context.storage
@@ -1727,45 +1835,46 @@ class MemoryCoreAgents:
     
     async def add_memory(self, **kwargs) -> str:
         """Add memory - compatibility wrapper"""
-        # Convert metadata dict to individual params
+        # Extract metadata dict to individual params
         metadata = kwargs.pop('metadata', {})
         
-        params = {
-            "memory_text": kwargs.get('memory_text', ''),
-            "memory_type": kwargs.get('memory_type', 'observation'),
-            "memory_scope": kwargs.get('memory_scope', 'game'),
-            "significance": kwargs.get('significance', 5),
-            "tags": kwargs.get('tags', []),
-            "emotional_context": metadata.get('emotional_context'),
-            "entities": metadata.get('entities', [])
-        }
-        
-        result = await create_memory(
-            RunContextWrapper(context=self.context),
-            **params
+        # Use the implementation directly
+        result = await _create_memory_impl(
+            storage=self.context.storage,
+            memory_text=kwargs.get('memory_text', ''),
+            memory_type=kwargs.get('memory_type', 'observation'),
+            memory_scope=kwargs.get('memory_scope', 'game'),
+            significance=kwargs.get('significance', 5),
+            tags=kwargs.get('tags', []),
+            emotional_context=metadata.get('emotional_context'),
+            memory_level=metadata.get('memory_level', 'detail'),
+            source_memory_ids=metadata.get('source_memory_ids'),
+            entities=metadata.get('entities', [])
         )
         
         return result.get("memory_id", "")
     
     async def retrieve_memories(self, **kwargs) -> List[Dict[str, Any]]:
         """Retrieve memories - compatibility wrapper"""
-        memories = await search_memories(
-            RunContextWrapper(context=self.context),
+        return await _search_memories_impl(
+            storage=self.context.storage,
             **kwargs
         )
-        return memories
     
     async def create_reflection(self, topic: str = None) -> Dict[str, Any]:
         """Create reflection - compatibility wrapper"""
-        return await create_reflection(
-            RunContextWrapper(context=self.context),
+        return await _create_reflection_impl(
+            storage=self.context.storage,
             topic=topic
         )
     
     async def run_maintenance(self) -> Dict[str, Any]:
         """Run maintenance - compatibility wrapper"""
-        decay_result = await apply_decay(RunContextWrapper(context=self.context))
-        consolidate_result = await consolidate_memories(RunContextWrapper(context=self.context))
+        # Apply decay
+        decay_result = await _apply_decay_impl(self.context.storage)
+        
+        # Consolidate memories
+        consolidate_result = await _consolidate_memories_impl(self.context.storage)
         
         return {
             "memories_decayed": decay_result["decayed_count"],
@@ -1775,23 +1884,54 @@ class MemoryCoreAgents:
     
     async def get_memory_stats(self) -> Dict[str, Any]:
         """Get stats - compatibility wrapper"""
-        return await get_memory_stats(RunContextWrapper(context=self.context))
+        return await _get_memory_stats_impl(self.context.storage)
     
     async def construct_narrative(self, topic: str, chronological: bool = True,
                                 limit: int = 5) -> Dict[str, Any]:
         """Construct narrative - compatibility wrapper"""
-        return await construct_narrative(
-            RunContextWrapper(context=self.context),
-            topic=topic,
-            chronological=chronological,
+        memories = await _search_memories_impl(
+            storage=self.context.storage,
+            query=topic,
+            memory_types=["observation", "experience"],
             limit=limit
         )
+        
+        if not memories:
+            return {
+                "narrative": f"I don't have memories about {topic}",
+                "confidence": 0.2,
+                "experience_count": 0
+            }
+        
+        # Sort if needed
+        if chronological:
+            memories.sort(key=lambda m: m.get("created_at", ""))
+        
+        # Build narrative
+        narrative_parts = []
+        for i, memory in enumerate(memories[:3]):
+            timeframe = _get_timeframe_text(memory.get("created_at", ""))
+            text = memory.get("memory_text", "")
+            narrative_parts.append(f"{timeframe}, {text}")
+        
+        narrative = f"Regarding {topic}: " + " ".join(narrative_parts)
+        
+        # Calculate confidence
+        avg_relevance = sum(m.get("relevance", 0.5) for m in memories) / len(memories)
+        avg_fidelity = sum(m.get("metadata", {}).get("fidelity", 1.0) for m in memories) / len(memories)
+        confidence = (0.4 + (len(memories) / 10) + (avg_relevance * 0.3)) * avg_fidelity
+        
+        return {
+            "narrative": narrative,
+            "confidence": min(1.0, confidence),
+            "experience_count": len(memories)
+        }
     
     async def retrieve_experiences(self, query: str, scenario_type: str = "",
                                  limit: int = 3) -> List[Dict[str, Any]]:
         """Retrieve experiences - compatibility wrapper"""
-        return await search_memories(
-            RunContextWrapper(context=self.context),
+        return await _search_memories_impl(
+            storage=self.context.storage,
             query=query,
             memory_types=["experience"],
             limit=limit
@@ -1881,14 +2021,14 @@ async def add_memory(
     """Standalone wrapper for add_memory that can be imported directly"""
     # Create a temporary context
     context = MemoryContext(user_id=user_id, conversation_id=conversation_id)
-    ctx = RunContextWrapper(context=context)
+    storage = context.storage
     
     # Extract metadata fields
     meta = metadata or {}
     
-    # Call the tool function
-    result = await create_memory(
-        ctx,
+    # Call the implementation directly
+    result = await _create_memory_impl(
+        storage=storage,
         memory_text=memory_text,
         memory_type=memory_type,
         memory_scope=memory_scope,
@@ -1919,10 +2059,10 @@ async def retrieve_memories(
 ) -> List[Dict[str, Any]]:
     """Standalone wrapper for retrieve_memories"""
     context = MemoryContext(user_id=user_id, conversation_id=conversation_id)
-    ctx = RunContextWrapper(context=context)
+    storage = context.storage
     
-    return await search_memories(
-        ctx,
+    return await _search_memories_impl(
+        storage=storage,
         query=query,
         memory_types=memory_types,
         scopes=scopes,
