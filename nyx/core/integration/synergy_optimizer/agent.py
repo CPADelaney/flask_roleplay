@@ -12,11 +12,6 @@ from nyx.core.integration.integrated_tracer import get_tracer, TraceLevel
 logger = logging.getLogger(__name__)
 
 class SynergyOptimizerAgent:
-    """
-    Agent that monitors the event bus system to identify and suggest
-    integration improvements between modules.
-    """
-    
     def __init__(self, brain):
         self.brain = brain
         self.event_bus = get_event_bus()
@@ -26,27 +21,30 @@ class SynergyOptimizerAgent:
         self.recommendations = []
         self.active = False
         self.last_analysis_time = None
+        self._initialized = False  # Add this flag
         
         # Initialize the agent
         self.agent = self._create_agent()
     
     async def initialize(self):
         """Initialize the synergy optimizer."""
+        if self._initialized:
+            logger.debug("SynergyOptimizerAgent already initialized, skipping")
+            return True
+            
         try:
-            self.event_bus.subscribe("*", self._handle_event) # Assuming _handle_event is async or safe to call from sync
+            self.event_bus.subscribe("*", self._handle_event)
             
             if self.brain.integration_manager:
-                # This await is now fine because IntegrationManager.register_bridge is async def
                 await self.brain.integration_manager.register_bridge(
                     "synergy_optimizer", 
                     self,
-                    ["event_bus"] 
+                    []
                 )
-            
             
             # Start monitoring
             self.active = True
-            # Ensure run_periodic_analysis is also an async method
+            self._initialized = True  # Set the flag
             asyncio.create_task(self.run_periodic_analysis()) 
             
             logger.info("SynergyOptimizerAgent initialized successfully.")
@@ -54,7 +52,6 @@ class SynergyOptimizerAgent:
         except Exception as e:
             logger.error(f"Error initializing SynergyOptimizerAgent: {e}", exc_info=True)
             return False
-
     
     async def _handle_event(self, event: Event):
         """Process an event from the event bus."""
