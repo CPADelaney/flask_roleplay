@@ -61,7 +61,6 @@ class BehaviorEvaluationOutput(BaseModel):
     explanation: str = Field(default="", description="Explanation of the recommendation")
     relevant_associations: List[Dict[str, Any]] = Field(default_factory=list, description="Relevant associations considered")
 
-# Fix 2: Update other output models similarly
 class ClassicalConditioningOutput(BaseModel):
     """Output schema for classical conditioning analysis"""
     association_key: str = Field(default="", description="Key for the association")
@@ -70,6 +69,11 @@ class ClassicalConditioningOutput(BaseModel):
     reinforcement_count: int = Field(default=0, description="Number of reinforcements")
     valence: float = Field(default=0.0, description="Emotional valence of the association")
     explanation: str = Field(default="", description="Explanation of the conditioning process")
+    
+    class Config:
+        schema_extra = {
+            "required": ["association_key", "type", "association_strength", "reinforcement_count", "valence", "explanation"]
+        }
 
 class OperantConditioningOutput(BaseModel):
     """Output schema for operant conditioning analysis"""
@@ -81,6 +85,11 @@ class OperantConditioningOutput(BaseModel):
     is_reinforcement: bool = Field(default=False, description="Whether this is reinforcement or punishment")
     is_positive: bool = Field(default=False, description="Whether this is positive or negative")
     explanation: str = Field(default="", description="Explanation of the conditioning process")
+    
+    class Config:
+        schema_extra = {
+            "required": ["association_key", "type", "behavior", "consequence_type", "association_strength", "is_reinforcement", "is_positive", "explanation"]
+        }
 
 class TraitConditioningOutput(BaseModel):
     """Output schema for personality trait conditioning"""
@@ -90,6 +99,11 @@ class TraitConditioningOutput(BaseModel):
     conditioned_behaviors: List[str] = Field(default_factory=list, description="Behaviors conditioned for this trait")
     identity_impact: str = Field(default="", description="Description of impact on identity")
     conditioning_strategy: str = Field(default="", description="Strategy used for conditioning")
+    
+    class Config:
+        schema_extra = {
+            "required": ["trait", "target_value", "actual_value", "conditioned_behaviors", "identity_impact", "conditioning_strategy"]
+        }
 
 # For conditioning_maintenance.py - these are already mostly correct but let's ensure consistency
 
