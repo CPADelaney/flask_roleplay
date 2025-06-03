@@ -583,6 +583,207 @@ def nyx_memory_maintenance_task():
         logger.exception("Critical error in nyx_memory_maintenance_task")
         return {"status": "error", "error": str(e)}
 
+@celery_app.task
+@async_task
+async def monitor_nyx_performance_task():
+    """
+    Periodic task to monitor Nyx agent performance across active conversations.
+    Collects metrics and triggers cleanup if needed.
+    """
+    logger.info("Starting Nyx performance monitoring task")
+    
+    if not await is_app_initialized():
+        logger.info("Application not initialized. Skipping performance monitoring.")
+        return {"status": "skipped", "reason": "App not initialized"}
+    
+    monitored_count = 0
+    issues_found = []
+    
+    try:
+        async with get_db_connection_context() as conn:
+            # Find active conversations
+            rows = await conn.fetch("""
+                SELECT DISTINCT c.id, c.user_id
+                FROM conversations c
+                JOIN messages m ON m.conversation_id = c.id
+                WHERE m.created_at > NOW() - INTERVAL '1 hour'
+                GROUP BY c.id, c.user_id
+            """)
+            
+            for row in rows:
+                user_id = row['user_id']
+                conversation_id = row['id']
+                
+                try:
+                    # Get latest performance metrics
+                    perf_row = await conn.fetchrow("""
+                        SELECT metrics, error_log
+                        FROM performance_metrics
+                        WHERE user_id = $1 AND conversation_id = $2
+                        ORDER BY created_at DESC
+                        LIMIT 1
+                    """, user_id, conversation_id)
+                    
+                    if perf_row and perf_row['metrics']:
+                        metrics = json.loads(perf_row['metrics'])
+                        
+                        # Check for issues
+                        if metrics.get('memory_usage', 0) > 600:  # 600MB threshold
+                            issues_found.append({
+                                'type': 'high_memory',
+                                'user_id': user_id,
+                                'conversation_id': conversation_id,
+                                'value': metrics['memory_usage']
+                            })
+                        
+                        if metrics.get('error_rates', {}).get('total', 0) > 50:
+                            issues_found.append({
+                                'type': 'high_errors',
+                                'user_id': user_id,
+                                'conversation_id': conversation_id,
+                                'value': metrics['error_rates']['total']
+                            })
+                        
+                        # Calculate average response time
+                        response_times = metrics.get('response_times', [])
+                        if response_times and len(response_times) > 5:
+                            avg_time = sum(response_times) / len(response_times)
+                            if avg_time > 3.0:  # 3 second threshold
+                                issues_found.append({
+                                    'type': 'slow_response',
+                                    'user_id': user_id,
+                                    'conversation_id': conversation_id,
+                                    'value': avg_time
+                                })
+                    
+                    monitored_count += 1
+                    
+                except Exception as e:
+                    logger.error(f"Error monitoring performance for {user_id}/{conversation_id}: {e}")
+            
+            # Log aggregated metrics
+            if issues_found:
+                logger.warning(f"Performance issues found: {json.dumps(issues_found)}")
+                
+                # Could trigger alerts or auto-remediation here
+                # For example, send to monitoring system or trigger cleanup tasks
+        
+        return {
+            "status": "success",
+            "conversations_monitored": monitored_count,
+            "issues_found": len(issues_found),
+            "issues": issues_found
+        }
+        
+    except Exception as e:
+        logger.exception("Error in Nyx performance monitoring task")
+        return {"status": "error", "error": str(e)}
+
+
+@celery_app.task
+@async_task
+async def aggregate_learning_metrics_task():
+    """
+    Periodic task to aggregate learning metrics across all Nyx instances.
+    Useful for understanding system-wide learning patterns.
+    """
+    logger.info("Starting learning metrics aggregation task")
+    
+    if not await is_app_initialized():
+        return {"status": "skipped", "reason": "App not initialized"}
+    
+    try:
+        async with get_db_connection_context() as conn:
+            # Get recent learning metrics
+            rows = await conn.fetch("""
+                SELECT user_id, conversation_id, metrics, learned_patterns
+                FROM learning_metrics
+                WHERE created_at > NOW() - INTERVAL '1 day'
+                ORDER BY created_at DESC
+            """)
+            
+            # Aggregate metrics
+            total_patterns = 0
+            avg_adaptation_rate = 0.0
+            pattern_success_rates = []
+            
+            for row in rows:
+                if row['metrics']:
+                    metrics = json.loads(row['metrics'])
+                    adaptation_rate = metrics.get('adaptation_success_rate', 0.0)
+                    if adaptation_rate > 0:
+                        pattern_success_rates.append(adaptation_rate)
+                
+                if row['learned_patterns']:
+                    patterns = json.loads(row['learned_patterns'])
+                    total_patterns += len(patterns)
+            
+            if pattern_success_rates:
+                avg_adaptation_rate = sum(pattern_success_rates) / len(pattern_success_rates)
+            
+            # Store aggregated metrics (could go to a monitoring system)
+            logger.info(f"Learning metrics - Total patterns: {total_patterns}, "
+                       f"Avg adaptation rate: {avg_adaptation_rate:.2%}, "
+                       f"Active conversations: {len(rows)}")
+            
+            return {
+                "status": "success",
+                "total_patterns_learned": total_patterns,
+                "average_adaptation_rate": avg_adaptation_rate,
+                "active_learning_conversations": len(rows)
+            }
+            
+    except Exception as e:
+        logger.exception("Error in learning metrics aggregation")
+        return {"status": "error", "error": str(e)}
+
+
+@celery_app.task
+@async_task
+async def cleanup_old_performance_data_task():
+    """
+    Periodic task to clean up old performance and learning data.
+    Keeps the database lean while preserving important patterns.
+    """
+    logger.info("Starting performance data cleanup task")
+    
+    try:
+        async with get_db_connection_context() as conn:
+            # Clean up old performance metrics (keep last 7 days)
+            perf_result = await conn.execute("""
+                DELETE FROM performance_metrics
+                WHERE created_at < NOW() - INTERVAL '7 days'
+            """)
+            perf_deleted = int(perf_result.split()[-1]) if perf_result else 0
+            
+            # Clean up old learning metrics (keep last 30 days)
+            learn_result = await conn.execute("""
+                DELETE FROM learning_metrics
+                WHERE created_at < NOW() - INTERVAL '30 days'
+            """)
+            learn_deleted = int(learn_result.split()[-1]) if learn_result else 0
+            
+            # Clean up old scenario states (keep last 3 days)
+            scenario_result = await conn.execute("""
+                DELETE FROM scenario_states
+                WHERE created_at < NOW() - INTERVAL '3 days'
+            """)
+            scenario_deleted = int(scenario_result.split()[-1]) if scenario_result else 0
+            
+            logger.info(f"Cleanup complete - Performance: {perf_deleted}, "
+                       f"Learning: {learn_deleted}, Scenarios: {scenario_deleted}")
+            
+            return {
+                "status": "success",
+                "performance_metrics_deleted": perf_deleted,
+                "learning_metrics_deleted": learn_deleted,
+                "scenario_states_deleted": scenario_deleted
+            }
+            
+    except Exception as e:
+        logger.exception("Error in cleanup task")
+        return {"status": "error", "error": str(e)}
+
 # --- Utility Functions ---
 async def find_split_brain_nyxes():
     cutoff = datetime.datetime.utcnow() - datetime.timedelta(minutes=30) # Check last 30 mins
