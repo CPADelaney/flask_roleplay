@@ -2034,7 +2034,7 @@ __all__ = [
     'score_decision_options_impl',
     'detect_conflicts_and_instability_impl',
 ]
-    __all__ = list(dict.fromkeys(__all__))
+__all__ = list(dict.fromkeys(__all__))
 
 async def determine_image_generation_impl(ctx, response_text: str) -> str:
     """Compatibility wrapper for image generation decision"""
