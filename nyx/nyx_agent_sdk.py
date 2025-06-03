@@ -196,9 +196,13 @@ class NyxContext:
         
         # Initialize CPU usage monitoring
         try:
-            # first call populates the internal psutil sample window
-            self._cpu_usage_cache = safe_psutil('cpu_percent', interval=0.1, default=0.0)
-        except Exception:
+            cpu_percent = safe_psutil('cpu_percent', interval=None)  # First call to establish baseline
+            if cpu_percent is not None:
+                self._cpu_usage_cache = safe_psutil('cpu_percent', interval=0.1, default=0.0)
+                self._cpu_usage_last_update = time.time()
+            else:
+                self._cpu_usage_cache = 0.0
+        except:
             self._cpu_usage_cache = 0.0
         
         # Load existing state from database
@@ -475,17 +479,6 @@ def safe_process_metric(process, metric_name: str, default=0):
     except (AttributeError, OSError, RuntimeError) as e:
         logger.debug(f"Process metric {metric_name} failed: {e}")
         return default
-
-def safe_process() -> Optional["psutil.Process"]:          # <‑‑ NEW
-    """Return an instantiated psutil.Process() or None (platform‑safe)."""
-    proc_cls = safe_psutil('Process')
-    if proc_cls is None:
-        return None
-    try:
-        return proc_cls()
-    except Exception as exc:  # covers AccessDenied, ZombieProcess, etc.
-        logger.debug(f"psutil.Process() failed: {exc}")
-        return None
 
 # ===== Function Tools =====
 
@@ -873,10 +866,13 @@ async def check_performance_metrics(ctx: RunContextWrapper[NyxContext]) -> str:
     # Update current metrics using safe wrappers
     try:
         # Try to get process handle safely
-        process = safe_process()                     # replaces raw safe_psutil('Process')
+        process = safe_psutil('Process')
         if process:
-            mem_bytes = safe_process_metric(process, 'memory_info')
-            metrics["memory_usage"] = mem_bytes / 1024 / 1024 if mem_bytes else 0
+            memory_info = safe_process_metric(process, 'memory_info')
+            if memory_info:
+                metrics["memory_usage"] = memory_info / 1024 / 1024  # MB
+            else:
+                metrics["memory_usage"] = 0
         else:
             metrics["memory_usage"] = 0
             
@@ -1306,7 +1302,7 @@ async def content_moderation_guardrail(ctx: RunContextWrapper[NyxContext], agent
         name="Content Moderator",
         instructions="Check if user input is appropriate for the femdom roleplay setting. Allow consensual adult content but flag anything that violates terms of service.",
         output_type=ContentModeration,
-        model="gpt-4.1-nano"
+        model="gpt-4o-mini"
     )
     
     result = await Runner.run(moderator_agent, input_data, context=ctx.context)
@@ -1329,7 +1325,7 @@ memory_agent = Agent[NyxContext](
 - Provide relevant context from past interactions
 Be precise and thorough in memory management.""",
     tools=[retrieve_memories, add_memory],
-    model="gpt-4.1-nano"
+    model="gpt-4o-mini"
 )
 
 # Analysis Agent
@@ -1343,7 +1339,7 @@ analysis_agent = Agent[NyxContext](
 - Maintain awareness of user boundaries
 Be observant and insightful.""",
     tools=[detect_user_revelations, get_user_model_guidance, update_relationship_state],
-    model="gpt-4.1-nano"
+    model="gpt-4o-mini"
 )
 
 # Emotional Agent - Fixed to update state after calculation
@@ -1358,7 +1354,7 @@ emotional_agent = Agent[NyxContext](
 - ALWAYS use calculate_and_update_emotional_state to persist changes
 Keep emotions contextual and believable.""",
     tools=[calculate_and_update_emotional_state, calculate_emotional_impact],
-    model="gpt-4.1-nano"
+    model="gpt-4o-mini"
 )
 
 # Visual Agent
@@ -1373,7 +1369,7 @@ visual_agent = Agent[NyxContext](
 - Coordinate with the image generation service
 Be selective and enhance key moments visually.""",
     tools=[generate_image_from_scene],
-    model="gpt-4.1-nano"
+    model="gpt-4o-mini"
 )
 
 # Activity Agent
@@ -1388,7 +1384,7 @@ activity_agent = Agent[NyxContext](
 - Balance difficulty and engagement
 Create engaging, contextual activities.""",
     tools=[get_activity_recommendations],
-    model="gpt-4.1-nano"
+    model="gpt-4o-mini"
 )
 
 # Performance Agent
@@ -1403,7 +1399,7 @@ performance_agent = Agent[NyxContext](
 - Ensure system health
 Keep the system running efficiently.""",
     tools=[check_performance_metrics],
-    model="gpt-4.1-nano"
+    model="gpt-4o-mini"
 )
 
 # Scenario Agent
@@ -1427,7 +1423,7 @@ When deciding on time_advancement:
 Create engaging, dynamic scenarios.""",
     output_type=ScenarioDecision,
     tools=[detect_conflicts_and_instability],
-    model="gpt-4.1-nano"
+    model="gpt-4o-mini"
 )
 
 # Belief Agent
@@ -1442,7 +1438,7 @@ belief_agent = Agent[NyxContext](
 - Integrate beliefs into responses
 Keep beliefs coherent and evolving.""",
     tools=[manage_beliefs],
-    model="gpt-4.1-nano"
+    model="gpt-4o-mini"
 )
 
 # Decision Agent
@@ -1457,7 +1453,7 @@ decision_agent = Agent[NyxContext](
 - Explain decision reasoning
 Make intelligent, contextual decisions.""",
     tools=[score_decision_options],
-    model="gpt-4.1-nano"
+    model="gpt-4o-mini"
 )
 
 # Reflection Agent
@@ -1472,7 +1468,7 @@ reflection_agent = Agent[NyxContext](
 - Maintain Nyx's dominant personality
 Be thoughtful and concise.""",
     output_type=MemoryReflection,
-    model="gpt-4.1-nano"
+    model="gpt-4o-mini"
 )
 
 # Main Nyx Agent
@@ -1501,20 +1497,20 @@ Your approach:
 
 Always maintain your dominant persona while being attentive to user needs and system performance.""",
     handoffs=[
-        handoff(memory_agent),
-        handoff(analysis_agent),
-        handoff(emotional_agent),
-        handoff(visual_agent),
-        handoff(activity_agent),
-        handoff(performance_agent),
-        handoff(scenario_agent),
-        handoff(belief_agent),
-        handoff(decision_agent),
-        handoff(reflection_agent),
+        handoff(memory_agent, tool_description="Consult memory system for context or store important information"),
+        handoff(analysis_agent, tool_description="Analyze user behavior and relationship dynamics"),
+        handoff(emotional_agent, tool_description="Process emotional changes and maintain emotional consistency"),
+        handoff(visual_agent, tool_description="Generate visual content for scenes"),
+        handoff(activity_agent, tool_description="Get activity recommendations or manage tasks"),
+        handoff(performance_agent, tool_description="Check system performance and health"),
+        handoff(scenario_agent, tool_description="Manage complex scenario progression and detect conflicts"),
+        handoff(belief_agent, tool_description="Consult or update belief system"),
+        handoff(decision_agent, tool_description="Make complex decisions using advanced scoring"),
+        handoff(reflection_agent, tool_description="Create thoughtful reflections"),
     ],
     output_type=NarrativeResponse,
     input_guardrails=[InputGuardrail(guardrail_function=content_moderation_guardrail)],
-    model="gpt-4.1-nano",
+    model="gpt-4o-mini",
     model_settings=ModelSettings(temperature=0.7)
 )
 
@@ -1941,6 +1937,29 @@ async def store_messages(user_id: int, conversation_id: int, user_input: str, ny
             conversation_id, "Nyx", nyx_response
         )
 
+# Additional helper functions
+async def get_emotional_state(ctx) -> str:
+    """Get current emotional state"""
+    if hasattr(ctx, 'emotional_state'):
+        return json.dumps(ctx.emotional_state, ensure_ascii=False)
+    elif hasattr(ctx, 'context') and hasattr(ctx.context, 'emotional_state'):
+        return json.dumps(ctx.context.emotional_state, ensure_ascii=False)
+    else:
+        # Default state
+        return json.dumps({
+            "valence": 0.0,
+            "arousal": 0.5,
+            "dominance": 0.7
+        }, ensure_ascii=False)
+
+async def update_emotional_state(ctx, emotional_state: Dict[str, Any]) -> str:
+    """Update emotional state - Fixed to properly update the context"""
+    if hasattr(ctx, 'emotional_state'):
+        ctx.emotional_state.update(emotional_state)
+    elif hasattr(ctx, 'context') and hasattr(ctx.context, 'emotional_state'):
+        ctx.context.emotional_state.update(emotional_state)
+    return "Emotional state updated"
+
 # ===== Compatibility functions to maintain existing imports =====
 
 # Function mappings for backward compatibility
@@ -2034,7 +2053,6 @@ __all__ = [
     'score_decision_options_impl',
     'detect_conflicts_and_instability_impl',
 ]
-__all__ = list(dict.fromkeys(__all__))
 
 async def determine_image_generation_impl(ctx, response_text: str) -> str:
     """Compatibility wrapper for image generation decision"""
@@ -2109,38 +2127,6 @@ def get_available_activities() -> List[Dict]:
             "outcomes": ["skill improvement", "increased discipline"]
         }
     ]
-
-# Additional helper functions
-async def get_emotional_state(ctx) -> str:
-    """Get current emotional state"""
-    if hasattr(ctx, 'emotional_state'):
-        return json.dumps(ctx.emotional_state, ensure_ascii=False)
-    elif hasattr(ctx, 'context') and hasattr(ctx.context, 'emotional_state'):
-        return json.dumps(ctx.context.emotional_state, ensure_ascii=False)
-    else:
-        # Default state
-        return json.dumps({
-            "valence": 0.0,
-            "arousal": 0.5,
-            "dominance": 0.7
-        }, ensure_ascii=False)
-
-async def update_emotional_state(ctx, emotional_state: Dict[str, Any]) -> str:
-    """Update emotional state - Fixed to properly update the context"""
-    if hasattr(ctx, 'emotional_state'):
-        ctx.emotional_state.update(emotional_state)
-    elif hasattr(ctx, 'context') and hasattr(ctx.context, 'emotional_state'):
-        ctx.context.emotional_state.update(emotional_state)
-    return "Emotional state updated"
-
-# Add wrapper for emotional agent to ensure state updates
-async def get_emotional_state_impl(ctx) -> str:
-    """Get current emotional state"""
-    return await get_emotional_state(ctx)
-
-async def update_emotional_state_impl(ctx, emotional_state: Dict[str, Any]) -> str:
-    """Update emotional state"""
-    return await update_emotional_state(ctx, emotional_state)
 
 async def generate_base_response(ctx: NyxContext, user_input: str, context: Dict[str, Any]) -> NarrativeResponse:
     """Generate base narrative response - for compatibility"""
