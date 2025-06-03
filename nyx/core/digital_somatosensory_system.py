@@ -871,20 +871,6 @@ class DigitalSomatosensorySystem:
         # Initialize harm guardrail
         self.harm_guardrail = PhysicalHarmGuardrail(self)
         
-        # Add tool function references for backward compatibility
-        self._process_stimulus_tool = process_stimulus_tool
-        self._get_region_state = get_region_state
-        self._get_all_region_states = get_all_region_states
-        self._calculate_overall_comfort = calculate_overall_comfort
-        self._get_arousal_state = get_arousal_state
-        self._update_arousal_state = update_arousal_state
-        self._get_current_temperature_effects = get_current_temperature_effects
-        self._get_pain_expression = get_pain_expression
-        self._update_body_temperature = update_body_temperature
-        self._process_memory_trigger = process_memory_trigger
-        self._link_memory_to_sensation_tool = link_memory_to_sensation_tool
-        self._get_arousal_expression_data = get_arousal_expression_data
-        
         logger.info("Digital Somatosensory System initialized")
     
     def _init_body_regions(self):
