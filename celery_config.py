@@ -58,6 +58,21 @@ celery_app.conf.beat_schedule = {
         # Logic inside the task will check if app is ready before proceeding
     },
 
+    celery_app.conf.beat_schedule.update({
+        'monitor-nyx-performance-every-5-mins': {
+            'task': 'tasks.monitor_nyx_performance_task',
+            'schedule': crontab(minute='*/5'),
+        },
+        'aggregate-learning-metrics-hourly': {
+            'task': 'tasks.aggregate_learning_metrics_task',
+            'schedule': crontab(minute=0),  # Every hour at :00
+        },
+        'cleanup-old-data-daily': {
+            'task': 'tasks.cleanup_old_performance_data_task',
+            'schedule': crontab(hour=2, minute=0),  # Daily at 2:00 AM
+            'options': {'queue': 'low_priority'}
+        },
+
     # --- NEW Periodic LLM Checkpointing Task ---
     'llm-periodic-checkpoint-every-10min': {
         'task': 'tasks.run_llm_periodic_checkpoint_task', # New task name
