@@ -57,6 +57,7 @@ class ConditioningSystem:
                 check_similar_associations
             ],
             output_type=ClassicalConditioningOutput,
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.3)
         )
         
@@ -78,6 +79,7 @@ class ConditioningSystem:
                 generate_reward_signal
             ],
             output_type=OperantConditioningOutput,
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.3)
         )
         
@@ -100,6 +102,7 @@ class ConditioningSystem:
                 get_reinforcement_history
             ],
             output_type=BehaviorEvaluationOutput,
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.3)
         )
         
@@ -122,6 +125,7 @@ class ConditioningSystem:
                 check_trait_balance
             ],
             output_type=TraitConditioningOutput,
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.3)
         )
         
@@ -151,6 +155,7 @@ class ConditioningSystem:
                 prepare_conditioning_data,
                 apply_association_effects
             ],
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.3)
         )
     
