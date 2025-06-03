@@ -167,6 +167,7 @@ class ConditioningMaintenanceSystem:
                 check_trait_balance
             ],
             output_type=BalanceAnalysisOutput,
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.2)
         )
         
@@ -184,6 +185,7 @@ class ConditioningMaintenanceSystem:
                 identify_extinction_candidates,
                 apply_extinction_to_association
             ],
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.3)
         )
         
@@ -197,6 +199,7 @@ class ConditioningMaintenanceSystem:
             tools=[
                 reinforce_core_trait
             ],
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.3)
         )
         
@@ -230,6 +233,7 @@ class ConditioningMaintenanceSystem:
                 record_maintenance_history
             ],
             output_type=MaintenanceSummaryOutput,
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.3)
         )
     
