@@ -33,7 +33,7 @@ from agents import (
 from agents.exceptions import MaxTurnsExceeded, ModelBehaviorError
 
 from nyx.core.internal_thoughts import InternalThought
-from nyx.core.brain.processing.manager import ProcessingManager
+from nyx.core.brain.processing.unified_processor import UnifiedProcessor
 
 
 from nyx.core.brain.nyx_distributed_checkpoint import DistributedCheckpointMixin
@@ -266,7 +266,6 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
         from nyx.core.goal_system import GoalManager
         from nyx.core.reasoning_agents import integrated_reasoning_agent, triage_agent as reasoning_triage_agent
         from nyx.core.reasoning_core import ReasoningCore
-        from nyx.core.brain.processing.manager import ProcessingManager
         from nyx.core.brain.adaptation.self_config import SelfConfigManager
         from nyx.core.context_awareness import ContextAwarenessSystem
         from nyx.core.interaction_mode_manager import InteractionModeManager
@@ -1506,8 +1505,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
         logger.debug(f"NyxBrain Init Tier 8: Final Setup for {self.user_id}-{self.conversation_id}")
         
         # Processing manager
-        from nyx.core.brain.processing.manager import ProcessingManager
-        self.processing_manager = ProcessingManager(brain=self)
+        self.processing_manager = UnifiedProcessor(brain=self)
         await self.processing_manager.initialize()
         
         # Self configuration manager
@@ -4735,31 +4733,29 @@ System Prompt End
             core_result = await self._process_input_coordinated(user_input, context)
             processing_result["processing_mode"] = "coordinated"
         else:
-            # ALWAYS use ProcessingManager for non-coordinated processing
+            # Use unified processor
             if not self.processing_manager:
-                # Initialize ProcessingManager if not already done
-                from nyx.core.brain.processing.manager import ProcessingManager
-                self.processing_manager = ProcessingManager(self)
+                # Initialize UnifiedProcessor if not already done
+                self.processing_manager = UnifiedProcessor(self)
                 await self.processing_manager.initialize()
             
-            # Pass mode and all context to ProcessingManager
+            # Pass all context to UnifiedProcessor
             processor_context = {
                 **context,
-                "processing_mode": mode,
                 "active_modules": list(processing_result.get("active_modules_for_input", [])),
                 "internal_thoughts": processing_result.get("internal_thoughts", []),
                 "thinking_applied": processing_result.get("thinking_applied", False),
                 "conditioning_applied": processing_result.get("conditioning_applied", False)
             }
             
-            # Let ProcessingManager handle mode selection and routing
+            # Process with unified processor
             core_result = await self.processing_manager.process_input(
                 user_input, 
                 processor_context
             )
             
-            # Store which processor was actually used
-            processing_result["processing_mode"] = core_result.get("processing_mode", "unknown")
+            # Store processing approach used
+            processing_result["processing_mode"] = core_result.get("processing_mode", "unified")
         
         # Merge results
         processing_result.update(core_result)
@@ -4911,15 +4907,12 @@ System Prompt End
         # Generate response based on processing mode
         response_data = None
         
-        # Check if we used a processor for input
-        processing_mode_used = input_result.get("processing_mode")
-        
         if use_coordination and hasattr(self, "context_distribution") and self.context_distribution:
             # Use coordinated response generation
             response_data = await self._generate_response_coordinated(user_input, context, input_result)
         
-        elif processing_mode_used and self.processing_manager:
-            # Use the same processor that handled the input
+        elif self.processing_manager:
+            # Use unified processor for response
             try:
                 response_data = await self.processing_manager.generate_response(
                     user_input,
@@ -4927,7 +4920,7 @@ System Prompt End
                     context
                 )
                 
-                # Extract the core response data from processor result
+                # Extract the core response data
                 if "message" in response_data:
                     response_data = {
                         "main_message": response_data["message"],
@@ -4935,16 +4928,13 @@ System Prompt End
                         "action": response_data.get("action_taken"),
                         "emotional_expression": response_data.get("emotional_expression"),
                         "processor_metadata": {
-                            "mode": processing_mode_used,
-                            "response_type": response_data.get("response_type", "standard"),
-                            "evaluation": response_data.get("evaluation"),
-                            "parallel_processing": response_data.get("parallel_processing", False),
-                            "distributed_processing": response_data.get("distributed_processing", False),
-                            "reflexive_processing": response_data.get("reflexive_processing", False)
+                            "mode": "unified",
+                            "response_type": response_data.get("response_type", "unified"),
+                            "approach": input_result.get("processing_mode", "unified")
                         }
                     }
             except Exception as e:
-                logger.error(f"Error using ProcessingManager for response: {e}")
+                logger.error(f"Error using UnifiedProcessor for response: {e}")
                 # Fallback to standard generation
                 response_data = await self._generate_response_standard(user_input, context, input_result, active_modules)
         
@@ -5790,9 +5780,8 @@ System Prompt End
             # Get processing stats if available
             if self.processing_manager:
                 stats["processing_stats"] = {
-                    "current_mode": self.processing_manager.current_mode,
-                    "mode_switches": len(self.processing_manager.mode_switch_history),
-                    "available_modes": list(self.processing_manager.processors.keys()) + ["auto"]
+                    "processor_type": "unified",
+                    "initialized": self.processing_manager._initialized
                 }
             
             return stats    
