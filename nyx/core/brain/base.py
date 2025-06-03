@@ -301,7 +301,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             'integrated_reasoning_agent': integrated_reasoning_agent,
             'reasoning_triage_agent': reasoning_triage_agent,
             'ReasoningCore': ReasoningCore,
-            'ProcessingManager': ProcessingManager,
+            'UnifiedProcessor': UnifiedProcessor,
             'SelfConfigManager': SelfConfigManager,
             'ContextAwarenessSystem': ContextAwarenessSystem,
             'InteractionModeManager': InteractionModeManager,
