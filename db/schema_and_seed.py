@@ -1134,6 +1134,115 @@ async def create_all_tables():
                 );
                 ''',
                 '''
+                CREATE TABLE IF NOT EXISTS interaction_history (
+                    id SERIAL PRIMARY KEY,
+                    entity1_id VARCHAR(100) NOT NULL,
+                    entity2_id VARCHAR(100) NOT NULL,
+                    interaction_type VARCHAR(50) NOT NULL,
+                    outcome VARCHAR(50) NOT NULL,
+                    emotional_impact JSONB NOT NULL DEFAULT '{}',
+                    duration INTEGER NOT NULL DEFAULT 0,
+                    intensity FLOAT NOT NULL DEFAULT 0.5,
+                    relationship_changes JSONB NOT NULL DEFAULT '{}',
+                    user_id INTEGER NOT NULL,
+                    conversation_id INTEGER NOT NULL,
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+                );
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_interaction_history_entities 
+                ON interaction_history(entity1_id, entity2_id, created_at);
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_interaction_history_user_conv
+                ON interaction_history(user_id, conversation_id, created_at);
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_interaction_history_lookup
+                ON interaction_history(user_id, conversation_id, entity1_id, entity2_id);
+                ''',
+                '''
+                COMMENT ON TABLE interaction_history IS 'Tracks interactions between entities (NPCs, users) for relationship management';
+                ''',
+                '''
+                CREATE TABLE IF NOT EXISTS strategy_reviews (
+                    id SERIAL PRIMARY KEY,
+                    strategy_id INTEGER NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    reason TEXT NOT NULL,
+                    status VARCHAR(20) DEFAULT 'pending',
+                    reviewed_at TIMESTAMP,
+                    reviewer_notes TEXT,
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+                );
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_strategy_reviews_strategy
+                ON strategy_reviews(strategy_id);
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_strategy_reviews_user
+                ON strategy_reviews(user_id);
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_strategy_reviews_status
+                ON strategy_reviews(status);
+                ''',
+                '''
+                CREATE TABLE IF NOT EXISTS scenario_states (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER NOT NULL,
+                    conversation_id INTEGER NOT NULL,
+                    state_data JSONB NOT NULL,
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+                );
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_scenario_states_user_conv
+                ON scenario_states(user_id, conversation_id);
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_scenario_states_created
+                ON scenario_states(created_at DESC);
+                ''',
+                '''
+                CREATE TABLE IF NOT EXISTS performance_metrics (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER NOT NULL,
+                    conversation_id INTEGER NOT NULL,
+                    metrics JSONB NOT NULL,
+                    error_log JSONB,
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+                );
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_performance_metrics_latest
+                ON performance_metrics(user_id, conversation_id, created_at DESC);
+                ''',
+                '''
+                CREATE TABLE IF NOT EXISTS learning_metrics (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER NOT NULL,
+                    conversation_id INTEGER NOT NULL,
+                    metrics JSONB NOT NULL,
+                    learned_patterns JSONB,
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+                );
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_learning_metrics_latest
+                ON learning_metrics(user_id, conversation_id, created_at DESC);
+                ''',
+                '''
                 CREATE TABLE IF NOT EXISTS NPCVisualEvolution (
                     id SERIAL PRIMARY KEY,
                     npc_id INTEGER NOT NULL,
