@@ -5,8 +5,8 @@ import asyncio
 import datetime
 import json
 import random
-from typing import Dict, List, Any, Optional, Tuple, Union, Set, Literal
-from dataclasses import dataclass
+from typing import Dict, List, Any, Optional, Tuple, Union, Set
+from dataclasses import dataclass, field
 import numpy as np
 
 from agents import (
@@ -119,8 +119,8 @@ class SomatosensoryContext:
     """Context for somatosensory system operations"""
     system: 'DigitalSomatosensorySystem'
     operation: str = "unknown"
-    start_time: datetime.datetime = Field(default_factory=datetime.datetime.now)
-    metadata: Dict[str, Any] = Field(default_factory=dict)
+    start_time: datetime.datetime = field(default_factory=datetime.datetime.now)
+    metadata: Dict[str, Any] = field(default_factory=dict)
 
 # =============== Global System Instance ===============
 # This is used by tool functions to access the system
@@ -871,6 +871,20 @@ class DigitalSomatosensorySystem:
         # Initialize harm guardrail
         self.harm_guardrail = PhysicalHarmGuardrail(self)
         
+        # Add tool function references for backward compatibility
+        self._process_stimulus_tool = process_stimulus_tool
+        self._get_region_state = get_region_state
+        self._get_all_region_states = get_all_region_states
+        self._calculate_overall_comfort = calculate_overall_comfort
+        self._get_arousal_state = get_arousal_state
+        self._update_arousal_state = update_arousal_state
+        self._get_current_temperature_effects = get_current_temperature_effects
+        self._get_pain_expression = get_pain_expression
+        self._update_body_temperature = update_body_temperature
+        self._process_memory_trigger = process_memory_trigger
+        self._link_memory_to_sensation_tool = link_memory_to_sensation_tool
+        self._get_arousal_expression_data = get_arousal_expression_data
+        
         logger.info("Digital Somatosensory System initialized")
     
     def _init_body_regions(self):
@@ -1018,7 +1032,7 @@ class DigitalSomatosensorySystem:
             """,
             tools=[get_valid_body_regions],
             output_type=StimulusValidationOutput,
-            model="gpt-4o-mini",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.1),
             hooks=self.agent_hooks
         )
@@ -1047,7 +1061,7 @@ class DigitalSomatosensorySystem:
                 get_arousal_expression_data
             ],
             output_type=SensoryExpression,
-            model="gpt-4o-mini",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.7),
             hooks=self.agent_hooks
         )
@@ -1076,7 +1090,7 @@ class DigitalSomatosensorySystem:
                 get_arousal_expression_data
             ],
             output_type=BodyStateOutput,
-            model="gpt-4o-mini",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.2),
             hooks=self.agent_hooks
         )
@@ -1103,7 +1117,7 @@ class DigitalSomatosensorySystem:
                 get_temperature_comfort
             ],
             output_type=TemperatureEffect,
-            model="gpt-4o-mini",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.4),
             hooks=self.agent_hooks
         )
@@ -1165,130 +1179,119 @@ class DigitalSomatosensorySystem:
             input_guardrails=[
                 InputGuardrail(guardrail_function=self._validate_input)
             ],
-            model="gpt-4o-mini",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.2),
             hooks=self.agent_hooks
         )
     
-    async def _validate_input(
-        self,
-        ctx: RunContextWrapper[SomatosensoryContext],
-        agent: Agent,
-        payload: Any,
-    ) -> GuardrailFunctionOutput:
-        """
-        Fast‑path dispatcher:
-    
-        * Non‑dict / non‑JSON            -> reject
-        * Non‑stimulus actions           -> pass‑through
-        * Stimulus dict                  -> call validator agent
-        """
-        # ---------- normalise to dict ----------
-        if isinstance(payload, str):
+    async def _validate_input(self, ctx: RunContextWrapper[SomatosensoryContext], agent: Agent, input_data: Any) -> GuardrailFunctionOutput:
+        """Validate input for the orchestrator"""
+        validation_input_dict = {}
+        
+        if isinstance(input_data, str):
             try:
-                payload_dict = json.loads(payload)
-                if not isinstance(payload_dict, dict):
-                    raise ValueError
-            except (json.JSONDecodeError, ValueError):
-                payload_dict = {"action": "free_text_request", "text_input": payload}
-        elif isinstance(payload, dict):
-            payload_dict = payload
+                parsed_input = json.loads(input_data)
+                if isinstance(parsed_input, dict):
+                    validation_input_dict = parsed_input
+                else:
+                    validation_input_dict = {"action": "free_text_request", "text_input": input_data}
+            except json.JSONDecodeError:
+                validation_input_dict = {"action": "free_text_request", "text_input": input_data}
+        elif isinstance(input_data, dict):
+            validation_input_dict = input_data
         else:
             return GuardrailFunctionOutput(
-                output_info={"is_valid": False, "reason": f"Unsupported input type: {type(payload).__name__}"},
-                tripwire_triggered=True,
+                output_info={"is_valid": False, "reason": f"Unexpected input type: {type(input_data).__name__}"},
+                tripwire_triggered=True
             )
-    
-        # ---------- quick allow‑list ----------
-        if payload_dict.get("action") in {
-            "analyze_body_state",
-            "generate_expression",
-            "analyze_temperature",
-            "get_somatic_memory",
-            "run_maintenance",
-            "free_text_request",
-        }:
+        
+        # Check if this is a non-stimulus action
+        action = validation_input_dict.get("action")
+        non_stimulus_actions = ["analyze_body_state", "generate_expression", "analyze_temperature",
+                               "get_somatic_memory", "run_maintenance", "free_text_request"]
+        
+        if action in non_stimulus_actions:
             return GuardrailFunctionOutput(
-                output_info={"is_valid": True, "reason": "Non‑stimulus action"},
-                tripwire_triggered=False,
+                output_info={"is_valid": True, "reason": f"Action '{action}' does not require stimulus validation."},
+                tripwire_triggered=False
             )
-    
-        # ---------- stimulus validation ----------
-        required = {"stimulus_type", "body_region", "intensity"}
-        if required.issubset(payload_dict):
+        
+        # For stimulus actions, validate the stimulus parameters
+        if all(key in validation_input_dict for key in ["stimulus_type", "body_region", "intensity"]):
+            validator_input = {
+                "stimulus_type": validation_input_dict.get("stimulus_type"),
+                "body_region": validation_input_dict.get("body_region"),
+                "intensity": validation_input_dict.get("intensity"),
+                "duration": validation_input_dict.get("duration", 1.0),
+            }
+            
             try:
                 result = await Runner.run(
                     self.stimulus_validator,
-                    json.dumps({k: payload_dict.get(k) for k in (*required, "duration")}),
+                    f"Validate this stimulus data: {json.dumps(validator_input)}",
                     context=ctx.context,
-                    run_config=RunConfig(workflow_name="StimulusValidation"),
+                    run_config=RunConfig(workflow_name="StimulusValidation")
                 )
-                out = result.final_output_as(StimulusValidationOutput)
-                return GuardrailFunctionOutput(out.model_dump(), tripwire_triggered=not out.is_valid)
-            except Exception as exc:  # noqa: B902
-                logger.error("Stimulus validator failed", exc_info=True)
+                
+                validation_output = result.final_output_as(StimulusValidationOutput)
                 return GuardrailFunctionOutput(
-                    output_info={"is_valid": False, "reason": f"Validator error: {exc}"},
-                    tripwire_triggered=True,
+                    output_info=validation_output.model_dump(),
+                    tripwire_triggered=not validation_output.is_valid
                 )
-    
-        # ---------- default pass‑through ----------
+            except Exception as e:
+                logger.error(f"Error running stimulus validator: {e}", exc_info=True)
+                return GuardrailFunctionOutput(
+                    output_info={"is_valid": False, "reason": f"Validation error: {str(e)}"},
+                    tripwire_triggered=True
+                )
+        
         return GuardrailFunctionOutput(
-            output_info={"is_valid": True, "reason": "No stimulus pattern detected"},
-            tripwire_triggered=False,
+            output_info={"is_valid": True, "reason": "Input does not match stimulus pattern, allowing through."},
+            tripwire_triggered=False
         )
     
     # =============== Helper Methods ===============
     
-    def _get_dominant_sensation(self, region: BodyRegion) -> Literal[
-        "pressure", "temperature", "pain", "pleasure", "tingling", "neutral"
-    ]:
-        """
-        Return the dominant sensation *label* for a body‑region.
-    
-        Rules
-        -----
-        1. Temperature is considered a deviation from 0.5 (neutral) and rescaled
-           to 0–1 so it’s comparable with the rest.
-        2. If *all* scaled values are below 0.2 we treat the region as neutral.
-        """
-        # Normalised magnitudes
-        magnitudes: dict[str, float] = {
-            "pressure":   region.pressure,
-            "temperature": abs(region.temperature - 0.5) * 2.0,
-            "pain":       region.pain,
-            "pleasure":   region.pleasure,
-            "tingling":   region.tingling,
+    def _get_dominant_sensation(self, region: BodyRegion) -> str:
+        """Determine the dominant sensation for a region"""
+        sensations = {
+            "pressure": region.pressure,
+            "temperature": abs(region.temperature - 0.5) * 2,
+            "pain": region.pain,
+            "pleasure": region.pleasure,
+            "tingling": region.tingling
         }
+        
+        max_sensation = max(sensations.items(), key=lambda x: x[1])
+        
+        if max_sensation[1] >= 0.2:
+            return max_sensation[0]
+        
+        return "neutral"
     
-        dominant, value = max(magnitudes.items(), key=lambda kv: kv[1])
-        return dominant if value >= 0.20 else "neutral"
+    async def _calculate_overall_comfort_internal(self) -> float:
+        """Internal method to calculate comfort (for backward compatibility)"""
+        context = SomatosensoryContext(system=self)
+        return await calculate_overall_comfort(RunContextWrapper(context=context))
     
-    def _decay_sensations(self, elapsed: float = 60.0) -> None:
-        """
-        Exponentially decay sensations for *all* regions.
+    async def _get_region_state_internal(self, region_name: str) -> Dict[str, Any]:
+        """Internal method to get region state (for backward compatibility)"""
+        context = SomatosensoryContext(system=self)
+        return await get_region_state(RunContextWrapper(context=context), region_name)
     
-        Parameters
-        ----------
-        elapsed : float
-            Seconds since last decay.  We clamp it to [0, 3600] so runaway
-            catch‑up updates don’t nuke the entire state.
-        """
-        elapsed = max(0.0, min(elapsed, 3600.0))           # safety‑clamp
-        # Shared decay multipliers
-        base     = 0.05 * (elapsed / 60.0)                 # 5 % per min
-        pain_k   = self.pain_model["decay_rate"] * (elapsed / 60.0)
-        pleasure = pain_k * 1.2
-    
-        for r in self.body_regions.values():
-            r.pressure  *= 1.0 - min(0.20, base)
-            r.tingling  *= 1.0 - min(0.20, base)
-            r.pain      *= 1.0 - min(1.00, pain_k)
-            r.pleasure  *= 1.0 - min(1.00, pleasure)
-    
-            # Clamp to [0, 1] in case of FP drift
-            for attr in ("pressure", "tingling", "pain", "pleasure"):
-                setattr(r, attr, max(0.0, min(1.0, getattr(r, attr))))
+    def _decay_sensations(self, duration: float = 60.0):
+        """Decay all sensations over time"""
+        decay = min(0.2, 0.05 * (duration / 60.0))
+        
+        for region in self.body_regions.values():
+            region.pressure = max(0.0, region.pressure - (region.pressure * decay))
+            region.tingling = max(0.0, region.tingling - (region.tingling * decay))
+            
+            pain_decay = self.pain_model["decay_rate"] * (duration / 60.0)
+            region.pain = max(0.0, region.pain - (region.pain * pain_decay))
+            
+            pleasure_decay = pain_decay * 1.2
+            region.pleasure = max(0.0, region.pleasure - (region.pleasure * pleasure_decay))
     
     def _decay_pain_memories(self):
         """Remove old pain memories based on duration setting"""
@@ -1315,63 +1318,59 @@ class DigitalSomatosensorySystem:
         
         self.pain_model["tolerance"] = max(0.4, min(0.9, self.pain_model["tolerance"]))
     
-    def _update_physical_arousal(self) -> float:
-        """
-        Recalculate *physical* arousal from regional pleasure/tingling.
+    def _update_physical_arousal(self):
+        """Update physical arousal levels based on current body region states"""
+        p_total, t_total, count = 0.0, 0.0, 0.0
+        
+        for data in self.body_regions.values():
+            er = data.erogenous_level
+            p_total += data.pleasure * er
+            t_total += data.tingling * er
+            if (data.pleasure > 0.1 or data.tingling > 0.05):
+                count += er
+        
+        score = (p_total * 0.7 + t_total * 0.4) / (count if count > 0 else 1.0)
+        
+        self.arousal_state.physical_arousal = min(1.0, score)
+        self.update_global_arousal()
+        
+        return score
     
-        Returns
-        -------
-        float
-            The new physical arousal score (0‑1).
-        """
-        weighted_sum, weights = 0.0, 0.0
-        for reg in self.body_regions.values():
-            if reg.pleasure < 0.1 and reg.tingling < 0.05:
-                continue
-            w = reg.erogenous_level
-            weights       += w
-            weighted_sum  += (reg.pleasure * 0.7 + reg.tingling * 0.4) * w
-    
-        score = weighted_sum / (weights or 1.0)
-        self.arousal_state.physical_arousal = round(min(1.0, score), 4)
-        self.update_global_arousal()        # keep composite in sync
-        return self.arousal_state.physical_arousal
-    
-    def update_global_arousal(self) -> None:
-        """
-        Blend physical + cognitive components, apply synergy, and handle
-        afterglow / refractory damping.  Side‑effects only.
-        """
-        phys, cog = self.arousal_state.physical_arousal, self.arousal_state.cognitive_arousal
-    
-        # Simple additive model with a *mild* synergistic boost
-        raw = phys + cog
+    def update_global_arousal(self):
+        """Update the global arousal state based on physical and cognitive components"""
+        phys = self.arousal_state.physical_arousal
+        cog = self.arousal_state.cognitive_arousal
+        
+        combo = phys + cog
+        
+        synergy = 1.0
         if phys > 0.25 and cog > 0.25:
-            raw *= 1.0 + (min(phys, cog) * 0.30)
-    
-        # Afterglow / refractory gates
+            synergy = 1.0 + (0.3 * min(1.0, (phys * cog) / 0.25))
+        
+        raw = min(1.0, combo * synergy)
+        
         if self.is_in_refractory():
-            raw *= 0.20
+            raw *= 0.2
         elif self.is_in_afterglow():
-            raw *= 0.50
-    
-        level = max(0.0, min(1.0, raw))
-        self.arousal_state.arousal_level = level
-    
-        # Peak / reset bookkeeping
-        now = datetime.datetime.now()
-        if level >= 0.97:
-            self.arousal_state.peak_time = now
-        elif level <= 0.02 and self.arousal_state.peak_time:
-            self.arousal_state.afterglow       = True
-            self.arousal_state.afterglow_ends  = now + datetime.timedelta(seconds=180)
+            raw *= 0.5
+        
+        self.arousal_state.arousal_level = raw
+        
+        if raw > 0.97 and not self.arousal_state.peak_time:
+            self.arousal_state.peak_time = datetime.datetime.now()
+        
+        if raw <= 0.02 and self.arousal_state.peak_time:
+            now = datetime.datetime.now()
+            self.arousal_state.afterglow = True
+            self.arousal_state.afterglow_ends = now + datetime.timedelta(seconds=180)
             self.arousal_state.refractory_until = now + datetime.timedelta(seconds=60)
             self.arousal_state.peak_time = None
-    
-        self.arousal_state.arousal_history.append((now, level))
+        
+        self.arousal_state.arousal_history.append((datetime.datetime.now(), raw))
+        self.arousal_state.last_update = datetime.datetime.now()
+        
         if len(self.arousal_state.arousal_history) > 100:
             self.arousal_state.arousal_history = self.arousal_state.arousal_history[-100:]
-        self.arousal_state.last_update = now
     
     def process_orgasm(self):
         """Simulate an orgasm/climax, resetting arousal and setting afterglow/refractory states"""
@@ -1703,7 +1702,6 @@ class DigitalSomatosensorySystem:
                 return await self.process_body_experience(stimulus_data)
             except Exception as e:
                 logger.error(f"Error processing stimulus: {e}")
-                context = SomatosensoryContext(system=self)
                 return await process_stimulus_tool(
                     RunContextWrapper(context=context),
                     stimulus_type=stimulus_type,
