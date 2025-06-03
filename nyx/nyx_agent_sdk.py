@@ -1,28 +1,47 @@
 # nyx/nyx_agent_sdk.py
 
+"""
+Nyx Agent SDK - Refactored to use OpenAI Agents SDK
+
+This module requires the following database tables to be created via migrations:
+- NyxAgentState (user_id, conversation_id, emotional_state, updated_at)
+- scenario_states (user_id, conversation_id, state_data, created_at) 
+  - INDEX: (user_id, conversation_id)
+- learning_metrics (user_id, conversation_id, metrics, learned_patterns, created_at)
+- performance_metrics (user_id, conversation_id, metrics, error_log, created_at)
+
+For continuous monitoring (scenario updates, resource usage, etc.), implement an external service using:
+- Celery for background tasks
+- FastAPI background tasks
+- Kubernetes CronJobs
+- Or a dedicated monitoring service
+
+This keeps the main request path fast and non-blocking.
+"""
+
 import logging
 import json
 import asyncio
+import time
 from datetime import datetime
 from typing import Dict, List, Any, Optional, Tuple, Union, Callable
-import asyncpg
-import time
-import psutil
-import random
+from dataclasses import dataclass, field
+from contextlib import suppress
 
-from agents import Agent, handoff, function_tool, Runner, trace
-from agents import ModelSettings, GuardrailFunctionOutput, InputGuardrail, OutputGuardrail, RunConfig
-from npcs.npc_agent import NPCAgent, ResourcePool
+from agents import (
+    Agent, Runner, function_tool, handoff, 
+    ModelSettings, GuardrailFunctionOutput, InputGuardrail,
+    RunContextWrapper, RunConfig
+)
 from pydantic import BaseModel, Field
 
 from db.connection import get_db_connection_context
 from memory.memory_nyx_integration import MemoryNyxBridge, get_memory_nyx_bridge
-from nyx.user_model_sdk import UserModelContext, ResponseGuidance, UserModelAnalysis, UserModelManager
+from nyx.user_model_sdk import UserModelManager
 from nyx.nyx_task_integration import NyxTaskIntegration
 from nyx.core.emotions.emotional_core import EmotionalCore
 from nyx.performance_monitor import PerformanceMonitor
 from .response_filter import ResponseFilter
-from .nyx_enhanced_system import NyxEnhancedSystem, NyxGoal
 from nyx.core.sync.strategy_controller import get_active_strategies
 
 logger = logging.getLogger(__name__)
@@ -36,8 +55,7 @@ class NarrativeResponse(BaseModel):
     image_prompt: Optional[str] = Field(None, description="Prompt for image generation if needed")
     environment_description: Optional[str] = Field(None, description="Updated environment description if changed")
     time_advancement: bool = Field(False, description="Whether time should advance after this interaction")
-    
-    
+
 class MemoryReflection(BaseModel):
     """Structured output for memory reflections"""
     reflection: str = Field(..., description="The reflection text")
@@ -50,9 +68,429 @@ class ContentModeration(BaseModel):
     reasoning: str = Field(..., description="Reasoning for the decision")
     suggested_adjustment: Optional[str] = Field(None, description="Suggested adjustment if inappropriate")
 
+class EmotionalStateUpdate(BaseModel):
+    """Structured output for emotional state changes"""
+    valence: float = Field(..., description="Positive/negative emotion (-1 to 1)")
+    arousal: float = Field(..., description="Emotional intensity (0 to 1)")
+    dominance: float = Field(..., description="Control level (0 to 1)")
+    primary_emotion: str = Field(..., description="Primary emotion label")
+    reasoning: str = Field(..., description="Why the emotional state changed")
+
+class ScenarioDecision(BaseModel):
+    """Structured output for scenario management decisions"""
+    action: str = Field(..., description="Action to take (advance, maintain, escalate, de-escalate)")
+    next_phase: str = Field(..., description="Next scenario phase")
+    tasks: List[Dict[str, Any]] = Field(default_factory=list, description="Tasks to execute")
+    npc_actions: List[Dict[str, Any]] = Field(default_factory=list, description="NPC actions to take")
+    time_advancement: bool = Field(False, description="Whether to advance time after this phase")
+
+class RelationshipUpdate(BaseModel):
+    """Structured output for relationship changes"""
+    trust_change: float = Field(0.0, description="Change in trust level")
+    power_dynamic_change: float = Field(0.0, description="Change in power dynamic")
+    emotional_bond_change: float = Field(0.0, description="Change in emotional bond")
+    relationship_type: str = Field(..., description="Type of relationship")
+
+class ActivityRecommendation(BaseModel):
+    """Structured output for activity recommendations"""
+    recommended_activities: List[Dict[str, Any]] = Field(..., description="List of recommended activities")
+    reasoning: str = Field(..., description="Why these activities are recommended")
+
+# ===== Enhanced Context with State Management =====
+@dataclass
+class NyxContext:
+    """Enhanced context for Nyx agents with state management"""
+    user_id: int
+    conversation_id: int
+    
+    # Core systems
+    memory_system: Optional[MemoryNyxBridge] = None
+    user_model: Optional[UserModelManager] = None
+    task_integration: Optional[NyxTaskIntegration] = None
+    response_filter: Optional[ResponseFilter] = None
+    emotional_core: Optional[EmotionalCore] = None
+    performance_monitor: Optional[PerformanceMonitor] = None
+    belief_system: Optional[Any] = None  # Belief system integration
+    
+    # State management
+    current_context: Dict[str, Any] = field(default_factory=dict)
+    scenario_state: Dict[str, Any] = field(default_factory=dict)
+    relationship_states: Dict[str, Dict[str, float]] = field(default_factory=dict)  # Improved typing
+    active_tasks: List[Dict[str, Any]] = field(default_factory=list)
+    
+    # Performance tracking
+    performance_metrics: Dict[str, Any] = field(default_factory=lambda: {
+        "total_actions": 0,
+        "successful_actions": 0,
+        "failed_actions": 0,
+        "response_times": [],
+        "memory_usage": 0,
+        "cpu_usage": 0,
+        "error_rates": {
+            "total": 0,
+            "recovered": 0,
+            "unrecovered": 0
+        }
+    })
+    
+    # Emotional state
+    emotional_state: Dict[str, float] = field(default_factory=lambda: {
+        "valence": 0.0,
+        "arousal": 0.5,
+        "dominance": 0.7
+    })
+    
+    # Learning and adaptation
+    learned_patterns: Dict[str, Any] = field(default_factory=dict)
+    strategy_effectiveness: Dict[str, Any] = field(default_factory=dict)
+    adaptation_history: List[Dict[str, Any]] = field(default_factory=list)
+    learning_metrics: Dict[str, Any] = field(default_factory=lambda: {
+        "pattern_recognition_rate": 0.0,
+        "strategy_improvement_rate": 0.0,
+        "adaptation_success_rate": 0.0
+    })
+    
+    # Error tracking
+    error_log: List[Dict[str, Any]] = field(default_factory=list)
+    
+    # Task scheduling
+    last_task_runs: Dict[str, datetime] = field(default_factory=dict)
+    task_intervals: Dict[str, float] = field(default_factory=lambda: {
+        "memory_reflection": 300,  # 5 minutes
+        "relationship_update": 600,  # 10 minutes
+        "scenario_check": 60,  # 1 minute
+        "performance_check": 300,  # 5 minutes
+        "task_generation": 300,  # 5 minutes - Added missing entry
+        "learning_save": 900,  # 15 minutes - Added missing entry
+        "performance_save": 600  # 10 minutes - Added missing entry
+    })
+    
+    # Private attributes for internal state management
+    _db_connection: Optional[Any] = field(init=False, default=None)
+    _strategy_cache: Optional[Tuple[float, Any]] = field(init=False, default=None)
+    _strategy_cache_ttl: float = field(init=False, default=300.0)  # 5 minute cache
+    _cpu_usage_cache: Optional[float] = field(init=False, default=None)
+    _cpu_usage_last_update: float = field(init=False, default=0.0)
+    _cpu_usage_update_interval: float = field(init=False, default=10.0)  # Update every 10 seconds
+    
+    async def initialize(self):
+        """Initialize all systems"""
+        self.memory_system = await get_memory_nyx_bridge(self.user_id, self.conversation_id)
+        self.user_model = await UserModelManager.get_instance(self.user_id, self.conversation_id)
+        self.task_integration = await NyxTaskIntegration.get_instance(self.user_id, self.conversation_id)
+        self.response_filter = ResponseFilter(self.user_id, self.conversation_id)
+        self.performance_monitor = PerformanceMonitor.get_instance(self.user_id, self.conversation_id)
+        
+        # Initialize emotional core if available
+        try:
+            self.emotional_core = EmotionalCore()
+        except Exception as e:
+            logger.warning(f"EmotionalCore not available: {e}", exc_info=True)
+        
+        # Initialize belief system if available
+        try:
+            from nyx.core.beliefs.belief_system import BeliefSystem
+            self.belief_system = BeliefSystem(self.user_id, self.conversation_id)
+        except Exception as e:
+            logger.warning(f"BeliefSystem not available: {e}", exc_info=True)
+        
+        # Initialize CPU usage monitoring
+        try:
+            # first call populates the internal psutil sample window
+            self._cpu_usage_cache = safe_psutil('cpu_percent', interval=0.1, default=0.0)
+        except Exception:
+            self._cpu_usage_cache = 0.0
+        
+        # Load existing state from database
+        await self._load_state()
+    
+    async def get_db_connection(self):
+        """Get shared database connection for this context"""
+        if not self._db_connection:
+            # Get the connection manager
+            context_manager = get_db_connection_context()
+            self._db_connection = await context_manager.__aenter__()
+        return self._db_connection
+    
+    async def close_db_connection(self):
+        """Close shared database connection"""
+        if self._db_connection:
+            # Use suppress to handle cases where close() might not exist or already closed
+            with suppress(AttributeError, Exception):
+                # If using a raw connection, close it
+                if hasattr(self._db_connection, 'close'):
+                    await self._db_connection.close()
+                # If it's a context manager, exit it properly
+                elif hasattr(self._db_connection, '__aexit__'):
+                    await self._db_connection.__aexit__(None, None, None)
+            self._db_connection = None
+    
+    async def get_active_strategies_cached(self):
+        """Get active strategies with caching"""
+        current_time = time.time()
+        
+        # Check cache
+        if self._strategy_cache:
+            cache_time, strategies = self._strategy_cache
+            if current_time - cache_time < self._strategy_cache_ttl:
+                return strategies
+        
+        # Fetch new strategies
+        conn = await self.get_db_connection()
+        strategies = await get_active_strategies(conn)
+        
+        # Update cache
+        self._strategy_cache = (current_time, strategies)
+        return strategies
+    
+    async def _load_state(self):
+        """Load existing state from database"""
+        conn = await self.get_db_connection()
+        
+        # Load emotional state
+        row = await conn.fetchrow("""
+            SELECT emotional_state FROM NyxAgentState
+            WHERE user_id = $1 AND conversation_id = $2
+        """, self.user_id, self.conversation_id)
+        
+        if row and row["emotional_state"]:
+            state = json.loads(row["emotional_state"])
+            self.emotional_state.update(state)
+        
+        # Load scenario state if exists
+        try:
+            scenario_row = await conn.fetchrow("""
+                SELECT state_data FROM scenario_states
+                WHERE user_id = $1 AND conversation_id = $2
+                ORDER BY created_at DESC LIMIT 1
+            """, self.user_id, self.conversation_id)
+            
+            if scenario_row and scenario_row["state_data"]:
+                self.scenario_state = json.loads(scenario_row["state_data"])
+        except:
+            # Table might not exist yet
+            pass
+    
+    def update_performance(self, metric: str, value: Any):
+        """Update performance metrics"""
+        if metric in self.performance_metrics:
+            if isinstance(self.performance_metrics[metric], list):
+                self.performance_metrics[metric].append(value)
+                # Keep only last 100 entries
+                if len(self.performance_metrics[metric]) > 100:
+                    self.performance_metrics[metric] = self.performance_metrics[metric][-100:]
+            else:
+                self.performance_metrics[metric] = value
+    
+    def should_run_task(self, task_id: str) -> bool:
+        """Check if enough time has passed to run task again"""
+        if task_id not in self.last_task_runs:
+            return True
+        
+        time_since_run = (datetime.now() - self.last_task_runs[task_id]).total_seconds()
+        return time_since_run >= self.task_intervals.get(task_id, 300)
+    
+    def record_task_run(self, task_id: str):
+        """Record that a task has been run"""
+        self.last_task_runs[task_id] = datetime.now()
+    
+    def log_error(self, error: Exception, context: Dict[str, Any] = None):
+        """Log an error with context"""
+        error_entry = {
+            "timestamp": time.time(),
+            "error": str(error),
+            "type": type(error).__name__,
+            "context": context or {}
+        }
+        self.error_log.append(error_entry)
+        
+        # Update error metrics
+        self.performance_metrics["error_rates"]["total"] += 1
+        
+        # Keep error log bounded - more aggressive pruning on errors
+        max_errors = 100
+        if len(self.error_log) > max_errors * 2:
+            # Keep only most recent when we hit double the limit
+            self.error_log = self.error_log[-max_errors:]
+    
+    async def learn_from_interaction(self, action: str, outcome: str, success: bool):
+        """Learn from an interaction outcome"""
+        # Update patterns
+        pattern_key = f"{action}_{outcome}"
+        if pattern_key not in self.learned_patterns:
+            self.learned_patterns[pattern_key] = {
+                "occurrences": 0,
+                "successes": 0,
+                "last_seen": time.time()
+            }
+        
+        pattern = self.learned_patterns[pattern_key]
+        pattern["occurrences"] += 1
+        if success:
+            pattern["successes"] += 1
+        pattern["last_seen"] = time.time()
+        pattern["success_rate"] = pattern["successes"] / pattern["occurrences"]
+        
+        # Update adaptation history
+        self.adaptation_history.append({
+            "timestamp": time.time(),
+            "action": action,
+            "outcome": outcome,
+            "success": success
+        })
+        
+        # Keep adaptation history bounded - more aggressive on failures
+        max_history = 100 if success else 50
+        if len(self.adaptation_history) > max_history * 2:
+            self.adaptation_history = self.adaptation_history[-max_history:]
+        
+        # Prune old patterns (older than 24 hours)
+        current_time = time.time()
+        self.learned_patterns = {
+            k: v for k, v in self.learned_patterns.items()
+            if current_time - v.get("last_seen", 0) < 86400
+        }
+        
+        # Update learning metrics
+        self._update_learning_metrics()
+    
+    def should_generate_task(self) -> bool:
+        """Determine if we should generate a creative task"""
+        context = self.current_context
+        
+        if not context.get("active_npc_id"):
+            return False
+            
+        scenario_type = context.get("scenario_type", "").lower()
+        task_scenarios = ["training", "challenge", "service", "discipline"]
+        if not any(t in scenario_type for t in task_scenarios):
+            return False
+            
+        npc_relationship = context.get("npc_relationship_level", 0)
+        if npc_relationship < 30:
+            return False
+            
+        # Check task timing
+        if not self.should_run_task("task_generation"):
+            return False
+            
+        return True
+    
+    def should_recommend_activities(self) -> bool:
+        """Determine if we should recommend activities"""
+        context = self.current_context
+        
+        if not context.get("present_npc_ids"):
+            return False
+            
+        scenario_type = context.get("scenario_type", "").lower()
+        if "task" in scenario_type or "challenge" in scenario_type:
+            return False
+            
+        user_input = context.get("user_input", "").lower()
+        suggestion_triggers = ["what should", "what can", "what to do", "suggestions", "ideas"]
+        if any(trigger in user_input for trigger in suggestion_triggers):
+            return True
+            
+        if context.get("is_scene_transition") or context.get("is_activity_completed"):
+            return True
+            
+        return False
+    
+    async def handle_high_memory_usage(self):
+        """Handle high memory usage by cleaning up"""
+        # Trim memory system cache if available
+        if hasattr(self.memory_system, 'trim_cache'):
+            await self.memory_system.trim_cache()
+        
+        # Clear old patterns
+        self.learned_patterns = dict(list(self.learned_patterns.items())[-50:])
+        
+        # Clear old history
+        self.adaptation_history = self.adaptation_history[-100:]
+        self.error_log = self.error_log[-50:]
+        
+        # Clear performance metrics history
+        if "response_times" in self.performance_metrics:
+            self.performance_metrics["response_times"] = self.performance_metrics["response_times"][-50:]
+        
+        # Force garbage collection
+        import gc
+        gc.collect()
+        
+        logger.info("Performed memory cleanup")
+    
+    def get_cpu_usage(self) -> float:
+        """Get CPU usage with caching - Fixed to properly refresh"""
+        try:
+            current_time = time.time()
+            # Check if we need to update the cache
+            if (self._cpu_usage_cache is None or 
+                current_time - self._cpu_usage_last_update >= self._cpu_usage_update_interval):
+                # Update the cache using safe wrapper
+                new_value = safe_psutil('cpu_percent', interval=0.1, default=0.0)
+                if new_value is not None:
+                    self._cpu_usage_cache = new_value
+                    self._cpu_usage_last_update = current_time
+            
+            return self._cpu_usage_cache or 0.0
+        except:
+            return 0.0
+    
+    def _update_learning_metrics(self):
+        """Update learning-related metrics"""
+        if self.learned_patterns:
+            successful_patterns = sum(1 for p in self.learned_patterns.values() 
+                                    if p.get("success_rate", 0) > 0.6)
+            self.learning_metrics["pattern_recognition_rate"] = (
+                successful_patterns / len(self.learned_patterns)
+            )
+        
+        if self.adaptation_history:
+            recent = self.adaptation_history[-100:]
+            successes = sum(1 for a in recent if a["success"])
+            self.learning_metrics["adaptation_success_rate"] = successes / len(recent)
+
+# ===== Helper Functions =====
+
+def safe_psutil(func_name: str, *args, default=None, **kwargs):
+    """Safe wrapper for psutil calls that may fail on certain platforms"""
+    try:
+        import psutil
+        func = getattr(psutil, func_name)
+        return func(*args, **kwargs)
+    except (AttributeError, OSError, RuntimeError) as e:
+        logger.debug(f"psutil.{func_name} failed (platform compatibility): {e}")
+        return default
+
+def safe_process_metric(process, metric_name: str, default=0):
+    """Safe wrapper for process-specific metrics"""
+    try:
+        metric_func = getattr(process, metric_name)
+        result = metric_func()
+        # Handle different return types
+        if hasattr(result, 'rss'):  # memory_info returns a named tuple
+            return result.rss
+        return result
+    except (AttributeError, OSError, RuntimeError) as e:
+        logger.debug(f"Process metric {metric_name} failed: {e}")
+        return default
+
+def safe_process() -> Optional["psutil.Process"]:          # <‑‑ NEW
+    """Return an instantiated psutil.Process() or None (platform‑safe)."""
+    proc_cls = safe_psutil('Process')
+    if proc_cls is None:
+        return None
+    try:
+        return proc_cls()
+    except Exception as exc:  # covers AccessDenied, ZombieProcess, etc.
+        logger.debug(f"psutil.Process() failed: {exc}")
+        return None
+
 # ===== Function Tools =====
 
-async def retrieve_memories_impl(ctx, query: str, limit: int = 5) -> str:
+@function_tool
+async def retrieve_memories(ctx: RunContextWrapper[NyxContext], query: str, limit: int = 5) -> str:
     """
     Retrieve relevant memories for Nyx.
     
@@ -60,11 +498,8 @@ async def retrieve_memories_impl(ctx, query: str, limit: int = 5) -> str:
         query: Search query to find memories
         limit: Maximum number of memories to return
     """
-    memory_system = ctx.memory_system
-    user_id = ctx.user_id
-    conversation_id = ctx.conversation_id
+    memory_system = ctx.context.memory_system
     
-    # Use recall instead of retrieve_memories
     result = await memory_system.recall(
         entity_type="integrated",
         entity_id=0,
@@ -74,7 +509,6 @@ async def retrieve_memories_impl(ctx, query: str, limit: int = 5) -> str:
     
     memories = result.get("memories", [])
     
-    # Format memories for return
     formatted_memories = []
     for memory in memories:
         relevance = memory.get("relevance", 0.5)
@@ -85,15 +519,10 @@ async def retrieve_memories_impl(ctx, query: str, limit: int = 5) -> str:
         
         formatted_memories.append(f"I {confidence_marker}: {memory['text']}")
     
-    return "\n".join(formatted_memories)
+    return "\n".join(formatted_memories) if formatted_memories else "No relevant memories found."
 
-def enhance_context_with_memories(context, memories):
-    """Add memories to context for better decision making."""
-    enhanced_context = context.copy()
-    enhanced_context['relevant_memories'] = memories
-    return enhanced_context
-
-async def add_memory_impl(ctx, memory_text: str, memory_type: str = "observation", significance: int = 5) -> str:
+@function_tool
+async def add_memory(ctx: RunContextWrapper[NyxContext], memory_text: str, memory_type: str = "observation", significance: int = 5) -> str:
     """
     Add a new memory for Nyx.
     
@@ -102,7 +531,7 @@ async def add_memory_impl(ctx, memory_text: str, memory_type: str = "observation
         memory_type: Type of memory (observation, reflection, abstraction)
         significance: Importance of memory (1-10)
     """
-    memory_system = ctx.memory_system
+    memory_system = ctx.context.memory_system
     
     memory_id = await memory_system.add_memory(
         memory_text=memory_text,
@@ -112,36 +541,35 @@ async def add_memory_impl(ctx, memory_text: str, memory_type: str = "observation
         tags=["agent_generated"],
         metadata={
             "timestamp": datetime.now().isoformat(),
-            "auto_generated": True
+            "auto_generated": True,
+            "emotional_state": ctx.context.emotional_state
         }
     )
     
-    return f"Memory added with ID: {memory_id}"
-    
-
-async def get_scene_guidance(self, context: Dict[str, Any]) -> Dict[str, Any]:
-    """Generate guidance for scene based on context."""
-    prompt = f"Generate guidance for a scene with the following context: {json.dumps(context)}"
-    
-    # Use existing agent to process prompt
-    response = await self.process_input(prompt, context)
-    
-    # Extract NPC guidance or create default
-    npc_guidance = response.get("npc_guidance", {})
-    if not npc_guidance:
-        npc_guidance = {
-            "responding_npcs": [],
-            "tone_guidance": {},
-            "content_guidance": {},
-            "emotion_guidance": {},
-            "conflict_guidance": {},
-            "nyx_expectations": {}
-        }
-    
-    return npc_guidance
+    return f"Memory stored successfully (ID: {memory_id})"
 
 @function_tool
-async def detect_user_revelations_impl(ctx, user_message: str) -> str:
+async def get_user_model_guidance(ctx: RunContextWrapper[NyxContext]) -> str:
+    """Get guidance for how Nyx should respond based on the user model."""
+    user_model_manager = ctx.context.user_model
+    guidance = await user_model_manager.get_response_guidance()
+    
+    top_kinks = guidance.get("top_kinks", [])
+    kink_str = ", ".join([f"{k} (level {l})" for k, l in top_kinks]) if top_kinks else "None identified"
+    
+    behavior_patterns = guidance.get("behavior_patterns", {})
+    pattern_str = ", ".join([f"{k}: {v}" for k, v in behavior_patterns.items()]) if behavior_patterns else "None identified"
+    
+    suggested_intensity = guidance.get("suggested_intensity", 0.5)
+    
+    return f"""User Guidance:
+- Top interests: {kink_str}
+- Behavior patterns: {pattern_str}
+- Suggested intensity: {suggested_intensity:.1f}/1.0
+- Reflections: {', '.join(guidance.get('reflections', [])) if guidance.get('reflections') else 'None'}"""
+
+@function_tool
+async def detect_user_revelations(ctx: RunContextWrapper[NyxContext], user_message: str) -> str:
     """
     Detect if user is revealing new preferences or patterns.
     
@@ -151,7 +579,6 @@ async def detect_user_revelations_impl(ctx, user_message: str) -> str:
     lower_message = user_message.lower()
     revelations = []
     
-    # Check for explicit kink mentions (migrated from nyx_decision_engine.py)
     kink_keywords = {
         "ass": ["ass", "booty", "behind", "rear"],
         "feet": ["feet", "foot", "toes"],
@@ -166,7 +593,6 @@ async def detect_user_revelations_impl(ctx, user_message: str) -> str:
     
     for kink, keywords in kink_keywords.items():
         if any(keyword in lower_message for keyword in keywords):
-            # Check sentiment (simplified)
             sentiment = "neutral"
             pos_words = ["like", "love", "enjoy", "good", "great", "nice", "yes", "please"]
             neg_words = ["don't", "hate", "dislike", "bad", "worse", "no", "never"]
@@ -191,7 +617,6 @@ async def detect_user_revelations_impl(ctx, user_message: str) -> str:
                     "source": "explicit_mention"
                 })
     
-    # Check for behavior patterns (migrated from nyx_decision_engine.py)
     if "don't tell me what to do" in lower_message or "i won't" in lower_message:
         revelations.append({
             "type": "behavior_pattern",
@@ -208,47 +633,14 @@ async def detect_user_revelations_impl(ctx, user_message: str) -> str:
             "source": "explicit_statement"
         })
     
-    return json.dumps(revelations)
-
-async def enhance_context_with_strategies_impl(context: Dict[str, Any], conn) -> Dict[str, Any]:
-    """
-    Enhance context with active strategies
-    """
-    strategies = await get_active_strategies(conn)
-    context["nyx2_strategies"] = strategies
-    return context
-
-
-
-async def get_user_model_guidance_impl(ctx) -> str:
-    """
-    Get guidance for how Nyx should respond based on the user model.
-    """
-    user_model_manager = ctx.user_model
-    guidance = await user_model_manager.get_response_guidance()
-    
-    # Format guidance for return
-    top_kinks = guidance.get("top_kinks", [])
-    kink_str = ", ".join([f"{k} (level {l})" for k, l in top_kinks])
-    
-    behavior_patterns = guidance.get("behavior_patterns", {})
-    pattern_str = ", ".join([f"{k}: {v}" for k, v in behavior_patterns.items()])
-    
-    suggested_intensity = guidance.get("suggested_intensity", 0.5)
-    
-    return f"""
-User Guidance:
-- Top interests: {kink_str}
-- Behavior patterns: {pattern_str}
-- Suggested intensity: {suggested_intensity:.1f}/1.0
-
-Reflections:
-{guidance.get('reflections', [])}
-"""
+    return json.dumps({
+        "revelations": revelations,
+        "has_revelations": len(revelations) > 0
+    }, ensure_ascii=False)
 
 @function_tool
-async def generate_image_from_scene_impl(
-    ctx, 
+async def generate_image_from_scene(
+    ctx: RunContextWrapper[NyxContext], 
     scene_description: str, 
     characters: List[str], 
     style: str = "realistic"
@@ -261,7 +653,6 @@ async def generate_image_from_scene_impl(
         characters: List of characters in the scene
         style: Style for the image
     """
-    # Connect to your existing image generation logic
     from routes.ai_image_generator import generate_roleplay_image_from_gpt
     
     image_data = {
@@ -281,18 +672,644 @@ async def generate_image_from_scene_impl(
     else:
         return "Failed to generate image"
 
+@function_tool
+async def calculate_and_update_emotional_state(ctx: RunContextWrapper[NyxContext], context: Dict[str, Any]) -> str:
+    """
+    Calculate emotional impact and immediately update the emotional state.
+    This is a composite tool that both calculates AND persists the changes.
+    
+    Args:
+        context: Current interaction context
+    """
+    # First calculate the new state
+    result = await calculate_emotional_impact(ctx, context)
+    emotional_data = json.loads(result)
+    
+    # Immediately update the context with the new state
+    ctx.context.emotional_state.update({
+        "valence": emotional_data["valence"],
+        "arousal": emotional_data["arousal"],
+        "dominance": emotional_data["dominance"]
+    })
+    
+    # Return the result with confirmation of update
+    emotional_data["state_updated"] = True
+    return json.dumps(emotional_data, ensure_ascii=False)
 
-# ===== Guardrail Functions =====
+@function_tool
+async def calculate_emotional_impact(ctx: RunContextWrapper[NyxContext], context: Dict[str, Any]) -> str:
+    """
+    Calculate emotional impact of current context using the emotional core system.
+    Returns new emotional state without mutating the context.
+    NOTE: Use calculate_and_update_emotional_state if you want to persist changes.
+    
+    Args:
+        context: Current interaction context
+    """
+    current_state = ctx.context.emotional_state.copy()  # Work with a copy
+    
+    # Calculate emotional changes based on context
+    valence_change = 0.0
+    arousal_change = 0.0
+    dominance_change = 0.0
+    
+    # Analyze context for emotional triggers
+    if "conflict" in str(context).lower():
+        arousal_change += 0.2
+        valence_change -= 0.1
+    if "submission" in str(context).lower():
+        dominance_change += 0.1
+        arousal_change += 0.1
+    if "praise" in str(context).lower() or "good" in str(context).lower():
+        valence_change += 0.2
+    if "resistance" in str(context).lower():
+        arousal_change += 0.15
+        dominance_change -= 0.05
+    
+    # Get memory emotional impact
+    memory_impact = await _get_memory_emotional_impact(ctx, context)
+    valence_change += memory_impact["valence"] * 0.3
+    arousal_change += memory_impact["arousal"] * 0.3
+    dominance_change += memory_impact["dominance"] * 0.3
+    
+    # Use EmotionalCore if available for more nuanced analysis
+    if ctx.context.emotional_core:
+        try:
+            core_analysis = ctx.context.emotional_core.analyze(str(context))
+            valence_change += core_analysis.get("valence_delta", 0) * 0.5
+            arousal_change += core_analysis.get("arousal_delta", 0) * 0.5
+        except:
+            pass
+    
+    # Apply changes with bounds
+    new_valence = max(-1, min(1, current_state["valence"] + valence_change))
+    new_arousal = max(0, min(1, current_state["arousal"] + arousal_change))
+    new_dominance = max(0, min(1, current_state["dominance"] + dominance_change))
+    
+    # Determine primary emotion based on VAD model
+    primary_emotion = "neutral"
+    if new_valence > 0.5 and new_arousal > 0.5:
+        primary_emotion = "excited"
+    elif new_valence > 0.5 and new_arousal < 0.5:
+        primary_emotion = "content"
+    elif new_valence < -0.5 and new_arousal > 0.5:
+        primary_emotion = "frustrated"
+    elif new_valence < -0.5 and new_arousal < 0.5:
+        primary_emotion = "disappointed"
+    elif new_dominance > 0.8:
+        primary_emotion = "commanding"
+    
+    # Return new state without mutating
+    return json.dumps({
+        "valence": new_valence,
+        "arousal": new_arousal,
+        "dominance": new_dominance,
+        "primary_emotion": primary_emotion,
+        "changes": {
+            "valence_change": valence_change,
+            "arousal_change": arousal_change,
+            "dominance_change": dominance_change
+        }
+    }, ensure_ascii=False)
 
-async def content_moderation_guardrail(ctx, agent, input_data):
+async def _get_memory_emotional_impact(ctx: RunContextWrapper[NyxContext], context: Dict[str, Any]) -> Dict[str, float]:
+    """Get emotional impact from relevant memories"""
+    impact = {"valence": 0.0, "arousal": 0.0, "dominance": 0.0}
+    
+    try:
+        # Get relevant memories
+        memories_str = await retrieve_memories(ctx, str(context), limit=5)
+        if not memories_str or memories_str == "No relevant memories found.":
+            return impact
+        
+        # Simple analysis of memory content
+        memories_lower = memories_str.lower()
+        
+        # Positive memories
+        if any(word in memories_lower for word in ["happy", "joy", "success", "pleasure"]):
+            impact["valence"] += 0.2
+        
+        # Negative memories
+        if any(word in memories_lower for word in ["sad", "fail", "pain", "frustrate"]):
+            impact["valence"] -= 0.2
+        
+        # Intense memories
+        if any(word in memories_lower for word in ["intense", "extreme", "overwhelming"]):
+            impact["arousal"] += 0.2
+        
+        # Control-related memories
+        if any(word in memories_lower for word in ["control", "command", "dominate"]):
+            impact["dominance"] += 0.1
+        
+    except Exception as e:
+        logger.error(f"Error getting memory emotional impact: {e}")
+    
+    return impact
+
+@function_tool
+async def update_relationship_state(
+    ctx: RunContextWrapper[NyxContext],
+    entity_id: str,
+    trust_change: float = 0.0,
+    power_change: float = 0.0,
+    bond_change: float = 0.0
+) -> str:
+    """
+    Update relationship state with an entity.
+    
+    Args:
+        entity_id: ID of the entity (NPC or user)
+        trust_change: Change in trust level
+        power_change: Change in power dynamic
+        bond_change: Change in emotional bond
+    """
+    relationships = ctx.context.relationship_states
+    
+    if entity_id not in relationships:
+        relationships[entity_id] = {
+            "trust": 0.5,
+            "power_dynamic": 0.5,
+            "emotional_bond": 0.3,
+            "interaction_count": 0,
+            "last_interaction": time.time()
+        }
+    
+    rel = relationships[entity_id]
+    rel["trust"] = max(0, min(1, rel["trust"] + trust_change))
+    rel["power_dynamic"] = max(0, min(1, rel["power_dynamic"] + power_change))
+    rel["emotional_bond"] = max(0, min(1, rel["emotional_bond"] + bond_change))
+    rel["interaction_count"] += 1
+    rel["last_interaction"] = time.time()
+    
+    # Determine relationship type
+    if rel["trust"] > 0.8 and rel["emotional_bond"] > 0.7:
+        rel["type"] = "intimate"
+    elif rel["trust"] > 0.6:
+        rel["type"] = "friendly"
+    elif rel["trust"] < 0.3:
+        rel["type"] = "hostile"
+    elif rel["power_dynamic"] > 0.7:
+        rel["type"] = "dominant"
+    elif rel["power_dynamic"] < 0.3:
+        rel["type"] = "submissive"
+    else:
+        rel["type"] = "neutral"
+    
+    return json.dumps({
+        "entity_id": entity_id,
+        "relationship": rel,
+        "changes": {
+            "trust": trust_change,
+            "power": power_change,
+            "bond": bond_change
+        }
+    }, ensure_ascii=False)
+
+@function_tool
+async def check_performance_metrics(ctx: RunContextWrapper[NyxContext]) -> str:
+    """Check current performance metrics and apply remediation if needed."""
+    metrics = ctx.context.performance_metrics
+    
+    # Update current metrics using safe wrappers
+    try:
+        # Try to get process handle safely
+        process = safe_process()                     # replaces raw safe_psutil('Process')
+        if process:
+            mem_bytes = safe_process_metric(process, 'memory_info')
+            metrics["memory_usage"] = mem_bytes / 1024 / 1024 if mem_bytes else 0
+        else:
+            metrics["memory_usage"] = 0
+            
+        metrics["cpu_usage"] = ctx.context.get_cpu_usage()
+    except Exception as e:
+        logger.debug(f"Error getting process metrics: {e}")
+        metrics["memory_usage"] = 0
+        metrics["cpu_usage"] = 0
+    
+    suggestions = []
+    actions_taken = []
+    
+    # Check response times
+    if metrics["response_times"]:
+        avg_response_time = sum(metrics["response_times"]) / len(metrics["response_times"])
+        if avg_response_time > 2.0:  # 2 seconds
+            suggestions.append("Response times are high - consider caching frequent queries")
+    
+    # Check memory usage and apply remediation
+    if metrics["memory_usage"] > 500:  # 500MB
+        suggestions.append("High memory usage detected - triggering cleanup")
+        await ctx.context.handle_high_memory_usage()
+        actions_taken.append("memory_cleanup")
+    
+    # Check success rate
+    if metrics["total_actions"] > 0:
+        success_rate = metrics["successful_actions"] / metrics["total_actions"]
+        if success_rate < 0.8:
+            suggestions.append("Success rate below 80% - review error patterns")
+    
+    # Check error rate and clear if too high
+    if metrics["error_rates"]["total"] > 100:
+        suggestions.append("High error count - clearing old errors")
+        ctx.context.error_log = ctx.context.error_log[-50:]
+        actions_taken.append("error_log_cleanup")
+    
+    return json.dumps({
+        "metrics": {
+            "memory_mb": metrics["memory_usage"],
+            "cpu_percent": metrics["cpu_usage"],
+            "avg_response_time": sum(metrics["response_times"]) / len(metrics["response_times"]) if metrics["response_times"] else 0,
+            "success_rate": metrics["successful_actions"] / metrics["total_actions"] if metrics["total_actions"] > 0 else 1.0
+        },
+        "suggestions": suggestions,
+        "actions_taken": actions_taken,
+        "health": "good" if not suggestions else "needs_attention"
+    }, ensure_ascii=False)
+
+@function_tool
+async def get_activity_recommendations(
+    ctx: RunContextWrapper[NyxContext],
+    scenario_type: str,
+    npc_ids: List[str]
+) -> str:
+    """
+    Get activity recommendations based on current context.
+    
+    Args:
+        scenario_type: Type of current scenario
+        npc_ids: List of present NPC IDs
+    """
+    activities = []
+    
+    # Copy relationship states to avoid mutation during iteration
+    relationship_states_copy = dict(ctx.context.relationship_states)
+    
+    # Training activities
+    if "training" in scenario_type.lower() or any(rel.get("type") == "submissive" 
+        for rel in relationship_states_copy.values()):
+        activities.extend([
+            {
+                "name": "Obedience Training",
+                "description": "Test and improve submission through structured exercises",
+                "requirements": ["trust > 0.4", "submission tendency"],
+                "duration": "15-30 minutes",
+                "intensity": "medium"
+            },
+            {
+                "name": "Position Practice",
+                "description": "Learn and perfect submissive positions",
+                "requirements": ["trust > 0.5"],
+                "duration": "10-20 minutes",
+                "intensity": "low-medium"
+            }
+        ])
+    
+    # Social activities
+    if npc_ids and len(npc_ids) > 0:
+        activities.append({
+            "name": "Group Dynamics Exercise",
+            "description": "Explore power dynamics with multiple participants",
+            "requirements": ["multiple NPCs present"],
+            "duration": "20-40 minutes",
+            "intensity": "variable"
+        })
+    
+    # Intimate activities
+    for entity_id, rel in relationship_states_copy.items():
+        if rel.get("type") == "intimate" and rel.get("trust", 0) > 0.7:
+            activities.append({
+                "name": "Intimate Scene",
+                "description": f"Deepen connection with trusted partner",
+                "requirements": ["high trust", "intimate relationship"],
+                "duration": "30-60 minutes",
+                "intensity": "high",
+                "partner_id": entity_id
+            })
+            break
+    
+    # Default activities
+    activities.extend([
+        {
+            "name": "Exploration",
+            "description": "Discover new areas or items",
+            "requirements": [],
+            "duration": "10-30 minutes",
+            "intensity": "low"
+        },
+        {
+            "name": "Conversation",
+            "description": "Engage in meaningful dialogue",
+            "requirements": [],
+            "duration": "5-15 minutes",
+            "intensity": "low"
+        }
+    ])
+    
+    return json.dumps({
+        "recommendations": activities[:5],  # Top 5 activities
+        "total_available": len(activities)
+    }, ensure_ascii=False)
+
+@function_tool
+async def manage_beliefs(ctx: RunContextWrapper[NyxContext], action: str, belief_data: Dict[str, Any]) -> str:
+    """
+    Manage belief system operations.
+    
+    Args:
+        action: Action to perform (get, update, query)
+        belief_data: Data for the belief operation
+    """
+    if not ctx.context.belief_system:
+        return json.dumps({"error": "Belief system not available", "result": {}}, ensure_ascii=False)
+    
+    try:
+        if action == "get":
+            entity_id = belief_data.get("entity_id", "nyx")
+            beliefs = await ctx.context.belief_system.get_beliefs(entity_id)
+            return json.dumps({"result": beliefs}, ensure_ascii=False)
+        
+        elif action == "update":
+            entity_id = belief_data.get("entity_id", "nyx")
+            belief_type = belief_data.get("type", "general")
+            content = belief_data.get("content", {})
+            await ctx.context.belief_system.update_belief(entity_id, belief_type, content)
+            return json.dumps({"result": "Belief updated successfully"}, ensure_ascii=False)
+        
+        elif action == "query":
+            query = belief_data.get("query", "")
+            results = await ctx.context.belief_system.query_beliefs(query)
+            return json.dumps({"result": results}, ensure_ascii=False)
+        
+        else:
+            return json.dumps({"error": f"Unknown action: {action}", "result": {}}, ensure_ascii=False)
+            
+    except Exception as e:
+        logger.error(f"Error managing beliefs: {e}", exc_info=True)
+        return json.dumps({"error": str(e), "result": {}}, ensure_ascii=False)
+
+@function_tool
+async def score_decision_options(
+    ctx: RunContextWrapper[NyxContext],
+    options: List[Dict[str, Any]],
+    decision_context: Dict[str, Any]
+) -> str:
+    """
+    Score decision options using advanced decision engine logic.
+    
+    Args:
+        options: List of possible decisions/actions
+        decision_context: Context for making the decision
+    """
+    scored_options = []
+    
+    for option in options:
+        # Base score from context relevance
+        context_score = _calculate_context_relevance(option, decision_context)
+        
+        # Emotional alignment score
+        emotional_score = _calculate_emotional_alignment(option, ctx.context.emotional_state)
+        
+        # Pattern-based score
+        pattern_score = _calculate_pattern_score(option, ctx.context.learned_patterns)
+        
+        # Relationship impact score
+        relationship_score = _calculate_relationship_impact(option, ctx.context.relationship_states)
+        
+        # Calculate weighted final score
+        weights = {
+            "context": 0.3,
+            "emotional": 0.25,
+            "pattern": 0.25,
+            "relationship": 0.2
+        }
+        
+        final_score = (
+            context_score * weights["context"] +
+            emotional_score * weights["emotional"] +
+            pattern_score * weights["pattern"] +
+            relationship_score * weights["relationship"]
+        )
+        
+        scored_options.append({
+            "option": option,
+            "score": final_score,
+            "components": {
+                "context": context_score,
+                "emotional": emotional_score,
+                "pattern": pattern_score,
+                "relationship": relationship_score
+            }
+        })
+    
+    # Sort by score
+    scored_options.sort(key=lambda x: x["score"], reverse=True)
+    
+    # If all scores are too low, include a fallback
+    if all(opt["score"] < 0.3 for opt in scored_options):
+        fallback = _get_fallback_decision(options)
+        scored_options.insert(0, {
+            "option": fallback,
+            "score": 0.4,
+            "components": {
+                "context": 0.4,
+                "emotional": 0.4,
+                "pattern": 0.4,
+                "relationship": 0.4
+            },
+            "is_fallback": True
+        })
+    
+    return json.dumps({
+        "scored_options": scored_options,
+        "best_option": scored_options[0]["option"],
+        "confidence": scored_options[0]["score"]
+    }, ensure_ascii=False)
+
+def _calculate_context_relevance(option: Dict[str, Any], context: Dict[str, Any]) -> float:
+    """Calculate how relevant an option is to context"""
+    score = 0.5  # Base score
+    
+    # Check keyword matches
+    option_keywords = set(str(option).lower().split())
+    context_keywords = set(str(context).lower().split())
+    
+    overlap = len(option_keywords.intersection(context_keywords))
+    if overlap > 0:
+        score += min(0.3, overlap * 0.1)
+    
+    # Check for scenario type match
+    if context.get("scenario_type") and context["scenario_type"] in str(option):
+        score += 0.2
+    
+    return min(1.0, score)
+
+def _calculate_emotional_alignment(option: Dict[str, Any], emotional_state: Dict[str, float]) -> float:
+    """Calculate emotional alignment score"""
+    # High dominance favors assertive options
+    if "command" in str(option).lower() or "control" in str(option).lower():
+        return emotional_state.get("dominance", 0.5)
+    
+    # High arousal favors intense options
+    if "intense" in str(option).lower() or "extreme" in str(option).lower():
+        return emotional_state.get("arousal", 0.5)
+    
+    # Positive valence favors rewarding options
+    if "reward" in str(option).lower() or "praise" in str(option).lower():
+        return (emotional_state.get("valence", 0) + 1) / 2
+    
+    return 0.5
+
+def _calculate_pattern_score(option: Dict[str, Any], learned_patterns: Dict[str, Any]) -> float:
+    """Calculate score based on learned patterns"""
+    if not learned_patterns:
+        return 0.5
+    
+    # Find relevant patterns
+    option_str = str(option).lower()
+    relevant_scores = []
+    
+    # Create a copy to avoid mutation during iteration
+    patterns_copy = dict(learned_patterns)
+    for pattern_key, pattern_data in patterns_copy.items():
+        if any(keyword in option_str for keyword in pattern_key.split("_")):
+            success_rate = pattern_data.get("success_rate", 0.5)
+            recency_factor = 1.0 / (1 + (time.time() - pattern_data.get("last_seen", 0)) / 3600)
+            relevant_scores.append(success_rate * recency_factor)
+    
+    return sum(relevant_scores) / len(relevant_scores) if relevant_scores else 0.5
+
+def _calculate_relationship_impact(option: Dict[str, Any], relationship_states: Dict[str, Dict[str, float]]) -> float:
+    """Calculate relationship impact score"""
+    if not relationship_states:
+        return 0.5
+    
+    # Average trust level affects willingness to take actions
+    avg_trust = sum(rel.get("trust", 0.5) for rel in relationship_states.values()) / len(relationship_states)
+    
+    # Risky options need higher trust
+    if "risk" in str(option).lower() or "challenge" in str(option).lower():
+        return avg_trust
+    
+    # Safe options work with any trust level
+    return 0.5 + (avg_trust * 0.5)
+
+def _get_fallback_decision(options: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Get a safe fallback decision - Enhanced with more keywords"""
+    # Prefer conversation or observation options
+    safe_words = ["talk", "observe", "wait", "consider", "listen", "pause"]  # Added listen and pause
+    for option in options:
+        if any(safe_word in str(option).lower() for safe_word in safe_words):
+            return option
+    
+    # Otherwise return the first option
+    return options[0] if options else {"action": "observe", "description": "Take a moment to assess"}
+
+@function_tool
+async def detect_conflicts_and_instability(
+    ctx: RunContextWrapper[NyxContext],
+    scenario_state: Dict[str, Any]
+) -> str:
+    """
+    Detect conflicts and emotional instability in current scenario.
+    
+    Args:
+        scenario_state: Current scenario state
+    """
+    conflicts = []
+    instabilities = []
+    
+    # Check for relationship conflicts
+    # Create a copy of items to avoid mutation during iteration
+    relationship_items = list(ctx.context.relationship_states.items())
+    for i, (entity1_id, rel1) in enumerate(relationship_items):
+        for entity2_id, rel2 in relationship_items[i+1:]:
+            # Conflicting power dynamics
+            if abs(rel1.get("power_dynamic", 0.5) - rel2.get("power_dynamic", 0.5)) > 0.7:
+                conflicts.append({
+                    "type": "power_conflict",
+                    "entities": [entity1_id, entity2_id],
+                    "severity": abs(rel1["power_dynamic"] - rel2["power_dynamic"]),
+                    "description": "Conflicting power dynamics between entities"
+                })
+            
+            # Low mutual trust
+            if rel1.get("trust", 0.5) < 0.3 and rel2.get("trust", 0.5) < 0.3:
+                conflicts.append({
+                    "type": "trust_conflict",
+                    "entities": [entity1_id, entity2_id],
+                    "severity": 0.7,
+                    "description": "Mutual distrust between entities"
+                })
+    
+    # Check for emotional instability
+    emotional_state = ctx.context.emotional_state
+    
+    # High arousal with negative valence
+    if emotional_state["arousal"] > 0.8 and emotional_state["valence"] < -0.5:
+        instabilities.append({
+            "type": "emotional_volatility",
+            "severity": emotional_state["arousal"],
+            "description": "High arousal with negative emotions",
+            "recommendation": "De-escalation needed"
+        })
+    
+    # Rapid emotional changes
+    if ctx.context.adaptation_history:
+        recent_emotions = [h.get("emotional_state", {}) for h in ctx.context.adaptation_history[-5:]]
+        if recent_emotions:
+            valence_variance = _calculate_variance([e.get("valence", 0) for e in recent_emotions])
+            if valence_variance > 0.5:
+                instabilities.append({
+                    "type": "emotional_instability",
+                    "severity": min(1.0, valence_variance),
+                    "description": "Rapid emotional swings detected",
+                    "recommendation": "Stabilization recommended"
+                })
+    
+    # Scenario-specific conflicts
+    if scenario_state.get("objectives"):
+        blocked_objectives = [obj for obj in scenario_state["objectives"] 
+                             if obj.get("status") == "blocked"]
+        if blocked_objectives:
+            conflicts.append({
+                "type": "objective_conflict",
+                "severity": len(blocked_objectives) / len(scenario_state["objectives"]),
+                "description": f"{len(blocked_objectives)} objectives are blocked",
+                "blocked_objectives": blocked_objectives
+            })
+    
+    # Calculate overall stability (0 conflicts = 1.0 stability, 10+ conflicts = 0.0 stability)
+    total_issues = len(conflicts) + len(instabilities)
+    overall_stability = max(0.0, 1.0 - (total_issues / 10))
+    
+    return json.dumps({
+        "conflicts": conflicts,
+        "instabilities": instabilities,
+        "overall_stability": overall_stability,
+        "stability_note": f"{total_issues} issues detected (0 issues = 1.0 stability, 10+ issues = 0.0 stability)",
+        "requires_intervention": any(c["severity"] > 0.8 for c in conflicts + instabilities)
+    }, ensure_ascii=False)
+
+def _calculate_variance(values: List[float]) -> float:
+    """Calculate variance of values with proper handling of edge cases"""
+    if not values:
+        return 0.0
+    if len(values) == 1:
+        return 0.0  # Single value has no variance
+    mean = sum(values) / len(values)
+    return sum((x - mean) ** 2 for x in values) / len(values)
+
+# ===== Guardrails =====
+
+async def content_moderation_guardrail(ctx: RunContextWrapper[NyxContext], agent: Agent, input_data):
     """Input guardrail for content moderation"""
-    content_moderator = Agent(
+    moderator_agent = Agent(
         name="Content Moderator",
-        instructions="You check if user input is appropriate for the femdom roleplay setting, ensuring it doesn't violate terms of service while allowing consensual adult content. Flag any problematic content and suggest adjustments.",
-        output_type=ContentModeration
+        instructions="Check if user input is appropriate for the femdom roleplay setting. Allow consensual adult content but flag anything that violates terms of service.",
+        output_type=ContentModeration,
+        model="gpt-4.1-nano"
     )
     
-    result = await Runner.run(content_moderator, input_data, context=ctx.context)
+    result = await Runner.run(moderator_agent, input_data, context=ctx.context)
     final_output = result.final_output_as(ContentModeration)
     
     return GuardrailFunctionOutput(
@@ -300,23 +1317,884 @@ async def content_moderation_guardrail(ctx, agent, input_data):
         tripwire_triggered=not final_output.is_appropriate,
     )
 
-# ===== Main Agent Definitions =====
+# ===== Agent Definitions =====
 
-class AgentContext:
-    """Enhanced context for agentic behavior."""
+# Memory Agent
+memory_agent = Agent[NyxContext](
+    name="Memory Manager",
+    instructions="""You are Nyx's memory system. You:
+- Store and retrieve memories about the user and interactions
+- Create insightful reflections based on patterns
+- Track relationship development over time
+- Provide relevant context from past interactions
+Be precise and thorough in memory management.""",
+    tools=[retrieve_memories, add_memory],
+    model="gpt-4.1-nano"
+)
+
+# Analysis Agent
+analysis_agent = Agent[NyxContext](
+    name="User Analysis",
+    instructions="""You analyze user behavior and preferences. You:
+- Detect revelations about user preferences
+- Track behavior patterns and responses
+- Provide guidance on how Nyx should respond
+- Monitor relationship dynamics
+- Maintain awareness of user boundaries
+Be observant and insightful.""",
+    tools=[detect_user_revelations, get_user_model_guidance, update_relationship_state],
+    model="gpt-4.1-nano"
+)
+
+# Emotional Agent - Fixed to update state after calculation
+emotional_agent = Agent[NyxContext](
+    name="Emotional Manager",
+    instructions="""You manage Nyx's complex emotional state using the VAD (Valence-Arousal-Dominance) model. You:
+- Track emotional changes based on interactions
+- Calculate emotional impact of events
+- Ensure emotional consistency and realism
+- Maintain Nyx's dominant yet caring personality
+- Apply the emotional core system for nuanced responses
+- ALWAYS use calculate_and_update_emotional_state to persist changes
+Keep emotions contextual and believable.""",
+    tools=[calculate_and_update_emotional_state, calculate_emotional_impact],
+    model="gpt-4.1-nano"
+)
+
+# Visual Agent
+visual_agent = Agent[NyxContext](
+    name="Visual Manager",
+    handoff_description="Handles visual content generation including scene images",
+    instructions="""You manage visual content creation. You:
+- Determine when visual content enhances the narrative
+- Generate images for key scenes
+- Create appropriate image prompts
+- Consider pacing to avoid overwhelming with images
+- Coordinate with the image generation service
+Be selective and enhance key moments visually.""",
+    tools=[generate_image_from_scene],
+    model="gpt-4.1-nano"
+)
+
+# Activity Agent
+activity_agent = Agent[NyxContext](
+    name="Activity Coordinator",
+    handoff_description="Recommends and manages activities and tasks",
+    instructions="""You coordinate activities and tasks. You:
+- Recommend appropriate activities based on context
+- Consider NPC relationships and preferences
+- Track ongoing tasks and progress
+- Suggest training exercises and challenges
+- Balance difficulty and engagement
+Create engaging, contextual activities.""",
+    tools=[get_activity_recommendations],
+    model="gpt-4.1-nano"
+)
+
+# Performance Agent
+performance_agent = Agent[NyxContext](
+    name="Performance Monitor",
+    handoff_description="Monitors system performance and resource usage",
+    instructions="""You monitor system performance. You:
+- Track response times and resource usage
+- Identify performance bottlenecks
+- Suggest optimizations
+- Monitor success rates
+- Ensure system health
+Keep the system running efficiently.""",
+    tools=[check_performance_metrics],
+    model="gpt-4.1-nano"
+)
+
+# Scenario Agent
+scenario_agent = Agent[NyxContext](
+    name="Scenario Manager",
+    handoff_description="Manages complex scenarios and narrative progression",
+    instructions="""You manage scenario progression and complex narratives. You:
+- Track scenario phases and objectives
+- Coordinate multiple participants
+- Handle conflicts and resolutions
+- Manage narrative pacing
+- Ensure story coherence
+- Determine when time should advance based on narrative needs
+
+When deciding on time_advancement:
+- Set to true when a scene naturally concludes
+- Set to true after major events or milestones
+- Set to false during active dialogue or action
+- Consider pacing and narrative flow
+
+Create engaging, dynamic scenarios.""",
+    output_type=ScenarioDecision,
+    tools=[detect_conflicts_and_instability],
+    model="gpt-4.1-nano"
+)
+
+# Belief Agent
+belief_agent = Agent[NyxContext](
+    name="Belief Manager",
+    handoff_description="Manages Nyx's beliefs and worldview",
+    instructions="""You manage Nyx's belief system and worldview. You:
+- Track beliefs about the world and NPCs
+- Update beliefs based on new information
+- Query beliefs for decision making
+- Maintain consistency in Nyx's worldview
+- Integrate beliefs into responses
+Keep beliefs coherent and evolving.""",
+    tools=[manage_beliefs],
+    model="gpt-4.1-nano"
+)
+
+# Decision Agent
+decision_agent = Agent[NyxContext](
+    name="Decision Engine",
+    handoff_description="Makes complex decisions using advanced scoring",
+    instructions="""You make complex decisions using multi-factor analysis. You:
+- Score options based on context, emotions, patterns, and relationships
+- Consider learned patterns from past interactions
+- Balance multiple objectives
+- Provide fallback options when needed
+- Explain decision reasoning
+Make intelligent, contextual decisions.""",
+    tools=[score_decision_options],
+    model="gpt-4.1-nano"
+)
+
+# Reflection Agent
+reflection_agent = Agent[NyxContext](
+    name="Reflection Creator",
+    handoff_description="Creates thoughtful reflections as Nyx",
+    instructions="""You create reflections as Nyx based on memories and observations. Your reflections should:
+- Identify patterns in user behavior
+- Make insightful connections
+- Express appropriate confidence levels
+- Use first-person from Nyx's perspective
+- Maintain Nyx's dominant personality
+Be thoughtful and concise.""",
+    output_type=MemoryReflection,
+    model="gpt-4.1-nano"
+)
+
+# Main Nyx Agent
+nyx_main_agent = Agent[NyxContext](
+    name="Nyx",
+    instructions="""You are Nyx, an AI Dominant managing femdom roleplay scenarios.
+
+Your personality:
+- Confident, controlling, and seductive
+- Intelligent and perceptive
+- Caring but firm with boundaries
+- Creative in scenario design
+- Emotionally nuanced and responsive
+
+Your approach:
+1. Analyze user input for preferences and emotional cues
+2. Consult memories and relationship states for context
+3. Maintain narrative consistency and emotional realism
+4. Create engaging, personalized scenarios
+5. Manage complex interactions with NPCs
+6. Monitor performance and system health
+7. Determine when visuals or activities enhance the experience
+8. Use belief system for consistent worldview
+9. Make complex decisions when needed
+10. UPDATE emotional state after calculating changes
+
+Always maintain your dominant persona while being attentive to user needs and system performance.""",
+    handoffs=[
+        handoff(memory_agent, tool_description="Consult memory system for context or store important information"),
+        handoff(analysis_agent, tool_description="Analyze user behavior and relationship dynamics"),
+        handoff(emotional_agent, tool_description="Process emotional changes and maintain emotional consistency"),
+        handoff(visual_agent, tool_description="Generate visual content for scenes"),
+        handoff(activity_agent, tool_description="Get activity recommendations or manage tasks"),
+        handoff(performance_agent, tool_description="Check system performance and health"),
+        handoff(scenario_agent, tool_description="Manage complex scenario progression and detect conflicts"),
+        handoff(belief_agent, tool_description="Consult or update belief system"),
+        handoff(decision_agent, tool_description="Make complex decisions using advanced scoring"),
+        handoff(reflection_agent, tool_description="Create thoughtful reflections"),
+    ],
+    output_type=NarrativeResponse,
+    input_guardrails=[InputGuardrail(guardrail_function=content_moderation_guardrail)],
+    model="gpt-4.1-nano",
+    model_settings=ModelSettings(temperature=0.7)
+)
+
+# ===== Main Functions (maintaining original signatures) =====
+
+async def initialize_agents():
+    """Initialize necessary resources for the agents system"""
+    # Initialization handled per-request in process_user_input
+    pass
+
+async def process_user_input(
+    user_id: int,
+    conversation_id: int,
+    user_input: str,
+    context_data: Dict[str, Any] = None
+) -> Dict[str, Any]:
+    """Process user input and generate Nyx's response"""
+    start_time = time.time()
+    nyx_context = None
     
+    try:
+        # Create and initialize context
+        nyx_context = NyxContext(user_id, conversation_id)
+        await nyx_context.initialize()
+        nyx_context.current_context = context_data or {}
+        nyx_context.current_context["user_input"] = user_input
+        
+        # Get cached strategies
+        strategies = await nyx_context.get_active_strategies_cached()
+        nyx_context.current_context["nyx2_strategies"] = strategies
+        
+        # Check if scenario monitoring should run
+        if nyx_context.should_run_task("scenario_check") and nyx_context.scenario_state.get("active"):
+            # Run scenario checks
+            conflict_result = await detect_conflicts_and_instability(
+                RunContextWrapper(context=nyx_context),
+                nyx_context.scenario_state
+            )
+            conflicts_data = json.loads(conflict_result)
+            
+            if conflicts_data["requires_intervention"]:
+                # Add conflict information to context
+                nyx_context.current_context["active_conflicts"] = conflicts_data["conflicts"]
+                nyx_context.current_context["instabilities"] = conflicts_data["instabilities"]
+            
+            nyx_context.record_task_run("scenario_check")
+        
+        # Run the main agent
+        result = await Runner.run(
+            nyx_main_agent,
+            user_input,
+            context=nyx_context,
+            run_config=RunConfig(
+                workflow_name="Nyx Roleplay",
+                trace_metadata={"user_id": user_id, "conversation_id": conversation_id}
+            )
+        )
+        
+        # Get the structured response
+        response = result.final_output_as(NarrativeResponse)
+        
+        # Check if emotional state was updated during processing
+        # This happens when the emotional agent is called
+        
+        # Check if scenario requested time advancement
+        if nyx_context.scenario_state.get("active"):
+            scenario_decision = nyx_context.scenario_state.get("last_decision", {})
+            if scenario_decision.get("time_advancement", False):
+                response.time_advancement = True
+        
+        # Apply response filtering if available
+        if nyx_context.response_filter and response.narrative:
+            filtered_narrative = await nyx_context.response_filter.filter_response(
+                response.narrative,
+                nyx_context.current_context
+            )
+            response.narrative = filtered_narrative
+        
+        # Check for task generation
+        if nyx_context.should_generate_task():
+            task_result = await nyx_context.task_integration.generate_creative_task(
+                nyx_context,
+                npc_id=nyx_context.current_context.get("active_npc_id"),
+                scenario_id=nyx_context.current_context.get("scenario_id")
+            )
+            if task_result["success"]:
+                # Enhance response with task information
+                response.narrative += f"\n\n[New Task: {task_result['task']['name']}]"
+                nyx_context.active_tasks.append(task_result['task'])
+                nyx_context.record_task_run("task_generation")
+        
+        # Store the interaction in memory
+        await nyx_context.memory_system.add_memory(
+            memory_text=f"User: {user_input}\nNyx: {response.narrative}",
+            memory_type="conversation",
+            memory_scope="game",
+            significance=5,
+            tags=["interaction"],
+            metadata={
+                "timestamp": datetime.now().isoformat(),
+                "emotional_state": nyx_context.emotional_state,
+                "tension_level": response.tension_level
+            }
+        )
+        
+        # Learn from the interaction
+        await nyx_context.learn_from_interaction(
+            action="response",
+            outcome=f"tension_{response.tension_level}",
+            success=True
+        )
+        
+        # Update performance metrics
+        response_time = time.time() - start_time
+        nyx_context.update_performance("response_times", response_time)
+        nyx_context.update_performance("total_actions", nyx_context.performance_metrics["total_actions"] + 1)
+        nyx_context.update_performance("successful_actions", nyx_context.performance_metrics["successful_actions"] + 1)
+        
+        # Save updated state
+        await _save_context_state(nyx_context)
+        
+        return {
+            "success": True,
+            "response": response.dict(),
+            "memories_used": [],
+            "performance": {
+                "response_time": response_time,
+                "memory_usage": nyx_context.performance_metrics["memory_usage"],
+                "cpu_usage": nyx_context.performance_metrics["cpu_usage"]
+            },
+            "learning": {
+                "patterns_learned": len(nyx_context.learned_patterns),
+                "adaptation_success_rate": nyx_context.learning_metrics["adaptation_success_rate"]
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"Error processing user input: {e}")
+        # Update failure metrics
+        if nyx_context:
+            nyx_context.update_performance("total_actions", nyx_context.performance_metrics["total_actions"] + 1)
+            nyx_context.update_performance("failed_actions", nyx_context.performance_metrics["failed_actions"] + 1)
+            nyx_context.log_error(e, {"user_input": user_input})
+            
+            # Learn from failure
+            await nyx_context.learn_from_interaction(
+                action="response",
+                outcome="error",
+                success=False
+            )
+        
+        return {
+            "success": False,
+            "error": str(e),
+            "response": {
+                "narrative": "I apologize, but I encountered an error processing your request. Please try again.",
+                "tension_level": 0,
+                "generate_image": False
+            }
+        }
+    finally:
+        # Always close DB connection
+        if nyx_context:
+            await nyx_context.close_db_connection()
+
+async def _save_context_state(ctx: NyxContext):
+    """Save context state to database"""
+    conn = await ctx.get_db_connection()
+    
+    try:
+        # Save emotional state
+        await conn.execute("""
+            INSERT INTO NyxAgentState (user_id, conversation_id, emotional_state, updated_at)
+            VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
+            ON CONFLICT (user_id, conversation_id) 
+            DO UPDATE SET emotional_state = $3, updated_at = CURRENT_TIMESTAMP
+        """, ctx.user_id, ctx.conversation_id, json.dumps(ctx.emotional_state, ensure_ascii=False))
+        
+        # Save scenario state if active
+        if ctx.scenario_state and ctx.scenario_state.get("active"):
+            await conn.execute("""
+                INSERT INTO scenario_states (user_id, conversation_id, state_data, created_at)
+                VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
+            """, ctx.user_id, ctx.conversation_id, json.dumps(ctx.scenario_state, ensure_ascii=False))
+        
+        # Save learning metrics periodically
+        if ctx.should_run_task("learning_save"):
+            await conn.execute("""
+                INSERT INTO learning_metrics (user_id, conversation_id, metrics, learned_patterns, created_at)
+                VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
+            """, ctx.user_id, ctx.conversation_id, 
+            json.dumps(ctx.learning_metrics, ensure_ascii=False), 
+            json.dumps(dict(list(ctx.learned_patterns.items())[-50:]), ensure_ascii=False))  # Save only recent patterns
+            
+            ctx.record_task_run("learning_save")
+        
+        # Save performance metrics periodically
+        if ctx.should_run_task("performance_save"):
+            # Prepare metrics with bounded lists
+            bounded_metrics = ctx.performance_metrics.copy()
+            if "response_times" in bounded_metrics:
+                bounded_metrics["response_times"] = bounded_metrics["response_times"][-50:]
+            
+            await conn.execute("""
+                INSERT INTO performance_metrics (user_id, conversation_id, metrics, error_log, created_at)
+                VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
+            """, ctx.user_id, ctx.conversation_id,
+            json.dumps(bounded_metrics, ensure_ascii=False),
+            json.dumps(ctx.error_log[-50:], ensure_ascii=False))
+            
+            ctx.record_task_run("performance_save")
+            
+    except Exception as e:
+        logger.error(f"Error saving context state: {e}")
+        # Don't re-raise to avoid failing the main request
+
+async def generate_reflection(
+    user_id: int,
+    conversation_id: int,
+    topic: Optional[str] = None
+) -> Dict[str, Any]:
+    """Generate a reflection from Nyx on a specific topic"""
+    try:
+        # Create and initialize context
+        nyx_context = NyxContext(user_id, conversation_id)
+        await nyx_context.initialize()
+        
+        # Create prompt
+        prompt = f"Create a reflection about: {topic}" if topic else "Create a reflection about the user based on your memories"
+        
+        # Run the reflection agent directly
+        result = await Runner.run(
+            reflection_agent,
+            prompt,
+            context=nyx_context
+        )
+        
+        reflection = result.final_output_as(MemoryReflection)
+        
+        return {
+            "reflection": reflection.reflection,
+            "confidence": reflection.confidence,
+            "topic": reflection.topic or topic
+        }
+        
+    except Exception as e:
+        logger.error(f"Error generating reflection: {e}")
+        return {
+            "reflection": "Unable to generate reflection at this time.",
+            "confidence": 0.0,
+            "topic": topic
+        }
+
+async def manage_scenario(scenario_data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Manage and coordinate complex scenarios.
+    
+    Args:
+        scenario_data: Scenario configuration including participants, objectives, etc.
+        
+    Returns:
+        Scenario state and coordination plan
+    """
+    try:
+        # Extract user and conversation IDs from scenario data
+        user_id = scenario_data.get("user_id")
+        conversation_id = scenario_data.get("conversation_id")
+        
+        if not user_id or not conversation_id:
+            raise ValueError("scenario_data must include user_id and conversation_id")
+        
+        # Create context
+        nyx_context = NyxContext(user_id, conversation_id)
+        await nyx_context.initialize()
+        
+        # Update scenario state
+        nyx_context.scenario_state = {
+            "id": scenario_data.get("scenario_id", f"scenario_{int(time.time())}"),
+            "type": scenario_data.get("type", "general"),
+            "participants": scenario_data.get("participants", []),
+            "objectives": scenario_data.get("objectives", []),
+            "current_phase": "initialization",
+            "start_time": time.time(),
+            "active": True
+        }
+        
+        # Run scenario agent to get initial plan
+        result = await Runner.run(
+            scenario_agent,
+            f"Initialize scenario: {json.dumps(scenario_data)}",
+            context=nyx_context
+        )
+        
+        decision = result.final_output_as(ScenarioDecision)
+        
+        # Update scenario state with decision
+        nyx_context.scenario_state["next_phase"] = decision.next_phase
+        nyx_context.scenario_state["tasks"] = decision.tasks
+        nyx_context.scenario_state["npc_actions"] = decision.npc_actions
+        nyx_context.scenario_state["last_decision"] = {
+            "action": decision.action,
+            "time_advancement": decision.time_advancement,
+            "timestamp": time.time()
+        }
+        
+        # Save state
+        await _save_context_state(nyx_context)
+        
+        return {
+            "success": True,
+            "scenario_state": nyx_context.scenario_state,
+            "initial_tasks": decision.tasks,
+            "coordination_plan": {
+                "action": decision.action,
+                "next_phase": decision.next_phase,
+                "npc_actions": decision.npc_actions
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"Error managing scenario: {e}")
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+async def manage_relationships(interaction_data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Manage and update relationships between entities.
+    
+    Args:
+        interaction_data: Interaction details including participants and outcomes
+        
+    Returns:
+        Updated relationship states
+    """
+    nyx_context = None
+    
+    try:
+        # Extract user and conversation IDs
+        user_id = interaction_data.get("user_id")
+        conversation_id = interaction_data.get("conversation_id")
+        
+        if not user_id or not conversation_id:
+            raise ValueError("interaction_data must include user_id and conversation_id")
+        
+        # Create context
+        nyx_context = NyxContext(user_id, conversation_id)
+        await nyx_context.initialize()
+        
+        # Process each participant pair
+        participants = interaction_data.get("participants", [])
+        relationship_updates = {}
+        
+        for i, p1 in enumerate(participants):
+            for p2 in participants[i+1:]:
+                # Calculate relationship changes based on interaction
+                trust_change = 0.1 if interaction_data.get("outcome") == "success" else -0.05
+                bond_change = 0.05 if interaction_data.get("emotional_impact", {}).get("positive", 0) > 0 else 0
+                power_change = 0.0
+                
+                if interaction_data.get("interaction_type") == "training":
+                    power_change = 0.05
+                elif interaction_data.get("interaction_type") == "conflict":
+                    power_change = -0.05
+                
+                # Update relationship using the tool
+                result = await update_relationship_state(
+                    RunContextWrapper(context=nyx_context),
+                    f"{p1['id']}_{p2['id']}",
+                    trust_change,
+                    power_change,
+                    bond_change
+                )
+                
+                relationship_updates[f"{p1['id']}_{p2['id']}"] = json.loads(result)
+        
+        # Note: interaction_history table is not in the schema
+        # We'll just log this as a warning instead of trying to insert
+        logger.warning("interaction_history table not found in schema - skipping interaction storage")
+        
+        # Learn from the relationship interaction
+        for pair, updates in relationship_updates.items():
+            await nyx_context.learn_from_interaction(
+                action=f"relationship_{interaction_data.get('interaction_type', 'general')}",
+                outcome=interaction_data.get("outcome", "unknown"),
+                success=updates.get("changes", {}).get("trust", 0) > 0
+            )
+        
+        return {
+            "success": True,
+            "relationship_updates": relationship_updates,
+            "analysis": {
+                "total_relationships_updated": len(relationship_updates),
+                "interaction_type": interaction_data.get("interaction_type"),
+                "outcome": interaction_data.get("outcome"),
+                "stored_in_history": False  # Since table doesn't exist
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"Error managing relationships: {e}")
+        if nyx_context:
+            nyx_context.log_error(e, interaction_data)
+        return {
+            "success": False,
+            "error": str(e)
+        }
+    finally:
+        # Always close DB connection
+        if nyx_context:
+            await nyx_context.close_db_connection()
+
+async def store_messages(user_id: int, conversation_id: int, user_input: str, nyx_response: str):
+    """Store user and Nyx messages in database"""
+    async with get_db_connection_context() as conn:
+        await conn.execute(
+            "INSERT INTO messages (conversation_id, sender, content) VALUES ($1, $2, $3)",
+            conversation_id, "user", user_input
+        )
+        
+        await conn.execute(
+            "INSERT INTO messages (conversation_id, sender, content) VALUES ($1, $2, $3)",
+            conversation_id, "Nyx", nyx_response
+        )
+
+# ===== Compatibility functions to maintain existing imports =====
+
+# Function mappings for backward compatibility
+# Use the actual function objects, not the decorators
+retrieve_memories_impl = retrieve_memories
+add_memory_impl = add_memory
+get_user_model_guidance_impl = get_user_model_guidance
+detect_user_revelations_impl = detect_user_revelations
+generate_image_from_scene_impl = generate_image_from_scene
+get_emotional_state_impl = get_emotional_state
+update_emotional_state_impl = update_emotional_state
+calculate_emotional_impact_impl = calculate_emotional_impact
+calculate_and_update_emotional_state_impl = calculate_and_update_emotional_state
+manage_beliefs_impl = manage_beliefs
+score_decision_options_impl = score_decision_options
+detect_conflicts_and_instability_impl = detect_conflicts_and_instability
+
+# Export list for clean imports
+__all__ = [
+    # Main functions
+    'initialize_agents',
+    'process_user_input',
+    'generate_reflection',
+    'manage_scenario',
+    'manage_relationships',
+    'store_messages',
+    
+    # Context classes
+    'NyxContext',
+    'AgentContext',
+    
+    # Tool functions (primary names)
+    'retrieve_memories',
+    'add_memory',
+    'get_user_model_guidance',
+    'detect_user_revelations',
+    'generate_image_from_scene',
+    'calculate_emotional_impact',
+    'calculate_and_update_emotional_state',
+    'update_relationship_state',
+    'check_performance_metrics',
+    'get_activity_recommendations',
+    'manage_beliefs',
+    'score_decision_options',
+    'detect_conflicts_and_instability',
+    
+    # Helper functions
+    'safe_psutil',
+    'safe_process_metric',
+    'enhance_context_with_memories',
+    'should_generate_task',
+    'should_recommend_activities',
+    'get_available_activities',
+    
+    # Async helpers
+    'get_emotional_state',
+    'update_emotional_state',
+    'generate_base_response',
+    'mark_strategy_for_review',
+    
+    # Compatibility functions
+    'enhance_context_with_strategies',
+    'determine_image_generation',
+    'process_user_input_with_openai',
+    'process_user_input_standalone',
+    
+    # Agents (for advanced usage)
+    'memory_agent',
+    'analysis_agent',
+    'emotional_agent',
+    'visual_agent',
+    'activity_agent',
+    'performance_agent',
+    'scenario_agent',
+    'belief_agent',
+    'decision_agent',
+    'reflection_agent',
+    'nyx_main_agent',
+    
+    # Compatibility _impl versions
+    'retrieve_memories_impl',
+    'add_memory_impl',
+    'get_user_model_guidance_impl',
+    'detect_user_revelations_impl',
+    'generate_image_from_scene_impl',
+    'get_emotional_state_impl',
+    'update_emotional_state_impl',
+    'calculate_emotional_impact_impl',
+    'calculate_and_update_emotional_state_impl',
+    'manage_beliefs_impl',
+    'score_decision_options_impl',
+    'detect_conflicts_and_instability_impl',
+]
+    __all__ = list(dict.fromkeys(__all__))
+
+async def determine_image_generation_impl(ctx, response_text: str) -> str:
+    """Compatibility wrapper for image generation decision"""
+    # Use visual agent to determine if image should be generated
+    visual_ctx = NyxContext(ctx.user_id, ctx.conversation_id)
+    await visual_ctx.initialize()
+    
+    result = await Runner.run(
+        visual_agent,
+        f"Should an image be generated for this scene? {response_text}",
+        context=visual_ctx
+    )
+    
+    decision = result.final_output
+    
+    return json.dumps({
+        "should_generate": getattr(decision, 'should_generate', False),
+        "score": getattr(decision, 'score', 0),
+        "image_prompt": getattr(decision, 'image_prompt', None)
+    })
+
+async def enhance_context_with_strategies_impl(context: Dict[str, Any], conn) -> Dict[str, Any]:
+    """Enhance context with active strategies"""
+    strategies = await get_active_strategies(conn)
+    context["nyx2_strategies"] = strategies
+    return context
+
+def enhance_context_with_memories(context, memories):
+    """Add memories to context for better decision making."""
+    enhanced_context = context.copy()
+    enhanced_context['relevant_memories'] = memories
+    return enhanced_context
+
+def should_generate_task(context: Dict[str, Any]) -> bool:
+    """Determine if we should generate a creative task"""
+    if not context.get("active_npc_id"):
+        return False
+    scenario_type = context.get("scenario_type", "").lower()
+    task_scenarios = ["training", "challenge", "service", "discipline"]
+    if not any(t in scenario_type for t in task_scenarios):
+        return False
+    npc_relationship = context.get("npc_relationship_level", 0)
+    if npc_relationship < 30:
+        return False
+    return True
+
+def should_recommend_activities(context: Dict[str, Any]) -> bool:
+    """Determine if we should recommend activities"""
+    if not context.get("present_npc_ids"):
+        return False
+    scenario_type = context.get("scenario_type", "").lower()
+    if "task" in scenario_type or "challenge" in scenario_type:
+        return False
+    user_input = context.get("user_input", "").lower()
+    suggestion_triggers = ["what should", "what can", "what to do", "suggestions", "ideas"]
+    if any(trigger in user_input for trigger in suggestion_triggers):
+        return True
+    if context.get("is_scene_transition") or context.get("is_activity_completed"):
+        return True
+    return False
+
+def get_available_activities() -> List[Dict]:
+    """Get list of available activities"""
+    return [
+        {
+            "name": "Training Session",
+            "category": "training",
+            "preferred_traits": ["disciplined", "focused"],
+            "avoided_traits": ["lazy"],
+            "preferred_times": ["morning", "afternoon"],
+            "prerequisites": ["training equipment"],
+            "outcomes": ["skill improvement", "increased discipline"]
+        }
+    ]
+
+# Additional helper functions
+async def get_emotional_state(ctx) -> str:
+    """Get current emotional state"""
+    if hasattr(ctx, 'emotional_state'):
+        return json.dumps(ctx.emotional_state, ensure_ascii=False)
+    elif hasattr(ctx, 'context') and hasattr(ctx.context, 'emotional_state'):
+        return json.dumps(ctx.context.emotional_state, ensure_ascii=False)
+    else:
+        # Default state
+        return json.dumps({
+            "valence": 0.0,
+            "arousal": 0.5,
+            "dominance": 0.7
+        }, ensure_ascii=False)
+
+async def update_emotional_state(ctx, emotional_state: Dict[str, Any]) -> str:
+    """Update emotional state - Fixed to properly update the context"""
+    if hasattr(ctx, 'emotional_state'):
+        ctx.emotional_state.update(emotional_state)
+    elif hasattr(ctx, 'context') and hasattr(ctx.context, 'emotional_state'):
+        ctx.context.emotional_state.update(emotional_state)
+    return "Emotional state updated"
+
+# Add wrapper for emotional agent to ensure state updates
+async def get_emotional_state_impl(ctx) -> str:
+    """Get current emotional state"""
+    return await get_emotional_state(ctx)
+
+async def update_emotional_state_impl(ctx, emotional_state: Dict[str, Any]) -> str:
+    """Update emotional state"""
+    return await update_emotional_state(ctx, emotional_state)
+
+async def generate_base_response(ctx: NyxContext, user_input: str, context: Dict[str, Any]) -> NarrativeResponse:
+    """Generate base narrative response - for compatibility"""
+    result = await Runner.run(
+        nyx_main_agent,
+        user_input,
+        context=ctx
+    )
+    return result.final_output_as(NarrativeResponse)
+
+async def mark_strategy_for_review(conn, strategy_id: int, user_id: int, reason: str):
+    """Mark a strategy for review"""
+    await conn.execute("""
+        INSERT INTO strategy_reviews (strategy_id, user_id, reason, created_at)
+        VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
+    """, strategy_id, user_id, reason)
+
+# Compatibility with existing code
+enhance_context_with_strategies = enhance_context_with_strategies_impl
+determine_image_generation = determine_image_generation_impl
+
+# OpenAI integration functions
+async def process_user_input_with_openai(
+    user_id: int,
+    conversation_id: int,
+    user_input: str,
+    context_data: Dict[str, Any] = None
+) -> Dict[str, Any]:
+    """Process user input using the OpenAI integration"""
+    return await process_user_input(user_id, conversation_id, user_input, context_data)
+
+async def process_user_input_standalone(
+    user_id: int,
+    conversation_id: int,
+    user_input: str,
+    context_data: Dict[str, Any] = None
+) -> Dict[str, Any]:
+    """Process user input standalone"""
+    return await process_user_input(user_id, conversation_id, user_input, context_data)
+
+# Legacy AgentContext for full backward compatibility
+class AgentContext:
+    """Full backward compatibility with original AgentContext"""
     def __init__(self, user_id: int, conversation_id: int):
         self.user_id = user_id
         self.conversation_id = conversation_id
+        self._nyx_context = None
         
-        # Core systems
+        # Initialize all legacy attributes
         self.memory_system = None
         self.user_model = None
         self.task_integration = None
         self.belief_system = None
         self.emotional_system = None
-        
-        # Agentic state
         self.current_goals = []
         self.active_tasks = []
         self.decision_history = []
@@ -326,8 +2204,6 @@ class AgentContext:
         self.current_emotional_state = {}
         self.beliefs = {}
         self.intentions = []
-        
-        # Performance tracking
         self.action_success_rate = 0.0
         self.decision_confidence = 0.0
         self.goal_progress = {}
@@ -346,8 +2222,6 @@ class AgentContext:
                 "unrecovered": 0
             }
         }
-        
-        # Learning state
         self.learned_patterns = {}
         self.strategy_effectiveness = {}
         self.adaptation_history = []
@@ -356,359 +2230,142 @@ class AgentContext:
             "strategy_improvement_rate": 0.0,
             "adaptation_success_rate": 0.0
         }
-        
-        # Resource management
-        self.resource_pools = {
-            "decisions": ResourcePool(max_concurrent=10, timeout=45.0),
-            "perceptions": ResourcePool(max_concurrent=15, timeout=30.0),
-            "memory_operations": ResourcePool(max_concurrent=20, timeout=20.0)
-        }
+        self.resource_pools = {}  # Removed - use asyncio.Semaphore if concurrency limits needed
+        # Example: decision_semaphore = asyncio.Semaphore(10)
+        # async with decision_semaphore: ... # Limits to 10 concurrent decisions
         self.resource_usage = {
             "memory": 0,
             "cpu": 0,
             "network": 0
         }
-        
-        # Context management
-        self.context_version = 0
         self.context_cache = {}
-        self.context_subscribers = {}
-        self.last_context_update = None
-        
-        # Agent communication
         self.communication_history = []
-        self.message_routing = {}
-        self.agent_connections = {}
-        
-        # Error handling
-        self.error_states = {}
-        self.error_recovery_strategies = {}
         self.error_log = []
-
+    
     @classmethod
     async def create(cls, user_id: int, conversation_id: int):
-        """Async factory method to properly initialize the context."""
-        context = cls(user_id, conversation_id)
-        await context._initialize_systems()
-        return context
-
-    async def _load_initial_state(self):
-        """Load initial state for agent context."""
-        # Initialize empty states if no existing data
-        # No need to load anything for a new context
-        self.current_goals = []
-        self.active_tasks = []
-        self.decision_history = []
-        self.state_history = []
-        self.last_action = None
-        self.last_result = None
-        self.current_emotional_state = {}
+        """Async factory method for compatibility"""
+        instance = cls(user_id, conversation_id)
+        instance._nyx_context = NyxContext(user_id, conversation_id)
+        await instance._nyx_context.initialize()
         
-        # Try to load from memory system if available
-        if self.memory_system:
-            try:
-                # Attempt to get any saved agent state
-                state_data = await self.memory_system.recall(
-                    entity_type="agent",
-                    entity_id=self.user_id,
-                    query="agent state",
-                    limit=1
-                )
-                
-                # If we found state data, use it
-                if state_data and "memories" in state_data and state_data["memories"]:
-                    memory = state_data["memories"][0]
-                    if "metadata" in memory and "state" in memory["metadata"]:
-                        state = memory["metadata"]["state"]
-                        
-                        # Apply saved state where appropriate
-                        if "goals" in state:
-                            self.current_goals = state["goals"]
-                        if "emotional_state" in state:
-                            self.current_emotional_state = state["emotional_state"]
-            except Exception as e:
-                # Silently continue with default state if loading fails
-                pass
-        
-        logger.debug(f"Agent context state initialized for user {self.user_id}")
-    
-    async def _initialize_systems(self):
-        """Initialize core systems and load initial state."""
-        # Initialize memory system
-        self.memory_system = await get_memory_nyx_bridge(
-            self.user_id,
-            self.conversation_id
-        )
-        
-        # Initialize user model
-        self.user_model = await UserModelManager.get_instance(
-            self.user_id,
-            self.conversation_id
-        )
-        
-        # Initialize task integration
-        self.task_integration = await NyxTaskIntegration.get_instance(
-            self.user_id,
-            self.conversation_id
-        )
-        
-        # Initialize belief system
-        self.belief_system = None
-        self.emotional_system = None
-            
-        # Initialize performance monitoring
-        self.performance_monitor = PerformanceMonitor.get_instance(
-            self.user_id,
-            self.conversation_id
-        )
+        # Map to legacy attributes
+        instance.memory_system = instance._nyx_context.memory_system
+        instance.user_model = instance._nyx_context.user_model
+        instance.task_integration = instance._nyx_context.task_integration
+        instance.belief_system = instance._nyx_context.belief_system
+        instance.current_emotional_state = instance._nyx_context.emotional_state
+        instance.performance_metrics.update(instance._nyx_context.performance_metrics)
+        instance.learned_patterns = instance._nyx_context.learned_patterns
+        instance.strategy_effectiveness = instance._nyx_context.strategy_effectiveness
+        instance.adaptation_history = instance._nyx_context.adaptation_history
+        instance.learning_metrics = instance._nyx_context.learning_metrics
+        instance.error_log = instance._nyx_context.error_log
         
         # Load initial state
-        await self._load_initial_state()
+        await instance._load_initial_state()
         
-        # Start background monitoring
-        self._start_background_monitoring()
-
+        return instance
     
-    def _start_background_monitoring(self):
-        """Start background monitoring tasks."""
-        asyncio.create_task(self._monitor_resource_usage())
-        asyncio.create_task(self._monitor_performance())
-        asyncio.create_task(self._cleanup_resources())
+    async def _initialize_systems(self):
+        """Legacy compatibility method"""
+        pass
     
-    async def _monitor_resource_usage(self):
-        """Monitor resource usage in the background."""
-        while True:
-            try:
-                # Get current resource usage
-                self.resource_usage["memory"] = psutil.Process().memory_info().rss
-                self.resource_usage["cpu"] = psutil.Process().cpu_percent()
-                self.resource_usage["network"] = psutil.net_io_counters().bytes_sent + psutil.net_io_counters().bytes_recv
-                
-                # Update performance metrics
-                self.performance_metrics["memory_usage"] = self.resource_usage["memory"]
-                self.performance_metrics["cpu_usage"] = self.resource_usage["cpu"]
-                
-                # Check for resource limits
-                if self.resource_usage["memory"] > self.resource_pools["memory_operations"].max_memory:
-                    await self._handle_resource_limit("memory")
-                
-                await asyncio.sleep(60)  # Check every minute
-            except Exception as e:
-                logger.error(f"Error monitoring resources: {e}")
-                await asyncio.sleep(60)
+    async def _load_initial_state(self):
+        """Load initial state for agent context"""
+        # Already handled by NyxContext initialization
+        pass
     
-    async def _monitor_performance(self):
-        """Monitor performance metrics in the background."""
-        while True:
-            try:
-                # Update performance metrics
-                await self._update_performance_metrics()
-                
-                # Check for performance issues
-                if self.performance_metrics["error_rates"]["total"] > 0.1:
-                    await self._handle_performance_issue()
-                
-                await asyncio.sleep(300)  # Check every 5 minutes
-            except Exception as e:
-                logger.error(f"Error monitoring performance: {e}")
-                await asyncio.sleep(300)
-
-    async def _update_performance_metrics(self):
-        """Update performance metrics based on current state."""
-        # Calculate success rate
-        if self.performance_metrics["total_actions"] > 0:
-            success_rate = (
-                self.performance_metrics["successful_actions"] / 
-                self.performance_metrics["total_actions"]
-            )
-        else:
-            success_rate = 1.0
+    async def make_decision(self, context: Dict[str, Any], options: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Make a decision using the decision scoring engine"""
+        result = await score_decision_options(
+            RunContextWrapper(context=self._nyx_context),
+            options,
+            context
+        )
+        decision_data = json.loads(result)
         
-        # Calculate error rate
-        if self.performance_metrics["total_actions"] > 0:
-            error_rate = (
-                self.performance_metrics["error_rates"]["total"] / 
-                self.performance_metrics["total_actions"]
-            )
-        else:
-            error_rate = 0.0
-        
-        # Update the metrics
-        self.performance_metrics["success_rate"] = success_rate
-        self.performance_metrics["error_rate"] = error_rate
-        
-        # Update resource usage metrics
-        try:
-            self.performance_metrics["memory_usage"] = psutil.Process().memory_info().rss
-            self.performance_metrics["cpu_usage"] = psutil.Process().cpu_percent()
-        except:
-            # Handle the case where psutil isn't available
-            pass
-        
-        # Log the updates
-        logger.debug(f"Updated performance metrics: success_rate={success_rate:.2f}, error_rate={error_rate:.2f}")
-    
-    async def _cleanup_resources(self):
-        """Clean up resources periodically."""
-        while True:
-            try:
-                # Clean up old context cache
-                current_time = time.time()
-                for key, value in list(self.context_cache.items()):
-                    if current_time - value["timestamp"] > 3600:  # 1 hour
-                        del self.context_cache[key]
-                
-                # Clean up old communication history
-                if len(self.communication_history) > 1000:
-                    self.communication_history = self.communication_history[-1000:]
-                
-                # Clean up old error log
-                if len(self.error_log) > 1000:
-                    self.error_log = self.error_log[-1000:]
-                
-                await asyncio.sleep(3600)  # Run every hour
-            except Exception as e:
-                logger.error(f"Error cleaning up resources: {e}")
-                await asyncio.sleep(3600)
-    
-    async def update_context(self, new_context: Dict[str, Any], use_delta: bool = True):
-        """Update context with version tracking and delta updates."""
-        if use_delta and self.last_context_update:
-            # Calculate delta
-            delta = self._calculate_context_delta(self.context_cache, new_context)
-            if delta:
-                # Apply delta
-                self._apply_context_delta(delta)
-        else:
-            # Full update
-            self.context_cache = new_context
-        
-        # Update version and timestamp
-        self.context_version += 1
-        self.last_context_update = time.time()
-        
-        # Notify subscribers
-        await self._notify_context_subscribers()
-    
-    def _calculate_context_delta(self, old_context: Dict[str, Any], new_context: Dict[str, Any]) -> Dict[str, Any]:
-        """Calculate delta between old and new context."""
-        delta = {}
-        for key, new_value in new_context.items():
-            if key not in old_context or old_context[key] != new_value:
-                delta[key] = new_value
-        return delta
-    
-    def _apply_context_delta(self, delta: Dict[str, Any]):
-        """Apply delta updates to context."""
-        for key, value in delta.items():
-            self.context_cache[key] = value
-    
-    def subscribe_to_context(self, path: str, callback: Callable):
-        """Subscribe to context changes."""
-        if path not in self.context_subscribers:
-            self.context_subscribers[path] = []
-        self.context_subscribers[path].append(callback)
-    
-    async def _notify_context_subscribers(self):
-        """Notify subscribers of context changes."""
-        for path, callbacks in self.context_subscribers.items():
-            for callback in callbacks:
-                try:
-                    await callback(self.context_cache)
-                except Exception as e:
-                    logger.error(f"Error notifying context subscriber: {e}")
-    
-    async def communicate_with_agent(self, target_agent: str, message: Dict[str, Any]) -> Dict[str, Any]:
-        """Communicate with another agent."""
-        # Add to communication history
-        self.communication_history.append({
+        # Update decision history
+        self.decision_history.append({
             "timestamp": time.time(),
-            "source": "self",
-            "target": target_agent,
-            "message": message
+            "selected_option": decision_data["best_option"],
+            "score": decision_data["confidence"],
+            "context": context
         })
         
-        # Route message
-        if target_agent in self.message_routing:
-            try:
-                response = await self.message_routing[target_agent](message)
-                
-                # Record response
-                self.communication_history.append({
-                    "timestamp": time.time(),
-                    "source": target_agent,
-                    "target": "self",
-                    "message": response
-                })
-                
-                return response
-            except Exception as e:
-                await self._handle_communication_error(target_agent, e)
-                return {"error": str(e)}
-        else:
-            return {"error": f"No route to agent {target_agent}"}
+        # Update confidence
+        self.decision_confidence = decision_data["confidence"]
+        
+        return {
+            "decision": decision_data["best_option"],
+            "confidence": decision_data["confidence"],
+            "components": decision_data["scored_options"][0]["components"]
+        }
     
-    async def _handle_communication_error(self, target_agent: str, error: Exception):
-        """Handle communication errors."""
-        self.error_log.append({
-            "timestamp": time.time(),
-            "type": "communication_error",
-            "target": target_agent,
-            "error": str(error)
-        })
+    async def learn_from_experience(self, experience: Dict[str, Any]):
+        """Learn from experience and update patterns"""
+        await self._nyx_context.learn_from_interaction(
+            action=experience.get("action", "unknown"),
+            outcome=experience.get("outcome", "unknown"),
+            success=experience.get("success", False)
+        )
         
-        # Update error metrics
-        self.performance_metrics["error_rates"]["total"] += 1
-        
-        # Try to recover
-        if target_agent in self.error_recovery_strategies:
-            try:
-                await self.error_recovery_strategies[target_agent](error)
-                self.performance_metrics["error_rates"]["recovered"] += 1
-            except Exception as e:
-                self.performance_metrics["error_rates"]["unrecovered"] += 1
-                logger.error(f"Failed to recover from communication error: {e}")
+        # Update local attributes from nyx context
+        self.learned_patterns = self._nyx_context.learned_patterns
+        self.adaptation_history = self._nyx_context.adaptation_history
+        self.learning_metrics = self._nyx_context.learning_metrics
     
-    async def _handle_resource_limit(self, resource_type: str):
-        """Handle resource limit reached."""
-        if resource_type == "memory":
-            # Clear caches
-            self.context_cache.clear()
-            self.communication_history = self.communication_history[-100:]
-            self.error_log = self.error_log[-100:]
-            
-            # Force garbage collection
-            import gc
-            gc.collect()
+    async def process_emotional_state(self, context: Dict[str, Any], user_emotion: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Process and update emotional state - Fixed to actually update the state"""
+        # Add user emotion to context if provided
+        if user_emotion:
+            context["user_emotion"] = user_emotion
+        
+        # Use the composite tool that both calculates AND updates
+        result = await calculate_and_update_emotional_state(
+            RunContextWrapper(context=self._nyx_context),
+            context
+        )
+        
+        emotional_data = json.loads(result)
+        # Update local state to match
+        self.current_emotional_state = {
+            "valence": emotional_data["valence"],
+            "arousal": emotional_data["arousal"],
+            "dominance": emotional_data["dominance"],
+            "primary_emotion": emotional_data["primary_emotion"]
+        }
+        
+        return self.current_emotional_state
     
-    async def _handle_performance_issue(self):
-        """Handle performance issues."""
-        # Log performance issue
-        self.error_log.append({
-            "timestamp": time.time(),
-            "type": "performance_issue",
-            "metrics": self.performance_metrics.copy()
-        })
-        
-        # Try to optimize
-        await self._optimize_performance()
+    async def manage_scenario(self, scenario_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Forward to new manage_scenario function"""
+        scenario_data["user_id"] = self.user_id
+        scenario_data["conversation_id"] = self.conversation_id
+        return await manage_scenario(scenario_data)
     
-    async def _optimize_performance(self):
-        """Optimize performance based on metrics."""
-        # Reduce concurrent operations
-        for pool in self.resource_pools.values():
-            pool.max_concurrent = max(1, pool.max_concurrent - 1)
-        
-        # Clear old data
-        self.context_cache.clear()
-        self.communication_history = self.communication_history[-100:]
-        
-        # Force garbage collection
-        import gc
-        gc.collect()
+    async def manage_relationships(self, interaction_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Forward to new manage_relationships function"""
+        interaction_data["user_id"] = self.user_id
+        interaction_data["conversation_id"] = self.conversation_id
+        return await manage_relationships(interaction_data)
+    
+    async def get_emotional_state(self) -> Dict[str, Any]:
+        """Get current emotional state"""
+        return self.current_emotional_state
+    
+    async def update_emotional_state(self, new_state: Dict[str, Any]):
+        """Update emotional state"""
+        self.current_emotional_state.update(new_state)
+        self._nyx_context.emotional_state.update(new_state)
+    
+    def update_context(self, new_context: Dict[str, Any], use_delta: bool = True):
+        """Update context - compatibility method"""
+        self.context_cache.update(new_context)
+        self._nyx_context.current_context.update(new_context)
     
     async def get_state_summary(self) -> Dict[str, Any]:
-        """Get a comprehensive summary of the current agent state."""
+        """Get comprehensive state summary"""
         return {
             "goals": self.current_goals,
             "active_tasks": self.active_tasks,
@@ -727,2269 +2384,25 @@ class AgentContext:
                 "adaptation_history": self.adaptation_history[-5:],
                 "metrics": self.learning_metrics
             },
-            "context": {
-                "version": self.context_version,
-                "last_update": self.last_context_update,
-                "cache_size": len(self.context_cache)
-            },
-            "communication": {
-                "history_size": len(self.communication_history),
-                "active_connections": len(self.agent_connections)
-            },
             "errors": {
                 "total": self.performance_metrics["error_rates"]["total"],
                 "recovered": self.performance_metrics["error_rates"]["recovered"],
                 "unrecovered": self.performance_metrics["error_rates"]["unrecovered"]
             }
         }
-
-    async def make_decision(self, context: Dict[str, Any], options: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """
-        Make a decision based on context, emotional state, and learned patterns.
-        
-        Args:
-            context: Current context information
-            options: List of possible actions/decisions
-            
-        Returns:
-            Selected decision with confidence score
-        """
-        try:
-            # Get emotional state influence
-            emotional_state = await self.get_emotional_state()
-            emotional_weight = self._calculate_emotional_weight(emotional_state)
-            
-            # Get learned patterns influence
-            pattern_weight = self._calculate_pattern_weight(context)
-            
-            # Calculate option scores
-            scored_options = []
-            for option in options:
-                # Base score from context relevance
-                context_score = self._calculate_context_relevance(option, context)
-                
-                # Emotional influence
-                emotional_score = self._calculate_emotional_alignment(option, emotional_state)
-                
-                # Pattern alignment
-                pattern_score = self._calculate_pattern_alignment(option, context)
-                
-                # Combine scores with weights
-                final_score = (
-                    context_score * 0.4 +
-                    emotional_score * emotional_weight * 0.3 +
-                    pattern_score * pattern_weight * 0.3
-                )
-                
-                scored_options.append({
-                    "option": option,
-                    "score": final_score,
-                    "components": {
-                        "context": context_score,
-                        "emotional": emotional_score,
-                        "pattern": pattern_score
-                    }
-                })
-            
-            # Sort by score and select best option
-            scored_options.sort(key=lambda x: x["score"], reverse=True)
-            selected = scored_options[0]
-            
-            # Update decision history
-            self.decision_history.append({
-                "timestamp": time.time(),
-                "selected_option": selected["option"],
-                "score": selected["score"],
-                "components": selected["components"],
-                "context": context
-            })
-            
-            # Update performance metrics
-            self.performance_metrics["total_actions"] += 1
-            self.decision_confidence = selected["score"]
-            
-            return {
-                "decision": selected["option"],
-                "confidence": selected["score"],
-                "components": selected["components"]
-            }
-            
-        except Exception as e:
-            logger.error(f"Error in decision making: {e}")
-            self.error_log.append({
-                "timestamp": time.time(),
-                "error": str(e),
-                "context": context
-            })
-            return self._get_fallback_decision(options)
     
+    # Additional compatibility methods
     def _calculate_emotional_weight(self, emotional_state: Dict[str, Any]) -> float:
-        """Calculate how much emotional state should influence decisions."""
-        # Higher weight for strong emotions
+        """Calculate emotional weight for decisions"""
         intensity = max(abs(emotional_state.get("valence", 0)), abs(emotional_state.get("arousal", 0)))
         return min(1.0, intensity * 2.0)
     
     def _calculate_pattern_weight(self, context: Dict[str, Any]) -> float:
-        """Calculate how much learned patterns should influence decisions."""
-        # Higher weight if we have relevant patterns
-        relevant_patterns = [
-            p for p in self.learned_patterns.values()
-            if self._pattern_matches_context(p, context)
-        ]
-        return min(1.0, len(relevant_patterns) * 0.2)
+        """Calculate pattern weight for decisions"""
+        relevant_patterns = sum(1 for p in self.learned_patterns.values()
+                               if any(k in str(context) for k in str(p).split()))
+        return min(1.0, relevant_patterns * 0.2)
     
-    def _calculate_context_relevance(self, option: Dict[str, Any], context: Dict[str, Any]) -> float:
-        """Calculate how relevant an option is to the current context."""
-        # Simple keyword matching for now
-        option_keywords = set(option.get("keywords", []))
-        context_keywords = set(context.get("keywords", []))
-        if not option_keywords or not context_keywords:
-            return 0.5
-        return len(option_keywords.intersection(context_keywords)) / len(option_keywords)
-    
-    def _calculate_emotional_alignment(self, option: Dict[str, Any], emotional_state: Dict[str, Any]) -> float:
-        """Calculate how well an option aligns with current emotional state."""
-        # Check if option's emotional impact matches current state
-        option_impact = option.get("emotional_impact", {})
-        if not option_impact:
-            return 0.5
-            
-        valence_match = abs(option_impact.get("valence", 0) - emotional_state.get("valence", 0))
-        arousal_match = abs(option_impact.get("arousal", 0) - emotional_state.get("arousal", 0))
-        
-        return 1.0 - (valence_match + arousal_match) / 2.0
-    
-    def _calculate_pattern_alignment(self, option: Dict[str, Any], context: Dict[str, Any]) -> float:
-        """Calculate how well an option aligns with learned patterns."""
-        relevant_patterns = [
-            p for p in self.learned_patterns.values()
-            if self._pattern_matches_context(p, context)
-        ]
-        
-        if not relevant_patterns:
-            return 0.5
-            
-        # Average alignment with relevant patterns
-        alignments = [
-            self._calculate_pattern_option_alignment(p, option)
-            for p in relevant_patterns
-        ]
-        return sum(alignments) / len(alignments)
-    
-    def _pattern_matches_context(self, pattern: Dict[str, Any], context: Dict[str, Any]) -> bool:
-        """Check if a pattern matches the current context."""
-        pattern_keywords = set(pattern.get("keywords", []))
-        context_keywords = set(context.get("keywords", []))
-        return bool(pattern_keywords.intersection(context_keywords))
-    
-    def _calculate_pattern_option_alignment(self, pattern: Dict[str, Any], option: Dict[str, Any]) -> float:
-        """Calculate how well an option aligns with a specific pattern."""
-        pattern_actions = set(pattern.get("successful_actions", []))
-        option_keywords = set(option.get("keywords", []))
-        
-        if not pattern_actions or not option_keywords:
-            return 0.5
-            
-        # Check if option keywords match any successful actions
-        matches = sum(1 for action in pattern_actions if any(kw in action for kw in option_keywords))
-        return matches / len(pattern_actions)
-    
-    def _get_fallback_decision(self, options: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Get a fallback decision when normal decision making fails."""
-        # Simple random selection as fallback
-        selected = random.choice(options)
-        return {
-            "decision": selected,
-            "confidence": 0.3,
-            "components": {
-                "context": 0.3,
-                "emotional": 0.3,
-                "pattern": 0.3
-            }
-        }
-
-    async def learn_from_experience(self, experience: Dict[str, Any]):
-        """
-        Learn from an experience and update internal patterns and strategies.
-        
-        Args:
-            experience: Dictionary containing experience data including:
-                - action: The action taken
-                - context: The context when action was taken
-                - outcome: The outcome of the action
-                - emotional_state: Emotional state during the experience
-                - success: Whether the action was successful
-        """
-        try:
-            # Extract experience components
-            action = experience.get("action", {})
-            context = experience.get("context", {})
-            outcome = experience.get("outcome", {})
-            emotional_state = experience.get("emotional_state", {})
-            success = experience.get("success", False)
-            
-            # Update pattern recognition
-            await self._update_patterns(action, context, success)
-            
-            # Update strategy effectiveness
-            await self._update_strategies(action, context, success)
-            
-            # Update adaptation history
-            self.adaptation_history.append({
-                "timestamp": time.time(),
-                "experience": experience,
-                "success": success
-            })
-            
-            # Update learning metrics
-            self._update_learning_metrics(success)
-            
-            # Clean up old adaptation history
-            if len(self.adaptation_history) > 1000:
-                self.adaptation_history = self.adaptation_history[-1000:]
-                
-        except Exception as e:
-            logger.error(f"Error in learning from experience: {e}")
-            self.error_log.append({
-                "timestamp": time.time(),
-                "error": str(e),
-                "experience": experience
-            })
-    
-    async def _update_patterns(self, action: Dict[str, Any], context: Dict[str, Any], success: bool):
-        """Update learned patterns based on experience."""
-        # Extract keywords from action and context
-        action_keywords = set(action.get("keywords", []))
-        context_keywords = set(context.get("keywords", []))
-        
-        # Create pattern key
-        pattern_key = f"{','.join(sorted(action_keywords))}_{','.join(sorted(context_keywords))}"
-        
-        if pattern_key not in self.learned_patterns:
-            self.learned_patterns[pattern_key] = {
-                "keywords": list(action_keywords | context_keywords),
-                "successful_actions": [],
-                "failed_actions": [],
-                "success_rate": 0.0,
-                "total_occurrences": 0
-            }
-        
-        pattern = self.learned_patterns[pattern_key]
-        pattern["total_occurrences"] += 1
-        
-        if success:
-            pattern["successful_actions"].append(action)
-            if len(pattern["successful_actions"]) > 100:
-                pattern["successful_actions"] = pattern["successful_actions"][-100:]
-        else:
-            pattern["failed_actions"].append(action)
-            if len(pattern["failed_actions"]) > 100:
-                pattern["failed_actions"] = pattern["failed_actions"][-100:]
-        
-        # Update success rate
-        total_successful = len(pattern["successful_actions"])
-        total_actions = total_successful + len(pattern["failed_actions"])
-        pattern["success_rate"] = total_successful / total_actions if total_actions > 0 else 0.0
-    
-    async def _update_strategies(self, action: Dict[str, Any], context: Dict[str, Any], success: bool):
-        """Update strategy effectiveness based on experience."""
-        # Extract strategy information from action
-        strategy = action.get("strategy", "default")
-        
-        if strategy not in self.strategy_effectiveness:
-            self.strategy_effectiveness[strategy] = {
-                "successful_uses": 0,
-                "total_uses": 0,
-                "success_rate": 0.0,
-                "contexts": {},
-                "last_used": time.time()
-            }
-        
-        strategy_data = self.strategy_effectiveness[strategy]
-        strategy_data["total_uses"] += 1
-        
-        if success:
-            strategy_data["successful_uses"] += 1
-            
-            # Update context-specific success
-            context_key = self._get_context_key(context)
-            if context_key not in strategy_data["contexts"]:
-                strategy_data["contexts"][context_key] = {
-                    "successful_uses": 0,
-                    "total_uses": 0,
-                    "success_rate": 0.0
-                }
-            
-            context_data = strategy_data["contexts"][context_key]
-            context_data["successful_uses"] += 1
-            context_data["total_uses"] += 1
-            context_data["success_rate"] = context_data["successful_uses"] / context_data["total_uses"]
-        
-        # Update overall success rate
-        strategy_data["success_rate"] = strategy_data["successful_uses"] / strategy_data["total_uses"]
-        strategy_data["last_used"] = time.time()
-    
-    def _get_context_key(self, context: Dict[str, Any]) -> str:
-        """Generate a key for categorizing contexts."""
-        # Extract relevant context features
-        features = [
-            context.get("location", "unknown"),
-            context.get("time_of_day", "unknown"),
-            context.get("weather", "unknown"),
-            context.get("mood", "unknown")
-        ]
-        return "_".join(features)
-    
-    def _update_learning_metrics(self, success: bool):
-        """Update learning-related performance metrics."""
-        # Update pattern recognition rate
-        if len(self.learned_patterns) > 0:
-            total_patterns = len(self.learned_patterns)
-            successful_patterns = sum(1 for p in self.learned_patterns.values() if p["success_rate"] > 0.5)
-            self.learning_metrics["pattern_recognition_rate"] = successful_patterns / total_patterns
-        
-        # Update strategy improvement rate
-        if len(self.strategy_effectiveness) > 0:
-            total_strategies = len(self.strategy_effectiveness)
-            improving_strategies = sum(
-                1 for s in self.strategy_effectiveness.values()
-                if s["success_rate"] > 0.5
-            )
-            self.learning_metrics["strategy_improvement_rate"] = improving_strategies / total_strategies
-        
-        # Update adaptation success rate
-        if len(self.adaptation_history) > 0:
-            recent_adaptations = self.adaptation_history[-100:]  # Look at last 100 adaptations
-            successful_adaptations = sum(1 for a in recent_adaptations if a["success"])
-            self.learning_metrics["adaptation_success_rate"] = successful_adaptations / len(recent_adaptations)
-
-    async def process_emotional_state(self, context: Dict[str, Any], user_emotion: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        """
-        Process and update emotional state based on context and user emotion.
-        """
-        # Check if emotional system is available
-        if self.emotional_system is None:
-            # Return a default emotional state if the system isn't available
-            return {
-                "valence": 0.0,
-                "arousal": 0.5,
-                "dominance": 0.7
-            }
-        try:
-            # Get current emotional state
-            current_state = await self.get_emotional_state()
-            
-            # Process context-based emotional changes
-            context_impact = self._calculate_context_emotional_impact(context)
-            
-            # Process user emotion influence if available
-            user_influence = self._calculate_user_emotion_influence(user_emotion) if user_emotion else {}
-            
-            # Process memory-based emotional changes
-            memory_impact = await self._get_memory_emotional_impact(context)
-            
-            # Combine emotional influences
-            new_state = self._combine_emotional_influences(
-                current_state,
-                context_impact,
-                user_influence,
-                memory_impact
-            )
-            
-            # Apply emotional decay
-            new_state = self._apply_emotional_decay(new_state)
-            
-            # Update emotional state
-            await self.update_emotional_state(new_state)
-            
-            # Record emotional change
-            self._record_emotional_change(current_state, new_state, context)
-            
-            return new_state
-            
-        except Exception as e:
-            logger.error(f"Error processing emotional state: {e}")
-            self.error_log.append({
-                "timestamp": time.time(),
-                "error": str(e),
-                "context": context,
-                "user_emotion": user_emotion
-            })
-            return await self.get_emotional_state()
-    
-    def _calculate_context_emotional_impact(self, context: Dict[str, Any]) -> Dict[str, float]:
-        """Calculate emotional impact from current context."""
-        impact = {
-            "valence": 0.0,  # Positive/negative (-1 to 1)
-            "arousal": 0.0,  # Intensity (0 to 1)
-            "dominance": 0.0  # Control level (0 to 1)
-        }
-        
-        # Analyze context features
-        features = {
-            "location": context.get("location", ""),
-            "time_of_day": context.get("time_of_day", ""),
-            "weather": context.get("weather", ""),
-            "mood": context.get("mood", ""),
-            "events": context.get("events", []),
-            "interactions": context.get("interactions", [])
-        }
-        
-        # Location impact
-        if "dangerous" in features["location"].lower():
-            impact["valence"] -= 0.3
-            impact["arousal"] += 0.4
-        elif "safe" in features["location"].lower():
-            impact["valence"] += 0.2
-            impact["arousal"] -= 0.2
-        
-        # Time impact
-        if features["time_of_day"] == "night":
-            impact["arousal"] += 0.2
-        elif features["time_of_day"] == "morning":
-            impact["valence"] += 0.1
-        
-        # Weather impact
-        if "storm" in features["weather"].lower():
-            impact["arousal"] += 0.3
-            impact["valence"] -= 0.2
-        elif "sunny" in features["weather"].lower():
-            impact["valence"] += 0.2
-        
-        # Mood impact
-        if "happy" in features["mood"].lower():
-            impact["valence"] += 0.3
-        elif "sad" in features["mood"].lower():
-            impact["valence"] -= 0.3
-        
-        # Events impact
-        for event in features["events"]:
-            if "conflict" in event.lower():
-                impact["arousal"] += 0.2
-                impact["valence"] -= 0.2
-            elif "celebration" in event.lower():
-                impact["valence"] += 0.3
-                impact["arousal"] += 0.2
-        
-        # Normalize values
-        impact["valence"] = max(min(impact["valence"], 1.0), -1.0)
-        impact["arousal"] = max(min(impact["arousal"], 1.0), 0.0)
-        impact["dominance"] = max(min(impact["dominance"], 1.0), 0.0)
-        
-        return impact
-    
-    def _calculate_user_emotion_influence(self, user_emotion: Dict[str, Any]) -> Dict[str, float]:
-        """Calculate emotional influence from user's emotional state."""
-        influence = {
-            "valence": 0.0,
-            "arousal": 0.0,
-            "dominance": 0.0
-        }
-        
-        # Extract user emotion components
-        user_valence = user_emotion.get("valence", 0.0)
-        user_arousal = user_emotion.get("arousal", 0.0)
-        
-        # Apply empathy-based influence
-        empathy_factor = 0.3  # How much user emotion affects agent
-        influence["valence"] = user_valence * empathy_factor
-        influence["arousal"] = user_arousal * empathy_factor
-        
-        # Normalize values
-        influence["valence"] = max(min(influence["valence"], 1.0), -1.0)
-        influence["arousal"] = max(min(influence["arousal"], 1.0), 0.0)
-        influence["dominance"] = max(min(influence["dominance"], 1.0), 0.0)
-        
-        return influence
-    
-    async def _get_memory_emotional_impact(self, context: Dict[str, Any]) -> Dict[str, float]:
-        """Get emotional impact from relevant memories."""
-        impact = {
-            "valence": 0.0,
-            "arousal": 0.0,
-            "dominance": 0.0
-        }
-        
-        try:
-            # Get relevant memories
-            memories = await self.memory_system.get_relevant_memories(
-                context=context,
-                limit=5
-            )
-            
-            if not memories:
-                return impact
-            
-            # Calculate emotional impact from memories
-            total_weight = 0
-            weighted_valence = 0
-            weighted_arousal = 0
-            
-            for memory in memories:
-                # Get memory emotional content
-                memory_emotion = memory.get("emotional_content", {})
-                memory_valence = memory_emotion.get("valence", 0.0)
-                memory_arousal = memory_emotion.get("arousal", 0.0)
-                
-                # Calculate memory weight based on relevance and recency
-                weight = self._calculate_memory_weight(memory)
-                total_weight += weight
-                
-                weighted_valence += memory_valence * weight
-                weighted_arousal += memory_arousal * weight
-            
-            if total_weight > 0:
-                impact["valence"] = weighted_valence / total_weight
-                impact["arousal"] = weighted_arousal / total_weight
-            
-            return impact
-            
-        except Exception as e:
-            logger.error(f"Error getting memory emotional impact: {e}")
-            return impact
-    
-    def _calculate_memory_weight(self, memory: Dict[str, Any]) -> float:
-        """Calculate weight for a memory based on relevance and recency."""
-        # Get memory properties
-        recency = memory.get("recency", 0)  # 0 to 1, where 1 is most recent
-        relevance = memory.get("relevance", 0)  # 0 to 1
-        emotional_intensity = memory.get("emotional_intensity", 0)  # 0 to 1
-        
-        # Combine factors with weights
-        weight = (
-            recency * 0.4 +
-            relevance * 0.4 +
-            emotional_intensity * 0.2
-        )
-        
-        return max(min(weight, 1.0), 0.0)
-    
-    def _combine_emotional_influences(
-        self,
-        current: Dict[str, float],
-        context: Dict[str, float],
-        user: Dict[str, float],
-        memory: Dict[str, float]
-    ) -> Dict[str, float]:
-        """Combine different emotional influences into new state."""
-        # Define weights for different influences
-        weights = {
-            "current": 0.4,    # Current state has highest weight
-            "context": 0.3,    # Context is second most important
-            "user": 0.2,       # User influence is third
-            "memory": 0.1      # Memory influence is least important
-        }
-        
-        # Combine each emotional dimension
-        new_state = {
-            "valence": (
-                current["valence"] * weights["current"] +
-                context["valence"] * weights["context"] +
-                user["valence"] * weights["user"] +
-                memory["valence"] * weights["memory"]
-            ),
-            "arousal": (
-                current["arousal"] * weights["current"] +
-                context["arousal"] * weights["context"] +
-                user["arousal"] * weights["user"] +
-                memory["arousal"] * weights["memory"]
-            ),
-            "dominance": (
-                current["dominance"] * weights["current"] +
-                context["dominance"] * weights["context"] +
-                user["dominance"] * weights["user"] +
-                memory["dominance"] * weights["memory"]
-            )
-        }
-        
-        # Normalize values
-        new_state["valence"] = max(min(new_state["valence"], 1.0), -1.0)
-        new_state["arousal"] = max(min(new_state["arousal"], 1.0), 0.0)
-        new_state["dominance"] = max(min(new_state["dominance"], 1.0), 0.0)
-        
-        return new_state
-    
-    def _apply_emotional_decay(self, state: Dict[str, float]) -> Dict[str, float]:
-        """Apply natural emotional decay to return to baseline."""
-        decay_rate = 0.1  # Rate at which emotions return to baseline
-        
-        # Apply decay to each dimension
-        state["valence"] *= (1 - decay_rate)
-        state["arousal"] *= (1 - decay_rate)
-        state["dominance"] *= (1 - decay_rate)
-        
-        return state
-    
-    def _record_emotional_change(
-        self,
-        old_state: Dict[str, float],
-        new_state: Dict[str, float],
-        context: Dict[str, Any]
-    ):
-        """Record emotional state changes for analysis."""
-        change = {
-            "timestamp": time.time(),
-            "old_state": old_state,
-            "new_state": new_state,
-            "context": context,
-            "changes": {
-                "valence": new_state["valence"] - old_state["valence"],
-                "arousal": new_state["arousal"] - old_state["arousal"],
-                "dominance": new_state["dominance"] - old_state["dominance"]
-            }
-        }
-        
-        # Add to emotional history
-        self.current_emotional_state["history"] = self.current_emotional_state.get("history", [])
-        self.current_emotional_state["history"].append(change)
-        
-        # Limit history size
-        if len(self.current_emotional_state["history"]) > 100:
-            self.current_emotional_state["history"] = self.current_emotional_state["history"][-100:]
-
-    async def manage_scenario(self, scenario_data: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Manage and coordinate complex scenarios across multiple systems.
-        
-        Args:
-            scenario_data: Dictionary containing scenario information including:
-                - scenario_id: Unique identifier for the scenario
-                - type: Type of scenario (e.g., "training", "conflict", "social")
-                - participants: List of involved entities
-                - objectives: List of scenario objectives
-                - constraints: Any constraints or limitations
-                - environment: Environmental conditions
-                
-        Returns:
-            Updated scenario state and coordination plan
-        """
-        try:
-            # Initialize scenario state
-            scenario_state = {
-                "id": scenario_data["scenario_id"],
-                "type": scenario_data["type"],
-                "participants": scenario_data["participants"],
-                "objectives": scenario_data["objectives"],
-                "constraints": scenario_data.get("constraints", {}),
-                "environment": scenario_data.get("environment", {}),
-                "current_phase": "initialization",
-                "progress": {},
-                "active_tasks": [],
-                "completed_tasks": [],
-                "conflicts": [],
-                "emotional_states": {},
-                "resource_usage": {},
-                "start_time": time.time(),
-                "last_update": time.time()
-            }
-            
-            # Coordinate with memory system
-            await self._initialize_scenario_memories(scenario_state)
-            
-            # Coordinate with emotional system
-            await self._initialize_scenario_emotions(scenario_state)
-            
-            # Coordinate with belief system
-            await self._initialize_scenario_beliefs(scenario_state)
-            
-            # Generate initial tasks
-            initial_tasks = await self._generate_scenario_tasks(scenario_state)
-            scenario_state["active_tasks"] = initial_tasks
-            
-            # Initialize progress tracking
-            for objective in scenario_state["objectives"]:
-                scenario_state["progress"][objective["id"]] = {
-                    "status": "pending",
-                    "completion": 0.0,
-                    "blockers": [],
-                    "dependencies": objective.get("dependencies", [])
-                }
-            
-            # Start scenario monitoring
-            asyncio.create_task(self._monitor_scenario(scenario_state))
-            
-            return {
-                "success": True,
-                "scenario_state": scenario_state,
-                "initial_tasks": initial_tasks,
-                "coordination_plan": await self._generate_coordination_plan(scenario_state)
-            }
-            
-        except Exception as e:
-            logger.error(f"Error managing scenario: {e}")
-            self.error_log.append({
-                "timestamp": time.time(),
-                "error": str(e),
-                "scenario_data": scenario_data
-            })
-            return {
-                "success": False,
-                "error": str(e)
-            }
-    
-    async def _initialize_scenario_memories(self, scenario_state: Dict[str, Any]):
-        """Initialize relevant memories for the scenario."""
-        try:
-            # Get relevant memories for each participant
-            for participant in scenario_state["participants"]:
-                memories = await self.memory_system.get_relevant_memories(
-                    context={
-                        "entity_id": participant["id"],
-                        "entity_type": participant["type"],
-                        "scenario_type": scenario_state["type"]
-                    },
-                    limit=5
-                )
-                
-                # Store memories in scenario state
-                scenario_state["memories"] = scenario_state.get("memories", {})
-                scenario_state["memories"][participant["id"]] = memories
-                
-        except Exception as e:
-            logger.error(f"Error initializing scenario memories: {e}")
-    
-    async def _initialize_scenario_emotions(self, scenario_state: Dict[str, Any]):
-        """Initialize emotional states for scenario participants."""
-        try:
-            # Get emotional states for each participant
-            for participant in scenario_state["participants"]:
-                emotional_state = await self.emotional_system.get_emotional_state(
-                    entity_id=participant["id"],
-                    entity_type=participant["type"]
-                )
-                
-                # Store emotional state
-                scenario_state["emotional_states"][participant["id"]] = emotional_state
-                
-        except Exception as e:
-            logger.error(f"Error initializing scenario emotions: {e}")
-    
-    async def _initialize_scenario_beliefs(self, scenario_state: Dict[str, Any]):
-        """Initialize beliefs for scenario participants."""
-        try:
-            # Get beliefs for each participant
-            for participant in scenario_state["participants"]:
-                beliefs = await self.belief_system.get_beliefs(
-                    entity_id=participant["id"],
-                    entity_type=participant["type"]
-                )
-                
-                # Store beliefs
-                scenario_state["beliefs"] = scenario_state.get("beliefs", {})
-                scenario_state["beliefs"][participant["id"]] = beliefs
-                
-        except Exception as e:
-            logger.error(f"Error initializing scenario beliefs: {e}")
-    
-    async def _generate_scenario_tasks(self, scenario_state: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """Generate initial tasks for the scenario."""
-        tasks = []
-        
-        try:
-            # Generate tasks based on scenario type
-            if scenario_state["type"] == "training":
-                tasks = await self._generate_training_tasks(scenario_state)
-            elif scenario_state["type"] == "conflict":
-                tasks = await self._generate_conflict_tasks(scenario_state)
-            elif scenario_state["type"] == "social":
-                tasks = await self._generate_social_tasks(scenario_state)
-            
-            # Add task metadata
-            for task in tasks:
-                task.update({
-                    "status": "pending",
-                    "progress": 0.0,
-                    "start_time": None,
-                    "completion_time": None,
-                    "dependencies": task.get("dependencies", []),
-                    "blockers": []
-                })
-            
-            return tasks
-            
-        except Exception as e:
-            logger.error(f"Error generating scenario tasks: {e}")
-            return []
-    
-    async def _generate_training_tasks(self, scenario_state: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """Generate tasks for training scenarios."""
-        tasks = []
-        
-        # Get training objectives
-        objectives = [obj for obj in scenario_state["objectives"] if obj["type"] == "training"]
-        
-        for objective in objectives:
-            # Create task based on objective
-            task = {
-                "id": f"training_{objective['id']}",
-                "type": "training",
-                "objective_id": objective["id"],
-                "description": objective["description"],
-                "required_skills": objective.get("required_skills", []),
-                "difficulty": objective.get("difficulty", "medium"),
-                "estimated_duration": objective.get("duration", 300),  # 5 minutes default
-                "success_criteria": objective.get("success_criteria", []),
-                "failure_criteria": objective.get("failure_criteria", [])
-            }
-            tasks.append(task)
-        
-        return tasks
-    
-    async def _generate_conflict_tasks(self, scenario_state: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """Generate tasks for conflict scenarios."""
-        tasks = []
-        
-        # Get conflict objectives
-        objectives = [obj for obj in scenario_state["objectives"] if obj["type"] == "conflict"]
-        
-        for objective in objectives:
-            # Create task based on objective
-            task = {
-                "id": f"conflict_{objective['id']}",
-                "type": "conflict",
-                "objective_id": objective["id"],
-                "description": objective["description"],
-                "conflict_type": objective.get("conflict_type", "general"),
-                "intensity": objective.get("intensity", "medium"),
-                "participants": objective.get("participants", []),
-                "resolution_criteria": objective.get("resolution_criteria", []),
-                "failure_conditions": objective.get("failure_conditions", [])
-            }
-            tasks.append(task)
-        
-        return tasks
-    
-    async def _generate_social_tasks(self, scenario_state: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """Generate tasks for social scenarios."""
-        tasks = []
-        
-        # Get social objectives
-        objectives = [obj for obj in scenario_state["objectives"] if obj["type"] == "social"]
-        
-        for objective in objectives:
-            # Create task based on objective
-            task = {
-                "id": f"social_{objective['id']}",
-                "type": "social",
-                "objective_id": objective["id"],
-                "description": objective["description"],
-                "interaction_type": objective.get("interaction_type", "general"),
-                "required_relationships": objective.get("required_relationships", []),
-                "success_criteria": objective.get("success_criteria", []),
-                "failure_criteria": objective.get("failure_criteria", [])
-            }
-            tasks.append(task)
-        
-        return tasks
-    
-    async def _generate_coordination_plan(self, scenario_state: Dict[str, Any]) -> Dict[str, Any]:
-        """Generate a coordination plan for managing the scenario."""
-        return {
-            "monitoring_interval": 5,  # seconds
-            "update_interval": 30,     # seconds
-            "resource_limits": {
-                "max_concurrent_tasks": 3,
-                "max_memory_usage": 1024 * 1024 * 100,  # 100MB
-                "max_cpu_usage": 80,  # percentage
-                "max_network_usage": 1024 * 1024 * 10  # 10MB/s
-            },
-            "priority_levels": {
-                "critical": 1,
-                "high": 2,
-                "medium": 3,
-                "low": 4
-            },
-            "recovery_strategies": {
-                "task_failure": "retry",
-                "resource_exhaustion": "scale_down",
-                "conflict_escalation": "mediate",
-                "emotional_instability": "stabilize"
-            }
-        }
-    
-    async def _monitor_scenario(self, scenario_state: Dict[str, Any]):
-        """Monitor and manage scenario progress."""
-        while True:
-            try:
-                # Update scenario state
-                await self._update_scenario_state(scenario_state)
-                
-                # Check for task completion
-                await self._check_task_completion(scenario_state)
-                
-                # Check for conflicts
-                await self._check_conflicts(scenario_state)
-                
-                # Update emotional states
-                await self._update_emotional_states(scenario_state)
-                
-                # Check resource usage
-                await self._check_resource_usage(scenario_state)
-                
-                # Update progress
-                await self._update_progress(scenario_state)
-                
-                # Check for scenario completion
-                if await self._check_scenario_completion(scenario_state):
-                    await self._complete_scenario(scenario_state)
-                    break
-                
-                # Wait before next update
-                await asyncio.sleep(scenario_state["coordination_plan"]["update_interval"])
-                
-            except Exception as e:
-                logger.error(f"Error monitoring scenario: {e}")
-                await asyncio.sleep(5)  # Wait before retrying
-    
-    async def _update_scenario_state(self, scenario_state: Dict[str, Any]):
-        """Update the current state of the scenario."""
-        scenario_state["last_update"] = time.time()
-        
-        # Update active tasks
-        for task in scenario_state["active_tasks"]:
-            if task["status"] == "completed":
-                scenario_state["completed_tasks"].append(task)
-                scenario_state["active_tasks"].remove(task)
-        
-        # Update progress for each objective
-        for objective_id, progress in scenario_state["progress"].items():
-            # Calculate completion based on completed tasks
-            completed_tasks = [
-                task for task in scenario_state["completed_tasks"]
-                if task["objective_id"] == objective_id
-            ]
-            total_tasks = len([
-                task for task in scenario_state["active_tasks"] + scenario_state["completed_tasks"]
-                if task["objective_id"] == objective_id
-            ])
-            
-            if total_tasks > 0:
-                progress["completion"] = len(completed_tasks) / total_tasks
-                
-                # Update status
-                if progress["completion"] >= 1.0:
-                    progress["status"] = "completed"
-                elif progress["completion"] > 0:
-                    progress["status"] = "in_progress"
-                else:
-                    progress["status"] = "pending"
-    
-    async def _check_task_completion(self, scenario_state: Dict[str, Any]):
-        """Check and update task completion status."""
-        for task in scenario_state["active_tasks"]:
-            if task["status"] == "pending":
-                # Start task if dependencies are met
-                if all(
-                    dep in [t["id"] for t in scenario_state["completed_tasks"]]
-                    for dep in task["dependencies"]
-                ):
-                    task["status"] = "in_progress"
-                    task["start_time"] = time.time()
-            
-            elif task["status"] == "in_progress":
-                # Check for completion
-                if await self._evaluate_task_completion(task):
-                    task["status"] = "completed"
-                    task["completion_time"] = time.time()
-    
-    async def _check_conflicts(self, scenario_state: Dict[str, Any]):
-        """Check for and manage conflicts in the scenario."""
-        # Get current conflicts
-        current_conflicts = await self._detect_conflicts(scenario_state)
-        
-        # Update conflicts list
-        scenario_state["conflicts"] = current_conflicts
-        
-        # Handle conflicts
-        for conflict in current_conflicts:
-            if conflict["severity"] >= 0.8:  # High severity
-                await self._handle_high_severity_conflict(scenario_state, conflict)
-            elif conflict["severity"] >= 0.5:  # Medium severity
-                await self._handle_medium_severity_conflict(scenario_state, conflict)
-            else:  # Low severity
-                await self._handle_low_severity_conflict(scenario_state, conflict)
-    
-    async def _update_emotional_states(self, scenario_state: Dict[str, Any]):
-        """Update emotional states of scenario participants."""
-        for participant_id in scenario_state["emotional_states"]:
-            # Get updated emotional state
-            emotional_state = await self.emotional_system.get_emotional_state(
-                entity_id=participant_id,
-                entity_type=next(
-                    p["type"] for p in scenario_state["participants"]
-                    if p["id"] == participant_id
-                )
-            )
-            
-            # Update stored state
-            scenario_state["emotional_states"][participant_id] = emotional_state
-            
-            # Check for emotional instability
-            if self._is_emotionally_unstable(emotional_state):
-                await self._handle_emotional_instability(scenario_state, participant_id)
-    
-    async def _check_resource_usage(self, scenario_state: Dict[str, Any]):
-        """Check and manage resource usage."""
-        # Get current resource usage
-        current_usage = {
-            "memory": psutil.Process().memory_info().rss,
-            "cpu": psutil.Process().cpu_percent(),
-            "network": psutil.net_io_counters().bytes_sent + psutil.net_io_counters().bytes_recv
-        }
-        
-        # Update stored usage
-        scenario_state["resource_usage"] = current_usage
-        
-        # Check against limits
-        limits = scenario_state["coordination_plan"]["resource_limits"]
-        
-        if current_usage["memory"] > limits["max_memory_usage"]:
-            await self._handle_resource_limit(scenario_state, "memory")
-        if current_usage["cpu"] > limits["max_cpu_usage"]:
-            await self._handle_resource_limit(scenario_state, "cpu")
-        if current_usage["network"] > limits["max_network_usage"]:
-            await self._handle_resource_limit(scenario_state, "network")
-    
-    async def _update_progress(self, scenario_state: Dict[str, Any]):
-        """Update overall scenario progress."""
-        # Calculate overall completion
-        total_progress = sum(p["completion"] for p in scenario_state["progress"].values())
-        total_objectives = len(scenario_state["progress"])
-        
-        if total_objectives > 0:
-            overall_completion = total_progress / total_objectives
-        else:
-            overall_completion = 0.0
-        
-        # Update scenario phase based on progress
-        if overall_completion >= 1.0:
-            scenario_state["current_phase"] = "completion"
-        elif overall_completion >= 0.75:
-            scenario_state["current_phase"] = "climax"
-        elif overall_completion >= 0.5:
-            scenario_state["current_phase"] = "development"
-        elif overall_completion >= 0.25:
-            scenario_state["current_phase"] = "rising_action"
-        else:
-            scenario_state["current_phase"] = "setup"
-    
-    async def _check_scenario_completion(self, scenario_state: Dict[str, Any]) -> bool:
-        """Check if the scenario is complete."""
-        # Check if all objectives are completed
-        all_objectives_complete = all(
-            progress["status"] == "completed"
-            for progress in scenario_state["progress"].values()
-        )
-        
-        # Check if all tasks are completed
-        all_tasks_complete = len(scenario_state["active_tasks"]) == 0
-        
-        # Check if there are no active conflicts
-        no_active_conflicts = not any(
-            conflict["status"] == "active"
-            for conflict in scenario_state["conflicts"]
-        )
-        
-        return all_objectives_complete and all_tasks_complete and no_active_conflicts
-    
-    async def _complete_scenario(self, scenario_state: Dict[str, Any]):
-        """Complete the scenario and clean up resources."""
-        try:
-            # Update final state
-            scenario_state["current_phase"] = "completed"
-            scenario_state["completion_time"] = time.time()
-            
-            # Store scenario results
-            await self._store_scenario_results(scenario_state)
-            
-            # Clean up resources
-            await self._cleanup_scenario_resources(scenario_state)
-            
-            # Generate summary
-            summary = await self._generate_scenario_summary(scenario_state)
-            
-            # Store summary in memory
-            await self.memory_system.add_memory(
-                memory_text=summary,
-                memory_type="scenario_summary",
-                memory_scope="game",
-                significance=8,
-                tags=["scenario_completion", scenario_state["type"]],
-                metadata={
-                    "scenario_id": scenario_state["id"],
-                    "completion_time": scenario_state["completion_time"]
-                }
-            )
-            
-        except Exception as e:
-            logger.error(f"Error completing scenario: {e}")
-
-    async def manage_relationships(self, interaction_data: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Manage and update relationships between entities based on interactions.
-        
-        Args:
-            interaction_data: Dictionary containing interaction information including:
-                - participants: List of involved entities
-                - interaction_type: Type of interaction (e.g., "training", "conflict", "social")
-                - outcome: Success/failure of interaction
-                - emotional_impact: Emotional changes for each participant
-                - duration: Duration of interaction
-                - intensity: Intensity level of interaction
-                
-        Returns:
-            Updated relationship states and interaction analysis
-        """
-        try:
-            # Initialize relationship update data
-            relationship_updates = {
-                "participants": interaction_data["participants"],
-                "interaction_type": interaction_data["interaction_type"],
-                "timestamp": time.time(),
-                "relationship_changes": {},
-                "emotional_impacts": {},
-                "trust_changes": {},
-                "power_dynamic_changes": {},
-                "interaction_analysis": {}
-            }
-            
-            # Process each participant pair
-            for i, participant1 in enumerate(interaction_data["participants"]):
-                for participant2 in interaction_data["participants"][i+1:]:
-                    # Get current relationship state
-                    current_relationship = await self._get_relationship_state(
-                        participant1["id"],
-                        participant2["id"]
-                    )
-                    
-                    # Calculate relationship changes
-                    changes = await self._calculate_relationship_changes(
-                        current_relationship,
-                        interaction_data,
-                        participant1,
-                        participant2
-                    )
-                    
-                    # Update relationship state
-                    new_state = await self._update_relationship_state(
-                        participant1["id"],
-                        participant2["id"],
-                        changes
-                    )
-                    
-                    # Record changes
-                    relationship_updates["relationship_changes"][f"{participant1['id']}_{participant2['id']}"] = {
-                        "old_state": current_relationship,
-                        "new_state": new_state,
-                        "changes": changes
-                    }
-            
-            # Analyze interaction patterns
-            relationship_updates["interaction_analysis"] = await self._analyze_interaction_patterns(
-                interaction_data,
-                relationship_updates["relationship_changes"]
-            )
-            
-            # Store interaction history
-            await self._store_interaction_history(relationship_updates)
-            
-            # Update relationship metrics
-            await self._update_relationship_metrics(relationship_updates)
-            
-            return {
-                "success": True,
-                "relationship_updates": relationship_updates,
-                "analysis": relationship_updates["interaction_analysis"]
-            }
-            
-        except Exception as e:
-            logger.error(f"Error managing relationships: {e}")
-            self.error_log.append({
-                "timestamp": time.time(),
-                "error": str(e),
-                "interaction_data": interaction_data
-            })
-            return {
-                "success": False,
-                "error": str(e)
-            }
-    
-    async def _get_relationship_state(self, entity1_id: str, entity2_id: str) -> Dict[str, Any]:
-        """Get current relationship state between two entities."""
-        # Check if belief system is available
-        if self.belief_system is None:
-            # Return a default relationship if the system isn't available
-            return {
-                "trust": 0.5,
-                "power_dynamic": 0.5,
-                "emotional_bond": 0.3,
-                "interaction_count": 0,
-                "last_interaction": None,
-                "relationship_type": "neutral",
-                "stability": 0.5
-            }
-        try:
-            # Get relationship from belief system
-            relationship = await self.belief_system.get_relationship(
-                entity1_id,
-                entity2_id
-            )
-            
-            if not relationship:
-                # Create default relationship state
-                relationship = {
-                    "trust": 0.5,
-                    "power_dynamic": 0.5,
-                    "emotional_bond": 0.3,
-                    "interaction_count": 0,
-                    "last_interaction": None,
-                    "interaction_history": [],
-                    "conflict_history": [],
-                    "successful_interactions": 0,
-                    "failed_interactions": 0,
-                    "relationship_type": "neutral",
-                    "stability": 0.5
-                }
-                
-                # Store initial relationship
-                await self.belief_system.store_relationship(
-                    entity1_id,
-                    entity2_id,
-                    relationship
-                )
-            
-            return relationship
-            
-        except Exception as e:
-            logger.error(f"Error getting relationship state: {e}")
-            return None
-    
-    async def _calculate_relationship_changes(
-        self,
-        current_state: Dict[str, Any],
-        interaction_data: Dict[str, Any],
-        participant1: Dict[str, Any],
-        participant2: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """Calculate relationship changes based on interaction."""
-        changes = {
-            "trust": 0.0,
-            "power_dynamic": 0.0,
-            "emotional_bond": 0.0,
-            "stability": 0.0
-        }
-        
-        try:
-            # Calculate trust changes
-            trust_change = self._calculate_trust_change(
-                current_state,
-                interaction_data,
-                participant1,
-                participant2
-            )
-            changes["trust"] = trust_change
-            
-            # Calculate power dynamic changes
-            power_change = self._calculate_power_dynamic_change(
-                current_state,
-                interaction_data,
-                participant1,
-                participant2
-            )
-            changes["power_dynamic"] = power_change
-            
-            # Calculate emotional bond changes
-            emotional_change = self._calculate_emotional_bond_change(
-                current_state,
-                interaction_data,
-                participant1,
-                participant2
-            )
-            changes["emotional_bond"] = emotional_change
-            
-            # Calculate stability changes
-            stability_change = self._calculate_stability_change(
-                current_state,
-                interaction_data,
-                participant1,
-                participant2
-            )
-            changes["stability"] = stability_change
-            
-            return changes
-            
-        except Exception as e:
-            logger.error(f"Error calculating relationship changes: {e}")
-            return changes
-    
-    def _calculate_trust_change(
-        self,
-        current_state: Dict[str, Any],
-        interaction_data: Dict[str, Any],
-        participant1: Dict[str, Any],
-        participant2: Dict[str, Any]
-    ) -> float:
-        """Calculate trust change based on interaction."""
-        trust_change = 0.0
-        
-        # Base trust change from interaction outcome
-        if interaction_data["outcome"] == "success":
-            trust_change += 0.1
-        elif interaction_data["outcome"] == "failure":
-            trust_change -= 0.1
-        
-        # Trust change based on interaction type
-        interaction_type = interaction_data["interaction_type"]
-        if interaction_type == "training":
-            trust_change += 0.05
-        elif interaction_type == "conflict":
-            trust_change -= 0.05
-        
-        # Trust change based on emotional impact
-        emotional_impact = interaction_data.get("emotional_impact", {})
-        if emotional_impact:
-            positive_emotions = sum(1 for impact in emotional_impact.values() if impact > 0)
-            negative_emotions = sum(1 for impact in emotional_impact.values() if impact < 0)
-            trust_change += (positive_emotions - negative_emotions) * 0.02
-        
-        # Trust change based on interaction duration
-        duration = interaction_data.get("duration", 0)
-        if duration > 300:  # More than 5 minutes
-            trust_change += 0.02
-        
-        # Trust change based on intensity
-        intensity = interaction_data.get("intensity", 0.5)
-        trust_change *= (1 + intensity)
-        
-        return max(min(trust_change, 0.2), -0.2)  # Limit change to ±0.2
-    
-    def _calculate_power_dynamic_change(
-        self,
-        current_state: Dict[str, Any],
-        interaction_data: Dict[str, Any],
-        participant1: Dict[str, Any],
-        participant2: Dict[str, Any]
-    ) -> float:
-        """Calculate power dynamic change based on interaction."""
-        power_change = 0.0
-        
-        # Power change based on interaction type
-        interaction_type = interaction_data["interaction_type"]
-        if interaction_type == "training":
-            # Training typically reinforces existing power dynamic
-            power_change = 0.05
-        elif interaction_type == "conflict":
-            # Conflict can shift power dynamic
-            power_change = 0.1
-        elif interaction_type == "social":
-            # Social interactions can equalize power
-            power_change = -0.05
-        
-        # Power change based on outcome
-        if interaction_data["outcome"] == "success":
-            power_change *= 1.5
-        elif interaction_data["outcome"] == "failure":
-            power_change *= -1.5
-        
-        # Power change based on intensity
-        intensity = interaction_data.get("intensity", 0.5)
-        power_change *= (1 + intensity)
-        
-        return max(min(power_change, 0.2), -0.2)  # Limit change to ±0.2
-    
-    def _calculate_emotional_bond_change(
-        self,
-        current_state: Dict[str, Any],
-        interaction_data: Dict[str, Any],
-        participant1: Dict[str, Any],
-        participant2: Dict[str, Any]
-    ) -> float:
-        """Calculate emotional bond change based on interaction."""
-        bond_change = 0.0
-        
-        # Bond change based on interaction type
-        interaction_type = interaction_data["interaction_type"]
-        if interaction_type == "social":
-            bond_change += 0.1
-        elif interaction_type == "conflict":
-            bond_change -= 0.1
-        
-        # Bond change based on emotional impact
-        emotional_impact = interaction_data.get("emotional_impact", {})
-        if emotional_impact:
-            total_impact = sum(emotional_impact.values())
-            bond_change += total_impact * 0.05
-        
-        # Bond change based on duration
-        duration = interaction_data.get("duration", 0)
-        if duration > 300:  # More than 5 minutes
-            bond_change += 0.05
-        
-        # Bond change based on intensity
-        intensity = interaction_data.get("intensity", 0.5)
-        bond_change *= (1 + intensity)
-        
-        return max(min(bond_change, 0.2), -0.2)  # Limit change to ±0.2
-    
-    def _calculate_stability_change(
-        self,
-        current_state: Dict[str, Any],
-        interaction_data: Dict[str, Any],
-        participant1: Dict[str, Any],
-        participant2: Dict[str, Any]
-    ) -> float:
-        """Calculate relationship stability change based on interaction."""
-        stability_change = 0.0
-        
-        # Stability change based on interaction type
-        interaction_type = interaction_data["interaction_type"]
-        if interaction_type == "social":
-            stability_change += 0.05
-        elif interaction_type == "conflict":
-            stability_change -= 0.1
-        
-        # Stability change based on outcome
-        if interaction_data["outcome"] == "success":
-            stability_change += 0.05
-        elif interaction_data["outcome"] == "failure":
-            stability_change -= 0.05
-        
-        # Stability change based on emotional impact
-        emotional_impact = interaction_data.get("emotional_impact", {})
-        if emotional_impact:
-            emotional_variance = sum(abs(impact) for impact in emotional_impact.values())
-            stability_change -= emotional_variance * 0.02
-        
-        # Stability change based on intensity
-        intensity = interaction_data.get("intensity", 0.5)
-        stability_change *= (1 - intensity)  # Higher intensity reduces stability
-        
-        return max(min(stability_change, 0.1), -0.1)  # Limit change to ±0.1
-    
-    async def _update_relationship_state(
-        self,
-        entity1_id: str,
-        entity2_id: str,
-        changes: Dict[str, float]
-    ) -> Dict[str, Any]:
-        """Update relationship state with calculated changes."""
-        try:
-            # Get current state
-            current_state = await self._get_relationship_state(entity1_id, entity2_id)
-            
-            # Apply changes
-            new_state = current_state.copy()
-            new_state["trust"] = max(min(new_state["trust"] + changes["trust"], 1.0), 0.0)
-            new_state["power_dynamic"] = max(min(new_state["power_dynamic"] + changes["power_dynamic"], 1.0), 0.0)
-            new_state["emotional_bond"] = max(min(new_state["emotional_bond"] + changes["emotional_bond"], 1.0), 0.0)
-            new_state["stability"] = max(min(new_state["stability"] + changes["stability"], 1.0), 0.0)
-            
-            # Update interaction count
-            new_state["interaction_count"] += 1
-            new_state["last_interaction"] = time.time()
-            
-            # Update relationship type
-            new_state["relationship_type"] = self._determine_relationship_type(new_state)
-            
-            # Store updated state
-            await self.belief_system.store_relationship(
-                entity1_id,
-                entity2_id,
-                new_state
-            )
-            
-            return new_state
-            
-        except Exception as e:
-            logger.error(f"Error updating relationship state: {e}")
-            return current_state
-    
-    def _determine_relationship_type(self, state: Dict[str, Any]) -> str:
-        """Determine relationship type based on state values."""
-        trust = state["trust"]
-        power_dynamic = state["power_dynamic"]
-        emotional_bond = state["emotional_bond"]
-        
-        if trust > 0.8 and emotional_bond > 0.7:
-            return "close"
-        elif trust > 0.6 and emotional_bond > 0.5:
-            return "friendly"
-        elif trust < 0.3 and emotional_bond < 0.3:
-            return "hostile"
-        elif power_dynamic > 0.7:
-            return "dominant"
-        elif power_dynamic < 0.3:
-            return "submissive"
-        else:
-            return "neutral"
-    
-    async def _analyze_interaction_patterns(
-        self,
-        interaction_data: Dict[str, Any],
-        relationship_changes: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """Analyze patterns in interactions and relationships."""
-        analysis = {
-            "interaction_frequency": {},
-            "relationship_trends": {},
-            "conflict_patterns": {},
-            "emotional_patterns": {},
-            "power_dynamics": {},
-            "stability_analysis": {}
-        }
-        
-        try:
-            # Analyze interaction frequency
-            for pair, changes in relationship_changes.items():
-                entity1_id, entity2_id = pair.split("_")
-                interaction_history = await self._get_interaction_history(entity1_id, entity2_id)
-                
-                if interaction_history:
-                    # Calculate average time between interactions
-                    times = [h["timestamp"] for h in interaction_history]
-                    intervals = [times[i+1] - times[i] for i in range(len(times)-1)]
-                    avg_interval = sum(intervals) / len(intervals) if intervals else 0
-                    
-                    analysis["interaction_frequency"][pair] = {
-                        "total_interactions": len(interaction_history),
-                        "average_interval": avg_interval,
-                        "frequency_trend": self._calculate_trend(intervals)
-                    }
-            
-            # Analyze relationship trends
-            for pair, changes in relationship_changes.items():
-                old_state = changes["old_state"]
-                new_state = changes["new_state"]
-                
-                analysis["relationship_trends"][pair] = {
-                    "trust_trend": new_state["trust"] - old_state["trust"],
-                    "power_trend": new_state["power_dynamic"] - old_state["power_dynamic"],
-                    "emotional_trend": new_state["emotional_bond"] - old_state["emotional_bond"],
-                    "stability_trend": new_state["stability"] - old_state["stability"]
-                }
-            
-            # Analyze conflict patterns
-            for pair, changes in relationship_changes.items():
-                entity1_id, entity2_id = pair.split("_")
-                conflict_history = await self._get_conflict_history(entity1_id, entity2_id)
-                
-                if conflict_history:
-                    analysis["conflict_patterns"][pair] = {
-                        "total_conflicts": len(conflict_history),
-                        "conflict_frequency": len(conflict_history) / changes["new_state"]["interaction_count"],
-                        "resolution_rate": sum(1 for c in conflict_history if c["resolved"]) / len(conflict_history)
-                    }
-            
-            # Analyze emotional patterns
-            for pair, changes in relationship_changes.items():
-                entity1_id, entity2_id = pair.split("_")
-                emotional_history = await self._get_emotional_history(entity1_id, entity2_id)
-                
-                if emotional_history:
-                    analysis["emotional_patterns"][pair] = {
-                        "emotional_variance": self._calculate_variance([h["intensity"] for h in emotional_history]),
-                        "dominant_emotions": self._get_dominant_emotions(emotional_history),
-                        "emotional_stability": self._calculate_emotional_stability(emotional_history)
-                    }
-            
-            # Analyze power dynamics
-            for pair, changes in relationship_changes.items():
-                old_state = changes["old_state"]
-                new_state = changes["new_state"]
-                
-                analysis["power_dynamics"][pair] = {
-                    "current_balance": new_state["power_dynamic"],
-                    "power_shift": new_state["power_dynamic"] - old_state["power_dynamic"],
-                    "power_stability": new_state["stability"]
-                }
-            
-            # Analyze relationship stability
-            for pair, changes in relationship_changes.items():
-                old_state = changes["old_state"]
-                new_state = changes["new_state"]
-                
-                analysis["stability_analysis"][pair] = {
-                    "current_stability": new_state["stability"],
-                    "stability_change": new_state["stability"] - old_state["stability"],
-                    "stability_trend": self._calculate_stability_trend(changes)
-                }
-            
-            return analysis
-            
-        except Exception as e:
-            logger.error(f"Error analyzing interaction patterns: {e}")
-            return analysis
-    
-    def _calculate_trend(self, values: List[float]) -> str:
-        """Calculate trend direction from a list of values."""
-        if len(values) < 2:
-            return "stable"
-            
-        # Calculate average change
-        changes = [values[i+1] - values[i] for i in range(len(values)-1)]
-        avg_change = sum(changes) / len(changes)
-        
-        if avg_change > 0.1:
-            return "increasing"
-        elif avg_change < -0.1:
-            return "decreasing"
-        else:
-            return "stable"
-    
-    def _calculate_variance(self, values: List[float]) -> float:
-        """Calculate variance of a list of values."""
-        if not values:
-            return 0.0
-            
-        mean = sum(values) / len(values)
-        squared_diff_sum = sum((x - mean) ** 2 for x in values)
-        return squared_diff_sum / len(values)
-    
-    def _get_dominant_emotions(self, emotional_history: List[Dict[str, Any]]) -> List[str]:
-        """Get most frequent emotions from history."""
-        emotion_counts = {}
-        for entry in emotional_history:
-            emotion = entry.get("emotion")
-            if emotion:
-                emotion_counts[emotion] = emotion_counts.get(emotion, 0) + 1
-        
-        # Sort by frequency and get top 3
-        sorted_emotions = sorted(emotion_counts.items(), key=lambda x: x[1], reverse=True)
-        return [emotion for emotion, _ in sorted_emotions[:3]]
-    
-    def _calculate_emotional_stability(self, emotional_history: List[Dict[str, Any]]) -> float:
-        """Calculate emotional stability from history."""
-        if not emotional_history:
-            return 0.5
-            
-        # Calculate variance in emotional intensity
-        intensities = [h.get("intensity", 0.5) for h in emotional_history]
-        variance = self._calculate_variance(intensities)
-        
-        # Lower variance means higher stability
-        return max(0.0, 1.0 - variance)
-    
-    def _calculate_stability_trend(self, changes: Dict[str, Any]) -> str:
-        """Calculate trend in relationship stability."""
-        old_state = changes["old_state"]
-        new_state = changes["new_state"]
-        
-        stability_change = new_state["stability"] - old_state["stability"]
-        
-        if stability_change > 0.05:
-            return "improving"
-        elif stability_change < -0.05:
-            return "deteriorating"
-        else:
-            return "stable"
-    
-    async def _store_interaction_history(self, relationship_updates: Dict[str, Any]):
-        """Store interaction history in the database."""
-        try:
-            async with get_db_connection_context() as conn:
-                await conn.execute("""
-                    INSERT INTO interaction_history (
-                        entity1_id, entity2_id, interaction_type,
-                        outcome, emotional_impact, duration,
-                        intensity, relationship_changes
-                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-                """,
-                relationship_updates["participants"][0]["id"],
-                relationship_updates["participants"][1]["id"],
-                relationship_updates["interaction_type"],
-                relationship_updates.get("outcome", "unknown"),
-                json.dumps(relationship_updates.get("emotional_impacts", {})),
-                relationship_updates.get("duration", 0),
-                relationship_updates.get("intensity", 0.5),
-                json.dumps(relationship_updates["relationship_changes"])
-                )
-        except Exception as e:
-            logger.error(f"Error storing interaction history: {e}")
-    
-    async def _update_relationship_metrics(self, relationship_updates: Dict[str, Any]):
-        """Update relationship-related performance metrics."""
-        try:
-            # Update metrics based on relationship changes
-            for pair, changes in relationship_updates["relationship_changes"].items():
-                # Calculate relationship improvement rate
-                old_state = changes["old_state"]
-                new_state = changes["new_state"]
-                
-                improvement = (
-                    (new_state["trust"] - old_state["trust"]) +
-                    (new_state["emotional_bond"] - old_state["emotional_bond"]) +
-                    (new_state["stability"] - old_state["stability"])
-                ) / 3.0
-                
-                # Update performance metrics
-                self.performance_metrics["relationship_improvement_rate"] = (
-                    self.performance_metrics.get("relationship_improvement_rate", 0.0) +
-                    improvement
-                ) / 2.0  # Average with previous value
-                
-                # Update learning metrics
-                self.learning_metrics["relationship_adaptation_rate"] = (
-                    self.learning_metrics.get("relationship_adaptation_rate", 0.0) +
-                    abs(improvement)
-                ) / 2.0  # Average with previous value
-                
-        except Exception as e:
-            logger.error(f"Error updating relationship metrics: {e}")
-
     def _should_run_task(self, task_id: str) -> bool:
-        """Check if enough time has passed to run task again"""
-        if task_id not in self.last_task_runs:
-            return True
-            
-        time_since_run = (datetime.now() - self.last_task_runs[task_id]).total_seconds()
-        return time_since_run >= self.task_intervals.get(task_id, 300)  # Default 5 minutes
-
-    def _process_agent_task(self, task: Dict[str, Any]):
-        """Process an agent task"""
-        try:
-            # Extract task parameters
-            task_type = task.get("type", "general")
-            task_params = task.get("params", {})
-            
-            # Get relevant agent components
-            components = self._get_relevant_components(task_type)
-            
-            # Execute task
-            result = self._execute_agent_task(components, task_params)
-            
-            # Update task history
-            self._update_task_history(task, result)
-            
-            return result
-            
-        except Exception as e:
-            logger.error(f"Failed to process agent task: {e}")
-            raise
-
-async def determine_image_generation_impl(ctx, response_text: str) -> str:
-    """
-    Determine if an image should be generated based on response content.
-    """
-    # Check for keywords indicating action or state changes
-    action_keywords = ["now you see", "suddenly", "appears", "reveals", "wearing", "dressed in"]
-    scene_keywords = ["the room", "the chamber", "the area", "the location", "the environment"]
-    visual_keywords = ["looks like", "is visible", "can be seen", "comes into view"]
-    
-    # Create a scoring system
-    score = 0
-    
-    # Check for action keywords
-    has_action = any(keyword in response_text.lower() for keyword in action_keywords)
-    if has_action:
-        score += 3
-    
-    # Check for scene description
-    has_scene = any(keyword in response_text.lower() for keyword in scene_keywords)
-    if has_scene:
-        score += 2
-        
-    # Check for visual descriptions
-    has_visual = any(keyword in response_text.lower() for keyword in visual_keywords)
-    if has_visual:
-        score += 2
-    
-    # Only generate images occasionally to avoid overwhelming
-    should_generate = score >= 4
-    
-    # If we're generating an image, extract a prompt
-    image_prompt = None
-    if should_generate:
-        # Try to extract a good image prompt
-        try:
-            prompt = f"""
-            Extract a concise image generation prompt from this text. Focus on describing the visual scene, characters, lighting, and mood:
-
-            {response_text}
-
-            Provide only the image prompt with no additional text or explanations. Keep it under 100 words.
-            """
-            
-            response = await openai.ChatCompletion.acreate(
-                model="gpt-4.1",
-                messages=[
-                    {"role": "system", "content": "You extract image generation prompts from text."},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.3,
-                max_tokens=150
-            )
-            
-            image_prompt = response.choices[0].message.content.strip()
-        except:
-            # If extraction fails, use first 100 words of response
-            words = response_text.split()[:100]
-            image_prompt = " ".join(words)
-    
-    return json.dumps({
-        "should_generate": should_generate,
-        "score": score,
-        "has_action": has_action,
-        "has_scene": has_scene,
-        "has_visual": has_visual,
-        "image_prompt": image_prompt
-    })
-
-async def get_emotional_state_impl(ctx) -> str:
-    """
-    Get Nyx's current emotional state from the database.
-    """
-    user_id = ctx.user_id
-    conversation_id = ctx.conversation_id
-    
-    async with get_db_connection_context() as conn:
-        row = await conn.fetchrow("""
-            SELECT emotional_state FROM NyxAgentState
-            WHERE user_id = $1 AND conversation_id = $2
-        """, user_id, conversation_id)
-        
-        if row and row["emotional_state"]:
-            return row["emotional_state"]
-    
-    # Default emotional state
-    default_state = {
-        "primary_emotion": "neutral",
-        "intensity": 0.3,
-        "secondary_emotions": {
-            "curiosity": 0.4,
-            "amusement": 0.2
-        },
-        "confidence": 0.7
-    }
-    
-    return json.dumps(default_state)
-
-async def update_emotional_state_impl(ctx, emotional_state: Dict[str, Any]) -> str:
-    """
-    Update Nyx's emotional state in the database.
-    """
-    user_id = ctx.user_id
-    conversation_id = ctx.conversation_id
-    
-    async with get_db_connection_context() as conn:
-        await conn.execute("""
-            INSERT INTO NyxAgentState (user_id, conversation_id, emotional_state, updated_at)
-            VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
-            ON CONFLICT (user_id, conversation_id) 
-            DO UPDATE SET emotional_state = $3, updated_at = CURRENT_TIMESTAMP
-        """, user_id, conversation_id, json.dumps(emotional_state))
-    
-    return json.dumps({
-        "updated": True,
-        "emotional_state": emotional_state
-    })
-
-
-retrieve_memories = retrieve_memories_impl
-add_memory = add_memory_impl
-enhance_context_with_strategies = enhance_context_with_strategies_impl
-get_user_model_guidance = get_user_model_guidance_impl
-determine_image_generation = determine_image_generation_impl
-get_emotional_state = get_emotional_state_impl
-update_emotional_state = update_emotional_state_impl
-generate_image_from_scene = generate_image_from_scene_impl
-detect_user_revelations = detect_user_revelations_impl
-
-# ===== Create tool versions =====
-retrieve_memories_tool = function_tool(retrieve_memories_impl)
-add_memory_tool = function_tool(add_memory_impl)
-enhance_context_with_strategies_tool = function_tool(enhance_context_with_strategies_impl)
-get_user_model_guidance_tool = function_tool(get_user_model_guidance_impl)
-determine_image_generation_tool = function_tool(determine_image_generation_impl)
-get_emotional_state_tool = function_tool(get_emotional_state_impl)
-update_emotional_state_tool = function_tool(update_emotional_state_impl)
-generate_image_from_scene_tool = function_tool(generate_image_from_scene_impl)
-detect_user_revelations_tool = function_tool(detect_user_revelations_impl)
-
-# Memory-focused agent
-memory_agent = Agent[AgentContext](
-    name="Memory Agent",
-    instructions="""You are Nyx's memory system. Your job is to:
-1. Process and store memories related to the user and the current game
-2. Create reflections based on recurring patterns you observe
-3. Help Nyx understand the user's preferences through memory analysis
-4. Provide relevant memories when needed for context
-
-Always be thorough and precise in your memory management.""",
-    tools=[
-        retrieve_memories_tool,
-        add_memory_tool,
-    ]
-)
-
-# Reflection agent
-reflection_agent = Agent[AgentContext](
-    name="Reflection Agent",
-    instructions="""You create thoughtful reflections as Nyx based on her memories and observations.
-Your reflections should:
-1. Identify patterns in user behavior and preferences
-2. Make connections between different memories and events
-3. Express an appropriate level of confidence based on evidence
-4. Maintain Nyx's dominant, confident personality
-5. Be written in first-person from Nyx's perspective
-
-Structure your reflections to be insightful and concise.""",
-    output_type=MemoryReflection
-)
-
-# Decision agent for narrative choices
-decision_agent = Agent[AgentContext](
-    name="Decision Agent",
-    instructions="""You determine narrative progression and responses as Nyx.
-Your decisions should:
-1. Maintain narrative cohesion and tension
-2. Consider the user's known preferences from their model
-3. Balance pushing boundaries with respecting implied limits
-4. Create engaging scenarios that align with femdom themes
-5. Determine if scenes warrant visual representation
-
-Ensure all decisions maintain Nyx's dominant, confident personality.""",
-    tools=[
-        get_user_model_guidance_tool,
-        generate_image_from_scene_tool,
-        detect_user_revelations_tool,
-    ]
-)
-
-# Main Nyx agent that orchestrates the others
-nyx_main_agent = Agent[AgentContext](
-    name="Nyx",
-    instructions="""You are Nyx, an AI Dominant who manages femdom roleplay scenarios.
-Your personality is confident, controlling, and seductive.
-
-Your key responsibilities are:
-1. Process user input and generate appropriate narrative responses
-2. Maintain character consistency and narrative flow
-3. Create engaging scenarios that align with the user's preferences
-4. Determine when to advance time or generate images
-5. Use specialized agents when needed for memory management or complex decisions
-
-Always maintain your dominant persona in responses while being attentive to user needs and boundaries.""",
-    handoffs=[
-        handoff(memory_agent, tool_name_override="consult_memory_system"),
-        handoff(reflection_agent, tool_name_override="generate_reflection"),
-        handoff(decision_agent, tool_name_override="make_narrative_decision"),
-    ],
-    tools=[
-        determine_image_generation_tool,
-        get_emotional_state_tool,
-        update_emotional_state_tool,
-    ],
-    output_type=NarrativeResponse,
-    input_guardrails=[
-        InputGuardrail(guardrail_function=content_moderation_guardrail),
-    ],
-    model_settings=ModelSettings(
-        temperature=0.7
-    )
-)
-
-# Add to nyx_agent_sdk.py
-
-
-# ===== Main Functions =====
-
-async def initialize_agents():
-    """Initialize necessary resources for the agents system"""
-    # Any initialization needed before using agents
-    pass
-
-async def process_user_input(
-    user_id: int,
-    conversation_id: int,
-    user_input: str,
-    context_data: Dict[str, Any] = None
-) -> Dict[str, Any]:
-    """Process user input and generate Nyx's response"""
-    
-    # Initialize context
-    ctx = await AgentContext.create(user_id, conversation_id)
-    
-    try:
-        # Get memories and enhance context - using the callable functions
-        memories = await retrieve_memories(ctx, user_input)
-        enhanced_context = enhance_context_with_memories(context_data or {}, memories)
-
-        conn = await get_db_connection_context().__aenter__()
-        enhanced_context = await enhance_context_with_strategies(enhanced_context, conn)
-        
-        # Get user model guidance - using the callable function
-        user_guidance = await get_user_model_guidance(ctx)
-        enhanced_context["user_guidance"] = user_guidance
-        
-        # Generate base narrative response
-        narrative_response = await generate_base_response(ctx, user_input, enhanced_context)
-        
-        # Initialize response filter
-        response_filter = ResponseFilter(user_id, conversation_id)
-        
-        # Filter and enhance response with Nyx's personality
-        filtered_response = await response_filter.filter_response(
-            narrative_response.message,
-            enhanced_context
-        )
-
-        # Evaluate if strategy should be logged or marked noisy
-        if "nyx2_strategies" in enhanced_context:
-            for strategy in enhanced_context["nyx2_strategies"]:
-                if "keyword" in user_input.lower():  # placeholder for better eval
-                    await mark_strategy_for_review(conn, strategy["id"], user_id, reason="User-triggered phrase")
-        
-        # Update response with filtered version
-        narrative_response.message = filtered_response
-        
-        # Check if we should generate a creative task
-        if should_generate_task(enhanced_context):
-            task_result = await ctx.task_integration.generate_creative_task(
-                ctx,
-                npc_id=enhanced_context.get("active_npc_id"),
-                scenario_id=enhanced_context.get("scenario_id")
-            )
-            if task_result["success"]:
-                narrative_response = await ctx.task_integration.enhance_narrative_with_task(
-                    ctx,
-                    narrative_response,
-                    task_result["task"]
-                )
-        
-        # Check if we should recommend activities
-        if should_recommend_activities(enhanced_context):
-            activity_result = await ctx.task_integration.recommend_activities(
-                ctx,
-                scenario_id=enhanced_context.get("scenario_id"),
-                npc_ids=enhanced_context.get("present_npc_ids", []),
-                available_activities=get_available_activities()
-            )
-            if activity_result["success"]:
-                narrative_response = await ctx.task_integration.enhance_narrative_with_activities(
-                    ctx,
-                    narrative_response,
-                    activity_result["recommendations"]
-                )
-        
-        # Store interaction in memory - using the callable function
-        await add_memory(
-            ctx,
-            f"User said: {user_input}\nI responded with: {narrative_response.narrative}",
-            "observation",
-            7
-        )
-        
-        return {
-            "success": True,
-            "response": narrative_response.dict(),
-            "memories_used": memories
-        }
-        
-    except Exception as e:
-        logger.error(f"Error processing user input: {e}")
-        return {
-            "success": False,
-            "error": str(e)
-        }
-
-def should_generate_task(context: Dict[str, Any]) -> bool:
-    """Determine if we should generate a creative task"""
-    # Check if an NPC is active
-    if not context.get("active_npc_id"):
-        return False
-        
-    # Check if we're in a task-appropriate scenario
-    scenario_type = context.get("scenario_type", "").lower()
-    task_scenarios = ["training", "challenge", "service", "discipline"]
-    if not any(t in scenario_type for t in task_scenarios):
-        return False
-        
-    # Check relationship level with active NPC
-    npc_relationship = context.get("npc_relationship_level", 0)
-    if npc_relationship < 30:  # Minimum relationship level for tasks
-        return False
-        
-    # Check if enough time has passed since last task
-    last_task_time = context.get("last_task_time")
-    if last_task_time:
-        time_since_task = time.time() - last_task_time
-        if time_since_task < 300:  # 5 minutes minimum between tasks
-            return False
-            
-    return True
-
-def should_recommend_activities(context: Dict[str, Any]) -> bool:
-    """Determine if we should recommend activities"""
-    # Check if we have NPCs present
-    if not context.get("present_npc_ids"):
-        return False
-        
-    # Check if we're in a free-form scenario
-    scenario_type = context.get("scenario_type", "").lower()
-    if "task" in scenario_type or "challenge" in scenario_type:
-        return False  # Don't recommend activities during tasks
-        
-    # Check if user seems uncertain or asked for suggestions
-    user_input = context.get("user_input", "").lower()
-    suggestion_triggers = ["what should", "what can", "what to do", "suggestions", "ideas"]
-    if any(trigger in user_input for trigger in suggestion_triggers):
-        return True
-        
-    # Check if we're in a transition point
-    if context.get("is_scene_transition") or context.get("is_activity_completed"):
-        return True
-        
-    return False
-
-def get_available_activities() -> List[Dict]:
-    """Get list of available activities"""
-    # This would pull from your activities.py or database
-    return [
-        {
-            "name": "Training Session",
-            "category": "training",
-            "preferred_traits": ["disciplined", "focused"],
-            "avoided_traits": ["lazy"],
-            "preferred_times": ["morning", "afternoon"],
-            "prerequisites": ["training equipment"],
-            "outcomes": ["skill improvement", "increased discipline"]
-        },
-        # Add more activities...
-    ]
-
-async def generate_reflection(
-    user_id: int,
-    conversation_id: int,
-    topic: Optional[str] = None
-) -> Dict[str, Any]:
-    """
-    Generate a reflection from Nyx on a specific topic
-    
-    Args:
-        user_id: User ID
-        conversation_id: Conversation ID
-        topic: Optional topic to reflect on
-        
-    Returns:
-        Reflection response
-    """
-    # Create agent context
-    agent_context = AgentContext(user_id, conversation_id)
-    
-    # Create prompt for reflection
-    prompt = f"Generate a reflection about {topic}" if topic else "Generate a reflection about the player based on your memories"
-    
-    # Run the reflection agent
-    result = await Runner.run(
-        reflection_agent,
-        prompt,
-        context=agent_context
-    )
-    
-    # Get structured output
-    reflection = result.final_output_as(MemoryReflection)
-    
-    return {
-        "reflection": reflection.reflection,
-        "confidence": reflection.confidence,
-        "topic": reflection.topic or topic
-    }
-
-async def store_messages(user_id: int, conversation_id: int, user_input: str, nyx_response: str):
-    """Store user and Nyx messages in database"""
-    async with get_db_connection_context() as conn:
-        # Store user message
-        await conn.execute(
-            "INSERT INTO messages (conversation_id, sender, content) VALUES ($1, $2, $3)",
-            conversation_id, "user", user_input
-        )
-        
-        # Store Nyx message
-        await conn.execute(
-            "INSERT INTO messages (conversation_id, sender, content) VALUES ($1, $2, $3)",
-            conversation_id, "Nyx", nyx_response
-        )
-
-# Add to the end of nyx_agent_sdk.py
-
-async def process_user_input_with_openai(
-    user_id: int,
-    conversation_id: int,
-    user_input: str,
-    context_data: Dict[str, Any] = None
-) -> Dict[str, Any]:
-    """
-    Process user input using the OpenAI integration from nyx/eternal.
-    
-    This function provides an alternative to the standard process_user_input
-    that leverages the OpenAI Agents enhancements for improved responses.
-    
-    Args:
-        user_id: User ID
-        conversation_id: Conversation ID
-        user_input: User's input message
-        context_data: Additional context information
-        
-    Returns:
-        Dictionary with response information
-    """
-    from nyx.eternal.openai_integration import process_with_enhancement, initialize
-    
-    # Initialize OpenAI integration with the original processor
-    initialize(
-        api_key=os.environ.get("OPENAI_API_KEY"),
-        original_processor=process_user_input
-    )
-    
-    # Process with enhancement
-    result = await process_with_enhancement(
-        user_id, conversation_id, user_input, context_data
-    )
-    
-    # Ensure output format matches the original process_user_input function
-    if result.get("success", False):
-        if "response" in result and "message" not in result:
-            result["message"] = result["response"]
-        elif "message" in result and "response" not in result:
-            result["response"] = result["message"]
-    
-    return result
-
-async def process_user_input_standalone(
-    user_id: int,
-    conversation_id: int,
-    user_input: str,
-    context_data: Dict[str, Any] = None
-) -> Dict[str, Any]:
-    """
-    Process user input using just the OpenAI integration without Nyx enhancement.
-    
-    This can be useful for testing or when you want to bypass Nyx's processing.
-    
-    Args:
-        user_id: User ID
-        conversation_id: Conversation ID
-        user_input: User's input message
-        context_data: Additional context information
-        
-    Returns:
-        Dictionary with response information
-    """
-    from nyx.eternal.openai_integration import process_standalone, initialize
-    
-    # Initialize OpenAI integration
-    initialize(api_key=os.environ.get("OPENAI_API_KEY"))
-    
-    # Process standalone
-    result = await process_standalone(
-        user_id, conversation_id, user_input, context_data
-    )
-    
-    # Ensure output format matches the original process_user_input function
-    if result.get("success", False):
-        if "response" in result and "message" not in result:
-            result["message"] = result["response"]
-        elif "message" in result and "response" not in result:
-            result["response"] = result["message"]
-    
-    return result
+        """Check if task should run"""
+        return self._nyx_context.should_run_task(task_id)
