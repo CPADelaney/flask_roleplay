@@ -10,6 +10,8 @@ from pydantic import BaseModel, Field
 from agents import Agent, Runner, function_tool, trace, ModelSettings, RunContextWrapper
 
 from nyx.core.interaction_mode_manager import ModeDistribution, InteractionMode
+from nyx.core.input_processing_config import InputProcessingConfig
+from nyx.core.input_processing_context import InputProcessingContext as SharedInputContext
 
 logger = logging.getLogger(__name__)
 
@@ -45,16 +47,20 @@ class BlendedResponseModification(BaseModel):
     coherence: float = Field(description="Coherence of the modified response (0.0-1.0)", ge=0.0, le=1.0)
     style_notes: Optional[str] = Field(None, description="Notes about the style of the modified response")
 
-class ProcessingContext:
-    """Context for input processing operations"""
+class InputProcessingAgentContext:
+    """Context for input processing agent operations"""
     
-    def __init__(self, conditioning_system=None, emotional_core=None, somatosensory_system=None, mode_manager=None):
-        self.conditioning_system = conditioning_system
-        self.emotional_core = emotional_core
-        self.somatosensory_system = somatosensory_system
-        self.mode_manager = mode_manager
+    def __init__(self, brain=None, shared_context: Optional[SharedInputContext] = None):
+        self.brain = brain
+        self.shared_context = shared_context or SharedInputContext()
         
-        # Pattern definitions (could be moved to a configuration file)
+        # Get subsystems from brain if available
+        self.conditioning_system = getattr(brain, 'conditioning_system', None) if brain else None
+        self.emotional_core = getattr(brain, 'emotional_core', None) if brain else None
+        self.somatosensory_system = getattr(brain, 'somatosensory_system', None) if brain else None
+        self.mode_manager = getattr(brain, 'mode_manager', None) if brain else None
+        
+        # Pattern definitions
         self.input_patterns = {
             "submission_language": [
                 r"(?i)yes,?\s*(mistress|goddess|master)",
@@ -209,15 +215,18 @@ class BlendedInputProcessor:
     """
     Processes input through conditioning triggers and modifies responses
     using blended interaction modes with the OpenAI Agents SDK architecture.
+    Integrates with the unified processor for seamless operation.
     """
     
-    def __init__(self, conditioning_system=None, emotional_core=None, somatosensory_system=None, mode_manager=None):
-        self.context = ProcessingContext(
-            conditioning_system=conditioning_system,
-            emotional_core=emotional_core,
-            somatosensory_system=somatosensory_system,
-            mode_manager=mode_manager
-        )
+    def __init__(self, brain=None, config: Optional[InputProcessingConfig] = None):
+        # Initialize shared context for coordination with unified processor
+        self.shared_context = SharedInputContext(config)
+        
+        # Initialize agent context
+        self.context = InputProcessingAgentContext(brain, self.shared_context)
+        
+        # Store reference to brain for integration
+        self.brain = brain
         
         # Initialize the agents
         self.pattern_analyzer_agent = self._create_pattern_analyzer()
@@ -225,7 +234,7 @@ class BlendedInputProcessor:
         self.response_modifier_agent = self._create_response_modifier()
         self.blended_modifier_agent = self._create_blended_modifier()
         
-        logger.info("Blended input processor initialized with agents")
+        logger.info("Blended input processor initialized with unified architecture support")
     
     def _create_pattern_analyzer(self) -> Agent:
         """Create an agent specialized in analyzing input patterns"""
@@ -243,7 +252,7 @@ class BlendedInputProcessor:
             Be thorough in your analysis, but focus on clear indicators.
             Do not overinterpret ambiguous text.
             """,
-            model="gpt-4.1-nano",
+            model="gpt-4.1-preview",
             model_settings=ModelSettings(temperature=0.2),
             tools=[
                 self._detect_patterns
@@ -267,7 +276,7 @@ class BlendedInputProcessor:
             Prioritize behaviors that are appropriate to the interaction and will 
             reinforce desired patterns while discouraging undesired ones.
             """,
-            model="gpt-4.1-nano",
+            model="gpt-4.1-preview",
             model_settings=ModelSettings(temperature=0.3),
             tools=[
                 self._evaluate_behavior,
@@ -291,7 +300,7 @@ class BlendedInputProcessor:
             Modifications should be subtle but effective, maintaining the core message
             while adjusting tone, phrasing, and emphasis.
             """,
-            model="gpt-4.1-nano",
+            model="gpt-4.1-preview",
             model_settings=ModelSettings(temperature=0.4),
             output_type=str
         )
@@ -312,7 +321,7 @@ class BlendedInputProcessor:
             The blend should proportionally reflect all active modes in the mode distribution,
             with higher-weighted modes having more influence on the final result.
             """,
-            model="gpt-4.1-nano",
+            model="gpt-4.1-preview",
             model_settings=ModelSettings(temperature=0.4),
             tools=[
                 self._get_mode_preferences,
@@ -324,7 +333,7 @@ class BlendedInputProcessor:
 
     @staticmethod
     @function_tool
-    async def _detect_patterns(ctx: RunContextWrapper[ProcessingContext], text: str = "") -> List[Dict[str, Any]]:
+    async def _detect_patterns(ctx: RunContextWrapper[InputProcessingAgentContext], text: str = "") -> List[Dict[str, Any]]:
         """
         Detect patterns in input text using regular expressions.
         
@@ -341,15 +350,20 @@ class BlendedInputProcessor:
         if not text:
             return detected
         
+        # Update shared context with detections
+        context.shared_context.patterns = []
+        
         for pattern_name, regex_list in context.input_patterns.items():
             for regex in regex_list:
                 match = re.search(regex, text)
                 if match:
-                    detected.append({
+                    pattern_data = {
                         "pattern_name": pattern_name,
                         "confidence": 0.8,  # Base confidence
                         "matched_text": match.group(0)
-                    })
+                    }
+                    detected.append(pattern_data)
+                    context.shared_context.patterns.append(pattern_data)
                     break  # Only detect each pattern once
         
         return detected
@@ -357,7 +371,7 @@ class BlendedInputProcessor:
     @staticmethod
     @function_tool
     async def _evaluate_behavior(
-        ctx: RunContextWrapper[ProcessingContext], 
+        ctx: RunContextWrapper[InputProcessingAgentContext], 
         behavior: str = "",
         detected_patterns: List[Dict[str, Any]] = None,
         user_history: Dict[str, Any] = None
@@ -389,13 +403,29 @@ class BlendedInputProcessor:
             user_history = {}
             
         context = ctx.context
+        
+        # Check shared context for adjusted sensitivities
+        adjusted_sensitivities = context.shared_context.get_adjusted_sensitivities()
+        behavior_scores = context.shared_context.get_behavior_scores()
+        
+        # Use behavior scores if available
+        if behavior in behavior_scores:
+            score = behavior_scores[behavior]
+            return {
+                "behavior": behavior,
+                "recommendation": "approach" if score > 0.5 else "avoid",
+                "confidence": abs(score - 0.5) * 2,  # Convert to confidence
+                "reasoning": f"Based on context-adjusted preferences (score: {score:.2f})"
+            }
+        
+        # Fall back to conditioning system if available
         if context.conditioning_system and hasattr(context.conditioning_system, 'evaluate_behavior_consequences'):
-            # Use the actual conditioning system if available
             result = await context.conditioning_system.evaluate_behavior_consequences(
                 behavior=behavior,
                 context={
                     "detected_patterns": [p["pattern_name"] for p in detected_patterns],
-                    "user_history": user_history
+                    "user_history": user_history,
+                    "adjusted_sensitivities": adjusted_sensitivities
                 }
             )
             return result
@@ -454,7 +484,7 @@ class BlendedInputProcessor:
     @staticmethod
     @function_tool
     async def _process_operant_conditioning(
-        ctx: RunContextWrapper[ProcessingContext],
+        ctx: RunContextWrapper[InputProcessingAgentContext],
         behavior: str = "",
         consequence_type: str = "",
         intensity: float = 0.5,
@@ -506,7 +536,7 @@ class BlendedInputProcessor:
     @staticmethod
     @function_tool
     async def _get_mode_preferences(
-        ctx: RunContextWrapper[ProcessingContext],
+        ctx: RunContextWrapper[InputProcessingAgentContext],
         mode: str = ""
     ) -> Dict[str, Any]:
         """
@@ -566,7 +596,7 @@ class BlendedInputProcessor:
     @staticmethod
     @function_tool
     async def _calculate_style_elements(
-        ctx: RunContextWrapper[ProcessingContext],
+        ctx: RunContextWrapper[InputProcessingAgentContext],
         mode_distribution: Dict[str, float] = None
     ) -> Dict[str, Any]:
         """
@@ -676,7 +706,7 @@ class BlendedInputProcessor:
     @staticmethod
     @function_tool
     async def _analyze_response_coherence(
-        ctx: RunContextWrapper[ProcessingContext],
+        ctx: RunContextWrapper[InputProcessingAgentContext],
         original_response: str = "",
         modified_response: str = ""
     ) -> Dict[str, Any]:
@@ -758,6 +788,37 @@ class BlendedInputProcessor:
             "is_coherent": coherence_score >= 0.5
         }
     
+    async def update_context_from_brain_state(self):
+        """Update shared context with current brain state"""
+        if not self.brain:
+            return
+            
+        # Apply emotional influence
+        if hasattr(self.brain, 'emotional_state') and self.brain.emotional_state:
+            emotional_data = {
+                "dominant_emotion": getattr(self.brain.emotional_state, 'dominant_emotion', 'neutral'),
+                "intensity": getattr(self.brain.emotional_state, 'intensity', 0.5)
+            }
+            self.shared_context.apply_emotional_influence(emotional_data)
+        
+        # Apply mode influence
+        if self.context.mode_manager and hasattr(self.context.mode_manager, 'context'):
+            try:
+                mode_distribution = self.context.mode_manager.context.mode_distribution.dict()
+                self.shared_context.apply_mode_influence({"mode_distribution": mode_distribution})
+            except:
+                pass
+        
+        # Apply relationship influence
+        if hasattr(self.brain, 'relationship_state') and self.brain.relationship_state:
+            relationship_data = {
+                "trust": getattr(self.brain.relationship_state, 'trust', 0.5),
+                "intimacy": getattr(self.brain.relationship_state, 'intimacy', 0.5),
+                "dominance_accepted": getattr(self.brain.relationship_state, 'dominance_accepted', 0.5),
+                "conflict": getattr(self.brain.relationship_state, 'conflict', 0.0)
+            }
+            self.shared_context.apply_relationship_influence(relationship_data)
+    
     async def process_input(self, text: str, user_id: str = "default", context: Dict[str, Any] = None) -> Dict[str, Any]:
         """
         Process input text through conditioning system and return processing results
@@ -770,7 +831,10 @@ class BlendedInputProcessor:
         Returns:
             Processing results including triggered responses
         """
-        with trace(workflow_name="process_input"):
+        with trace(workflow_name="process_input", group_id=getattr(self.brain, 'trace_group_id', 'default')):
+            # Update context from brain state
+            await self.update_context_from_brain_state()
+            
             # Prepare the prompt for pattern analysis
             pattern_prompt = f"""
             Analyze the following input text for patterns indicating submission, defiance, 
@@ -868,7 +932,9 @@ class BlendedInputProcessor:
                 "recommended_behaviors": recommended_behaviors,
                 "avoided_behaviors": avoided_behaviors,
                 "reinforcement_results": reinforcement_results,
-                "mode_distribution": mode_distribution
+                "mode_distribution": mode_distribution,
+                "adjusted_sensitivities": self.shared_context.get_adjusted_sensitivities(),
+                "behavior_scores": self.shared_context.get_behavior_scores()
             }
     
     async def modify_response(self, response_text: str, input_processing_results: Dict[str, Any]) -> str:
@@ -882,7 +948,7 @@ class BlendedInputProcessor:
         Returns:
             Modified response text
         """
-        with trace(workflow_name="modify_conditioned_response"):
+        with trace(workflow_name="modify_conditioned_response", group_id=getattr(self.brain, 'trace_group_id', 'default')):
             # Check if mode distribution is available
             mode_distribution = input_processing_results.get("mode_distribution", {})
             
@@ -962,7 +1028,7 @@ class BlendedInputProcessor:
         Returns:
             Modified response information with details
         """
-        with trace(workflow_name="modify_blended_response"):
+        with trace(workflow_name="modify_blended_response", group_id=getattr(self.brain, 'trace_group_id', 'default')):
             # Prepare the prompt
             blended_prompt = f"""
             Modify the following response based on the given mode distribution:
@@ -982,3 +1048,7 @@ class BlendedInputProcessor:
             
             # Return the full result
             return result.final_output
+    
+    def get_shared_context(self) -> SharedInputContext:
+        """Get the shared input processing context for coordination with other systems"""
+        return self.shared_context
