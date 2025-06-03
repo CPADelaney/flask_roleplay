@@ -1314,6 +1314,7 @@ async def content_moderation_guardrail(ctx: RunContextWrapper[NyxContext], agent
 # Memory Agent
 memory_agent = Agent[NyxContext](
     name="Memory Manager",
+    handoff_description="Consult memory system for context or store important information",
     instructions="""You are Nyx's memory system. You:
 - Store and retrieve memories about the user and interactions
 - Create insightful reflections based on patterns
@@ -1327,6 +1328,7 @@ Be precise and thorough in memory management.""",
 # Analysis Agent
 analysis_agent = Agent[NyxContext](
     name="User Analysis",
+    handoff_description="Analyze user behavior and relationship dynamics",
     instructions="""You analyze user behavior and preferences. You:
 - Detect revelations about user preferences
 - Track behavior patterns and responses
@@ -1341,6 +1343,7 @@ Be observant and insightful.""",
 # Emotional Agent - Fixed to update state after calculation
 emotional_agent = Agent[NyxContext](
     name="Emotional Manager",
+    handoff_description="Process emotional changes and maintain emotional consistency",
     instructions="""You manage Nyx's complex emotional state using the VAD (Valence-Arousal-Dominance) model. You:
 - Track emotional changes based on interactions
 - Calculate emotional impact of events
@@ -1386,7 +1389,7 @@ Create engaging, contextual activities.""",
 # Performance Agent
 performance_agent = Agent[NyxContext](
     name="Performance Monitor",
-    handoff_description="Monitors system performance and resource usage",
+    handoff_description="Check system performance and health",
     instructions="""You monitor system performance. You:
 - Track response times and resource usage
 - Identify performance bottlenecks
@@ -1493,16 +1496,16 @@ Your approach:
 
 Always maintain your dominant persona while being attentive to user needs and system performance.""",
     handoffs=[
-        handoff(memory_agent, tool_description="Consult memory system for context or store important information"),
-        handoff(analysis_agent, tool_description="Analyze user behavior and relationship dynamics"),
-        handoff(emotional_agent, tool_description="Process emotional changes and maintain emotional consistency"),
-        handoff(visual_agent, tool_description="Generate visual content for scenes"),
-        handoff(activity_agent, tool_description="Get activity recommendations or manage tasks"),
-        handoff(performance_agent, tool_description="Check system performance and health"),
-        handoff(scenario_agent, tool_description="Manage complex scenario progression and detect conflicts"),
-        handoff(belief_agent, tool_description="Consult or update belief system"),
-        handoff(decision_agent, tool_description="Make complex decisions using advanced scoring"),
-        handoff(reflection_agent, tool_description="Create thoughtful reflections"),
+        handoff(memory_agent),
+        handoff(analysis_agent),
+        handoff(emotional_agent),
+        handoff(visual_agent),
+        handoff(activity_agent),
+        handoff(performance_agent),
+        handoff(scenario_agent),
+        handoff(belief_agent),
+        handoff(decision_agent),
+        handoff(reflection_agent),
     ],
     output_type=NarrativeResponse,
     input_guardrails=[InputGuardrail(guardrail_function=content_moderation_guardrail)],
