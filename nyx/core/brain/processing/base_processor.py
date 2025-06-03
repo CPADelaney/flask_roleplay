@@ -3,490 +3,131 @@ import logging
 import asyncio
 import datetime
 from typing import Dict, List, Any, Optional
-
-try:
-    from agents import trace, RunContextWrapper
-except ImportError:
-    # If RunContextWrapper is not available, create a simple wrapper
-    class RunContextWrapper:
-        def __init__(self, context):
-            self.context = context
-    
-    # If trace is not available, create a no-op decorator
-    def trace(*args, **kwargs):
-        if args and callable(args[0]):
-            return args[0]
-        def decorator(func):
-            return func
-        return decorator
+from dataclasses import dataclass
+from agents import Agent, Runner, trace, function_tool, RunContextWrapper
+from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
-    
+
+@dataclass
+class ProcessingContext:
+    """Context for processing operations"""
+    user_id: str
+    emotional_state: Dict[str, float]
+    memories: List[Dict[str, Any]]
+    conversation_id: str
+    metadata: Dict[str, Any]
+
+class ProcessingResult(BaseModel):
+    """Structured output for processing results"""
+    user_input: str
+    emotional_state: Dict[str, float]
+    memories: List[Dict[str, Any]]
+    memory_count: int
+    has_experience: bool
+    experience_response: Optional[str] = None
+    cross_user_experience: bool = False
+    memory_id: Optional[str] = None
+    response_time: float
+    processing_mode: str = "serial"
+    error: Optional[str] = None
+    tripwire_triggered: bool = False
+
+class ResponseData(BaseModel):
+    """Structured output for response generation"""
+    message: str
+    response_type: str
+    emotional_state: Dict[str, float]
+    emotional_expression: Optional[str] = None
+    generate_image: bool = False
+    image_prompt: Optional[str] = None
 
 class BaseProcessor:
+    """Base processor with agent integration"""
+    
     def __init__(self, brain):
         self.brain = brain
         self._initialized = False
-    
+        self._agents = {}
+        self._runner = None
+        
     async def initialize(self):
-        """Initialize processor after brain is fully initialized"""
+        """Initialize processor and create agents"""
+        await self._create_agents()
         self._initialized = True
         logger.info(f"{self.__class__.__name__} initialized")
     
-    async def _ensure_initialized(self):
-        """Ensure processor is initialized before use"""
-        if not self._initialized:
-            await self.initialize()
+    async def _create_agents(self):
+        """Create agents for this processor - override in subclasses"""
+        # Base emotional analysis agent
+        self._agents["emotional_analyzer"] = Agent(
+            name="Emotional Analyzer",
+            model="gpt-4.1-nano",
+            instructions="Analyze the emotional content and sentiment of user input.",
+            tools=[function_tool(self._analyze_emotion_tool)],
+            output_type=Dict[str, float]
+        )
+        
+        # Memory retrieval agent
+        self._agents["memory_retriever"] = Agent(
+            name="Memory Retriever",
+            model="gpt-4.1-nano",
+            instructions="Retrieve relevant memories based on user input and context.",
+            tools=[function_tool(self._retrieve_memories_tool)],
+            output_type=List[Dict[str, Any]]
+        )
+    
+    @function_tool
+    async def _analyze_emotion_tool(ctx: RunContextWrapper[ProcessingContext], text: str) -> Dict[str, float]:
+        """Analyze emotional content of text"""
+        # This would integrate with the brain's emotional core
+        if hasattr(ctx.context, 'metadata') and 'brain' in ctx.context.metadata:
+            brain = ctx.context.metadata['brain']
+            if hasattr(brain, 'emotional_core') and brain.emotional_core:
+                stimuli = brain.emotional_core.analyze_text_sentiment(text)
+                state = brain.emotional_core.update_from_stimuli(stimuli)
+                return state
+        
+        # Fallback
+        return {"neutral": 1.0}
+    
+    @function_tool
+    async def _retrieve_memories_tool(ctx: RunContextWrapper[ProcessingContext], 
+                                    query: str, 
+                                    memory_types: List[str] = None,
+                                    limit: int = 5) -> List[Dict[str, Any]]:
+        """Retrieve memories from the brain"""
+        if hasattr(ctx.context, 'metadata') and 'brain' in ctx.context.metadata:
+            brain = ctx.context.metadata['brain']
+            if hasattr(brain, 'memory_orchestrator') and brain.memory_orchestrator:
+                memories = await brain.memory_orchestrator.retrieve_memories(
+                    query=query,
+                    memory_types=memory_types or ["observation", "experience", "reflection"],
+                    limit=limit
+                )
+                return memories
+        return []
     
     async def process_input(self, user_input: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
         """Process user input - implemented by subclasses"""
         raise NotImplementedError("Subclasses must implement process_input")
     
-    async def generate_response(self, user_input: str, processing_result: Dict[str, Any], context: Dict[str, Any] = None) -> Dict[str, Any]:
+    async def generate_response(self, user_input: str, processing_result: Dict[str, Any], 
+                              context: Dict[str, Any] = None) -> Dict[str, Any]:
         """Generate response - implemented by subclasses"""
         raise NotImplementedError("Subclasses must implement generate_response")
     
-    async def _process_emotional_impact(self, user_input: str, context: Dict[str, Any]) -> Dict[str, Any]:
-        """Process emotional impact of user input"""
-        # Process emotional impact
-        if hasattr(self.brain, "emotional_core") and self.brain.emotional_core:
-            emotional_stimuli = self.brain.emotional_core.analyze_text_sentiment(user_input)
-            emotional_state = self.brain.emotional_core.update_from_stimuli(emotional_stimuli)
-            
-            # Update performance counter
-            if hasattr(self.brain, "performance_metrics"):
-                self.brain.performance_metrics["emotion_updates"] = self.brain.performance_metrics.get("emotion_updates", 0) + 1
-            
-            return {
-                "emotional_state": emotional_state,
-                "stimuli": emotional_stimuli
-            }
-        
-        return {"emotional_state": {}, "stimuli": {}}
-    
-    async def _retrieve_memories_with_emotion(self, 
-                                          user_input: str, 
-                                          context: Dict[str, Any],
-                                          emotional_state: Dict[str, float]) -> List[Dict[str, Any]]:
-        """Retrieve relevant memories with emotional influence"""
-        if not hasattr(self.brain, "memory_orchestrator") or not self.brain.memory_orchestrator:
-            return []
-        
-        # Create emotional prioritization for memory types
-        # Based on current emotional state, prioritize different memory types
-        
-        # Check if emotional valence is available
-        valence = 0
-        arousal = 0.5
-        if hasattr(self.brain, "emotional_core") and self.brain.emotional_core:
-            valence = self.brain.emotional_core.get_emotional_valence()
-            arousal = self.brain.emotional_core.get_emotional_arousal()
-        
-        # Prioritize experiences and reflections for high emotional states
-        if abs(valence) > 0.6 or arousal > 0.7:
-            prioritization = {
-                "experience": 0.5,
-                "reflection": 0.3,
-                "abstraction": 0.1,
-                "observation": 0.1
-            }
-        # Prioritize abstractions and reflections for low emotional states
-        elif arousal < 0.3:
-            prioritization = {
-                "abstraction": 0.4,
-                "reflection": 0.3,
-                "experience": 0.2,
-                "observation": 0.1
-            }
-        # Balanced prioritization for moderate emotional states
-        else:
-            prioritization = {
-                "experience": 0.3,
-                "reflection": 0.3,
-                "abstraction": 0.2,
-                "observation": 0.2
-            }
-        
-        # Adjust prioritization based on emotion-to-memory influence
-        influence = getattr(self.brain, "emotion_to_memory_influence", 0.4)
-        for memory_type, priority in prioritization.items():
-            prioritization[memory_type] = priority * (1 + influence)
-        
-        # Use prioritized retrieval if available
-        if hasattr(self.brain.memory_orchestrator, "retrieve_memories_with_prioritization"):
-            memories = await self.brain.memory_orchestrator.retrieve_memories_with_prioritization(
-                query=user_input,
-                memory_types=context.get("memory_types", ["observation", "reflection", "abstraction", "experience"]),
-                prioritization=prioritization,
-                limit=context.get("memory_limit", 5)
-            )
-        else:
-            # Fallback to regular retrieval
-            memories = await self.brain.memory_orchestrator.retrieve_memories(
-                query=user_input,
-                memory_types=context.get("memory_types", ["observation", "reflection", "abstraction", "experience"]), 
-                limit=context.get("memory_limit", 5)
-            )
-        
-        # Update performance counter
-        if hasattr(self.brain, "performance_metrics"):
-            self.brain.performance_metrics["memory_operations"] = self.brain.performance_metrics.get("memory_operations", 0) + 1
-        
-        return memories
-    
-    async def _share_experience(self, 
-                            user_input: str, 
-                            context: Dict[str, Any], 
-                            emotional_state: Dict[str, float]) -> Dict[str, Any]:
-        """Share experience based on user input"""
-        if not hasattr(self.brain, "experience_interface") or not self.brain.experience_interface:
-            return {"has_experience": False}
-        
-        # Enhanced experience sharing with cross-user support and adaptation
-        cross_user_enabled = getattr(self.brain, "cross_user_enabled", True)
-        cross_user_sharing_threshold = getattr(self.brain, "cross_user_sharing_threshold", 0.7)
-        
-        experience_result = await self.brain.experience_interface.share_experience_enhanced(
-            query=user_input,
-            context_data={
-                "user_id": str(self.brain.user_id),
-                "emotional_state": emotional_state,
-                "include_cross_user": cross_user_enabled and context.get("include_cross_user", True),
-                "cross_user_threshold": cross_user_sharing_threshold,
-                "scenario_type": context.get("scenario_type", ""),
-                "conversation_id": self.brain.conversation_id
+    def _create_processing_context(self, user_input: str, context: Dict[str, Any] = None) -> ProcessingContext:
+        """Create a processing context from input"""
+        context = context or {}
+        return ProcessingContext(
+            user_id=context.get("user_id", str(getattr(self.brain, 'user_id', 'unknown'))),
+            emotional_state=context.get("emotional_state", {}),
+            memories=context.get("memories", []),
+            conversation_id=getattr(self.brain, 'conversation_id', 'default'),
+            metadata={
+                "brain": self.brain,
+                "user_input": user_input,
+                **context
             }
         )
-        
-        # Update performance metrics
-        if hasattr(self.brain, "performance_metrics") and experience_result.get("has_experience", False):
-            self.brain.performance_metrics["experiences_shared"] = self.brain.performance_metrics.get("experiences_shared", 0) + 1
-            
-            # Track cross-user experiences
-            if experience_result.get("cross_user", False):
-                self.brain.performance_metrics["cross_user_experiences_shared"] = self.brain.performance_metrics.get("cross_user_experiences_shared", 0) + 1
-        
-        return experience_result
-    
-    async def _calculate_memory_emotional_impact(self, memories: List[Dict[str, Any]]) -> Dict[str, float]:
-        """Calculate emotional impact from relevant memories"""
-        impact = {}
-        
-        for memory in memories:
-            # Extract emotional context
-            emotional_context = memory.get("metadata", {}).get("emotional_context", {})
-            
-            if not emotional_context:
-                continue
-                
-            # Get primary emotion
-            primary_emotion = emotional_context.get("primary_emotion")
-            primary_intensity = emotional_context.get("primary_intensity", 0.5)
-            
-            if primary_emotion:
-                # Calculate impact based on relevance and recency
-                relevance = memory.get("relevance", 0.5)
-                
-                # Get timestamp if available
-                timestamp_str = memory.get("metadata", {}).get("timestamp")
-                recency_factor = 1.0
-                if timestamp_str:
-                    try:
-                        timestamp = datetime.datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
-                        days_old = (datetime.datetime.now() - timestamp).days
-                        recency_factor = max(0.5, 1.0 - (days_old / 30))  # Decay over 30 days, minimum 0.5
-                    except (ValueError, TypeError):
-                        # If timestamp can't be parsed, use default
-                        pass
-                
-                # Calculate final impact value
-                impact_value = primary_intensity * relevance * recency_factor * 0.1
-                
-                # Add to impact dict
-                if primary_emotion not in impact:
-                    impact[primary_emotion] = 0
-                impact[primary_emotion] += impact_value
-        
-        return impact
-    
-    def _should_share_experience(self, user_input: str, context: Dict[str, Any]) -> bool:
-        """Determine if experience sharing is appropriate"""
-        # Check for explicit experience requests
-        explicit_request = any(phrase in user_input.lower() for phrase in 
-                             ["remember", "recall", "tell me about", "have you done", 
-                              "previous", "before", "past", "experience", "what happened",
-                              "have you ever", "did you ever", "similar", "others"])
-        
-        if explicit_request:
-            return True
-        
-        # Check if it's a question that could benefit from experience sharing
-        is_question = user_input.endswith("?") or user_input.lower().startswith(("what", "how", "when", "where", "why", "who", "can", "could", "do", "did"))
-        
-        if is_question and context and "share_experiences" in context and context["share_experiences"]:
-            return True
-        
-        # Check for personal references that might trigger experience sharing
-        personal_references = any(phrase in user_input.lower() for phrase in 
-                               ["your experience", "you like", "you prefer", "you enjoy",
-                                "you think", "you feel", "your opinion", "your view"])
-        
-        if personal_references:
-            return True
-            
-        # Get user preference for experience sharing if available
-        if hasattr(self.brain, "user_id") and hasattr(self.brain, "experience_interface"):
-            user_id = str(self.brain.user_id)
-            if hasattr(self.brain.experience_interface, "_get_user_preference_profile"):
-                try:
-                    profile = self.brain.experience_interface._get_user_preference_profile(user_id)
-                    sharing_preference = profile.get("experience_sharing_preference", 0.5)
-                    
-                    # Higher preference means more likely to share experiences
-                    import random
-                    random_factor = random.random()
-                    if random_factor < sharing_preference * 0.5:
-                        return True
-                except Exception:
-                    pass
-        
-        # Default to not sharing experiences unless explicitly requested
-        return False
-        
-    def _is_reasoning_query(self, user_input: str) -> bool:
-        """Determine if a query is likely to need reasoning capabilities"""
-        reasoning_indicators = [
-            "why", "how come", "explain", "what if", "cause", "reason", "logic", 
-            "analyze", "understand", "think through", "consider", "would happen",
-            "hypothetical", "scenario", "reasoning", "connect", "relationship",
-            "causality", "counterfactual", "consequence", "impact", "effect"
-        ]
-        
-        return any(indicator in user_input.lower() for indicator in reasoning_indicators)
-    
-    async def _generate_emotional_expression(self, emotional_state: Dict[str, float]) -> Dict[str, Any]:
-        """Generate emotional expression based on emotional state"""
-        # Determine if emotion should be expressed
-        if not hasattr(self.brain, "emotional_core") or not self.brain.emotional_core:
-            return {"expression": None, "should_express": False}
-        
-        should_express_emotion = False
-        if hasattr(self.brain.emotional_core, "should_express_emotion"):
-            should_express_emotion = self.brain.emotional_core.should_express_emotion()
-        
-        emotional_expression = None
-        
-        if should_express_emotion:
-            try:
-                if hasattr(self.brain.emotional_core, "generate_emotional_expression"):
-                    expression_result = await self.brain.emotional_core.generate_emotional_expression(force=False)
-                    if expression_result.get("expressed", False):
-                        emotional_expression = expression_result.get("expression", "")
-                elif hasattr(self.brain.emotional_core, "get_expression_for_emotion"):
-                    emotional_expression = self.brain.emotional_core.get_expression_for_emotion()
-            except Exception as e:
-                logger.error(f"Error generating emotional expression: {str(e)}")
-                if hasattr(self.brain.emotional_core, "get_expression_for_emotion"):
-                    emotional_expression = self.brain.emotional_core.get_expression_for_emotion()
-        
-        return {
-            "expression": emotional_expression,
-            "should_express": should_express_emotion
-        }
-    
-    async def _generate_reasoning_response(self, user_input: str) -> str:
-        """Generate a response using reasoning capabilities"""
-        try:
-            if hasattr(self.brain, "reasoning_triage_agent") and hasattr(self.brain, "Runner"):
-                reasoning_result = await self.brain.Runner.run(
-                    self.brain.reasoning_triage_agent,
-                    user_input
-                )
-                return reasoning_result.final_output if hasattr(reasoning_result, "final_output") else str(reasoning_result)
-            else:
-                return "I understand your question and would like to reason through it with you."
-        except Exception as e:
-            logger.error(f"Error in reasoning response: {str(e)}")
-            return "I understand your question and would like to reason through it with you."
-    
-    async def _determine_main_response(self, 
-                                   user_input: str, 
-                                   processing_result: Dict[str, Any],
-                                   context: Dict[str, Any]) -> Dict[str, str]:
-        """Determine the main response content based on processing results"""
-        # Safely check for has_experience with default value
-        has_experience = processing_result.get("has_experience", False)
-        
-        # Determine if experience response should be used
-        if has_experience:
-            main_response = processing_result.get("experience_response", "I understand your input.")
-            response_type = "experience"
-            
-            # If it's a cross-user experience, mark it
-            if processing_result.get("cross_user_experience", False):
-                response_type = "cross_user_experience"
-        else:
-            # Check if procedural knowledge can be used
-            procedural_knowledge = processing_result.get("procedural_knowledge", None)
-            if procedural_knowledge and procedural_knowledge.get("can_execute", False) and hasattr(self.brain, "agent_enhanced_memory"):
-                try:
-                    # Get the most relevant procedure
-                    top_procedure = procedural_knowledge["relevant_procedures"][0]
-                    
-                    # Execute the procedure
-                    procedure_result = await self.brain.agent_enhanced_memory.execute_procedure(
-                        top_procedure["name"],
-                        context={"user_input": user_input, **(context or {})}
-                    )
-                    
-                    # If successful, use the procedure's response
-                    if procedure_result.get("success", False) and "output" in procedure_result:
-                        main_response = procedure_result["output"]
-                        response_type = "procedural"
-                    else:
-                        # For reasoning-related queries, use the reasoning agents
-                        if self._is_reasoning_query(user_input):
-                            main_response = await self._generate_reasoning_response(user_input)
-                            response_type = "reasoning"
-                        else:
-                            # No specific type, standard response
-                            main_response = "I understand your input and have processed it."
-                            response_type = "standard"
-                except Exception as e:
-                    logger.error(f"Error executing procedure: {str(e)}")
-                    
-                    # For reasoning-related queries, use the reasoning agents
-                    if self._is_reasoning_query(user_input):
-                        main_response = await self._generate_reasoning_response(user_input)
-                        response_type = "reasoning"
-                    else:
-                        # No specific type, standard response
-                        main_response = "I understand your input and have processed it."
-                        response_type = "standard"
-            else:
-                # For reasoning-related queries, use the reasoning agents
-                if self._is_reasoning_query(user_input):
-                    main_response = await self._generate_reasoning_response(user_input)
-                    response_type = "reasoning"
-                else:
-                    # No specific type, standard response
-                    main_response = "I understand your input and have processed it."
-                    response_type = "standard"
-        
-        return {
-            "message": main_response,
-            "response_type": response_type
-        }
-
-    def _get_safe_name(self, obj):
-        """Safely get the name of an object for logging/error handling"""
-        if hasattr(obj, '__name__'):
-            return obj.__name__
-        elif hasattr(obj, '__class__') and hasattr(obj.__class__, '__name__'):
-            return obj.__class__.__name__
-        elif hasattr(obj, 'name'):
-            return obj.name
-        elif hasattr(obj, 'guardrail_function'):
-            # For InputGuardrail objects
-            func = obj.guardrail_function
-            if hasattr(func, '__name__'):
-                return f"InputGuardrail[{func.__name__}]"
-            else:
-                return "InputGuardrail[unknown]"
-        else:
-            # Safe fallback that won't cause AttributeError
-            try:
-                return str(type(obj).__name__)
-            except:
-                return str(obj)[:50]  # Truncate to avoid huge outputs
-    
-    async def _handle_error(self, error: Exception, context: Dict[str, Any]) -> Dict[str, Any]:
-        """Handle errors during processing"""
-        # Get safe class name
-        class_name = self._get_safe_name(self)
-        logger.error(f"Error in {self._get_safe_name(self)}: {str(error)}")
-        
-        # Get safe error type
-        error_type = self._get_safe_name(error)
-        
-        # Check if this is a guardrail exception
-        is_guardrail = 'GuardrailTripwireTriggered' in error_type
-        
-        # Create base error result
-        error_result = {
-            "registered": False,
-            "error": str(error),
-            "error_type": error_type,
-            "component": class_name,
-            "context": context
-        }
-        
-        # Add guardrail-specific fields if applicable
-        if is_guardrail:
-            error_result["tripwire_triggered"] = True
-            error_result["guardrail_type"] = error_type
-            
-            # Try to extract guardrail result if available
-            if hasattr(error, 'guardrail_result'):
-                error_result["guardrail_result"] = error.guardrail_result
-        
-        # Register with issue tracker if available
-        if hasattr(self.brain, "issue_tracker") and not is_guardrail:
-            # Don't register guardrail triggers as issues
-            issue_data = {
-                "title": f"Error in {self._get_safe_name(self)}",
-                "error_type": error_type,
-                "error_message": str(error),
-                "component": class_name,
-                "category": "PROCESSING",
-                "severity": "MEDIUM",
-                "context": context
-            }
-            issue_result = await self.brain.issue_tracker.register_issue(issue_data)
-            error_result["registered"] = issue_result.get("registered", False)
-        
-        return error_result
-    
-    # Also add a method to ensure all processor results have required fields:
-    
-    def _ensure_valid_result(self, result: Any, user_input: str) -> Dict[str, Any]:
-        """
-        Ensure the result is a valid dict with required fields
-        
-        Args:
-            result: The result to validate
-            user_input: The original user input
-            
-        Returns:
-            A valid result dict
-        """
-        # If result is not a dict, convert it
-        if not isinstance(result, dict):
-            logger.warning(f"Result is not a dict: {type(result)}")
-            result = {
-                "error": f"Invalid result type: {type(result)}",
-                "user_input": user_input
-            }
-        
-        # Ensure required fields are present
-        required_fields = {
-            "user_input": user_input,
-            "emotional_state": {},
-            "memories": [],
-            "memory_count": 0,
-            "has_experience": False,
-            "experience_response": None,
-            "cross_user_experience": False,
-            "memory_id": None,
-            "response_time": 0.0
-        }
-        
-        for field, default_value in required_fields.items():
-            if field not in result:
-                result[field] = default_value
-        
-        # Ensure tripwire_triggered is set
-        if "tripwire_triggered" not in result:
-            result["tripwire_triggered"] = False
-        
-        return result
