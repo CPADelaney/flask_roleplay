@@ -873,13 +873,61 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
         else:
             self.mode_manager = original_mode_manager
         
-        # Input processor (needs mode_manager)
-        self.conditioned_input_processor = BlendedInputProcessor(
-            conditioning_system=self.conditioning_system,
-            emotional_core=self.emotional_core,
-            somatosensory_system=self.digital_somatosensory_system,
-            mode_manager=self.mode_manager
-        )
+        # Input processor - Initialize with brain instance
+        # The BlendedInputProcessor will get subsystems from the brain
+        try:
+            # Check if we need to import InputProcessingConfig
+            config = None
+            try:
+                from nyx.core.input_processing_config import InputProcessingConfig
+                # Create a default config if the class exists
+                config = InputProcessingConfig()
+            except ImportError:
+                logger.debug("InputProcessingConfig not found, using None")
+            
+            # Initialize BlendedInputProcessor with brain and optional config
+            self.conditioned_input_processor = BlendedInputProcessor(
+                brain=self,  # Pass the brain instance
+                config=config  # Pass the config if available
+            )
+            logger.debug("Initialized BlendedInputProcessor with brain instance")
+            
+        except Exception as e:
+            logger.error(f"Failed to initialize BlendedInputProcessor: {e}")
+            # Create a simple fallback processor
+            class FallbackInputProcessor:
+                def __init__(self, brain=None):
+                    self.brain = brain
+                    # The BlendedInputProcessor gets these from brain, so we don't need to store them
+                    
+                async def process_input(self, text: str, user_id: str = None, context: Dict[str, Any] = None) -> Dict[str, Any]:
+                    """Simple passthrough for input"""
+                    return {
+                        "input_text": text,
+                        "user_id": user_id or "default",
+                        "detected_patterns": [],
+                        "behavior_evaluations": [],
+                        "recommended_behaviors": [],
+                        "avoided_behaviors": [],
+                        "reinforcement_results": [],
+                        "mode_distribution": {},
+                        "adjusted_sensitivities": {},
+                        "behavior_scores": {}
+                    }
+                
+                async def modify_response(self, response_text: str, input_processing_results: Dict[str, Any] = None) -> str:
+                    """Simple passthrough for response"""
+                    return response_text
+                
+                def get_shared_context(self):
+                    """Return a dummy shared context"""
+                    from nyx.core.input_processing_context import InputProcessingContext
+                    return InputProcessingContext()
+            
+            self.conditioned_input_processor = FallbackInputProcessor(brain=self)
+            logger.warning("Using fallback input processor due to initialization failure")
+        
+        # Wrap with A2A if enabled
         if self.use_a2a_integration:
             from nyx.core.a2a.context_aware_input_processor import ContextAwareInputProcessor
             self.conditioned_input_processor = ContextAwareInputProcessor(self.conditioned_input_processor)
