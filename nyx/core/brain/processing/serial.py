@@ -2,6 +2,7 @@
 import datetime
 from typing import Dict, Any
 from agents import Agent, Runner, trace
+import logging
 
 from nyx.core.brain.processing.base_processor import BaseProcessor, ProcessingContext, ProcessingResult, ResponseData
 
