@@ -17,7 +17,7 @@ flatbuffers==24.3.25    # TensorFlow 2.19.0 runtime dependency :contentReference
 gast==0.4.0                # TensorFlow 2.19.0 runtime dependency :contentReference[oaicite:11]{index=11}  
 google-pasta==0.2.0        # TensorFlow 2.19.0 runtime dependency :contentReference[oaicite:12]{index=12}  
 grpcio==1.59.3             # TensorFlow 2.19.0 runtime dependency :contentReference[oaicite:13]{index=13}  
-h5py==3.9.0                # TensorFlow 2.19.0 runtime dependency :contentReference[oaicite:14]{index=14}  
+h5py==3.11.0                # TensorFlow 2.19.0 runtime dependency :contentReference[oaicite:14]{index=14}  
 keras==3.8.0               # TensorFlow 2.19.0 pulls in Keras 3.8.x :contentReference[oaicite:15]{index=15}  
 libclang==17.0.6           # Required by TensorFlow 2.19.0 :contentReference[oaicite:16]{index=16}  
 ml-dtypes==0.5.1           # TensorFlow 2.19.0 requires ml-dtypes>=0.5.1,<1.0.0 :contentReference[oaicite:17]{index=17}  
