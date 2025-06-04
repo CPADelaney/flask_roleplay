@@ -35,13 +35,13 @@ class InputAnalysis(BaseModel):
 
 class ProcessingResult(BaseModel):
     """Unified processing result"""
-    user_input: str
-    response: str
-    emotional_state: Dict[str, float]
-    memories_used: List[Dict[str, Any]]
-    processing_approach: str
-    response_time: float
-    confidence: float
+    user_input: str = ""
+    response: str = ""
+    emotional_state: Dict[str, float] = Field(default_factory=dict)
+    memories_used: List[Dict[str, Any]] = Field(default_factory=list)
+    processing_approach: str = "ANALYTICAL"
+    response_time: float = 0.0
+    confidence: float = 1.0
     generate_image: bool = False
     image_prompt: Optional[str] = None
     error: Optional[str] = None
