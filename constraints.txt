@@ -25,7 +25,7 @@ numpy==2.1.3             # TensorFlow 2.19.0 runtime dependency :contentReferenc
 opt-einsum==3.3.0          # TensorFlow 2.19.0 runtime dependency :contentReference[oaicite:19]{index=19}  
 packaging==24.1            # TensorFlow 2.19.0 runtime dependency :contentReference[oaicite:20]{index=20}  
 protobuf==4.25.3           # TensorFlow 2.19.0 runtime dependency :contentReference[oaicite:21]{index=21}  
-requests==2.31.0           # TensorFlow 2.19.0 runtime dependency :contentReference[oaicite:22]{index=22}  
+requests==2.32.3         # TensorFlow 2.19.0 runtime dependency :contentReference[oaicite:22]{index=22}  
 setuptools==68.0.0         # TensorFlow 2.19.0 runtime dependency :contentReference[oaicite:23]{index=23}  
 six==1.16.0                # TensorFlow 2.19.0 runtime dependency :contentReference[oaicite:24]{index=24}  
 tensorboard==2.19.0        # Must match TensorFlow’s ±0.1 version window :contentReference[oaicite:25]{index=25}  
