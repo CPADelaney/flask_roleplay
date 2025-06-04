@@ -35,22 +35,26 @@ class InputAnalysis(BaseModel):
     suggested_approach: str
 
 class ProcessingResult(BaseModel):
-    """Unified processing result"""
-    user_input: str = Field(default="", description="The user's input text")
-    response: str = Field(default="", description="The generated response")
-    emotional_state: Dict[str, float] = Field(default={}, description="Current emotional state")
-    memories_used: List[Dict[str, Any]] = Field(default=[], description="Memories used in processing")
-    processing_approach: str = Field(default="ANALYTICAL", description="Processing approach used")
-    response_time: float = Field(default=0.0, description="Response time in seconds")
-    confidence: float = Field(default=1.0, description="Confidence in the response")
-    generate_image: bool = Field(default=False, description="Whether to generate an image")
-    image_prompt: Optional[str] = Field(default=None, description="Image generation prompt if applicable")
-    error: Optional[str] = Field(default=None, description="Error message if any")
+    user_input: str
+    response: str
+    emotional_state: Dict[str, float]
+    memories_used: List[Dict[str, Any]]
+    processing_approach: str
+    response_time: float
+    confidence: float
+    generate_image: bool
+    image_prompt: Optional[str] = None
+    error: Optional[str] = None
 
-class Config:
-    # This ensures proper JSON schema generation
-    schema_extra = {
-        "required": []  # No fields are required since all have defaults
+    model_config = {
+        "json_schema_extra": {
+            "required": [  # every key **exactly once**, no defaults except the truly optional ones
+                "user_input", "response", "emotional_state",
+                "memories_used", "processing_approach",
+                "response_time", "confidence", "generate_image"
+            ],
+            "additionalProperties": False,
+        }
     }
     
 
