@@ -1172,6 +1172,8 @@ class DigitalSomatosensorySystem:
     
     async def _validate_input(self, ctx: RunContextWrapper[SomatosensoryContext], agent: Agent, input_data: Any) -> GuardrailFunctionOutput:
         """Validate input for the orchestrator"""
+        logger.debug(f"Validating input: {input_data}")  # Add logging
+        
         validation_input_dict = {}
         
         if isinstance(input_data, str):
@@ -1186,10 +1188,12 @@ class DigitalSomatosensorySystem:
         elif isinstance(input_data, dict):
             validation_input_dict = input_data
         else:
+            logger.warning(f"Unexpected input type in guardrail: {type(input_data).__name__}")  # Add logging
             return GuardrailFunctionOutput(
                 output_info={"is_valid": False, "reason": f"Unexpected input type: {type(input_data).__name__}"},
                 tripwire_triggered=True
             )
+        
         
         # Check if this is a non-stimulus action
         action = validation_input_dict.get("action")
@@ -1688,8 +1692,13 @@ class DigitalSomatosensorySystem:
                 return await self.process_body_experience(stimulus_data)
             except Exception as e:
                 logger.error(f"Error processing stimulus: {e}")
+                # Create a context for the fallback
+                fallback_context = SomatosensoryContext(
+                    system=self,
+                    operation="process_stimulus_fallback"
+                )
                 return await process_stimulus_tool(
-                    RunContextWrapper(context=context),
+                    RunContextWrapper(context=fallback_context),
                     stimulus_type=stimulus_type,
                     body_region=body_region,
                     intensity=intensity,
