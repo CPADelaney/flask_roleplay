@@ -36,16 +36,17 @@ class InputAnalysis(BaseModel):
 
 class ProcessingResult(BaseModel):
     """Unified processing result"""
-    user_input: str = ""
-    response: str = ""
-    emotional_state: Dict[str, float] = Field(default_factory=dict)
-    memories_used: List[Dict[str, Any]] = Field(default_factory=list)
-    processing_approach: str = "ANALYTICAL"
-    response_time: float = 0.0
-    confidence: float = 1.0
-    generate_image: bool = False
-    image_prompt: Optional[str] = None
-    error: Optional[str] = None
+    user_input: str = Field(default="", description="The user's input text")
+    response: str = Field(default="", description="The generated response")
+    emotional_state: Dict[str, float] = Field(default={}, description="Current emotional state")
+    memories_used: List[Dict[str, Any]] = Field(default=[], description="Memories used in processing")
+    processing_approach: str = Field(default="ANALYTICAL", description="Processing approach used")
+    response_time: float = Field(default=0.0, description="Response time in seconds")
+    confidence: float = Field(default=1.0, description="Confidence in the response")
+    generate_image: bool = Field(default=False, description="Whether to generate an image")
+    image_prompt: Optional[str] = Field(default=None, description="Image generation prompt if applicable")
+    error: Optional[str] = Field(default=None, description="Error message if any")
+    
 
 class UnifiedProcessor:
     """Single processor that dynamically handles all input types"""
