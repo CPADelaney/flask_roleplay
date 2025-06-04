@@ -54,7 +54,6 @@ importlib-resources==6.5.2 # chromadb 1.0.8 dependency :contentReference[oaicite
 kubernetes==32.0.1         # chromadb 1.0.8 dependency :contentReference[oaicite:44]{index=44}  
 mmh3==5.0.1                # chromadb 1.0.8 dependency :contentReference[oaicite:45]{index=45}  
 multidict==6.4.3           # aiohttp 3.11.18 dependency :contentReference[oaicite:46]{index=46}  
-protobuf==4.25.3           # qdrant-client 1.7.0 dependency (already pinned above) :contentReference[oaicite:47]{index=47}  
 grpcio-tools==1.71.0       # qdrant-client 1.7.0 dependency :contentReference[oaicite:48]{index=48}  
 
 # ----- FastAPI (matched to fastapi==0.115.9) -----  
