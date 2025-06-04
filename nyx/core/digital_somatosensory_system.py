@@ -2076,7 +2076,7 @@ class DigitalSomatosensorySystem:
                 
                 logger.info(f"Cycle {i+1}: stimulating but withholding")
                 stim_tasks = [
-                    self.process_stimulus("pleasure", region, min(1.0, intensity), "denial_loop", duration=1.5)
+                    self.process_stimulus_with_protection("pleasure", region, min(1.0, intensity), "denial_loop", duration=1.5)
                     for region in pleasure_regions
                     if region in self.body_regions
                 ]
