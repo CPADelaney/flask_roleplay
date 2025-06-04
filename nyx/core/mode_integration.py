@@ -146,13 +146,15 @@ class ModeIntegrationManager:
             
             # Use existing input processor if available
             existing_processor = getattr(self.brain, 'conditioned_input_processor', None)
-            if existing_processor and hasattr(existing_processor, 'mode_manager'):
+            if existing_processor:
                 self.input_processor = existing_processor
+                logger.debug("Using existing conditioned_input_processor from brain")
             else:
+                # Create new processor with brain instance
                 self.input_processor = BlendedInputProcessor(
-                    mode_manager=self.mode_manager,
-                    emotional_core=self.emotional_core
+                    brain=self.brain  # Pass brain instead of individual components
                 )
+                logger.debug("Created new BlendedInputProcessor with brain instance")
             
             # Update brain references
             if self.brain:
@@ -165,7 +167,7 @@ class ModeIntegrationManager:
         except Exception as e:
             logger.error(f"Error initializing mode integration: {e}")
             return False
-    
+        
     async def initialize_agents(self) -> bool:
         """Initialize the agent infrastructure for mode integration"""
         if self.agents_initialized:
