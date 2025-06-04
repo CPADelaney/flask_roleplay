@@ -1,6 +1,9 @@
 # Use an official Python runtime as a parent image
 FROM python:3.10-slim
 
+# Disable pip's version check for faster installs
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1
+
 WORKDIR /app
 
 # Install OS dependencies as root
