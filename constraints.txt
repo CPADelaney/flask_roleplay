@@ -38,7 +38,7 @@ wrapt==1.15.0              # TensorFlow 2.19.0 runtime dependency :contentRefere
 jiter==0.8.2               # openai 1.84.0 dependency :contentReference[oaicite:30]{index=30}  
 rich==13.9.4               # smolagents 1.16.1 dependency :contentReference[oaicite:31]{index=31}  
 colorama==0.4.6            # openai-agents dependency :contentReference[oaicite:32]{index=32}  
-types-requests==2.32.0     # openai-agents 0.0.17 dependency :contentReference[oaicite:33]{index=33}  
+types-requests==2.31.0     # openai-agents 0.0.17 dependency :contentReference[oaicite:33]{index=33}  
 types-urllib3==1.26.25     # openai-agents 0.0.17 dependency :contentReference[oaicite:34]{index=34}  
 sse-starlette==2.3.6       # mcp 1.9.1 dependency (used by openai-agents-mcp) :contentReference[oaicite:35]{index=35}  
 python-multipart==0.0.20   # mcp 1.9.1 dependency :contentReference[oaicite:36]{index=36}  
