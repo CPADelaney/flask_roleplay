@@ -13,7 +13,7 @@ thinc==8.3.6               # spaCy 3.8.2 requires thinc>=8.3.0,<8.4.0 :contentRe
 # ----- TensorFlow (matched to tensorflow==2.19.0) -----  
 absl-py==1.4.0             # TensorFlow 2.19.0 runtime dependency :contentReference[oaicite:8]{index=8}  
 astunparse==1.6.3          # TensorFlow 2.19.0 runtime dependency :contentReference[oaicite:9]{index=9}  
-flatbuffers==23.5.29       # TensorFlow 2.19.0 runtime dependency :contentReference[oaicite:10]{index=10}  
+flatbuffers==24.3.25    # TensorFlow 2.19.0 runtime dependency :contentReference[oaicite:10]{index=10}  
 gast==0.4.0                # TensorFlow 2.19.0 runtime dependency :contentReference[oaicite:11]{index=11}  
 google-pasta==0.2.0        # TensorFlow 2.19.0 runtime dependency :contentReference[oaicite:12]{index=12}  
 grpcio==1.59.3             # TensorFlow 2.19.0 runtime dependency :contentReference[oaicite:13]{index=13}  
