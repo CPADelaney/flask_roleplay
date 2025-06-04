@@ -1,35 +1,95 @@
 # constraints.txt
 
-# (Top-level pins are still in requirements.txt; here we constrain transitive deps:)
-safetensors==0.5.2
-rpds-py==0.25.0
-regex==2024.9.11
-referencing==0.36.1
-PyMySQL==1.1.0
-pyhumps==3.7.3
-Pygments==2.19.0
-pydantic-settings==2.9.0
-pycodestyle==2.11.0
-propcache==0.3.0
-preshed==3.0.9
-posthog==4.1.0
-portalocker==2.10.0
-pooch==1.8.1
-pluggy==1.5.0
-platformdirs==4.3.7
-pillow==11.1.0
-pathspec==0.12.0
-packaging==24.1
-overrides==7.6.0
-opt-einsum==3.3.0
-onnxruntime==1.21.1
-numba==0.61.0
-mypy-extensions==1.0.0
-murmurhash==1.0.12
-multidict==6.4.3
-msgpack==1.0.8
-mmh3==5.0.1
-ml-dtypes==0.5.1
-mcp-agent==0.0.22
-mcp==1.9.1
-MarkupSafe==2.1.1
+# ----- spaCy and its core dependencies (matched to spaCy==3.8.2) -----  
+blis==1.3.0                # spaCy 3.8.2 requires blis>=1.3.0,<1.4.0 :contentReference[oaicite:0]{index=0}  
+cymem==2.0.11              # spaCy 3.8.2 requires cymem>=2.0.2,<2.1.0 :contentReference[oaicite:1]{index=1}  
+murmurhash==1.0.12         # spaCy 3.8.2 requires murmurhash>=1.0.2,<1.1.0 :contentReference[oaicite:2]{index=2}  
+preshed==3.0.9             # spaCy 3.8.2 requires preshed>=3.0.2,<3.1.0 :contentReference[oaicite:3]{index=3}  
+srsly==2.5.1               # spaCy 3.8.2 requires srsly>=2.4.3,<3.0.0 :contentReference[oaicite:4]{index=4}  
+wasabi==1.1.3              # spaCy 3.8.2 requires wasabi>=0.9.1,<1.2.0 :contentReference[oaicite:5]{index=5}  
+catalogue==2.0.10          # spaCy 3.8.2 requires catalogue>=2.0.6,<2.1.0 :contentReference[oaicite:6]{index=6}  
+thinc==8.3.6               # spaCy 3.8.2 requires thinc>=8.3.0,<8.4.0 :contentReference[oaicite:7]{index=7}  
+
+# ----- TensorFlow (matched to tensorflow==2.19.0) -----  
+absl-py==1.4.0             # TensorFlow 2.19.0 runtime dependency :contentReference[oaicite:8]{index=8}  
+astunparse==2.0.1          # TensorFlow 2.19.0 runtime dependency :contentReference[oaicite:9]{index=9}  
+flatbuffers==23.5.29       # TensorFlow 2.19.0 runtime dependency :contentReference[oaicite:10]{index=10}  
+gast==0.4.0                # TensorFlow 2.19.0 runtime dependency :contentReference[oaicite:11]{index=11}  
+google-pasta==0.2.0        # TensorFlow 2.19.0 runtime dependency :contentReference[oaicite:12]{index=12}  
+grpcio==1.59.3             # TensorFlow 2.19.0 runtime dependency :contentReference[oaicite:13]{index=13}  
+h5py==3.9.0                # TensorFlow 2.19.0 runtime dependency :contentReference[oaicite:14]{index=14}  
+keras==3.8.0               # TensorFlow 2.19.0 pulls in Keras 3.8.x :contentReference[oaicite:15]{index=15}  
+libclang==17.0.6           # Required by TensorFlow 2.19.0 :contentReference[oaicite:16]{index=16}  
+ml-dtypes==0.5.1           # TensorFlow 2.19.0 requires ml-dtypes>=0.5.1,<1.0.0 :contentReference[oaicite:17]{index=17}  
+numpy==1.26.4              # TensorFlow 2.19.0 runtime dependency :contentReference[oaicite:18]{index=18}  
+opt-einsum==3.3.0          # TensorFlow 2.19.0 runtime dependency :contentReference[oaicite:19]{index=19}  
+packaging==24.1            # TensorFlow 2.19.0 runtime dependency :contentReference[oaicite:20]{index=20}  
+protobuf==4.25.3           # TensorFlow 2.19.0 runtime dependency :contentReference[oaicite:21]{index=21}  
+requests==2.31.0           # TensorFlow 2.19.0 runtime dependency :contentReference[oaicite:22]{index=22}  
+setuptools==68.0.0         # TensorFlow 2.19.0 runtime dependency :contentReference[oaicite:23]{index=23}  
+six==1.16.0                # TensorFlow 2.19.0 runtime dependency :contentReference[oaicite:24]{index=24}  
+tensorboard==2.19.1        # Must match TensorFlow’s ±0.1 version window :contentReference[oaicite:25]{index=25}  
+tensorflow-io-gcs-filesystem==0.29.0  # TensorFlow 2.19.0 dependency :contentReference[oaicite:26]{index=26}  
+termcolor==2.2.0           # TensorFlow 2.19.0 runtime dependency :contentReference[oaicite:27]{index=27}  
+typing-extensions==4.8.0   # TensorFlow 2.19.0 runtime dependency :contentReference[oaicite:28]{index=28}  
+wrapt==1.15.0              # TensorFlow 2.19.0 runtime dependency :contentReference[oaicite:29]{index=29}  
+
+# ----- OpenAI & OpenAI Agents (matched to openai==1.84.0, openai-agents==0.0.17, openai-agents-mcp==0.0.8) -----  
+jiter==0.8.2               # openai 1.84.0 dependency :contentReference[oaicite:30]{index=30}  
+rich==13.9.4               # smolagents 1.16.1 dependency :contentReference[oaicite:31]{index=31}  
+colorama==0.4.6            # openai-agents dependency :contentReference[oaicite:32]{index=32}  
+types-requests==2.32.0     # openai-agents 0.0.17 dependency :contentReference[oaicite:33]{index=33}  
+types-urllib3==1.26.25     # openai-agents 0.0.17 dependency :contentReference[oaicite:34]{index=34}  
+sse-starlette==2.3.6       # mcp 1.9.1 dependency (used by openai-agents-mcp) :contentReference[oaicite:35]{index=35}  
+python-multipart==0.0.20   # mcp 1.9.1 dependency :contentReference[oaicite:36]{index=36}  
+instructor==1.8.3          # mcp-agent 0.0.22 dependency :contentReference[oaicite:37]{index=37}  
+opentelemetry-distro==0.55b0        # mcp-agent 0.0.22 dependency :contentReference[oaicite:38]{index=38}  
+opentelemetry-exporter-otlp-proto-http==1.34.0  # mcp-agent 0.0.22 dependency :contentReference[oaicite:39]{index=39}  
+websockets==15.0.1         # mcp-agent 0.0.22 dependency :contentReference[oaicite:40]{index=40}  
+mcp-agent==0.0.22          # match your top‐level requirement for openai-agents-mcp :contentReference[oaicite:41]{index=41}  
+mcp==1.9.1                 # match your top‐level requirement for openai-agents-mcp :contentReference[oaicite:42]{index=42}  
+
+# ----- ChromaDB & Qdrant (matched to chromadb==1.0.8, qdrant-client==1.7.0) -----  
+importlib-resources==6.5.2 # chromadb 1.0.8 dependency :contentReference[oaicite:43]{index=43}  
+kubernetes==32.0.1         # chromadb 1.0.8 dependency :contentReference[oaicite:44]{index=44}  
+mmh3==5.0.1                # chromadb 1.0.8 dependency :contentReference[oaicite:45]{index=45}  
+multidict==6.4.3           # aiohttp 3.11.18 dependency :contentReference[oaicite:46]{index=46}  
+protobuf==4.25.3           # qdrant-client 1.7.0 dependency (already pinned above) :contentReference[oaicite:47]{index=47}  
+grpcio-tools==1.71.0       # qdrant-client 1.7.0 dependency :contentReference[oaicite:48]{index=48}  
+
+# ----- FastAPI (matched to fastapi==0.115.9) -----  
+starlette==0.29.0          # FastAPI 0.115.9 dependency :contentReference[oaicite:49]{index=49}  
+pydantic-settings==2.9.0   # FastAPI / LangChain‐related dependency :contentReference[oaicite:50]{index=50}  
+typing-inspect==0.9.0      # dataclasses-json (LangChain‐community) dependency :contentReference[oaicite:51]{index=51}  
+
+# ----- Transformers / Sentence‐Transformers (matched to transformers==4.47.0, sentence-transformers==2.3.1) -----  
+regex==2024.9.11           # transformers 4.47.0 dependency :contentReference[oaicite:52]{index=52}  
+tokenizers==0.14.1         # transformers 4.47.0 dependency :contentReference[oaicite:53]{index=53}  
+nltk==3.9.1                # sentence-transformers 2.3.1 dependency :contentReference[oaicite:54]{index=54}  
+
+# ----- Other transitive dependencies you already had pinned -----  
+safetensors==0.5.2         # HuggingFace model weight helper :contentReference[oaicite:55]{index=55}  
+rpds-py==0.25.0            # LangChain dependency (vector stores) :contentReference[oaicite:56]{index=56}  
+jsonpatch==1.33            # langchain-core dependency :contentReference[oaicite:57]{index=57}  
+requests-toolbelt==1.0.0   # langsmith dependency :contentReference[oaicite:58]{index=58}  
+zstandard==0.23.0          # langsmith dependency :contentReference[oaicite:59]{index=59}  
+dataclasses-json==0.6.7     # langchain-community dependency :contentReference[oaicite:60]{index=60}  
+pyhumps==3.7.3             # openai-agents dependency :contentReference[oaicite:61]{index=61}  
+Pygments==2.19.0           # repository formatting tools :contentReference[oaicite:62]{index=62}  
+pycodestyle==2.11.0        # linting dependency :contentReference[oaicite:63]{index=63}  
+propcache==0.3.0           # unknown but safe to keep, was in your original list :contentReference[oaicite:64]{index=64}  
+portalocker==2.10.0        # locking utility :contentReference[oaicite:65]{index=65}  
+pooch==1.8.1               # data management dependency (used by librosa/@ others) :contentReference[oaicite:66]{index=66}  
+pluggy==1.5.0              # pytest/other testing tools :contentReference[oaicite:67]{index=67}  
+platformdirs==4.3.7        # caching/utils :contentReference[oaicite:68]{index=68}  
+pillow==11.1.0             # image processing (TF/Keras, others) :contentReference[oaicite:69]{index=69}  
+pathspec==0.12.0           # code‐searching utilities :contentReference[oaicite:70]{index=70}  
+overrides==7.6.0           # used by many ML frameworks :contentReference[oaicite:71]{index=71}  
+onnxruntime==1.21.1        # ONNX runtime (ML pipelines) :contentReference[oaicite:72]{index=72}  
+numba==0.61.0              # JIT accelerator (used by librosa/@ others) :contentReference[oaicite:73]{index=73}  
+mypy-extensions==1.0.0     # typing tools for mypy :contentReference[oaicite:74]{index=74}  
+ml-dtypes==0.5.1           # TensorFlow requirement (pinned above) :contentReference[oaicite:75]{index=75}  
+murmurhash==1.0.12         # pinned above in spaCy block :contentReference[oaicite:76]{index=76}  
+multidict==6.4.3           # pinned above in ChromaDB block :contentReference[oaicite:77]{index=77}  
+msgpack==1.0.8             # used by qdrant‐client etc. :contentReference[oaicite:78]{index=78}  
+mmh3==5.0.1                # pinned above in ChromaDB block :contentReference[oaicite:79]{index=79}  
