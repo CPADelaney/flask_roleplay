@@ -129,6 +129,6 @@ tf-keras
 transformers==4.47.0
 pgvector
 cython==0.29.37 
-spacy==3.1.3
+spacy==3.7.4
 opencv-python==4.11.0.86
 librosa==0.11.0
