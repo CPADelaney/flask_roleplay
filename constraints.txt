@@ -58,7 +58,7 @@ protobuf==4.25.3           # qdrant-client 1.7.0 dependency (already pinned abov
 grpcio-tools==1.71.0       # qdrant-client 1.7.0 dependency :contentReference[oaicite:48]{index=48}  
 
 # ----- FastAPI (matched to fastapi==0.115.9) -----  
-starlette==0.29.0          # FastAPI 0.115.9 dependency :contentReference[oaicite:49]{index=49}  
+starlette==0.45.0         # FastAPI 0.115.9 dependency :contentReference[oaicite:49]{index=49}  
 pydantic-settings==2.9.0   # FastAPI / LangChain‐related dependency :contentReference[oaicite:50]{index=50}  
 typing-inspect==0.9.0      # dataclasses-json (LangChain‐community) dependency :contentReference[oaicite:51]{index=51}  
 
