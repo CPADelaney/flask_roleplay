@@ -128,6 +128,7 @@ huggingface-hub==0.31.2
 tf-keras
 transformers==4.47.0
 pgvector
+cython==0.29.37 
 spacy
 opencv-python==4.11.0.86
 librosa==0.11.0
