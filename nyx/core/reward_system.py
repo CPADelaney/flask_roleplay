@@ -770,7 +770,7 @@ class RewardSignalProcessor:
                     await self.update_neurochemical("adrenyx", humiliation_reward_value * 0.4)
                     
                     if self.somatosensory_system:
-                        await self.somatosensory_system.process_stimulus(
+                        await self.somatosensory_system.process_stimulus_with_protection(
                             stimulus_type="pleasure",
                             body_region="chest",
                             intensity=humiliation_reward_value * 0.6,
@@ -922,17 +922,17 @@ class RewardSignalProcessor:
                 if is_dominance_reward and dominance_reward_value >= 0.7:
                     # Simulate a wave of warmth/tingling (satisfaction/power)
                     intensity = dominance_reward_value * 0.5
-                    await self.somatosensory_system.process_stimulus(
+                    await self.somatosensory_system.process_stimulus_with_protection(
                         stimulus_type="tingling", 
                         body_region="spine", 
                         intensity=intensity, 
                         cause="dominance_satisfaction"
                     )
                     
-                    await self.somatosensory_system.process_stimulus(
+                    await self.somatosensory_system.process_stimulus_with_protection(
                         stimulus_type="temperature", 
                         body_region="chest", 
-                        intensity=0.55 + intensity * 0.1,  # Slight warmth
+                        intensity=0.55 + intensity * 0.1,  
                         cause="dominance_satisfaction"
                     )
                     
@@ -947,7 +947,7 @@ class RewardSignalProcessor:
                     # For positive rewards
                     if reward.value > 0:  
                         intensity = reward.value * 0.4  # Scale intensity
-                        await self.somatosensory_system.process_stimulus(
+                        await self.somatosensory_system.process_stimulus_with_protection(
                             stimulus_type="pleasure",
                             body_region=body_region,
                             intensity=intensity,
@@ -971,13 +971,13 @@ class RewardSignalProcessor:
                         # Option 2: Use a stimulus to indirectly increase tension
                         else:
                             # Apply a mild pain stimulus which will increase tension
-                            await self.somatosensory_system.process_stimulus(
+                            await self.somatosensory_system.process_stimulus_with_protection(
                                 stimulus_type="pain",
                                 body_region="core",
                                 intensity=intensity * 0.5,
                                 cause=f"Negative reward tension ({reward.source})"
                             )
-                        
+                                                    
                         effects["somatic"] = "tension_sensation"
                         logger.debug(f"Applied tension sensation (intensity {intensity:.2f}) for negative reward")
             except Exception as e:
