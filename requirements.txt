@@ -14,7 +14,7 @@ psutil==5.9.7
 psycopg2==2.9.10
 openai==1.84.0
 openai-agents==0.0.17
-openai-agents-mcp=0.0.8
+openai-agents-mcp==0.0.8
 asyncpg==0.30.0
 celery==5.5.2
 eventlet==0.33.3
