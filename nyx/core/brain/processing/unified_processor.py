@@ -1,7 +1,8 @@
 # nyx/core/brain/processing/unified_processor.py
 import logging
 import datetime
-from typing import Dict, List, Any, Optional, Field
+from typing import Dict, List, Any, Optional
+from pydantic import BaseModel, Field
 from dataclasses import dataclass
 from agents import (
     Agent, Runner, trace, function_tool, 
