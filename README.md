@@ -73,6 +73,8 @@ source venv/bin/activate  # On Windows: venv\Scripts\activate
 
 3. Install dependencies:
 ```bash
+# Optional: disable pip's version check to speed up installs
+export PIP_DISABLE_PIP_VERSION_CHECK=1
 pip install -r requirements.txt
 ```
 
