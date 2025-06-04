@@ -46,6 +46,12 @@ class ProcessingResult(BaseModel):
     generate_image: bool = Field(default=False, description="Whether to generate an image")
     image_prompt: Optional[str] = Field(default=None, description="Image generation prompt if applicable")
     error: Optional[str] = Field(default=None, description="Error message if any")
+
+class Config:
+    # This ensures proper JSON schema generation
+    schema_extra = {
+        "required": []  # No fields are required since all have defaults
+    }
     
 
 class UnifiedProcessor:
