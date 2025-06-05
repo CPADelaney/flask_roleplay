@@ -41,7 +41,6 @@ class EmotionalContext(BaseModel):
     class Config:
         """Pydantic configuration"""
         arbitrary_types_allowed = True
-        extra = "allow" # Or "ignore" if you don't want extra fields saved
     
     def model_post_init(self, __context) -> None:
         """
