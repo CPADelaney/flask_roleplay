@@ -23,10 +23,185 @@ from context.memory_manager import get_memory_manager, get_memory_agent
 from context.context_manager import get_context_manager, get_context_manager_agent
 from context.models import (
     ContextRequest, ContextOutput, TokenUsage, 
-    NPCData, Memory, QuestData, LocationData
+    NPCData, Memory, QuestData, LocationData,
+    LocationDetails, NarrativeSummaryData,
+    TimeSpanMetadata, DeltaChanges, DeltaChange,
+    NPCMetadata, LocationMetadata, MemoryMetadata
 )
 
+
 logger = logging.getLogger(__name__)
+
+class BaseContextData(BaseModel):
+    """Base context data from database"""
+    time_info: 'TimeInfo'
+    player_stats: 'PlayerStats'
+    current_roleplay: 'RoleplayData'
+    current_location: str
+    narrative_stage: Optional['NarrativeStageInfo'] = None
+    error: Optional[str] = None
+    
+    class Config:
+        extra = "forbid"
+
+
+class TimeInfo(BaseModel):
+    """Time information"""
+    year: str
+    month: str
+    day: str
+    time_of_day: str
+    
+    class Config:
+        extra = "forbid"
+
+
+class PlayerStats(BaseModel):
+    """Player statistics"""
+    corruption: Optional[float] = None
+    confidence: Optional[float] = None
+    willpower: Optional[float] = None
+    obedience: Optional[float] = None
+    dependency: Optional[float] = None
+    lust: Optional[float] = None
+    mental_resilience: Optional[float] = None
+    physical_endurance: Optional[float] = None
+    
+    class Config:
+        extra = "forbid"
+
+
+class RoleplayData(BaseModel):
+    """Current roleplay data"""
+    CurrentLocation: Optional[str] = None
+    EnvironmentDesc: Optional[str] = None
+    PlayerRole: Optional[str] = None
+    MainQuest: Optional[str] = None
+    
+    class Config:
+        extra = "forbid"
+
+
+class NarrativeStageInfo(BaseModel):
+    """Narrative stage information"""
+    name: str
+    description: str
+    
+    class Config:
+        extra = "forbid"
+
+
+class MaintenanceResult(BaseModel):
+    """Result of maintenance operations"""
+    memory_maintenance: Optional['MemoryMaintenanceResult'] = None
+    vector_maintenance: Optional['VectorMaintenanceResult'] = None
+    cache_maintenance: Optional['CacheMaintenanceResult'] = None
+    performance_metrics: Optional['PerformanceMetrics'] = None
+    narrative_maintenance: Optional['NarrativeMaintenanceResult'] = None
+    
+    class Config:
+        extra = "forbid"
+
+
+class MemoryMaintenanceResult(BaseModel):
+    """Memory maintenance result"""
+    consolidated: bool
+    checked_count: Optional[int] = None
+    consolidated_count: Optional[int] = None
+    summary_count: Optional[int] = None
+    threshold_days: Optional[int] = None
+    reason: Optional[str] = None
+    error: Optional[str] = None
+    
+    class Config:
+        extra = "forbid"
+
+
+class VectorMaintenanceResult(BaseModel):
+    """Vector maintenance result"""
+    status: str
+    
+    class Config:
+        extra = "forbid"
+
+
+class CacheMaintenanceResult(BaseModel):
+    """Cache maintenance result"""
+    cache_items: int
+    levels: 'CacheLevels'
+    
+    class Config:
+        extra = "forbid"
+
+
+class CacheLevels(BaseModel):
+    """Cache level counts"""
+    l1: int
+    l2: int
+    l3: int
+    
+    class Config:
+        extra = "forbid"
+
+
+class PerformanceMetrics(BaseModel):
+    """Performance metrics"""
+    response_time: 'ResponseTimeMetrics'
+    token_usage: 'TokenUsageMetrics'
+    cache: 'CacheMetrics'
+    memory_usage: 'MemoryUsageMetrics'
+    uptime_seconds: float
+    timestamp: str
+    
+    class Config:
+        extra = "forbid"
+
+
+class ResponseTimeMetrics(BaseModel):
+    """Response time metrics"""
+    avg_seconds: float
+    max_seconds: float
+    
+    class Config:
+        extra = "forbid"
+
+
+class TokenUsageMetrics(BaseModel):
+    """Token usage metrics"""
+    avg: float
+    max: float
+    
+    class Config:
+        extra = "forbid"
+
+
+class CacheMetrics(BaseModel):
+    """Cache performance metrics"""
+    hit_rate: float
+    hits: int
+    misses: int
+    
+    class Config:
+        extra = "forbid"
+
+
+class MemoryUsageMetrics(BaseModel):
+    """Memory usage metrics"""
+    avg_mb: float
+    current_mb: float
+    
+    class Config:
+        extra = "forbid"
+
+
+class NarrativeMaintenanceResult(BaseModel):
+    """Narrative maintenance result"""
+    status: Optional[str] = None
+    error: Optional[str] = None
+    
+    class Config:
+        extra = "forbid"
+
 
 
 class ContextGuardrailResult(BaseModel):
@@ -199,7 +374,7 @@ class ContextService:
                 tripwire_triggered=True
             )
     
-    async def _run_maintenance(self) -> Dict[str, Any]:
+    async def _run_maintenance(self) -> MaintenanceResult:
         """
         Internal method to run maintenance tasks for context optimization.
         """
@@ -207,53 +382,55 @@ class ContextService:
         if not self.initialized:
             await self.initialize()
         
-        results = {
-            "memory_maintenance": None,
-            "vector_maintenance": None,
-            "cache_maintenance": None,
-            "performance_metrics": None,
-            "narrative_maintenance": None
-        }
+        results = MaintenanceResult()
         
         # 1. Memory maintenance
         memory_manager = await get_memory_manager(self.user_id, self.conversation_id)
-        memory_result = await memory_manager.run_maintenance(None)  # pass None for ctx
-        results["memory_maintenance"] = memory_result
+        memory_result_dict = await memory_manager.run_maintenance(None)  # pass None for ctx
+        results.memory_maintenance = MemoryMaintenanceResult(**memory_result_dict)
         
         # 2. Vector maintenance
         if self.config.is_enabled("use_vector_search"):
             vector_service = await get_vector_service(self.user_id, self.conversation_id)
-            results["vector_maintenance"] = {"status": "vector_service_active"}
+            results.vector_maintenance = VectorMaintenanceResult(status="vector_service_active")
         
         # 3. Cache maintenance
         cache_items = (len(context_cache.l1_cache)
                        + len(context_cache.l2_cache)
                        + len(context_cache.l3_cache))
-        results["cache_maintenance"] = {
-            "cache_items": cache_items,
-            "levels": {
-                "l1": len(context_cache.l1_cache),
-                "l2": len(context_cache.l2_cache),
-                "l3": len(context_cache.l3_cache)
-            }
-        }
+        results.cache_maintenance = CacheMaintenanceResult(
+            cache_items=cache_items,
+            levels=CacheLevels(
+                l1=len(context_cache.l1_cache),
+                l2=len(context_cache.l2_cache),
+                l3=len(context_cache.l3_cache)
+            )
+        )
         
         # 4. Performance metrics (placeholder)
         if self.performance_monitor:
-            results["performance_metrics"] = self.performance_monitor.get_metrics()
+            metrics = self.performance_monitor.get_metrics()
+            results.performance_metrics = PerformanceMetrics(
+                response_time=ResponseTimeMetrics(**metrics["response_time"]),
+                token_usage=TokenUsageMetrics(**metrics["token_usage"]),
+                cache=CacheMetrics(**metrics["cache"]),
+                memory_usage=MemoryUsageMetrics(**metrics["memory_usage"]),
+                uptime_seconds=metrics["uptime_seconds"],
+                timestamp=metrics["timestamp"]
+            )
         
         # 5. Narrative maintenance if available
         if self.narrative_manager:
             try:
                 narrative_result = await self.narrative_manager.run_maintenance()
-                results["narrative_maintenance"] = narrative_result
+                results.narrative_maintenance = NarrativeMaintenanceResult(**narrative_result)
             except Exception as e:
                 logger.error(f"Error running narrative maintenance: {e}")
-                results["narrative_maintenance"] = {"error": str(e)}
+                results.narrative_maintenance = NarrativeMaintenanceResult(error=str(e))
         
         return results
     
-    async def _get_base_context(self, location: Optional[str] = None) -> Dict[str, Any]:
+    async def _get_base_context(self, location: Optional[str] = None) -> BaseContextData:
         """Internal method: get base context from database or fallback."""
         cache_key = f"base_context:{self.user_id}:{self.conversation_id}:{location or 'none'}"
         
@@ -264,13 +441,13 @@ class ContextService:
                 
                 # Use proper async context manager syntax
                 async with get_db_connection_context() as conn:
-                    # Rest of the database queries remain unchanged
-                    time_info = {
-                        "year": "1040",
-                        "month": "6",
-                        "day": "15",
-                        "time_of_day": "Morning"
-                    }
+                    # Time info
+                    time_info = TimeInfo(
+                        year="1040",
+                        month="6",
+                        day="15",
+                        time_of_day="Morning"
+                    )
                     
                     # Attempt to fetch from CurrentRoleplay table
                     time_keys = ["CurrentYear", "CurrentMonth", "CurrentDay", "TimeOfDay"]
@@ -284,16 +461,16 @@ class ContextService:
                         if row:
                             value = row["value"]
                             if key == "CurrentYear":
-                                time_info["year"] = value
+                                time_info.year = value
                             elif key == "CurrentMonth":
-                                time_info["month"] = value
+                                time_info.month = value
                             elif key == "CurrentDay":
-                                time_info["day"] = value
+                                time_info.day = value
                             elif key == "TimeOfDay":
-                                time_info["time_of_day"] = value
+                                time_info.time_of_day = value
                     
                     # Player stats
-                    player_stats = {}
+                    player_stats = PlayerStats()
                     player_row = await conn.fetchrow("""
                         SELECT corruption, confidence, willpower,
                                obedience, dependency, lust,
@@ -304,10 +481,10 @@ class ContextService:
                     """, self.user_id, self.conversation_id)
                     
                     if player_row:
-                        player_stats = dict(player_row)
+                        player_stats = PlayerStats(**dict(player_row))
                     
                     # Roleplay data
-                    roleplay_data = {}
+                    roleplay_data = RoleplayData()
                     rp_rows = await conn.fetch("""
                         SELECT key, value
                         FROM CurrentRoleplay
@@ -315,40 +492,41 @@ class ContextService:
                         AND key IN ('CurrentLocation', 'EnvironmentDesc', 'PlayerRole', 'MainQuest')
                     """, self.user_id, self.conversation_id)
                     
+                    roleplay_dict = {}
                     for row in rp_rows:
-                        roleplay_data[row["key"]] = row["value"]
+                        roleplay_dict[row["key"]] = row["value"]
+                    roleplay_data = RoleplayData(**roleplay_dict)
                     
                     # Narrative stage
                     from logic.narrative_progression import get_current_narrative_stage
                     narrative_stage = await get_current_narrative_stage(self.user_id, self.conversation_id)
                     narrative_stage_info = None
                     if narrative_stage:
-                        narrative_stage_info = {
-                            "name": narrative_stage.name,
-                            "description": narrative_stage.description
-                        }
+                        narrative_stage_info = NarrativeStageInfo(
+                            name=narrative_stage.name,
+                            description=narrative_stage.description
+                        )
                     
-                    context = {
-                        "time_info": time_info,
-                        "player_stats": player_stats,
-                        "current_roleplay": roleplay_data,
-                        "current_location": location or roleplay_data.get("CurrentLocation", "Unknown"),
-                        "narrative_stage": narrative_stage_info
-                    }
-                    return context
+                    return BaseContextData(
+                        time_info=time_info,
+                        player_stats=player_stats,
+                        current_roleplay=roleplay_data,
+                        current_location=location or roleplay_data.CurrentLocation or "Unknown",
+                        narrative_stage=narrative_stage_info
+                    )
             except Exception as e:
                 logger.error(f"Error getting base context: {e}")
                 # Fallback return
-                return {
-                    "time_info": {"year": "1040", "month": "6", "day": "15", "time_of_day": "Morning"},
-                    "player_stats": {},
-                    "current_roleplay": {},
-                    "current_location": location or "Unknown",
-                    "error": str(e)
-                }
+                return BaseContextData(
+                    time_info=TimeInfo(year="1040", month="6", day="15", time_of_day="Morning"),
+                    player_stats=PlayerStats(),
+                    current_roleplay=RoleplayData(),
+                    current_location=location or "Unknown",
+                    error=str(e)
+                )
         
         return await context_cache.get(cache_key, fetch_base_context, cache_level=1, importance=0.7, ttl_override=30)
-    
+
     async def _get_relevant_npcs(self, input_text: str, location: Optional[str] = None) -> List[NPCData]:
         """
         Internal method: get NPCs relevant to current input & location 
@@ -940,11 +1118,11 @@ async def validate_context_budget_tool(
     return await service._validate_context_budget(context, context_budget)
 
 
-@function_tool(strict=False)
+@function_tool
 async def get_base_context_tool(
     ctx: RunContextWrapper,
     location: Optional[str] = None
-) -> Dict[str, Any]:
+) -> BaseContextData:
     """
     Standalone tool: get base context from DB or fallback,
     calling the private method `_get_base_context`.
@@ -954,20 +1132,46 @@ async def get_base_context_tool(
     service = await get_context_service(user_id, conversation_id)
     return await service._get_base_context(location)
 
-@function_tool(strict=False)
+
+@function_tool
+async def run_context_maintenance_tool(
+    ctx: RunContextWrapper
+) -> MaintenanceResult:
+    """
+    Standalone tool: run maintenance tasks 
+    (calls the private method _run_maintenance inside the ContextService).
+    """
+    user_id = ctx.get("user_id", 0)
+    conversation_id = ctx.get("conversation_id", 0)
+    service = await get_context_service(user_id, conversation_id)
+    return await service._run_maintenance()
+
+
+@function_tool
 async def get_narrative_summaries_tool(
     ctx: RunContextWrapper,
     input_text: str
-) -> Dict[str, Any]:
+) -> NarrativeSummaryData:
     """
     Standalone tool: get summarized narratives from `_get_narrative_summaries`.
     """
     user_id = ctx.get("user_id", 0)
     conversation_id = ctx.get("conversation_id", 0)
     service = await get_context_service(user_id, conversation_id)
-    return await service._get_narrative_summaries(input_text)
-
-@function_tool(strict=False)
+    result = await service._get_narrative_summaries(input_text)
+    # Convert dict to NarrativeSummaryData
+    if result:
+        return NarrativeSummaryData(
+            summary_text=result.get("summary_text", ""),
+            summary_level=result.get("summary_level", 0),
+            key_events=result.get("key_events", []),
+            important_npcs=result.get("important_npcs", []),
+            locations_visited=result.get("locations_visited", []),
+            time_period=TimeSpanMetadata(**result["time_period"]) if "time_period" in result else None
+        )
+    return NarrativeSummaryData(summary_text="", summary_level=0)
+    
+@function_tool
 async def trim_to_budget_tool(
     ctx: RunContextWrapper,
     context: Dict[str, Any],
@@ -980,20 +1184,6 @@ async def trim_to_budget_tool(
     conversation_id = ctx.get("conversation_id", 0)
     service = await get_context_service(user_id, conversation_id)
     return await service._trim_to_budget(context, budget)
-
-@function_tool(strict=False)
-async def run_context_maintenance_tool(
-    ctx: RunContextWrapper
-) -> Dict[str, Any]:
-    """
-    Standalone tool: run maintenance tasks 
-    (calls the private method _run_maintenance inside the ContextService).
-    """
-    user_id = ctx.get("user_id", 0)
-    conversation_id = ctx.get("conversation_id", 0)
-    service = await get_context_service(user_id, conversation_id)
-    return await service._run_maintenance()
-
 
 @function_tool
 async def get_relevant_npcs_tool(
