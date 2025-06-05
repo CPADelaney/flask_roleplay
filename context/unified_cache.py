@@ -452,7 +452,7 @@ class UnifiedCache:
 
 context_cache = UnifiedCache()  # The singleton instance
 
-@function_tool(strict=False)
+@function_tool
 async def get_item_tool(
     ctx: RunContextWrapper,
     request: CacheOperationRequest
@@ -462,7 +462,7 @@ async def get_item_tool(
     """
     return await context_cache._get_item(request)
 
-@function_tool(strict=False)
+@function_tool
 async def set_item_tool(
     ctx: RunContextWrapper,
     request: CacheOperationRequest,
