@@ -686,18 +686,28 @@ class ContextService:
             logger.error(f"Error getting quest info: {e}")
             return []
     
-    async def _get_narrative_summaries(self, input_text: str) -> Dict[str, Any]:
+    async def _get_narrative_summaries(self, input_text: str) -> Optional[NarrativeSummaryData]:
         """Internal method: get summarized narratives from the narrative manager."""
         if not self.narrative_manager:
-            return {}
+            return None
         try:
-            return await self.narrative_manager.get_optimal_narrative_context(
+            result = await self.narrative_manager.get_optimal_narrative_context(
                 query=input_text,
                 max_tokens=1000
             )
+            # Convert dict result to typed model
+            if result:
+                return NarrativeSummaryData(
+                    summary_text=result.get("summary", ""),
+                    summary_level=result.get("level", 0),
+                    key_events=result.get("key_events", []),
+                    important_npcs=result.get("important_npcs", []),
+                    locations_visited=result.get("locations_visited", [])
+                )
+            return None
         except Exception as e:
             logger.error(f"Error getting summarized narratives: {e}")
-            return {}
+            return None
     
     def _calculate_token_usage(self, context: Dict[str, Any]) -> Dict[str, int]:
         """
