@@ -15,10 +15,86 @@ from pydantic import BaseModel, Field
 from context.unified_cache import context_cache
 from context.context_config import get_config
 
+from context.models import (
+    EntityMetadata, NPCMetadata, LocationMetadata,
+    MemoryMetadata
+)
+
 logger = logging.getLogger(__name__)
 
 
 # --- Pydantic Models for Vector Service ---
+
+class VectorSearchResultItem(BaseModel):
+    """Individual search result item"""
+    id: str
+    score: float
+    entity_type: str
+    metadata: Union[NPCMetadata, LocationMetadata, MemoryMetadata, EntityMetadata]
+    
+    class Config:
+        extra = "forbid"
+
+
+class VectorContextResult(BaseModel):
+    """Result for context retrieval"""
+    npcs: List['NPCContextItem'] = []
+    locations: List['LocationContextItem'] = []
+    memories: List['MemoryContextItem'] = []
+    narratives: List['NarrativeContextItem'] = []
+    
+    class Config:
+        extra = "forbid"
+
+
+class NPCContextItem(BaseModel):
+    """NPC context item"""
+    npc_id: str
+    npc_name: str
+    description: Optional[str] = None
+    personality: Optional[str] = None
+    location: Optional[str] = None
+    relevance: float
+    
+    class Config:
+        extra = "forbid"
+
+
+class LocationContextItem(BaseModel):
+    """Location context item"""
+    location_id: str
+    location_name: str
+    description: Optional[str] = None
+    connected_locations: List[str] = []
+    relevance: float
+    
+    class Config:
+        extra = "forbid"
+
+
+class MemoryContextItem(BaseModel):
+    """Memory context item"""
+    memory_id: str
+    content: str
+    memory_type: str
+    importance: float
+    relevance: float
+    
+    class Config:
+        extra = "forbid"
+
+
+class NarrativeContextItem(BaseModel):
+    """Narrative context item"""
+    narrative_id: str
+    content: str
+    narrative_type: str
+    importance: float
+    relevance: float
+    
+    class Config:
+        extra = "forbid"
+
 
 class VectorSearchRequest(BaseModel):
     """Request model for vector search"""
@@ -32,10 +108,21 @@ class VectorSearchRequest(BaseModel):
 class VectorSearchResult(BaseModel):
     """Result model for vector search"""
     query: str
-    results: List[Dict[str, Any]] = []
+    results: List[VectorSearchResultItem] = []
     total_found: int = 0
     entity_types_searched: List[str] = []
     search_time_ms: float = 0.0
+
+
+# Update EntityVectorRequest
+class EntityVectorRequest(BaseModel):
+    """Request model for adding an entity vector"""
+    entity_type: str
+    entity_id: str
+    content: str
+    name: Optional[str] = None
+    description: Optional[str] = None
+    metadata: Optional[Union[NPCMetadata, LocationMetadata, EntityMetadata]] = None
 
 
 class MemoryVectorRequest(BaseModel):
@@ -45,17 +132,6 @@ class MemoryVectorRequest(BaseModel):
     memory_type: str = "observation"
     importance: float = 0.5
     tags: Optional[List[str]] = None
-
-
-class EntityVectorRequest(BaseModel):
-    """Request model for adding an entity vector"""
-    entity_type: str
-    entity_id: str
-    content: str
-    name: Optional[str] = None
-    description: Optional[str] = None
-    metadata: Optional[Dict[str, Any]] = None
-
 
 class VectorService:
     """
@@ -259,7 +335,7 @@ class VectorService:
                 logger.error(f"Error in batch processor: {e}")
                 await asyncio.sleep(0.1)  # avoid tight error loop
     
-    async def _perform_search(self, data):
+    async def _perform_search(self, data) -> List[VectorSearchResultItem]:
         """Perform a vector search operation."""
         if not self.entity_manager:
             await self.initialize()
@@ -274,38 +350,59 @@ class VectorService:
         query_embedding = await self._get_embedding(query_text)
         
         # Perform search
-        results = await self.entity_manager.search_entities(
+        raw_results = await self.entity_manager.search_entities(
             query_text="",  # Not used when embedding is provided
             top_k=top_k,
             entity_types=entity_types,
             query_embedding=query_embedding
         )
         
+        # Convert to typed results
+        typed_results = []
+        for result in raw_results:
+            metadata_dict = result.get("metadata", {})
+            entity_type = metadata_dict.get("entity_type", "")
+            
+            # Create appropriate metadata object
+            if entity_type == "npc":
+                metadata = NPCMetadata(**metadata_dict)
+            elif entity_type == "location":
+                metadata = LocationMetadata(**metadata_dict)
+            elif entity_type == "memory":
+                metadata = MemoryMetadata(**metadata_dict)
+            else:
+                metadata = EntityMetadata(**metadata_dict)
+            
+            typed_results.append(VectorSearchResultItem(
+                id=result.get("id", ""),
+                score=result.get("score", 0.0),
+                entity_type=entity_type,
+                metadata=metadata
+            ))
+        
         # Apply hybrid ranking if requested
         if data.get("hybrid_ranking", False):
-            results = self._apply_hybrid_ranking(
-                results,
+            typed_results = self._apply_hybrid_ranking(
+                typed_results,
                 recency_weight=data.get("recency_weight", 0.3)
             )
         
-        return results
+        return typed_results
     
-    def _apply_hybrid_ranking(self, results, recency_weight=0.3):
+    def _apply_hybrid_ranking(self, results: List[VectorSearchResultItem], recency_weight=0.3) -> List[VectorSearchResultItem]:
         """Apply a hybrid ranking with vector similarity and recency."""
         from datetime import datetime
         now = datetime.now()
         
         # Calculate hybrid scores
         for result in results:
-            base_score = result.get("score", 0.5)
+            base_score = result.score
             
             # Calculate temporal score if timestamp available
             temporal_score = 0.5
-            metadata = result.get("metadata", {})
-            if "timestamp" in metadata:
+            if result.metadata.timestamp:
                 try:
-                    timestamp_str = metadata["timestamp"]
-                    timestamp = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
+                    timestamp = datetime.fromisoformat(result.metadata.timestamp.replace("Z", "+00:00"))
                     days_diff = (now - timestamp).days
                     # Newer items get higher scores
                     temporal_score = math.exp(-0.1 * max(0, days_diff))
@@ -314,9 +411,10 @@ class VectorService:
             
             vector_weight = 1.0 - recency_weight
             hybrid_score = (vector_weight * base_score) + (recency_weight * temporal_score)
-            result["hybrid_score"] = hybrid_score
+            # Store hybrid score in metadata for sorting
+            result.score = hybrid_score
         
-        results.sort(key=lambda x: x.get("hybrid_score", 0), reverse=True)
+        results.sort(key=lambda x: x.score, reverse=True)
         return results
     
     async def _add_memory(self, data):
@@ -383,12 +481,12 @@ class VectorService:
         input_text: str,
         current_location: Optional[str] = None,
         max_items: int = 10
-    ) -> Dict[str, Any]:
+    ) -> VectorContextResult:
         """
         Internal method to get relevant context for input text.
         """
         if not await self.is_initialized():
-            return {}
+            return VectorContextResult()
         
         cache_key = (
             f"vector_context:{self.user_id}:{self.conversation_id}:"
@@ -400,7 +498,6 @@ class VectorService:
             if current_location:
                 query += f" Location: {current_location}"
             
-            # We'll do a direct call to _perform_search via the batch queue.
             # Build search request
             search_request = VectorSearchRequest(
                 query_text=query,
@@ -408,7 +505,7 @@ class VectorService:
                 top_k=max_items
             )
             
-            # Reuse the same approach as _perform_search, but put it in the queue.
+            # Perform search
             start_time = time.time()
             future = asyncio.get_event_loop().create_future()
             await self.batch_queue.put({
@@ -427,52 +524,52 @@ class VectorService:
                 results = await future
             except Exception as e:
                 logger.error(f"Error performing search in get_context_for_input: {e}")
-                return {}
+                return VectorContextResult()
             
-            context = {
-                "npcs": [],
-                "locations": [],
-                "memories": [],
-                "narratives": []
-            }
+            context = VectorContextResult()
             
             for result in results:
-                metadata = result.get("metadata", {})
-                entity_type = metadata.get("entity_type")
+                if isinstance(result, VectorSearchResultItem):
+                    metadata = result.metadata
+                    entity_type = result.entity_type
+                else:
+                    # Handle raw dict results from entity manager
+                    metadata = result.get("metadata", {})
+                    entity_type = metadata.get("entity_type")
                 
                 if entity_type == "npc":
-                    context["npcs"].append({
-                        "npc_id": metadata.get("npc_id") or metadata.get("entity_id"),
-                        "npc_name": metadata.get("npc_name") or metadata.get("name"),
-                        "description": metadata.get("description"),
-                        "personality": metadata.get("personality"),
-                        "location": metadata.get("location"),
-                        "relevance": result.get("score", 0.5)
-                    })
+                    context.npcs.append(NPCContextItem(
+                        npc_id=metadata.get("npc_id") or metadata.get("entity_id", ""),
+                        npc_name=metadata.get("npc_name") or metadata.get("name", ""),
+                        description=metadata.get("description"),
+                        personality=metadata.get("personality"),
+                        location=metadata.get("location"),
+                        relevance=result.get("score", 0.5) if isinstance(result, dict) else result.score
+                    ))
                 elif entity_type == "location":
-                    context["locations"].append({
-                        "location_id": metadata.get("location_id") or metadata.get("entity_id"),
-                        "location_name": metadata.get("location_name") or metadata.get("name"),
-                        "description": metadata.get("description"),
-                        "connected_locations": metadata.get("connected_locations", []),
-                        "relevance": result.get("score", 0.5)
-                    })
+                    context.locations.append(LocationContextItem(
+                        location_id=metadata.get("location_id") or metadata.get("entity_id", ""),
+                        location_name=metadata.get("location_name") or metadata.get("name", ""),
+                        description=metadata.get("description"),
+                        connected_locations=metadata.get("connected_locations", []),
+                        relevance=result.get("score", 0.5) if isinstance(result, dict) else result.score
+                    ))
                 elif entity_type == "memory":
-                    context["memories"].append({
-                        "memory_id": metadata.get("memory_id") or metadata.get("entity_id"),
-                        "content": metadata.get("content"),
-                        "memory_type": metadata.get("memory_type"),
-                        "importance": metadata.get("importance", 0.5),
-                        "relevance": result.get("score", 0.5)
-                    })
+                    context.memories.append(MemoryContextItem(
+                        memory_id=metadata.get("memory_id") or metadata.get("entity_id", ""),
+                        content=metadata.get("content", ""),
+                        memory_type=metadata.get("memory_type", ""),
+                        importance=metadata.get("importance", 0.5),
+                        relevance=result.get("score", 0.5) if isinstance(result, dict) else result.score
+                    ))
                 elif entity_type == "narrative":
-                    context["narratives"].append({
-                        "narrative_id": metadata.get("narrative_id") or metadata.get("entity_id"),
-                        "content": metadata.get("content"),
-                        "narrative_type": metadata.get("narrative_type"),
-                        "importance": metadata.get("importance", 0.5),
-                        "relevance": result.get("score", 0.5)
-                    })
+                    context.narratives.append(NarrativeContextItem(
+                        narrative_id=metadata.get("narrative_id") or metadata.get("entity_id", ""),
+                        content=metadata.get("content", ""),
+                        narrative_type=metadata.get("narrative_type", ""),
+                        importance=metadata.get("importance", 0.5),
+                        relevance=result.get("score", 0.5) if isinstance(result, dict) else result.score
+                    ))
             
             return context
         
@@ -484,6 +581,7 @@ class VectorService:
             importance=importance,
             ttl_override=30
         )
+
 
 # ---------------------------------------------------------------------
 #            STANDALONE TOOL FUNCTIONS (run_context first param)
@@ -623,7 +721,7 @@ async def add_vector_memory_tool(
         logger.error(f"Error in add_vector_memory_tool: {e}")
         return False
 
-@function_tool(strict=False)
+@function_tool
 async def add_entity_tool(
     ctx: RunContextWrapper,
     user_id: int,
@@ -670,7 +768,7 @@ async def get_context_for_input_tool(
     input_text: str,
     current_location: Optional[str] = None,
     max_items: int = 10
-) -> Dict[str, Any]:
+) -> VectorContextResult:
     """
     Tool: Get relevant context for input text, possibly including location.
     """
