@@ -9,6 +9,7 @@ import copy
 from datetime import datetime
 from collections import defaultdict
 from typing import Dict, List, Any, Optional, Union, Tuple, Callable
+from pydantic import BaseModel, Field
 
 # Agent SDK imports
 from agents import Agent, function_tool, RunContextWrapper
