@@ -1,4 +1,4 @@
-# nyx/core/experience_consolidation.py
+# nyx/core/experience_consolidation.py - Part 1
 
 import logging
 import asyncio
@@ -7,6 +7,7 @@ import math
 from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional, Tuple, Union, Set
 import os
+from pydantic import BaseModel, Field
 
 # Update imports to use OpenAI Agents SDK
 from agents import (
@@ -14,9 +15,8 @@ from agents import (
     InputGuardrail, GuardrailFunctionOutput, RunConfig, RunHooks,
     ModelSettings, set_default_openai_key
 )
-from pydantic import BaseModel, Field
 
-from nyx.core.memory_core import MemoryCoreAgents
+from nyx.core.memory_core import MemoryCoreAgents, MemoryCreateParams
 
 # Configure OpenAI API key
 if "OPENAI_API_KEY" not in os.environ:
@@ -65,6 +65,93 @@ class SimilarExperiencesParams(BaseModel):
     similarity_threshold: float = Field(default=0.7, description="Minimum similarity threshold")
     max_similar: int = Field(default=5, description="Maximum number of similar experiences to return")
 
+# Additional Pydantic models for function tools
+class ExperienceDetails(BaseModel, extra="forbid"):
+    """Details of an experience"""
+    id: str
+    content: str
+    scenario_type: str = "general"
+    timestamp: str = ""
+    significance: float = 5
+    tags: List[str] = Field(default_factory=list)
+    emotional_context: Dict[str, Any] = Field(default_factory=dict)
+    user_id: str = "unknown"
+    is_consolidated: bool = False
+    error: Optional[str] = None
+
+class SimilarityScore(BaseModel, extra="forbid"):
+    """Result of similarity calculation"""
+    score: float
+
+class CommonTheme(BaseModel, extra="forbid"):
+    """Common theme across experiences"""
+    theme: str
+
+class SortedGroups(BaseModel, extra="forbid"):
+    """Sorted candidate groups"""
+    groups: List[Dict[str, Any]]
+
+class EmotionalContextSummary(BaseModel, extra="forbid"):
+    """Common emotional context"""
+    primary_emotion: Optional[str] = None
+    primary_intensity: Optional[float] = None
+    valence: Optional[float] = None
+    arousal: Optional[float] = None
+
+class ConsolidationType(BaseModel, extra="forbid"):
+    """Consolidation type determination"""
+    type: str  # "pattern", "abstraction", "trend"
+
+class SignificanceScore(BaseModel, extra="forbid"):
+    """Significance score for consolidation"""
+    score: float
+
+class CoverageScore(BaseModel, extra="forbid"):
+    """Coverage score for consolidation"""
+    score: float
+
+class CoherenceScore(BaseModel, extra="forbid"):
+    """Coherence score for consolidation"""
+    score: float
+
+class InformationGain(BaseModel, extra="forbid"):
+    """Information gain score"""
+    score: float
+
+class UpdateHistoryResult(BaseModel, extra="forbid"):
+    """Result of updating consolidation history"""
+    success: bool
+
+class ConsolidationStatistics(BaseModel, extra="forbid"):
+    """Consolidation statistics"""
+    total_consolidations: int
+    avg_quality: float
+    type_distribution: Dict[str, int] = Field(default_factory=dict)
+    ready_for_next: bool
+    hours_until_next: float = 0.0
+
+class FindSimilarResult(BaseModel, extra="forbid"):
+    """Result of finding similar experiences"""
+    experiences: List[Dict[str, Any]]
+
+class RunCycleResult(BaseModel, extra="forbid"):
+    """Result of running consolidation cycle"""
+    status: str
+    consolidations_created: int = 0
+    source_memories_processed: int = 0
+    reason: Optional[str] = None
+    error: Optional[str] = None
+
+class ConsolidationInsights(BaseModel, extra="forbid"):
+    """Insights about consolidation activities"""
+    total_consolidations: int
+    last_consolidation: str
+    consolidation_types: Dict[str, int] = Field(default_factory=dict)
+    unique_users_consolidated: int
+    user_coverage: List[str] = Field(default_factory=list)
+    hours_until_next_consolidation: float
+    ready_for_consolidation: bool
+
 class ConsolidationContext:
     """Context object for sharing state between agents and tools"""
     def __init__(self):
@@ -73,6 +160,8 @@ class ConsolidationContext:
         self.consolidation_history = []
         self.max_history_size = 100
         self.cycle_count = 0
+        # Add reference to the parent system
+        self.parent_system = None
 
 class ConsolidationRunHooks(RunHooks):
     """Hooks for monitoring consolidation agent execution"""
@@ -116,6 +205,8 @@ class ExperienceConsolidationSystem:
         
         # Create context object for sharing state between agents
         self.context = ConsolidationContext()
+        # Set parent reference so tools can access the system
+        self.context.parent_system = self
         
         # Create run hooks for monitoring
         self.run_hooks = ConsolidationRunHooks()
@@ -293,11 +384,13 @@ class ExperienceConsolidationSystem:
             output_info={"valid": True},
             tripwire_triggered=False
         )
+
+# nyx/core/experience_consolidation.py - Part 2 (Tool Functions)
         
     # Tool functions with pydantic models for parameters
     @staticmethod  
     @function_tool
-    async def _get_experience_details(ctx: RunContextWrapper, experience_id: str) -> Dict[str, Any]:
+    async def _get_experience_details(ctx: RunContextWrapper, experience_id: str) -> ExperienceDetails:
         """
         Get details for a specific experience
         
@@ -307,37 +400,52 @@ class ExperienceConsolidationSystem:
         Returns:
             Experience details
         """
-        if not self.memory_core:
-            return {"error": "Memory core not available"}
+        # Get parent system from context
+        parent_system = ctx.context.parent_system
+        
+        if not parent_system.memory_core:
+            return ExperienceDetails(
+                id=experience_id,
+                content="",
+                error="Memory core not available"
+            )
         
         try:
-            experience = await self.memory_core.get_memory_by_id(experience_id)
+            experience = await parent_system.memory_core.get_memory_by_id(experience_id)
             
             if not experience:
-                return {"error": f"Experience {experience_id} not found"}
+                return ExperienceDetails(
+                    id=experience_id,
+                    content="",
+                    error=f"Experience {experience_id} not found"
+                )
             
             # Extract key details
-            return {
-                "id": experience_id,
-                "content": experience.get("memory_text", ""),
-                "scenario_type": experience.get("metadata", {}).get("scenario_type", "general"),
-                "timestamp": experience.get("timestamp", ""),
-                "significance": experience.get("significance", 5),
-                "tags": experience.get("tags", []),
-                "emotional_context": experience.get("metadata", {}).get("emotional_context", {}),
-                "user_id": experience.get("metadata", {}).get("user_id", "unknown"),
-                "is_consolidated": experience.get("metadata", {}).get("is_consolidation", False)
-            }
+            return ExperienceDetails(
+                id=experience_id,
+                content=experience.get("memory_text", ""),
+                scenario_type=experience.get("metadata", {}).get("scenario_type", "general"),
+                timestamp=experience.get("timestamp", ""),
+                significance=experience.get("significance", 5),
+                tags=experience.get("tags", []),
+                emotional_context=experience.get("metadata", {}).get("emotional_context", {}),
+                user_id=experience.get("metadata", {}).get("user_id", "unknown"),
+                is_consolidated=experience.get("metadata", {}).get("is_consolidation", False)
+            )
             
         except Exception as e:
             logger.error(f"Error getting experience details: {e}")
-            return {"error": str(e)}
+            return ExperienceDetails(
+                id=experience_id,
+                content="",
+                error=str(e)
+            )
 
     @staticmethod  
     @function_tool
     async def _calculate_similarity_score(ctx: RunContextWrapper, 
                                      experience_id1: str, 
-                                     experience_id2: str) -> float:
+                                     experience_id2: str) -> SimilarityScore:
         """
         Calculate similarity score between two experiences
         
@@ -348,50 +456,54 @@ class ExperienceConsolidationSystem:
         Returns:
             Similarity score (0.0-1.0)
         """
-        if not self.experience_interface:
-            return 0.0
+        # Get parent system from context
+        parent_system = ctx.context.parent_system
+        
+        if not parent_system.experience_interface:
+            return SimilarityScore(score=0.0)
         
         try:
             # Get experience details
-            exp1 = await self._get_experience_details(ctx, experience_id1)
-            exp2 = await self._get_experience_details(ctx, experience_id2)
+            exp1 = await parent_system._get_experience_details(ctx, experience_id1)
+            exp2 = await parent_system._get_experience_details(ctx, experience_id2)
             
-            if "error" in exp1 or "error" in exp2:
-                return 0.0
+            if exp1.error or exp2.error:
+                return SimilarityScore(score=0.0)
             
             # Use vector similarity if available
-            if hasattr(self.experience_interface, "_calculate_cosine_similarity"):
+            if hasattr(parent_system.experience_interface, "_calculate_cosine_similarity"):
                 # Generate vectors using experience interface
-                vec1 = await self.experience_interface._generate_experience_vector(ctx, exp1["content"])
-                vec2 = await self.experience_interface._generate_experience_vector(ctx, exp2["content"])
+                vec1 = await parent_system.experience_interface._generate_experience_vector(ctx, parent_system.experience_interface, exp1.content)
+                vec2 = await parent_system.experience_interface._generate_experience_vector(ctx, parent_system.experience_interface, exp2.content)
                 
                 # Calculate cosine similarity
-                return self.experience_interface._calculate_cosine_similarity(vec1, vec2)
+                score = parent_system.experience_interface._calculate_cosine_similarity(vec1, vec2)
+                return SimilarityScore(score=score)
             
-            # Same logic as before for fallback
+            # Fallback similarity calculation
             similarity = 0.3
-            if exp1["scenario_type"] == exp2["scenario_type"]:
+            if exp1.scenario_type == exp2.scenario_type:
                 similarity += 0.2
             
-            common_tags = set(exp1["tags"]) & set(exp2["tags"])
+            common_tags = set(exp1.tags) & set(exp2.tags)
             similarity += min(0.3, len(common_tags) * 0.05)
             
-            if exp1["emotional_context"] and exp2["emotional_context"]:
-                primary1 = exp1["emotional_context"].get("primary_emotion", "")
-                primary2 = exp2["emotional_context"].get("primary_emotion", "")
+            if exp1.emotional_context and exp2.emotional_context:
+                primary1 = exp1.emotional_context.get("primary_emotion", "")
+                primary2 = exp2.emotional_context.get("primary_emotion", "")
                 
                 if primary1 and primary2 and primary1 == primary2:
                     similarity += 0.2
             
-            return min(1.0, similarity)
+            return SimilarityScore(score=min(1.0, similarity))
             
         except Exception as e:
             logger.error(f"Error calculating similarity: {e}")
-            return 0.0
+            return SimilarityScore(score=0.0)
 
     @staticmethod  
     @function_tool
-    async def _find_common_theme(ctx: RunContextWrapper, experience_ids: List[str]) -> str:
+    async def _find_common_theme(ctx: RunContextWrapper, experience_ids: List[str]) -> CommonTheme:
         """
         Find common theme across multiple experiences
         
@@ -401,34 +513,36 @@ class ExperienceConsolidationSystem:
         Returns:
             Common theme description
         """
-        # Same implementation as before
-        if not self.memory_core:
-            return "Unknown theme"
+        # Get parent system from context
+        parent_system = ctx.context.parent_system
+        
+        if not parent_system.memory_core:
+            return CommonTheme(theme="Unknown theme")
         
         try:
             # Get all experiences
             experiences = []
             for exp_id in experience_ids:
-                exp = await self._get_experience_details(ctx, exp_id)
-                if not "error" in exp:
+                exp = await parent_system._get_experience_details(ctx, exp_id)
+                if not exp.error:
                     experiences.append(exp)
             
             if not experiences:
-                return "Unknown theme"
+                return CommonTheme(theme="Unknown theme")
             
             # Count scenario types
             scenario_counts = {}
             for exp in experiences:
-                scenario = exp["scenario_type"]
+                scenario = exp.scenario_type
                 scenario_counts[scenario] = scenario_counts.get(scenario, 0) + 1
             
-            # Rest of the implementation remains the same
+            # Find most common scenario
             common_scenario = max(scenario_counts.items(), key=lambda x: x[1])[0] if scenario_counts else "general"
             
             # Count emotional context
             emotion_counts = {}
             for exp in experiences:
-                emotion = exp.get("emotional_context", {}).get("primary_emotion", "neutral")
+                emotion = exp.emotional_context.get("primary_emotion", "neutral")
                 emotion_counts[emotion] = emotion_counts.get(emotion, 0) + 1
             
             common_emotion = max(emotion_counts.items(), key=lambda x: x[1])[0] if emotion_counts else "neutral"
@@ -436,7 +550,7 @@ class ExperienceConsolidationSystem:
             # Count tags
             tag_counts = {}
             for exp in experiences:
-                for tag in exp["tags"]:
+                for tag in exp.tags:
                     tag_counts[tag] = tag_counts.get(tag, 0) + 1
             
             common_tags = [tag for tag, count in tag_counts.items() 
@@ -459,16 +573,16 @@ class ExperienceConsolidationSystem:
                 tags_str = ", ".join(common_tags[:2])
                 theme += f" involving {tags_str}"
             
-            return theme
+            return CommonTheme(theme=theme)
             
         except Exception as e:
             logger.error(f"Error finding common theme: {e}")
-            return "Unknown theme"
+            return CommonTheme(theme="Unknown theme")
 
     @staticmethod  
     @function_tool
     async def _sort_candidate_groups(ctx: RunContextWrapper, 
-                                groups: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+                                groups: List[Dict[str, Any]]) -> SortedGroups:
         """
         Sort candidate groups by quality for consolidation
         
@@ -478,11 +592,14 @@ class ExperienceConsolidationSystem:
         Returns:
             Sorted groups
         """
+        # Get parent system from context
+        parent_system = ctx.context.parent_system
+        
         # Define scoring function
         def score_group(group):
             similarity = group.get("similarity_score", 0)
             size = len(group.get("source_ids", []))
-            size_factor = min(1.0, size / self.max_group_size)
+            size_factor = min(1.0, size / parent_system.max_group_size)
             
             # Basic score is similarity * size factor
             score = similarity * 0.7 + size_factor * 0.3
@@ -507,12 +624,12 @@ class ExperienceConsolidationSystem:
         scored_groups = [(group, score_group(group)) for group in groups]
         sorted_groups = [group for group, _ in sorted(scored_groups, key=lambda x: x[1], reverse=True)]
         
-        return sorted_groups
+        return SortedGroups(groups=sorted_groups)
 
     @staticmethod  
     @function_tool
     async def _extract_common_emotional_context(ctx: RunContextWrapper, 
-                                          experience_ids: List[str]) -> Dict[str, Any]:
+                                          experience_ids: List[str]) -> EmotionalContextSummary:
         """
         Extract common emotional context from multiple experiences
         
@@ -522,25 +639,26 @@ class ExperienceConsolidationSystem:
         Returns:
             Common emotional context
         """
-        # Same implementation as before
-        if not self.memory_core:
-            return {}
+        # Get parent system from context
+        parent_system = ctx.context.parent_system
+        
+        if not parent_system.memory_core:
+            return EmotionalContextSummary()
         
         try:
             # Get all experiences
             emotional_contexts = []
             for exp_id in experience_ids:
-                exp = await self._get_experience_details(ctx, exp_id)
-                if not "error" in exp and "emotional_context" in exp:
-                    emotional_contexts.append(exp["emotional_context"])
+                exp = await parent_system._get_experience_details(ctx, exp_id)
+                if not exp.error and exp.emotional_context:
+                    emotional_contexts.append(exp.emotional_context)
             
             if not emotional_contexts:
-                return {}
+                return EmotionalContextSummary()
             
             # Calculate average emotional context
-            common_context = {}
+            common_context = EmotionalContextSummary()
             
-            # Rest of implementation remains the same
             # Find most common primary emotion
             primary_emotions = {}
             for ec in emotional_contexts:
@@ -549,32 +667,32 @@ class ExperienceConsolidationSystem:
             
             if primary_emotions:
                 common_primary = max(primary_emotions.items(), key=lambda x: x[1])[0]
-                common_context["primary_emotion"] = common_primary
+                common_context.primary_emotion = common_primary
                 
                 # Calculate average intensity
                 intensities = [ec.get("primary_intensity", 0.5) for ec in emotional_contexts 
                              if ec.get("primary_emotion", "") == common_primary]
-                common_context["primary_intensity"] = sum(intensities) / len(intensities) if intensities else 0.5
+                common_context.primary_intensity = sum(intensities) / len(intensities) if intensities else 0.5
             
             # Calculate average valence
             valences = [ec.get("valence", 0.0) for ec in emotional_contexts if "valence" in ec]
             if valences:
-                common_context["valence"] = sum(valences) / len(valences)
+                common_context.valence = sum(valences) / len(valences)
             
             # Calculate average arousal
             arousals = [ec.get("arousal", 0.5) for ec in emotional_contexts if "arousal" in ec]
             if arousals:
-                common_context["arousal"] = sum(arousals) / len(arousals)
+                common_context.arousal = sum(arousals) / len(arousals)
             
             return common_context
             
         except Exception as e:
             logger.error(f"Error extracting emotional context: {e}")
-            return {}
+            return EmotionalContextSummary()
 
     @staticmethod  
     @function_tool
-    async def _generate_consolidation_type(ctx: RunContextWrapper, experiences: List[Dict[str, Any]]) -> str:
+    async def _generate_consolidation_type(ctx: RunContextWrapper, experiences: List[ExperienceDetails]) -> ConsolidationType:
         """
         Determine appropriate consolidation type based on experiences
         
@@ -584,46 +702,45 @@ class ExperienceConsolidationSystem:
         Returns:
             Consolidation type
         """
-        # Same implementation as before
         if not experiences:
-            return "pattern"
+            return ConsolidationType(type="pattern")
         
         # Count consolidated experiences
-        consolidated_count = sum(1 for e in experiences if e.get("is_consolidated", False))
+        consolidated_count = sum(1 for e in experiences if e.is_consolidated)
         
         # If many experiences are already consolidations, use abstraction
         if consolidated_count >= len(experiences) / 2:
-            return "abstraction"
+            return ConsolidationType(type="abstraction")
         
         # Check for scenario diversity
-        scenarios = [e.get("scenario_type", "general") for e in experiences]
+        scenarios = [e.scenario_type for e in experiences]
         unique_scenarios = len(set(scenarios))
         
         # If multiple scenarios, use abstraction
         if unique_scenarios > 1:
-            return "abstraction"
+            return ConsolidationType(type="abstraction")
         
         # Check for temporal relationships
         timestamps = []
         for e in experiences:
-            if "timestamp" in e:
+            if e.timestamp:
                 try:
-                    ts = datetime.fromisoformat(e["timestamp"].replace("Z", "+00:00"))
+                    ts = datetime.fromisoformat(e.timestamp.replace("Z", "+00:00"))
                     timestamps.append(ts)
                 except:
                     pass
         
         # If experiences span a significant time period, use trend
         if timestamps and max(timestamps) - min(timestamps) > timedelta(days=7):
-            return "trend"
+            return ConsolidationType(type="trend")
         
         # Default to pattern
-        return "pattern"
+        return ConsolidationType(type="pattern")
 
     @staticmethod  
     @function_tool
     async def _calculate_significance_score(ctx: RunContextWrapper, 
-                                      experiences: List[Dict[str, Any]]) -> float:
+                                      experiences: List[ExperienceDetails]) -> SignificanceScore:
         """
         Calculate significance score for consolidated experience
         
@@ -633,18 +750,17 @@ class ExperienceConsolidationSystem:
         Returns:
             Significance score (0.0-10.0)
         """
-        # Same implementation as before
         if not experiences:
-            return 5.0
+            return SignificanceScore(score=5.0)
         
         # Base significance is average of source significances
-        base_significance = sum(e.get("significance", 5.0) for e in experiences) / len(experiences)
+        base_significance = sum(e.significance for e in experiences) / len(experiences)
         
         # Adjust based on number of experiences
         size_factor = min(1.5, 1.0 + (len(experiences) - 1) * 0.1)
         
         # Adjust based on diversity
-        user_ids = [e.get("user_id", "unknown") for e in experiences]
+        user_ids = [e.user_id for e in experiences]
         unique_users = len(set(user_ids))
         diversity_factor = 1.0 + min(0.5, (unique_users - 1) * 0.1)
         
@@ -652,13 +768,13 @@ class ExperienceConsolidationSystem:
         significance = base_significance * size_factor * diversity_factor
         
         # Cap at 10.0
-        return min(10.0, significance)
+        return SignificanceScore(score=min(10.0, significance))
 
     @staticmethod  
     @function_tool
     async def _calculate_coverage_score(ctx: RunContextWrapper,
-                                  consolidated: Dict[str, Any],
-                                  source_experiences: List[Dict[str, Any]]) -> float:
+                                  consolidated: ExperienceDetails,
+                                  source_experiences: List[ExperienceDetails]) -> CoverageScore:
         """
         Calculate how well the consolidation covers the source experiences
         
@@ -669,19 +785,18 @@ class ExperienceConsolidationSystem:
         Returns:
             Coverage score (0.0-1.0)
         """
-        # Same implementation as before
         if not source_experiences:
-            return 0.0
+            return CoverageScore(score=0.0)
         
-        consolidated_text = consolidated.get("content", "")
+        consolidated_text = consolidated.content
         if not consolidated_text:
-            return 0.0
+            return CoverageScore(score=0.0)
         
         # For each source experience, check if key elements are represented in the consolidation
         coverage_scores = []
         
         for source in source_experiences:
-            source_text = source.get("content", "")
+            source_text = source.content
             if not source_text:
                 continue
             
@@ -697,14 +812,14 @@ class ExperienceConsolidationSystem:
             coverage_scores.append(min(1.0, source_coverage * 2))  # Scale up but cap at 1.0
         
         if not coverage_scores:
-            return 0.0
+            return CoverageScore(score=0.0)
         
         # Overall coverage is average of individual coverages
-        return sum(coverage_scores) / len(coverage_scores)
+        return CoverageScore(score=sum(coverage_scores) / len(coverage_scores))
 
     @staticmethod  
     @function_tool
-    async def _calculate_coherence_score(ctx: RunContextWrapper, consolidated: Dict[str, Any]) -> float:
+    async def _calculate_coherence_score(ctx: RunContextWrapper, consolidated: ExperienceDetails) -> CoherenceScore:
         """
         Calculate coherence of the consolidated experience
         
@@ -714,10 +829,9 @@ class ExperienceConsolidationSystem:
         Returns:
             Coherence score (0.0-1.0)
         """
-        # Same implementation as before
-        consolidated_text = consolidated.get("content", "")
+        consolidated_text = consolidated.content
         if not consolidated_text:
-            return 0.0
+            return CoherenceScore(score=0.0)
         
         # Simple measure based on text structure and clarity
         # In a full implementation, this would use more sophisticated NLP
@@ -739,13 +853,13 @@ class ExperienceConsolidationSystem:
         # Combined score with weights
         coherence = structure_score * 0.7 + length_score * 0.3
         
-        return coherence
+        return CoherenceScore(score=coherence)
 
     @staticmethod  
     @function_tool
     async def _calculate_information_gain(ctx: RunContextWrapper,
-                                    consolidated: Dict[str, Any],
-                                    source_experiences: List[Dict[str, Any]]) -> float:
+                                    consolidated: ExperienceDetails,
+                                    source_experiences: List[ExperienceDetails]) -> InformationGain:
         """
         Calculate information gain from consolidation
         
@@ -756,20 +870,19 @@ class ExperienceConsolidationSystem:
         Returns:
             Information gain score (0.0-1.0)
         """
-        # Same implementation as before
         if not source_experiences:
-            return 0.0
+            return InformationGain(score=0.0)
         
-        consolidated_text = consolidated.get("content", "")
+        consolidated_text = consolidated.content
         if not consolidated_text:
-            return 0.0
+            return InformationGain(score=0.0)
         
         # Check for higher-level insights
         has_insight_markers = any(marker in consolidated_text.lower() for marker in 
                               ["pattern", "trend", "insight", "connection", "common", "across"])
         
         # Check if consolidation is shorter than sum of sources
-        source_length = sum(len(s.get("content", "")) for s in source_experiences)
+        source_length = sum(len(s.content) for s in source_experiences)
         consolidated_length = len(consolidated_text)
         compression_ratio = 1.0 - (consolidated_length / max(1, source_length))
         compression_score = min(1.0, max(0.0, compression_ratio * 2))  # Scale up but cap at 1.0
@@ -786,7 +899,7 @@ class ExperienceConsolidationSystem:
             (abstraction_score * 0.2)
         )
         
-        return information_gain
+        return InformationGain(score=information_gain)
     
     # New helper functions for orchestration
 
@@ -796,7 +909,7 @@ class ExperienceConsolidationSystem:
                                        consolidated_id: str,
                                        source_ids: List[str],
                                        quality_score: float,
-                                       consolidation_type: str) -> bool:
+                                       consolidation_type: str) -> UpdateHistoryResult:
         """
         Update consolidation history with new entry
         
@@ -809,8 +922,11 @@ class ExperienceConsolidationSystem:
         Returns:
             Success status
         """
+        # Get parent system from context
+        parent_system = ctx.context.parent_system
+        
         # Add to history
-        self.consolidation_history.append({
+        parent_system.consolidation_history.append({
             "timestamp": datetime.now().isoformat(),
             "consolidated_id": consolidated_id,
             "source_ids": source_ids,
@@ -820,57 +936,61 @@ class ExperienceConsolidationSystem:
         })
         
         # Limit history size
-        if len(self.consolidation_history) > self.max_history_size:
-            self.consolidation_history = self.consolidation_history[-self.max_history_size:]
+        if len(parent_system.consolidation_history) > parent_system.max_history_size:
+            parent_system.consolidation_history = parent_system.consolidation_history[-parent_system.max_history_size:]
         
-        return True
+        return UpdateHistoryResult(success=True)
 
     @staticmethod  
     @function_tool
-    async def _get_consolidation_statistics(ctx: RunContextWrapper) -> Dict[str, Any]:
+    async def _get_consolidation_statistics(ctx: RunContextWrapper) -> ConsolidationStatistics:
         """
         Get statistics about consolidation activities
         
         Returns:
             Consolidation statistics
         """
-        if not self.consolidation_history:
-            return {
-                "total_consolidations": 0,
-                "avg_quality": 0.0,
-                "type_distribution": {},
-                "ready_for_next": True
-            }
+        # Get parent system from context
+        parent_system = ctx.context.parent_system
+        
+        if not parent_system.consolidation_history:
+            return ConsolidationStatistics(
+                total_consolidations=0,
+                avg_quality=0.0,
+                type_distribution={},
+                ready_for_next=True,
+                hours_until_next=0.0
+            )
         
         # Calculate statistics
-        total = len(self.consolidation_history)
-        avg_quality = sum(entry.get("quality_score", 0.0) for entry in self.consolidation_history) / total
+        total = len(parent_system.consolidation_history)
+        avg_quality = sum(entry.get("quality_score", 0.0) for entry in parent_system.consolidation_history) / total
         
         # Count consolidation types
         type_counts = {}
-        for entry in self.consolidation_history:
+        for entry in parent_system.consolidation_history:
             c_type = entry.get("consolidation_type", "unknown")
             type_counts[c_type] = type_counts.get(c_type, 0) + 1
         
         # Check if ready for next consolidation
         now = datetime.now()
-        time_since_last = (now - self.last_consolidation).total_seconds() / 3600  # hours
-        ready_for_next = time_since_last >= self.consolidation_interval
+        time_since_last = (now - parent_system.last_consolidation).total_seconds() / 3600  # hours
+        ready_for_next = time_since_last >= parent_system.consolidation_interval
         
-        return {
-            "total_consolidations": total,
-            "avg_quality": avg_quality,
-            "type_distribution": type_counts,
-            "ready_for_next": ready_for_next,
-            "hours_until_next": max(0, self.consolidation_interval - time_since_last)
-        }
+        return ConsolidationStatistics(
+            total_consolidations=total,
+            avg_quality=avg_quality,
+            type_distribution=type_counts,
+            ready_for_next=ready_for_next,
+            hours_until_next=max(0, parent_system.consolidation_interval - time_since_last)
+        )
     
     # New implementation of find_similar_experiences with Pydantic model
 
     @staticmethod  
     @function_tool
     async def _find_similar_experiences(ctx: RunContextWrapper,
-                                   params: SimilarExperiencesParams) -> List[Dict[str, Any]]:
+                                   params: SimilarExperiencesParams) -> FindSimilarResult:
         """
         Find experiences similar to the given one
         
@@ -880,6 +1000,9 @@ class ExperienceConsolidationSystem:
         Returns:
             List of similar experiences
         """
+        # Get parent system from context
+        parent_system = ctx.context.parent_system
+        
         # Extract parameters
         experience_id = params.experience_id
         similarity_threshold = params.similarity_threshold
@@ -887,27 +1010,29 @@ class ExperienceConsolidationSystem:
         
         # Get the experience
         try:
-            experience = await self.memory_core.get_memory_by_id(experience_id)
+            experience = await parent_system.memory_core.get_memory_by_id(experience_id)
             
             if not experience:
-                return []
+                return FindSimilarResult(experiences=[])
             
             # Get the experience text
             experience_text = experience.get("memory_text", "")
             
             if not experience_text:
-                return []
+                return FindSimilarResult(experiences=[])
             
             # Get vector for this experience
-            if hasattr(self.experience_interface, "_generate_experience_vector") and hasattr(self.experience_interface, "experience_vectors"):
-                if experience_id in self.experience_interface.experience_vectors:
-                    exp_vector = self.experience_interface.experience_vectors[experience_id].get("vector", [])
+            if hasattr(parent_system.experience_interface, "_generate_experience_vector") and hasattr(parent_system.experience_interface, "experience_vectors"):
+                if experience_id in parent_system.experience_interface.experience_vectors:
+                    exp_vector = parent_system.experience_interface.experience_vectors[experience_id].get("vector", [])
                 else:
                     # Generate vector
-                    exp_vector = await self.experience_interface._generate_experience_vector(ctx, experience_text)
+                    exp_vector = await parent_system.experience_interface._generate_experience_vector(
+                        ctx, parent_system.experience_interface, experience_text
+                    )
                     
                     # Store for future use
-                    self.experience_interface.experience_vectors[experience_id] = {
+                    parent_system.experience_interface.experience_vectors[experience_id] = {
                         "experience_id": experience_id,
                         "vector": exp_vector,
                         "metadata": {
@@ -919,16 +1044,16 @@ class ExperienceConsolidationSystem:
                 # Find similar experiences
                 similar_experiences = []
                 
-                for other_id, other_vector_data in self.experience_interface.experience_vectors.items():
+                for other_id, other_vector_data in parent_system.experience_interface.experience_vectors.items():
                     if other_id != experience_id:
                         other_vector = other_vector_data.get("vector", [])
                         
                         # Calculate similarity
-                        similarity = self.experience_interface._calculate_cosine_similarity(exp_vector, other_vector)
+                        similarity = parent_system.experience_interface._calculate_cosine_similarity(exp_vector, other_vector)
                         
                         if similarity >= similarity_threshold:
                             # Get the experience
-                            other_exp = await self.memory_core.get_memory_by_id(other_id)
+                            other_exp = await parent_system.memory_core.get_memory_by_id(other_id)
                             
                             if other_exp:
                                 other_exp["similarity"] = similarity
@@ -938,15 +1063,17 @@ class ExperienceConsolidationSystem:
                 similar_experiences.sort(key=lambda x: x.get("similarity", 0), reverse=True)
                 
                 # Return top matches
-                return similar_experiences[:max_similar]
+                return FindSimilarResult(experiences=similar_experiences[:max_similar])
             else:
                 # Fallback method if vector search not available
                 logger.warning("Vector search not available, using fallback method")
-                return []
+                return FindSimilarResult(experiences=[])
                 
         except Exception as e:
             logger.error(f"Error finding similar experiences: {e}")
-            return []
+            return FindSimilarResult(experiences=[])
+
+# nyx/core/experience_consolidation.py - Part 3 (Public Methods)
     
     # Public methods with enhanced implementation
     
@@ -1075,6 +1202,7 @@ class ExperienceConsolidationSystem:
                             hasattr(self.experience_interface, "_generate_experience_vector")):
                             vector = await self.experience_interface._generate_experience_vector(
                                 RunContextWrapper(context=self.context),
+                                self.experience_interface,
                                 consolidation_output.consolidation_text
                             )
                             
@@ -1150,7 +1278,7 @@ class ExperienceConsolidationSystem:
                 logger.error(f"Error evaluating consolidation: {e}")
                 return None
     
-    async def run_consolidation_cycle(self, experience_ids: Optional[List[str]] = None) -> Dict[str, Any]:
+    async def run_consolidation_cycle(self, experience_ids: Optional[List[str]] = None) -> RunCycleResult:
         """
         Run a complete consolidation cycle using direct logic (not orchestrator).
         Modified to correctly store consolidated memories with hierarchical data.
@@ -1160,7 +1288,10 @@ class ExperienceConsolidationSystem:
         time_since_last = (now - self.last_consolidation).total_seconds() / 3600
         if time_since_last < self.consolidation_interval:
             logger.info(f"Skipping consolidation cycle: Only {time_since_last:.1f} hours passed ({self.consolidation_interval} required).")
-            return {"status": "skipped", "reason": "Interval not met"}
+            return RunCycleResult(
+                status="skipped",
+                reason="Interval not met"
+            )
 
         logger.info("Starting experience consolidation cycle...")
         with trace(workflow_name="consolidation_cycle", group_id=self.trace_group_id):
@@ -1179,12 +1310,16 @@ class ExperienceConsolidationSystem:
                     run_config=RunConfig(workflow_name="CandidateFinder")
                 )
                 raw = result.final_output or []
-                candidate_groups = [ConsolidationCandidate(**c) for c in raw]
+                candidate_groups = [ConsolidationCandidate(**c) for c in raw] if isinstance(raw, list) else raw
 
                 if not candidate_groups:
                     logger.info("No candidate groups found.")
                     self.last_consolidation = now
-                    return {"status": "completed", "consolidations_created": 0, "source_memories_processed": 0}
+                    return RunCycleResult(
+                        status="completed",
+                        consolidations_created=0,
+                        source_memories_processed=0
+                    )
 
                 # 2. Loop over each group
                 for cand in candidate_groups:
@@ -1280,18 +1415,21 @@ class ExperienceConsolidationSystem:
                 # 3. Wrap up
                 self.last_consolidation = now
                 logger.info(f"Cycle done: created={consolidations_created}, affected={total_memories_affected}")
-                return {
-                    "status": "completed",
-                    "consolidations_created": consolidations_created,
-                    "source_memories_processed": total_memories_affected
-                }
+                return RunCycleResult(
+                    status="completed",
+                    consolidations_created=consolidations_created,
+                    source_memories_processed=total_memories_affected
+                )
 
             except Exception as e:
                 logger.error(f"Unexpected error in consolidation cycle: {e}", exc_info=True)
-                return {"status": "error", "error": str(e)}
+                return RunCycleResult(
+                    status="error",
+                    error=str(e)
+                )
 
     
-    async def get_consolidation_insights(self) -> Dict[str, Any]:
+    async def get_consolidation_insights(self) -> ConsolidationInsights:
         """
         Get insights about consolidation activities
         
@@ -1303,30 +1441,26 @@ class ExperienceConsolidationSystem:
             stats = await self._get_consolidation_statistics(RunContextWrapper(context=self.context))
             
             # Add additional insights
-            insights = {
-                "total_consolidations": stats["total_consolidations"],
-                "last_consolidation": self.last_consolidation.isoformat(),
-                "consolidation_types": stats["type_distribution"],
-                "user_coverage": set()
-            }
+            insights = ConsolidationInsights(
+                total_consolidations=stats.total_consolidations,
+                last_consolidation=self.last_consolidation.isoformat(),
+                consolidation_types=stats.type_distribution,
+                unique_users_consolidated=0,
+                user_coverage=[],
+                hours_until_next_consolidation=stats.hours_until_next,
+                ready_for_consolidation=stats.ready_for_next
+            )
             
-            # Count consolidation types
+            # Count consolidation types and users
+            user_coverage_set = set()
             for entry in self.consolidation_history:
                 # Track unique users
                 user_ids = entry.get("user_ids", [])
                 for user_id in user_ids:
-                    insights["user_coverage"].add(user_id)
+                    user_coverage_set.add(user_id)
             
             # Convert set to count
-            insights["unique_users_consolidated"] = len(insights["user_coverage"])
-            insights["user_coverage"] = list(insights["user_coverage"])
-            
-            # Add time until next consolidation
-            now = datetime.now()
-            time_since_last = (now - self.last_consolidation).total_seconds() / 3600  # hours
-            time_until_next = max(0, self.consolidation_interval - time_since_last)
-            
-            insights["hours_until_next_consolidation"] = time_until_next
-            insights["ready_for_consolidation"] = time_until_next <= 0
+            insights.unique_users_consolidated = len(user_coverage_set)
+            insights.user_coverage = list(user_coverage_set)
             
             return insights
