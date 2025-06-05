@@ -16,6 +16,64 @@ from agents.tracing import trace, custom_span
 
 logger = logging.getLogger(__name__)
 
+class ContextData(BaseModel):
+    """Full context data"""
+    full_context: 'ContextContent'
+    is_incremental: bool = False
+    version: int
+    no_changes: Optional[bool] = None
+    
+    class Config:
+        extra = "forbid"
+
+
+class DeltaContextData(BaseModel):
+    """Delta context data"""
+    delta_context: List['ContextDiffModel']
+    is_incremental: bool = True
+    version: int
+    
+    class Config:
+        extra = "forbid"
+
+
+class ContextContent(BaseModel):
+    """Generic context content container"""
+    data: Dict[str, Union[str, int, float, bool, List[str]]]
+    
+    class Config:
+        extra = "forbid"
+
+
+class ContextDiffModel(BaseModel):
+    """Model for context diff"""
+    path: str
+    op: str  # "add", "remove", "replace"
+    value: Optional[Union[str, int, float, bool, List[str]]] = None
+    old_value: Optional[Union[str, int, float, bool, List[str]]] = None
+    priority: int
+    timestamp: float
+    
+    class Config:
+        extra = "forbid"
+
+
+class PrioritizedContext(BaseModel):
+    """Prioritized context with metadata"""
+    context: ContextContent
+    priority_metadata: 'PriorityMetadata'
+    
+    class Config:
+        extra = "forbid"
+
+
+class PriorityMetadata(BaseModel):
+    """Priority metadata"""
+    scores: Dict[str, float]
+    timestamp: float
+    
+    class Config:
+        extra = "forbid"
 
 class ContextDiff:
     """Represents a context difference with change priority information"""
@@ -318,7 +376,7 @@ class ContextManager:
     # INTERNAL (PRIVATE) Methods that used to be @function_tool
     # ---------------------------------------------------------------------
 
-    async def _get_context(self, source_version: Optional[int] = None) -> Dict[str, Any]:
+    async def _get_context(self, source_version: Optional[int] = None) -> Union[ContextData, DeltaContextData]:
         """
         Return the full context or a delta if `source_version` is older.
         """
@@ -327,34 +385,35 @@ class ContextManager:
         
         if source_version is None:
             # Return everything if no version is specified
-            return {
-                "full_context": self.context,
-                "is_incremental": False,
-                "version": self.version
-            }
+            return ContextData(
+                full_context=ContextContent(data=self.context),
+                is_incremental=False,
+                version=self.version
+            )
         
         if source_version >= self.version:
             # The requester is up-to-date
-            return {
-                "full_context": self.context,
-                "is_incremental": False,
-                "no_changes": True,
-                "version": self.version
-            }
+            return ContextData(
+                full_context=ContextContent(data=self.context),
+                is_incremental=False,
+                no_changes=True,
+                version=self.version
+            )
         
         # Attempt to build a delta from change_log if not too large
         if len(self.change_log) == 0 or len(self.change_log) > 20:
-            return {
-                "full_context": self.context,
-                "is_incremental": False,
-                "version": self.version
-            }
+            return ContextData(
+                full_context=ContextContent(data=self.context),
+                is_incremental=False,
+                version=self.version
+            )
         
-        return {
-            "delta_context": [diff.to_dict() for diff in self.change_log],
-            "is_incremental": True,
-            "version": self.version
-        }
+        delta_models = [ContextDiffModel(**diff.to_dict()) for diff in self.change_log]
+        return DeltaContextData(
+            delta_context=delta_models,
+            is_incremental=True,
+            version=self.version
+        )
 
     async def _update_context(self, new_context: Dict[str, Any]) -> bool:
         """
@@ -403,12 +462,9 @@ class ContextManager:
                 return True
         return False
 
-    def _prioritize_context(self, context: Dict[str, Any]) -> Dict[str, Any]:
+    def _prioritize_context(self, context: Dict[str, Any]) -> PrioritizedContext:
         """
         Internal method: reorder or annotate context by priority.
-        This used to be a function_tool, now it's a normal method.
-        
-        Here's an example approach with `type_scores`.
         """
         try:
             # Some sample type-based scoring
@@ -424,42 +480,40 @@ class ContextManager:
                 "events": 5,
                 "items": 4
             }
-
+    
             priority_scores = {}
-
+    
             # For each key in the context, compute a "score"
             for key, value in context.items():
                 # Start with a base from type_scores
                 score = type_scores.get(key, 3)
-
-                # If value has special flags, we can add logic here
-                # e.g., if "critical" in str(value): score += 5
-                # or if it's a big list, add more score, etc.
-
-                # For demonstration, let's just keep it simple
                 priority_scores[key] = score
-
+    
             # Sort items in descending order of the computed score
             sorted_items = sorted(
                 context.items(),
                 key=lambda x: priority_scores.get(x[0], 0),
                 reverse=True
             )
-
+    
             # Build a new dictionary with the high-score items first
-            prioritized_context = dict(sorted_items)
+            prioritized_dict = dict(sorted_items)
             
-            # Add metadata about priority
-            prioritized_context["_priority_metadata"] = {
-                "scores": priority_scores,
-                "timestamp": time.time()
-            }
-
-            return prioritized_context
-
+            # Return typed result
+            return PrioritizedContext(
+                context=ContextContent(data=prioritized_dict),
+                priority_metadata=PriorityMetadata(
+                    scores=priority_scores,
+                    timestamp=time.time()
+                )
+            )
+    
         except Exception as e:
             logger.error(f"Error prioritizing context: {e}")
-            return context
+            return PrioritizedContext(
+                context=ContextContent(data=context),
+                priority_metadata=PriorityMetadata(scores={}, timestamp=time.time())
+            )
 
     # ---------------------------------------------------------------------
     # Nyx / Governance integration
@@ -537,7 +591,7 @@ def get_context_manager() -> ContextManager:
 async def get_context_tool(
     ctx: RunContextWrapper,
     source_version: Optional[int] = None
-) -> Dict[str, Any]:
+) -> Union[ContextData, DeltaContextData]:
     """
     Tool function: get context or a delta from the singleton context manager.
     """
@@ -548,13 +602,25 @@ async def get_context_tool(
 @function_tool
 async def update_context_tool(
     ctx: RunContextWrapper,
-    new_context: Dict[str, Any]
+    new_context: ContextContent
 ) -> bool:
     """
     Tool function: replace the entire context with `new_context`.
     """
     cm = get_context_manager()
-    return await cm._update_context(new_context)
+    return await cm._update_context(new_context.data)
+
+
+@function_tool
+def prioritize_context_tool(
+    ctx: RunContextWrapper,
+    user_context: ContextContent
+) -> PrioritizedContext:
+    """
+    Tool function: reorder/annotate a context dictionary by priority.
+    """
+    cm = get_context_manager()
+    return cm._prioritize_context(user_context.data)
 
 
 @function_tool
@@ -569,19 +635,6 @@ async def apply_targeted_change_tool(
     """
     cm = get_context_manager()
     return await cm._apply_targeted_change(path, value, operation)
-
-
-@function_tool
-def prioritize_context_tool(
-    ctx: RunContextWrapper,
-    user_context: Dict[str, Any]
-) -> Dict[str, Any]:
-    """
-    Tool function: reorder/annotate a context dictionary by priority.
-    """
-    cm = get_context_manager()
-    return cm._prioritize_context(user_context)
-
 
 # ---------------------------------------------------------------------
 # Agent creation referencing the *standalone* tool functions
