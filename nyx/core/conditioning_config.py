@@ -4,6 +4,7 @@ import json
 import logging
 import os
 from typing import Dict, List, Any, Optional
+from pydantic import BaseModel, Field
 
 from agents import Agent, Runner, ModelSettings, trace, function_tool, FunctionTool, RunContextWrapper, handoff
 from nyx.core.conditioning_models import *
@@ -11,51 +12,168 @@ from nyx.core.conditioning_tools import check_trait_balance
 
 logger = logging.getLogger(__name__)
 
+# Pydantic models for function parameters and returns
+class ParametersResult(BaseModel, extra="forbid"):
+    """Result of getting parameters"""
+    association_learning_rate: float = 0.01
+    extinction_rate: float = 0.005
+    generalization_factor: float = 0.3
+    context_weight: float = 0.4
+    temporal_decay_rate: float = 0.02
+    max_association_strength: float = 1.0
+    min_association_strength: float = 0.0
+    reinforcement_threshold: float = 0.3
+    punishment_modifier: float = 0.8
+    # Add other fields as they appear in ConditioningParameters
+
+class UpdateParametersParams(BaseModel, extra="forbid"):
+    """Parameters for updating conditioning parameters"""
+    association_learning_rate: Optional[float] = None
+    extinction_rate: Optional[float] = None
+    generalization_factor: Optional[float] = None
+    context_weight: Optional[float] = None
+    temporal_decay_rate: Optional[float] = None
+    max_association_strength: Optional[float] = None
+    min_association_strength: Optional[float] = None
+    reinforcement_threshold: Optional[float] = None
+    punishment_modifier: Optional[float] = None
+
+class UpdateParametersResult(BaseModel, extra="forbid"):
+    """Result of updating parameters"""
+    success: bool
+    updated_keys: List[str] = Field(default_factory=list)
+    previous_values: Dict[str, float] = Field(default_factory=dict)
+    new_values: Dict[str, float] = Field(default_factory=dict)
+    message: Optional[str] = None
+
+class SaveResult(BaseModel, extra="forbid"):
+    """Result of save operation"""
+    success: bool
+    message: Optional[str] = None
+    error: Optional[str] = None
+
+class ValidateParametersResult(BaseModel, extra="forbid"):
+    """Result of parameter validation"""
+    valid: bool
+    issues: Dict[str, str] = Field(default_factory=dict)
+
+class ResetResult(BaseModel, extra="forbid"):
+    """Result of reset operation"""
+    success: bool
+    message: str
+    parameters: ParametersResult
+    personality_profile: 'PersonalityProfileResult'
+    error: Optional[str] = None
+
+class PersonalityProfileResult(BaseModel, extra="forbid"):
+    """Result of getting personality profile"""
+    traits: Dict[str, float] = Field(default_factory=dict)
+    preferences: Dict[str, 'PreferenceDetailResult'] = Field(default_factory=dict)
+    emotion_triggers: Dict[str, 'EmotionTriggerDetailResult'] = Field(default_factory=dict)
+    behaviors: Dict[str, List[str]] = Field(default_factory=dict)
+
+class PreferenceDetailResult(BaseModel, extra="forbid"):
+    """Preference detail result"""
+    type: str
+    value: float
+
+class EmotionTriggerDetailResult(BaseModel, extra="forbid"):
+    """Emotion trigger detail result"""
+    emotion: str
+    intensity: float
+
+class UpdatePersonalityProfileParams(BaseModel, extra="forbid"):
+    """Parameters for updating personality profile"""
+    traits: Optional[Dict[str, float]] = None
+    preferences: Optional[Dict[str, PreferenceDetail]] = None
+    emotion_triggers: Optional[Dict[str, EmotionTriggerDetail]] = None
+    behaviors: Optional[Dict[str, List[str]]] = None
+
+class UpdatePersonalityResult(BaseModel, extra="forbid"):
+    """Result of updating personality profile"""
+    success: bool
+    updated_keys: List[str] = Field(default_factory=list)
+    message: Optional[str] = None
+    error: Optional[str] = None
+
+class AdjustTraitParams(BaseModel, extra="forbid"):
+    """Parameters for adjusting a trait"""
+    trait: str
+    value: float
+
+class AdjustTraitResult(BaseModel, extra="forbid"):
+    """Result of adjusting a trait"""
+    success: bool
+    trait: str
+    old_value: float
+    new_value: float
+    error: Optional[str] = None
+
+class AdjustPreferenceParams(BaseModel, extra="forbid"):
+    """Parameters for adjusting a preference"""
+    stimulus: str
+    preference_type: str
+    value: float
+
+class AdjustPreferenceResult(BaseModel, extra="forbid"):
+    """Result of adjusting a preference"""
+    success: bool
+    stimulus: str
+    preference_type: str
+    value: float
+    error: Optional[str] = None
+
 # Configuration-specific tools
 
 @function_tool
-async def get_parameters(ctx: RunContextWrapper) -> Dict[str, Any]:
+async def get_parameters(ctx: RunContextWrapper) -> ParametersResult:
     """Get current conditioning parameters"""
     if ctx.context.parameters:
-        return ctx.context.parameters.model_dump()
-    return {}
+        params_dict = ctx.context.parameters.model_dump()
+        return ParametersResult(**params_dict)
+    return ParametersResult()
 
 @function_tool
-async def update_parameters(ctx: RunContextWrapper, new_params: Dict[str, Any]) -> Dict[str, Any]:
+async def update_parameters(ctx: RunContextWrapper, params: UpdateParametersParams) -> UpdateParametersResult:
     """Update conditioning parameters"""
     if not ctx.context.parameters:
-        return {"success": False, "message": "Parameters not loaded"}
+        return UpdateParametersResult(success=False, message="Parameters not loaded")
     
-    result = {"success": True, "updated_keys": [], "previous_values": {}, "new_values": {}}
+    result = UpdateParametersResult(success=True)
     current_params = ctx.context.parameters.model_dump()
     
-    for key, value in new_params.items():
+    # Update only the provided fields
+    update_dict = params.model_dump(exclude_unset=True)
+    
+    for key, value in update_dict.items():
         if hasattr(ctx.context.parameters, key):
-            result["previous_values"][key] = current_params[key]
-            result["new_values"][key] = value
-            result["updated_keys"].append(key)
+            result.previous_values[key] = current_params[key]
+            result.new_values[key] = value
+            result.updated_keys.append(key)
             setattr(ctx.context.parameters, key, value)
     
     return result
 
 @function_tool
-async def save_parameters(ctx: RunContextWrapper) -> Dict[str, Any]:
+async def save_parameters(ctx: RunContextWrapper) -> SaveResult:
     """Save current parameters to disk"""
     try:
         os.makedirs(ctx.context.config_dir, exist_ok=True)
         with open(ctx.context.params_file, 'w') as f:
             json.dump(ctx.context.parameters.model_dump(), f, indent=2)
-        return {"success": True, "message": "Parameters saved"}
+        return SaveResult(success=True, message="Parameters saved")
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        return SaveResult(success=False, error=str(e))
 
 @function_tool
-async def validate_parameters(ctx: RunContextWrapper, parameters: Dict[str, Any]) -> Dict[str, Any]:
+async def validate_parameters(ctx: RunContextWrapper, parameters: ParametersResult) -> ValidateParametersResult:
     """Validate parameters against constraints"""
-    validation_result = {"valid": True, "issues": {}}
+    validation_result = ValidateParametersResult(valid=True)
     
     try:
-        ConditioningParameters(**parameters)
+        # Convert back to ConditioningParameters to validate
+        params_dict = parameters.model_dump()
+        ConditioningParameters(**params_dict)
         
         # Range checks
         constraints = {
@@ -64,21 +182,21 @@ async def validate_parameters(ctx: RunContextWrapper, parameters: Dict[str, Any]
             "generalization_factor": (0.0, 1.0)
         }
         
-        for param, value in parameters.items():
+        for param, value in params_dict.items():
             if param in constraints:
                 min_val, max_val = constraints[param]
                 if not min_val <= value <= max_val:
-                    validation_result["valid"] = False
-                    validation_result["issues"][param] = f"Value outside range [{min_val}, {max_val}]"
+                    validation_result.valid = False
+                    validation_result.issues[param] = f"Value outside range [{min_val}, {max_val}]"
     
     except Exception as e:
-        validation_result["valid"] = False
-        validation_result["issues"]["validation_error"] = str(e)
+        validation_result.valid = False
+        validation_result.issues["validation_error"] = str(e)
     
     return validation_result
 
 @function_tool
-async def reset_to_defaults(ctx: RunContextWrapper) -> Dict[str, Any]:
+async def reset_to_defaults(ctx: RunContextWrapper) -> ResetResult:
     """Reset all parameters and profile to defaults"""
     try:
         ctx.context.parameters = ConditioningParameters()
@@ -93,84 +211,127 @@ async def reset_to_defaults(ctx: RunContextWrapper) -> Dict[str, Any]:
         await save_parameters(ctx)
         await save_personality_profile(ctx)
         
-        return {
-            "success": True,
-            "message": "Reset to defaults",
-            "parameters": ctx.context.parameters.model_dump(),
-            "personality_profile": ctx.context.personality_profile.model_dump()
-        }
+        # Convert to result models
+        params_result = ParametersResult(**ctx.context.parameters.model_dump())
+        profile_result = PersonalityProfileResult(
+            traits=ctx.context.personality_profile.traits,
+            preferences={k: PreferenceDetailResult(type=v.type, value=v.value) 
+                        for k, v in ctx.context.personality_profile.preferences.items()},
+            emotion_triggers={k: EmotionTriggerDetailResult(emotion=v.emotion, intensity=v.intensity)
+                            for k, v in ctx.context.personality_profile.emotion_triggers.items()},
+            behaviors=ctx.context.personality_profile.behaviors
+        )
+        
+        return ResetResult(
+            success=True,
+            message="Reset to defaults",
+            parameters=params_result,
+            personality_profile=profile_result
+        )
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        return ResetResult(
+            success=False,
+            message="",
+            parameters=ParametersResult(),
+            personality_profile=PersonalityProfileResult(),
+            error=str(e)
+        )
 
 @function_tool
-async def get_personality_profile(ctx: RunContextWrapper) -> Dict[str, Any]:
+async def get_personality_profile(ctx: RunContextWrapper) -> PersonalityProfileResult:
     """Get current personality profile"""
     if ctx.context.personality_profile:
-        return ctx.context.personality_profile.model_dump()
-    return {}
+        profile = ctx.context.personality_profile
+        return PersonalityProfileResult(
+            traits=profile.traits,
+            preferences={k: PreferenceDetailResult(type=v.type, value=v.value) 
+                        for k, v in profile.preferences.items()},
+            emotion_triggers={k: EmotionTriggerDetailResult(emotion=v.emotion, intensity=v.intensity)
+                            for k, v in profile.emotion_triggers.items()},
+            behaviors=profile.behaviors
+        )
+    return PersonalityProfileResult()
 
 @function_tool
-async def update_personality_profile(ctx: RunContextWrapper, new_profile: Dict[str, Any]) -> Dict[str, Any]:
+async def update_personality_profile(ctx: RunContextWrapper, params: UpdatePersonalityProfileParams) -> UpdatePersonalityResult:
     """Update personality profile"""
     if not ctx.context.personality_profile:
-        return {"success": False, "message": "Profile not loaded"}
+        return UpdatePersonalityResult(success=False, message="Profile not loaded")
     
-    result = {"success": True, "updated_keys": []}
+    result = UpdatePersonalityResult(success=True)
     
     try:
         current_dict = ctx.context.personality_profile.model_dump()
-        current_dict.update(new_profile)
+        update_dict = params.model_dump(exclude_unset=True)
+        
+        # Update the current dict with new values
+        for key, value in update_dict.items():
+            if value is not None:
+                current_dict[key] = value
+                result.updated_keys.append(key)
+        
         ctx.context.personality_profile = PersonalityProfile(**current_dict)
-        result["updated_keys"] = list(new_profile.keys())
         return result
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        return UpdatePersonalityResult(success=False, error=str(e))
 
 @function_tool
-async def adjust_trait(ctx: RunContextWrapper, trait: str, value: float) -> Dict[str, Any]:
+async def adjust_trait(ctx: RunContextWrapper, params: AdjustTraitParams) -> AdjustTraitResult:
     """Adjust a specific personality trait"""
     if not ctx.context.personality_profile:
-        return {"success": False, "error": "Profile not loaded"}
+        return AdjustTraitResult(
+            success=False, 
+            trait=params.trait, 
+            old_value=0.0, 
+            new_value=0.0,
+            error="Profile not loaded"
+        )
     
-    old_value = ctx.context.personality_profile.traits.get(trait, 0.0)
-    new_value = max(0.0, min(1.0, value))
-    ctx.context.personality_profile.traits[trait] = new_value
+    old_value = ctx.context.personality_profile.traits.get(params.trait, 0.0)
+    new_value = max(0.0, min(1.0, params.value))
+    ctx.context.personality_profile.traits[params.trait] = new_value
     
-    return {
-        "success": True,
-        "trait": trait,
-        "old_value": old_value,
-        "new_value": new_value
-    }
+    return AdjustTraitResult(
+        success=True,
+        trait=params.trait,
+        old_value=old_value,
+        new_value=new_value
+    )
 
 @function_tool
-async def adjust_preference(ctx: RunContextWrapper, stimulus: str, preference_type: str, value: float) -> Dict[str, Any]:
+async def adjust_preference(ctx: RunContextWrapper, params: AdjustPreferenceParams) -> AdjustPreferenceResult:
     """Adjust a preference"""
     if not ctx.context.personality_profile:
-        return {"success": False, "error": "Profile not loaded"}
+        return AdjustPreferenceResult(
+            success=False,
+            stimulus=params.stimulus,
+            preference_type=params.preference_type,
+            value=params.value,
+            error="Profile not loaded"
+        )
     
-    ctx.context.personality_profile.preferences[stimulus] = PreferenceDetail(
-        type=preference_type,
-        value=value
+    ctx.context.personality_profile.preferences[params.stimulus] = PreferenceDetail(
+        type=params.preference_type,
+        value=params.value
     )
     
-    return {
-        "success": True,
-        "stimulus": stimulus,
-        "preference_type": preference_type,
-        "value": value
-    }
+    return AdjustPreferenceResult(
+        success=True,
+        stimulus=params.stimulus,
+        preference_type=params.preference_type,
+        value=params.value
+    )
 
 @function_tool
-async def save_personality_profile(ctx: RunContextWrapper) -> Dict[str, Any]:
+async def save_personality_profile(ctx: RunContextWrapper) -> SaveResult:
     """Save personality profile to disk"""
     try:
         os.makedirs(ctx.context.config_dir, exist_ok=True)
         with open(ctx.context.personality_file, 'w') as f:
             json.dump(ctx.context.personality_profile.model_dump(), f, indent=2)
-        return {"success": True, "message": "Profile saved"}
+        return SaveResult(success=True, message="Profile saved")
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        return SaveResult(success=False, error=str(e))
 
 class ConditioningConfiguration:
     """Configuration system for adjusting conditioning parameters"""
@@ -274,7 +435,9 @@ class ConditioningConfiguration:
     async def update_parameters(self, new_params: Dict[str, Any]) -> Dict[str, Any]:
         """Update specific parameters"""
         with trace(workflow_name="update_parameters", group_id=self.context.trace_group_id):
-            prompt = f"Update these parameters: {json.dumps(new_params)}"
+            # Convert dict to UpdateParametersParams
+            params_obj = UpdateParametersParams(**new_params)
+            prompt = f"Update these parameters: {params_obj.model_dump_json()}"
             
             result = await Runner.run(
                 self.config_manager_agent,
@@ -287,7 +450,9 @@ class ConditioningConfiguration:
     async def update_personality_profile(self, new_profile: Dict[str, Any]) -> Dict[str, Any]:
         """Update personality profile"""
         with trace(workflow_name="update_personality", group_id=self.context.trace_group_id):
-            prompt = f"Update the personality profile: {json.dumps(new_profile)}"
+            # Convert dict to UpdatePersonalityProfileParams
+            params_obj = UpdatePersonalityProfileParams(**new_profile)
+            prompt = f"Update the personality profile: {params_obj.model_dump_json()}"
             
             result = await Runner.run(
                 self.personality_editor_agent,
@@ -343,3 +508,7 @@ class ConditioningConfiguration:
             )
             
             return {"success": True, "message": str(result.final_output)}
+
+# Update model forward references
+PersonalityProfileResult.model_rebuild()
+ResetResult.model_rebuild()
