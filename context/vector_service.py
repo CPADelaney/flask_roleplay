@@ -623,7 +623,7 @@ async def add_vector_memory_tool(
         logger.error(f"Error in add_vector_memory_tool: {e}")
         return False
 
-@function_tool
+@function_tool(strict=False)
 async def add_entity_tool(
     ctx: RunContextWrapper,
     user_id: int,
