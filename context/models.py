@@ -7,6 +7,119 @@ from pydantic import BaseModel, Field
 from typing import Dict, List, Any, Optional, Union
 
 
+# Base metadata models
+class BaseMetadata(BaseModel):
+    """Base metadata model with common fields"""
+    timestamp: Optional[str] = None
+    source: Optional[str] = None
+    version: Optional[int] = None
+    
+    class Config:
+        extra = "forbid"  # Explicitly forbid extra fields
+
+
+# Specific metadata models
+class MemoryMetadata(BaseMetadata):
+    """Metadata specific to memories"""
+    npc_id: Optional[str] = None
+    location_id: Optional[str] = None
+    quest_id: Optional[str] = None
+    emotion: Optional[str] = None
+    context_type: Optional[str] = None
+    related_memories: Optional[List[str]] = None
+    
+    # Consolidation metadata
+    group_key: Optional[str] = None
+    memory_count: Optional[int] = None
+    time_span: Optional['TimeSpanMetadata'] = None
+
+
+class TimeSpanMetadata(BaseModel):
+    """Time span metadata for consolidated memories"""
+    start: str
+    end: str
+    
+    class Config:
+        extra = "forbid"
+
+
+class EntityMetadata(BaseMetadata):
+    """Metadata specific to entities"""
+    entity_class: Optional[str] = None
+    relationships: Optional[List[str]] = None
+    attributes: Optional[List[str]] = None
+    status: Optional[str] = None
+    tags: Optional[List[str]] = None
+
+
+class NPCMetadata(EntityMetadata):
+    """Metadata specific to NPCs"""
+    personality: Optional[str] = None
+    occupation: Optional[str] = None
+    faction: Optional[str] = None
+    mood: Optional[str] = None
+    location: Optional[str] = None
+
+
+class LocationMetadata(EntityMetadata):
+    """Metadata specific to locations"""
+    location_type: Optional[str] = None
+    population: Optional[int] = None
+    danger_level: Optional[int] = None
+    resources: Optional[List[str]] = None
+    quests_available: Optional[List[str]] = None
+
+
+class LocationDetails(BaseModel):
+    """Detailed location information"""
+    location_id: Optional[str] = None
+    location_name: str
+    description: Optional[str] = None
+    location_type: Optional[str] = None
+    connected_locations: Optional[List[str]] = None
+    metadata: Optional[LocationMetadata] = None
+    
+    class Config:
+        extra = "forbid"
+
+
+class NarrativeSummaryData(BaseModel):
+    """Data structure for narrative summaries"""
+    summary_text: str
+    summary_level: int
+    key_events: Optional[List[str]] = None
+    important_npcs: Optional[List[str]] = None
+    locations_visited: Optional[List[str]] = None
+    time_period: Optional[TimeSpanMetadata] = None
+    
+    class Config:
+        extra = "forbid"
+
+
+class DeltaChange(BaseModel):
+    """Represents a single delta change"""
+    path: str
+    operation: str  # "add", "remove", "replace"
+    value: Optional[Union[str, int, float, bool, List[str]]] = None
+    old_value: Optional[Union[str, int, float, bool, List[str]]] = None
+    priority: int = 5
+    timestamp: float
+    
+    class Config:
+        extra = "forbid"
+
+
+class DeltaChanges(BaseModel):
+    """Container for delta changes"""
+    changes: List[DeltaChange]
+    from_version: int
+    to_version: int
+    
+    class Config:
+        extra = "forbid"
+
+
+# Update existing models
 class ContextRequest(BaseModel):
     """Request model for context operations"""
     user_id: int
@@ -34,7 +147,7 @@ class Memory(BaseModel):
     access_count: int = 0
     last_accessed: str
     tags: List[str] = []
-    metadata: Dict[str, Any] = {}
+    metadata: MemoryMetadata = Field(default_factory=MemoryMetadata)
 
 
 class NPCData(BaseModel):
@@ -50,6 +163,7 @@ class NPCData(BaseModel):
     current_location: Optional[str] = None
     physical_description: Optional[str] = None
     relevance: Optional[float] = None
+    metadata: Optional[NPCMetadata] = None
 
 
 class LocationData(BaseModel):
@@ -59,6 +173,7 @@ class LocationData(BaseModel):
     description: Optional[str] = None
     connected_locations: Optional[List[str]] = None
     relevance: Optional[float] = None
+    metadata: Optional[LocationMetadata] = None
 
 
 class QuestData(BaseModel):
@@ -78,6 +193,7 @@ class NarrativeSummary(BaseModel):
     narrative_type: str
     importance: float = 0.5
     relevance: Optional[float] = None
+    data: Optional[NarrativeSummaryData] = None
 
 
 class TokenUsage(BaseModel):
@@ -98,16 +214,16 @@ class ContextOutput(BaseModel):
     """Complete context output model"""
     npcs: List[NPCData] = []
     memories: List[Memory] = []
-    location_details: Optional[Dict[str, Any]] = {}
+    location_details: Optional[LocationDetails] = None
     quests: List[QuestData] = []
-    narrative_summaries: Optional[Dict[str, Any]] = {}
+    narrative_summaries: Optional[NarrativeSummaryData] = None
     token_usage: TokenUsage = Field(default_factory=TokenUsage)
     total_tokens: int = 0
     version: Optional[int] = None
     timestamp: str = ""
     retrieval_time: Optional[float] = None
     is_delta: bool = False
-    delta_changes: Optional[Dict[str, Any]] = None
+    delta_changes: Optional[DeltaChanges] = None
 
 
 class MemorySearchRequest(BaseModel):
@@ -140,5 +256,5 @@ class MemoryAddRequest(BaseModel):
     memory_type: str = "observation"
     importance: Optional[float] = None
     tags: Optional[List[str]] = None
-    metadata: Optional[Dict[str, Any]] = None
+    metadata: Optional[MemoryMetadata] = None
     store_vector: bool = True
