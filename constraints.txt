@@ -42,11 +42,9 @@ types-requests==2.31.0     # openai-agents 0.0.17 dependency :contentReference[o
 types-urllib3==1.26.25     # openai-agents 0.0.17 dependency :contentReference[oaicite:34]{index=34}  
 sse-starlette==2.3.6       # mcp 1.9.1 dependency (used by openai-agents-mcp) :contentReference[oaicite:35]{index=35}  
 python-multipart==0.0.20   # mcp 1.9.1 dependency :contentReference[oaicite:36]{index=36}  
-instructor==1.8.3          # mcp-agent 0.0.22 dependency :contentReference[oaicite:37]{index=37}  
 opentelemetry-distro==0.55b0        # mcp-agent 0.0.22 dependency :contentReference[oaicite:38]{index=38}  
 opentelemetry-exporter-otlp-proto-http==1.34.0  # mcp-agent 0.0.22 dependency :contentReference[oaicite:39]{index=39}  
 websockets==15.0.1         # mcp-agent 0.0.22 dependency :contentReference[oaicite:40]{index=40}  
-mcp-agent==0.0.22          # match your top‐level requirement for openai-agents-mcp :contentReference[oaicite:41]{index=41}  
 mcp==1.9.1                 # match your top‐level requirement for openai-agents-mcp :contentReference[oaicite:42]{index=42}  
 
 # ----- ChromaDB & Qdrant (matched to chromadb==1.0.8, qdrant-client==1.7.0) -----  
