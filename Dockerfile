@@ -15,9 +15,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Copy requirements first (for better caching)
 COPY requirements.txt .
-RUN python -m pip install --upgrade pip setuptools wheel \
-    && pip install --no-cache-dir --prefer-binary -r requirements.txt \
-    && python -m spacy download en_core_web_sm
+
+# Install Python dependencies globally (don't use --user flag with root)
+RUN pip install --no-cache-dir -r requirements.txt
+RUN python -m spacy download en_core_web_sm
 
 # Copy the application code
 COPY . .
