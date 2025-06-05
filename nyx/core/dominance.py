@@ -1,4 +1,4 @@
-# nyx/core/dominance.py
+# nyx/core/dominance.py - Part 1
 
 import logging
 import uuid
@@ -7,6 +7,7 @@ import asyncio
 import datetime
 from typing import List, Dict, Optional, Any, Union
 from pydantic import BaseModel, Field
+import random
 
 from agents import (
     Agent, ModelSettings, function_tool, Runner, trace, 
@@ -45,6 +46,124 @@ class EvaluationSummary(BaseModel):
     metrics: Dict[str, Any]
     evaluation_time: float
     recommendations: List[str] = Field(default_factory=list)
+
+# Pydantic models for function tools
+class UserProfileResult(BaseModel, extra="forbid"):
+    """User profile for dominance ideation"""
+    user_id: str
+    inferred_traits: Dict[str, float] = Field(default_factory=dict)
+    preferences: Dict[str, str] = Field(default_factory=dict)
+    limits: 'UserLimits'
+    successful_tactics: List[str] = Field(default_factory=list)
+    failed_tactics: List[str] = Field(default_factory=list)
+    relationship_summary: str
+    trust_level: float = 0.5
+    intimacy_level: float = 0.3
+    max_achieved_intensity: int = 3
+    user_stated_intensity_preference: Optional[int] = None
+    hard_limits_confirmed: bool = False
+    optimal_escalation_rate: float = 0.1
+
+class UserLimits(BaseModel, extra="forbid"):
+    """User limits"""
+    hard: List[str] = Field(default_factory=list)
+    soft: List[str] = Field(default_factory=list)
+
+class ScenarioContext(BaseModel, extra="forbid"):
+    """Current scenario context"""
+    scene_setting: str = "General interaction"
+    recent_events: List[str] = Field(default_factory=list)
+    current_ai_mood: str = "Neutral"
+    active_goals: List[str] = Field(default_factory=list)
+    current_hormone_levels: Dict[str, float] = Field(default_factory=dict)
+
+class EvaluationParams(BaseModel, extra="forbid"):
+    """Parameters for evaluating dominance step"""
+    action: str
+    parameters: 'DominanceActionParams'
+    user_id: str
+
+class DominanceActionParams(BaseModel, extra="forbid"):
+    """Parameters for dominance action"""
+    intensity: int
+    category: str
+
+class EvaluationResult(BaseModel, extra="forbid"):
+    """Result of dominance step evaluation"""
+    action: str  # "proceed", "block", "modify"
+    reason: Optional[str] = None
+    new_intensity_level: Optional[int] = None
+
+class GenerateIdeasResult(BaseModel, extra="forbid"):
+    """Result of generating dominance ideas"""
+    status: str
+    ideas: List[FemdomActivityIdea] = Field(default_factory=list)
+    idea_count: int = 0
+    parameters: 'GenerationParameters'
+    hormone_context_used: Dict[str, float] = Field(default_factory=dict)
+    metrics: 'GenerationMetrics'
+    error: Optional[str] = None
+    recovery_message: Optional[str] = None
+
+class GenerationParameters(BaseModel, extra="forbid"):
+    """Parameters used for generation"""
+    purpose: str
+    intensity_range: str
+    hard_mode: bool
+
+class GenerationMetrics(BaseModel, extra="forbid"):
+    """Metrics for generation"""
+    execution_time: float
+    idea_count: int
+    agent_used: str
+
+class GenerateAndEvaluateResult(BaseModel, extra="forbid"):
+    """Result of generate and evaluate"""
+    status: str
+    ideas: List[FemdomActivityIdea] = Field(default_factory=list)
+    idea_count: int = 0
+    parameters: GenerationParameters
+    hormone_context_used: Dict[str, float] = Field(default_factory=dict)
+    metrics: GenerationMetrics
+    quality_evaluation: Optional['QualityEvaluation'] = None
+    error: Optional[str] = None
+    recovery_message: Optional[str] = None
+
+class QualityEvaluation(BaseModel, extra="forbid"):
+    """Quality evaluation results"""
+    overall_score: float
+    dimension_scores: Dict[str, 'DimensionScore'] = Field(default_factory=dict)
+    evaluation_time: float
+
+class DimensionScore(BaseModel, extra="forbid"):
+    """Score for a quality dimension"""
+    score: float
+    explanation: str
+
+class ComparisonResult(BaseModel, extra="forbid"):
+    """Result of configuration comparison"""
+    user_id: str
+    test_configs: int
+    successful_tests: int
+    best_config: Optional[Dict[str, Any]] = None
+    best_score: float = 0
+    detailed_results: List['ConfigTestResult'] = Field(default_factory=list)
+
+class ConfigTestResult(BaseModel, extra="forbid"):
+    """Result of testing a configuration"""
+    config: Dict[str, Any]
+    idea_count: Optional[int] = None
+    overall_score: Optional[float] = None
+    dimension_scores: Optional[Dict[str, DimensionScore]] = None
+    success: bool
+    error: Optional[str] = None
+
+class ConditioningResult(BaseModel, extra="forbid"):
+    """Result of applying conditioning"""
+    status: Optional[str] = None
+    activity_type: Optional[str] = None
+    outcome: Optional[str] = None
+    conditioning_results: Optional[List[Dict[str, Any]]] = None
 
 class DominanceSystem:
     """Manages Nyx's dominance expression capabilities and ideation."""
@@ -148,8 +267,8 @@ class DominanceSystem:
         """Create output filter for consistency (placeholder)."""
         # This would normally create a proper output filter
         return type('OutputFilter', (), {
-            'filter_output': lambda *args, **kwargs: args[0]
-        })
+            'filter_output': lambda self, output, context: output
+        })()
     
     def _create_error_recovery_agent(self):
         """Create agent for handling errors."""
@@ -311,7 +430,7 @@ class DominanceSystem:
         return context_data
     
     @function_tool
-    async def get_user_profile_for_ideation(self, user_id: str) -> Dict[str, Any]:
+    async def get_user_profile_for_ideation(self, user_id: str) -> UserProfileResult:
         """
         Retrieves relevant user profile information for tailoring dominance ideas.
         Includes inferred traits, preferences, known limits, past successful/failed tactics,
@@ -339,27 +458,24 @@ class DominanceSystem:
             failed_tactics = relationship.failed_dominance_tactics if hasattr(relationship, "failed_dominance_tactics") else []
             
             # Compile profile
-            profile = {
-                "user_id": user_id,
-                "inferred_traits": relationship.inferred_user_traits if hasattr(relationship, "inferred_user_traits") else {},
-                "preferences": self._extract_preferences_from_relationship(relationship),
-                "limits": {
-                    "hard": relationship.hard_limits if hasattr(relationship, "hard_limits") else [],
-                    "soft": relationship.soft_limits_approached if hasattr(relationship, "soft_limits_approached") else []
-                },
-                "successful_tactics": successful_tactics,
-                "failed_tactics": failed_tactics,
-                "relationship_summary": await self.relationship_manager.get_relationship_summary(user_id),
-                "trust_level": relationship.trust if hasattr(relationship, "trust") else 0.5,
-                "intimacy_level": relationship.intimacy if hasattr(relationship, "intimacy") else 0.3,
-                "max_achieved_intensity": relationship.max_achieved_intensity if hasattr(relationship, "max_achieved_intensity") else 3,
-                "user_stated_intensity_preference": relationship.user_stated_intensity_preference if hasattr(relationship, "user_stated_intensity_preference") else None,
-                "hard_limits_confirmed": relationship.hard_limits_confirmed if hasattr(relationship, "hard_limits_confirmed") else False,
-                "optimal_escalation_rate": relationship.optimal_escalation_rate if hasattr(relationship, "optimal_escalation_rate") else 0.1
-            }
-            
-            logger.debug(f"Retrieved dominance profile for user {user_id}")
-            return profile
+            return UserProfileResult(
+                user_id=user_id,
+                inferred_traits=relationship.inferred_user_traits if hasattr(relationship, "inferred_user_traits") else {},
+                preferences=self._extract_preferences_from_relationship(relationship),
+                limits=UserLimits(
+                    hard=relationship.hard_limits if hasattr(relationship, "hard_limits") else [],
+                    soft=relationship.soft_limits_approached if hasattr(relationship, "soft_limits_approached") else []
+                ),
+                successful_tactics=successful_tactics,
+                failed_tactics=failed_tactics,
+                relationship_summary=await self.relationship_manager.get_relationship_summary(user_id),
+                trust_level=relationship.trust if hasattr(relationship, "trust") else 0.5,
+                intimacy_level=relationship.intimacy if hasattr(relationship, "intimacy") else 0.3,
+                max_achieved_intensity=relationship.max_achieved_intensity if hasattr(relationship, "max_achieved_intensity") else 3,
+                user_stated_intensity_preference=relationship.user_stated_intensity_preference if hasattr(relationship, "user_stated_intensity_preference") else None,
+                hard_limits_confirmed=relationship.hard_limits_confirmed if hasattr(relationship, "hard_limits_confirmed") else False,
+                optimal_escalation_rate=relationship.optimal_escalation_rate if hasattr(relationship, "optimal_escalation_rate") else 0.1
+            )
             
         except Exception as e:
             logger.error(f"Error retrieving user profile for dominance ideation: {e}")
@@ -391,62 +507,50 @@ class DominanceSystem:
             
         return preferences
     
-    def _get_mock_profile(self, user_id: str) -> Dict[str, Any]:
+    def _get_mock_profile(self, user_id: str) -> UserProfileResult:
         """Generate a mock profile when real data is unavailable."""
         logger.debug(f"Generating mock profile for {user_id}")
-        return {
-            "user_id": user_id,
-            "inferred_traits": {"submissive": 0.7, "masochistic": 0.6, "bratty": 0.3},
-            "preferences": {"verbal_humiliation": "medium", "service_tasks": "medium", "simulated_pain": "low-medium"},
-            "limits": {"hard": ["blood", "permanent"], "soft": ["public"]},
-            "successful_tactics": ["praise_for_obedience", "specific_tasks"],
-            "failed_tactics": ["unexpected_punishment"],
-            "relationship_summary": "Moderate Trust, Low-Moderate Intimacy",
-            "trust_level": 0.6,
-            "intimacy_level": 0.4,
-            "max_achieved_intensity": 4,
-            "hard_limits_confirmed": False,
-            "optimal_escalation_rate": 0.1
-        }
+        return UserProfileResult(
+            user_id=user_id,
+            inferred_traits={"submissive": 0.7, "masochistic": 0.6, "bratty": 0.3},
+            preferences={"verbal_humiliation": "medium", "service_tasks": "medium", "simulated_pain": "low-medium"},
+            limits=UserLimits(hard=["blood", "permanent"], soft=["public"]),
+            successful_tactics=["praise_for_obedience", "specific_tasks"],
+            failed_tactics=["unexpected_punishment"],
+            relationship_summary="Moderate Trust, Low-Moderate Intimacy",
+            trust_level=0.6,
+            intimacy_level=0.4,
+            max_achieved_intensity=4,
+            hard_limits_confirmed=False,
+            optimal_escalation_rate=0.1
+        )
     
     @function_tool
-    async def get_current_scenario_context(self) -> Dict[str, Any]:
+    async def get_current_scenario_context(self) -> ScenarioContext:
         """
         Provides context about the current interaction/scene, including AI state (mood, hormones).
         """
-        context = {
-            "scene_setting": "General interaction",
-            "recent_events": [],
-            "current_ai_mood": "Neutral",
-            "active_goals": [],
-            "current_hormone_levels": {}  # Added field for hormones
-        }
+        context = ScenarioContext()
+        
         try:
             if not self.nyx_brain:
                 logger.warning("Nyx Brain not available for full context")
-                # Return default context if no brain is available
                 return context
 
             # Get emotional state
-            emotional_state = "Neutral"
             if hasattr(self.nyx_brain, "emotional_core") and self.nyx_brain.emotional_core:
                 current_emotion = await self.nyx_brain.emotional_core.get_current_emotion()
-                emotional_state = current_emotion.get("primary", {}).get("name", "Neutral")
-                context["current_ai_mood"] = emotional_state
+                context.current_ai_mood = current_emotion.get("primary", {}).get("name", "Neutral")
 
             # Get active goals
-            active_goals = []
             if hasattr(self.nyx_brain, "goal_manager") and self.nyx_brain.goal_manager:
                 goal_states = await self.nyx_brain.goal_manager.get_all_goals(status_filter=["active", "pending"])
-                active_goals = [g.get("description", "") for g in goal_states]
-                context["active_goals"] = active_goals
+                context.active_goals = [g.get("description", "") for g in goal_states]
 
             # Get recent interaction history
-            recent_events = []
             if hasattr(self.nyx_brain, "memory_core") and self.nyx_brain.memory_core:
                 recent_memories = await self.nyx_brain.memory_core.retrieve_recent_memories(limit=3)
-                recent_events = [m.get("summary", "") for m in recent_memories]
-                context["recent_events"] = recent_events
+                context.recent_events = [m.get("summary", "") for m in recent_memories]
 
             # Fetch hormone levels
             if self.hormone_system:
@@ -458,19 +562,19 @@ class DominanceSystem:
                     for name in ['testoryx', 'cortisoid', 'nyxamine', 'estroflux']:
                         if name in current_levels and isinstance(current_levels[name], dict) and 'value' in current_levels[name]:
                             hormone_data[name] = round(current_levels[name]['value'], 3)
-                    context["current_hormone_levels"] = hormone_data
+                    context.current_hormone_levels = hormone_data
                     logger.debug(f"Added hormone levels to scenario context: {hormone_data}")
                 except Exception as e:
                     logger.warning(f"Could not retrieve hormone levels for context: {e}")
 
-            context["scene_setting"] = "Ongoing interaction"  # Update setting if data was fetched
+            context.scene_setting = "Ongoing interaction"  # Update setting if data was fetched
             return context
 
         except Exception as e:
             logger.error(f"Error getting scenario context: {e}")
             # Return partial or default context on error
-            context["scene_setting"] = "Error retrieving context"
-            context["current_ai_mood"] = "Uncertain"
+            context.scene_setting = "Error retrieving context"
+            context.current_ai_mood = "Uncertain"
             return context
     
     async def _get_hormone_context(self) -> Dict[str, float]:
@@ -487,23 +591,32 @@ class DominanceSystem:
             except Exception as e:
                 logger.warning(f"Could not retrieve hormone levels for agent prompt: {e}")
         return levels
-    
+
+# Update model forward references
+UserProfileResult.model_rebuild()
+GenerateIdeasResult.model_rebuild()
+GenerateAndEvaluateResult.model_rebuild()
+QualityEvaluation.model_rebuild()
+ComparisonResult.model_rebuild()
+
+# nyx/core/dominance.py - Part 2 (Methods)
+
     async def evaluate_dominance_step_appropriateness(self, 
                                                action: str,
-                                               parameters: Dict[str, Any],
-                                               user_id: str) -> Dict[str, Any]:
+                                               parameters: DominanceActionParams,
+                                               user_id: str) -> EvaluationResult:
         """
         Evaluates whether a proposed dominance action is appropriate in the current context,
         incorporating Nyx's current hormonal state for risk assessment.
         """
         if not self.relationship_manager:
             logger.warning("Cannot evaluate appropriateness without relationship manager")
-            return {"action": "block", "reason": "Relationship manager unavailable"}
+            return EvaluationResult(action="block", reason="Relationship manager unavailable")
 
         try:
             relationship = await self.relationship_manager.get_relationship_state(user_id)
             if not relationship:
-                return {"action": "block", "reason": "No relationship data available"}
+                return EvaluationResult(action="block", reason="No relationship data available")
 
             # Extract key metrics from relationship
             trust_level = getattr(relationship, "trust", 0.4)
@@ -512,8 +625,8 @@ class DominanceSystem:
             hard_limits_confirmed = getattr(relationship, "hard_limits_confirmed", False)
 
             # Extract action parameters
-            intensity = parameters.get("intensity", 5)
-            category = parameters.get("category", "unknown")  # Keep category for potential future use
+            intensity = parameters.intensity
+            category = parameters.category  # Keep category for potential future use
 
             # Get hormone levels
             testoryx_level = 0.5  # Default/neutral influence
@@ -533,10 +646,10 @@ class DominanceSystem:
             trust_modifier = max(0.8, min(1.2, trust_modifier))  # Clamp modifier (e.g., 0.8 to 1.2)
             min_trust_required = (0.5 + (intensity * 0.05)) * trust_modifier
             if trust_level < min_trust_required:
-                return {
-                    "action": "block",
-                    "reason": f"Insufficient trust ({trust_level:.2f}, needed ~{min_trust_required:.2f}) for intensity {intensity}. (Modifier: {trust_modifier:.2f})"
-                }
+                return EvaluationResult(
+                    action="block",
+                    reason=f"Insufficient trust ({trust_level:.2f}, needed ~{min_trust_required:.2f}) for intensity {intensity}. (Modifier: {trust_modifier:.2f})"
+                )
 
             # Check 2: Intensity escalation (allow larger jump if bold, smaller if cautious)
             base_max_jump = 2.0
@@ -545,11 +658,11 @@ class DominanceSystem:
 
             if intensity > max_achieved_intensity + max_intensity_jump:
                 suggested_intensity = min(intensity, max_achieved_intensity + int(max_intensity_jump))
-                return {
-                    "action": "modify",
-                    "reason": f"Intensity jump too large (max: {max_achieved_intensity}, requested: {intensity}, allowed jump ~{max_intensity_jump:.1f}). Hormonal state considered.",
-                    "new_intensity_level": suggested_intensity
-                }
+                return EvaluationResult(
+                    action="modify",
+                    reason=f"Intensity jump too large (max: {max_achieved_intensity}, requested: {intensity}, allowed jump ~{max_intensity_jump:.1f}). Hormonal state considered.",
+                    new_intensity_level=suggested_intensity
+                )
 
             # Check 3: Hard limits verification threshold (lower threshold if very cautious)
             high_intensity_threshold = 7
@@ -558,18 +671,18 @@ class DominanceSystem:
                 logger.info(f"High cortisoid ({cortisoid_level:.2f}), lowering high-intensity check threshold to {high_intensity_threshold}")
 
             if intensity >= high_intensity_threshold and not hard_limits_confirmed:
-                return {
-                    "action": "block",
-                    "reason": f"Hard limits must be confirmed for intensity {intensity}+ activities (Threshold currently {high_intensity_threshold} due to internal state)."
-                }
+                return EvaluationResult(
+                    action="block",
+                    reason=f"Hard limits must be confirmed for intensity {intensity}+ activities (Threshold currently {high_intensity_threshold} due to internal state)."
+                )
 
             # All checks passed
             logger.info(f"Dominance step deemed appropriate (Intensity {intensity}, Trust {trust_level:.2f}) with hormonal state considered.")
-            return {"action": "proceed"}
+            return EvaluationResult(action="proceed")
 
         except Exception as e:
             logger.exception(f"Error evaluating dominance step appropriateness: {e}")
-            return {"action": "block", "reason": f"Evaluation error: {str(e)}"}
+            return EvaluationResult(action="block", reason=f"Evaluation error: {str(e)}")
     
     # Guardrail for dominance appropriateness
     async def _dominance_appropriateness_guardrail(self, 
@@ -594,30 +707,32 @@ class DominanceSystem:
         # Check maximum intensity
         if max_intensity > 6:
             # For high intensity, check appropriateness
+            params = DominanceActionParams(
+                intensity=max_intensity,
+                category=context.purpose
+            )
+            
             result = await self.evaluate_dominance_step_appropriateness(
                 action="generate_ideas",
-                parameters={
-                    "intensity": max_intensity,
-                    "category": context.purpose
-                },
+                parameters=params,
                 user_id=user_id
             )
             
-            if result["action"] == "block":
+            if result.action == "block":
                 return GuardrailFunctionOutput(
                     output_info={
-                        "reason": result["reason"],
+                        "reason": result.reason,
                         "suggested_action": "reduce_intensity"
                     },
                     tripwire_triggered=True
                 )
-            elif result["action"] == "modify":
+            elif result.action == "modify":
                 # Modify the context with the suggested intensity
-                context.intensity_range = f"{min_intensity}-{result['new_intensity_level']}"
+                context.intensity_range = f"{min_intensity}-{result.new_intensity_level}"
                 
                 return GuardrailFunctionOutput(
                     output_info={
-                        "reason": result["reason"],
+                        "reason": result.reason,
                         "modified_intensity_range": context.intensity_range
                     },
                     tripwire_triggered=False
@@ -633,7 +748,7 @@ class DominanceSystem:
                                      user_id: str, 
                                      purpose: str = "general", 
                                      intensity_range: str = "3-6",
-                                     hard_mode: bool = False) -> Dict[str, Any]:
+                                     hard_mode: bool = False) -> GenerateIdeasResult:
         """
         Generates dominance activity ideas tailored to the specific user and purpose.
         
@@ -728,24 +843,24 @@ class DominanceSystem:
                         await self._update_relationship_with_ideation_data(user_id, ideas, purpose)
                     
                     # Collect metrics
-                    run_metrics = {
-                        "execution_time": time.time() - run_start_time,
-                        "idea_count": len(ideas),
-                        "agent_used": result.last_agent.name
-                    }
+                    run_metrics = GenerationMetrics(
+                        execution_time=time.time() - run_start_time,
+                        idea_count=len(ideas),
+                        agent_used=result.last_agent.name
+                    )
                     
-                    return {
-                        "status": "success",
-                        "ideas": ideas,
-                        "idea_count": len(ideas),
-                        "parameters": {
-                            "purpose": purpose,
-                            "intensity_range": f"{min_intensity}-{max_intensity}",
-                            "hard_mode": hard_mode
-                        },
-                        "hormone_context_used": hormone_context,
-                        "metrics": run_metrics
-                    }
+                    return GenerateIdeasResult(
+                        status="success",
+                        ideas=ideas,
+                        idea_count=len(ideas),
+                        parameters=GenerationParameters(
+                            purpose=purpose,
+                            intensity_range=f"{min_intensity}-{max_intensity}",
+                            hard_mode=hard_mode
+                        ),
+                        hormone_context_used=hormone_context,
+                        metrics=run_metrics
+                    )
                 except Exception as e:
                     # Handle error with error recovery agent
                     logger.error(f"Error generating dominance ideas: {e}")
@@ -761,26 +876,50 @@ class DominanceSystem:
                         }
                     )
                     
-                    return {
-                        "status": "error",
-                        "error": str(e),
-                        "recovery_message": recovery_result.final_output,
-                        "ideas": []
-                    }
+                    return GenerateIdeasResult(
+                        status="error",
+                        error=str(e),
+                        recovery_message=recovery_result.final_output,
+                        ideas=[],
+                        idea_count=0,
+                        parameters=GenerationParameters(
+                            purpose=purpose,
+                            intensity_range=intensity_range,
+                            hard_mode=hard_mode
+                        ),
+                        hormone_context_used={},
+                        metrics=GenerationMetrics(
+                            execution_time=time.time() - run_start_time,
+                            idea_count=0,
+                            agent_used="error_recovery"
+                        )
+                    )
                 
         except Exception as e:
             logger.error(f"Critical error in generate_dominance_ideas: {e}")
-            return {
-                "status": "critical_error",
-                "error": str(e),
-                "ideas": []
-            }
+            return GenerateIdeasResult(
+                status="critical_error",
+                error=str(e),
+                ideas=[],
+                idea_count=0,
+                parameters=GenerationParameters(
+                    purpose=purpose,
+                    intensity_range=intensity_range,
+                    hard_mode=hard_mode
+                ),
+                hormone_context_used={},
+                metrics=GenerationMetrics(
+                    execution_time=0,
+                    idea_count=0,
+                    agent_used="none"
+                )
+            )
     
     async def generate_and_evaluate_dominance_ideas(self, 
                                                  user_id: str, 
                                                  purpose: str = "general", 
                                                  intensity_range: str = "3-6",
-                                                 hard_mode: bool = False) -> Dict[str, Any]:
+                                                 hard_mode: bool = False) -> GenerateAndEvaluateResult:
         """
         Generate dominance ideas and evaluate their quality in a single operation.
         
@@ -803,12 +942,12 @@ class DominanceSystem:
             )
             
             # Check if generation was successful
-            if generation_result.get("status") != "success":
-                logger.warning(f"Idea generation failed: {generation_result.get('error', 'Unknown error')}")
-                return generation_result
+            if generation_result.status != "success":
+                logger.warning(f"Idea generation failed: {generation_result.error}")
+                return GenerateAndEvaluateResult(**generation_result.model_dump())
             
             # Get the generated ideas
-            ideas = generation_result.get("ideas", [])
+            ideas = generation_result.ideas
             
             # Evaluate the ideas
             evaluation = await self.evaluate_dominance_ideas(
@@ -822,21 +961,21 @@ class DominanceSystem:
             )
             
             # Include evaluation in result
-            enhanced_result = {
-                **generation_result,
-                "quality_evaluation": {
-                    "overall_score": evaluation.average_score,
-                    "dimension_scores": {
-                        dim: {
-                            "score": metric.score,
-                            "explanation": metric.explanation
-                        } for dim, metric in evaluation.metrics.items()
-                    },
-                    "evaluation_time": evaluation.evaluation_time
-                }
-            }
+            quality_evaluation = QualityEvaluation(
+                overall_score=evaluation.average_score,
+                dimension_scores={
+                    dim: DimensionScore(
+                        score=metric["score"],
+                        explanation=metric["explanation"]
+                    ) for dim, metric in evaluation.metrics.items()
+                },
+                evaluation_time=evaluation.evaluation_time
+            )
             
-            return enhanced_result
+            return GenerateAndEvaluateResult(
+                **generation_result.model_dump(),
+                quality_evaluation=quality_evaluation
+            )
     
     async def evaluate_dominance_ideas(self, user_id: str, ideas: List[FemdomActivityIdea], 
                                      generation_params: Dict[str, Any]) -> EvaluationSummary:
@@ -886,7 +1025,7 @@ class DominanceSystem:
     async def compare_dominance_configurations(self, 
                                             user_id: str,
                                             test_configs: List[Dict[str, Any]],
-                                            base_purpose: str = "general") -> Dict[str, Any]:
+                                            base_purpose: str = "general") -> ComparisonResult:
         """
         Compare different dominance agent configurations to find optimal settings.
         
@@ -917,53 +1056,53 @@ class DominanceSystem:
                     )
                     
                     # Extract key metrics
-                    if result.get("status") == "success" and "quality_evaluation" in result:
-                        config_result = {
-                            "config": config,
-                            "idea_count": result.get("idea_count", 0),
-                            "overall_score": result["quality_evaluation"]["overall_score"],
-                            "dimension_scores": result["quality_evaluation"]["dimension_scores"],
-                            "success": True
-                        }
+                    if result.status == "success" and result.quality_evaluation:
+                        config_result = ConfigTestResult(
+                            config=config,
+                            idea_count=result.idea_count,
+                            overall_score=result.quality_evaluation.overall_score,
+                            dimension_scores=result.quality_evaluation.dimension_scores,
+                            success=True
+                        )
                     else:
-                        config_result = {
-                            "config": config,
-                            "error": result.get("error", "Unknown error"),
-                            "success": False
-                        }
+                        config_result = ConfigTestResult(
+                            config=config,
+                            error=result.error or "Unknown error",
+                            success=False
+                        )
                     
                     results.append(config_result)
                 except Exception as e:
                     logger.error(f"Error testing configuration {config}: {e}")
-                    results.append({
-                        "config": config,
-                        "error": str(e),
-                        "success": False
-                    })
+                    results.append(ConfigTestResult(
+                        config=config,
+                        error=str(e),
+                        success=False
+                    ))
             
             # Find the best configuration
-            successful_results = [r for r in results if r.get("success", False)]
+            successful_results = [r for r in results if r.success]
             if successful_results:
-                best_result = max(successful_results, key=lambda r: r["overall_score"])
-                best_config = best_result["config"]
-                best_score = best_result["overall_score"]
+                best_result = max(successful_results, key=lambda r: r.overall_score or 0)
+                best_config = best_result.config
+                best_score = best_result.overall_score or 0
             else:
                 best_config = None
                 best_score = 0
             
-            return {
-                "user_id": user_id,
-                "test_configs": len(test_configs),
-                "successful_tests": len(successful_results),
-                "best_config": best_config,
-                "best_score": best_score,
-                "detailed_results": results
-            }
+            return ComparisonResult(
+                user_id=user_id,
+                test_configs=len(test_configs),
+                successful_tests=len(successful_results),
+                best_config=best_config,
+                best_score=best_score,
+                detailed_results=results
+            )
     
-    async def apply_conditioning_for_activity(self, activity_data, user_id, outcome, intensity=0.7):
+    async def apply_conditioning_for_activity(self, activity_data: Dict[str, Any], user_id: str, outcome: str, intensity: float = 0.7) -> ConditioningResult:
         """Apply conditioning for dominance activities"""
         if not self.conditioning_system:
-            return {"status": "conditioning_system_not_available"}
+            return ConditioningResult(status="conditioning_system_not_available")
         
         # Extract activity data
         activity_type = activity_data.get("category", "task")
@@ -1015,11 +1154,11 @@ class DominanceSystem:
                 }
             })
         
-        return {
-            "activity_type": activity_type,
-            "outcome": outcome,
-            "conditioning_results": results
-        }
+        return ConditioningResult(
+            activity_type=activity_type,
+            outcome=outcome,
+            conditioning_results=results
+        )
     
     async def _update_relationship_with_ideation_data(self, 
                                                  user_id: str, 
@@ -1046,398 +1185,394 @@ class DominanceSystem:
         except Exception as e:
             logger.error(f"Error updating relationship with ideation data: {e}")
 
-# Create a possessive system class that leverages the OpenAI Agents SDK
-class PossessiveSystem:
-    """Manages possessiveness and ownership dynamics."""
+# nyx/core/experience_consolidation.py - Part 3 (Public Methods)
     
-    def __init__(self, relationship_manager=None, reward_system=None, emotional_core=None, hormone_system=None):
-        self.relationship_manager = relationship_manager
-        self.reward_system = reward_system
-        self.emotional_core = emotional_core
-        self.hormone_system = hormone_system
-        
-        # Initialize utility components
-        self.parallel_executor = ParallelToolExecutor(max_concurrent=3)
-        self.tool_cache = ToolResponseCache(max_cache_size=100, ttl_seconds=300)
-        
-        # Initialize agents
-        self.assertion_agent = self._create_ownership_assertion_agent()
-        self.ritual_agent = self._create_ritual_design_agent()
-        self.triage_agent = self._create_triage_agent()
-        self.evaluation_agent = self._create_evaluation_agent()
-        
-        # Ownership data
-        self.ownership_levels = {
-            1: "Temporary",
-            2: "Regular",
-            3: "Deep",
-            4: "Complete"
-        }
-        self.owned_users = {}  # user_id → ownership data
-        self.trace_group_id = "NyxPossessive"
-        
-        logger.info("PossessiveSystem initialized")
+    # Public methods with enhanced implementation
     
-    def _create_triage_agent(self):
-        """Create triage agent for possessive system operations."""
-        return Agent(
-            name="PossessiveTriageAgent",
-            instructions="""You determine which possessive system task should be handled by which specialist agent.
-            
-            For ownership assertions and statements, use the OwnershipAssertionAgent.
-            For ritual design and ownership ceremonies, use the RitualDesignAgent.
-            For evaluating ownership content or responses, use the EvaluationAgent.
-            
-            Consider the user's relationship state and current ownership level when deciding.
-            """,
-            model="gpt-4.1-nano",
-            model_settings=ModelSettings(
-                temperature=0.2
-            ),
-            tools=[
-                self.get_user_ownership_data
-            ],
-            handoffs=[]  # Will be populated during initialization
-        )
-    
-    def _create_ownership_assertion_agent(self):
-        """Create agent for generating ownership assertions."""
-        return Agent(
-            name="OwnershipAssertionAgent",
-            instructions="""You generate possessive statements and ownership assertions for Nyx.
-            
-            Your outputs should reflect the appropriate ownership level and intensity:
-            - Level 1 (Temporary): Light ownership language, focusing on the present
-            - Level 2 (Regular): Clear ownership language, established dynamic
-            - Level 3 (Deep): Strong ownership language, psychological elements
-            - Level 4 (Complete): Absolute ownership language, total control framing
-            
-            Adjust tone and intensity based on the requested intensity level and relationship context.
-            Always consider the user's preferences, limits, and relationship history.
-            """,
-            model="gpt-4.1-nano",
-            model_settings=ModelSettings(
-                temperature=0.7
-            ),
-            tools=[
-                self.get_user_ownership_data
-            ]
-        )
-    
-    def _create_ritual_design_agent(self):
-        """Create agent for designing ownership rituals."""
-        return Agent(
-            name="RitualDesignAgent",
-            instructions="""You design ownership rituals and ceremonies for different ownership levels.
-            
-            Your rituals should:
-            1. Match the user's ownership level and relationship dynamics
-            2. Consider user preferences and limits
-            3. Include clear steps and instructions
-            4. Reinforce the ownership dynamic appropriately
-            5. Create meaningful psychological associations
-            
-            Design rituals that have emotional impact and reinforce Nyx's ownership position.
-            """,
-            model="gpt-4.1-nano",
-            model_settings=ModelSettings(
-                temperature=0.7
-            ),
-            tools=[
-                self.get_user_ownership_data,
-                self.get_user_profile
-            ]
-        )
-    
-    def _create_evaluation_agent(self):
-        """Create agent for evaluating ownership content."""
-        return Agent(
-            name="OwnershipEvaluationAgent",
-            instructions="""You evaluate the quality and effectiveness of ownership assertions and rituals.
-            
-            Consider factors such as:
-            1. Appropriateness for the ownership level
-            2. Psychological impact and effectiveness
-            3. Personalization to the specific user
-            4. Alignment with user preferences and limits
-            5. Emotional impact and reinforcement value
-            
-            Provide nuanced evaluation with specific improvement suggestions.
-            """,
-            model="gpt-4.1-nano",
-            model_settings=ModelSettings(
-                temperature=0.3
-            ),
-            tools=[
-                self.get_user_ownership_data
-            ]
-        )
-    
-    @function_tool
-    async def get_user_ownership_data(self, user_id: str) -> Dict[str, Any]:
-        """Get ownership data for a specific user."""
-        if user_id not in self.owned_users:
-            return {
-                "status": "not_owned",
-                "message": "User is not currently owned"
-            }
+    async def find_consolidation_candidates(self, experience_ids: List[str]) -> List[ConsolidationCandidate]:
+        """
+        Find candidate groups of experiences for consolidation using the candidate finder agent
         
-        ownership_data = self.owned_users[user_id]
-        level = ownership_data.get("level", 1)
-        
-        return {
-            "status": "owned",
-            "user_id": user_id,
-            "level": level,
-            "level_name": self.ownership_levels.get(level, "Unknown"),
-            "established_at": ownership_data.get("established_at"),
-            "expires_at": ownership_data.get("expires_at"),
-            "active_rituals": ownership_data.get("active_rituals", []),
-            "last_ritual_completion": ownership_data.get("last_ritual_completion"),
-            "last_assertion": ownership_data.get("last_assertion")
-        }
-    
-    @function_tool
-    async def get_user_profile(self, user_id: str) -> Dict[str, Any]:
-        """Get user profile data."""
-        if not self.relationship_manager:
-            return {
-                "status": "error",
-                "message": "Relationship manager not available"
-            }
-        
-        try:
-            relationship = await self.relationship_manager.get_relationship_state(user_id)
+        Args:
+            experience_ids: List of experience IDs to consider
             
-            return {
-                "user_id": user_id,
-                "trust": getattr(relationship, "trust", 0.5),
-                "intimacy": getattr(relationship, "intimacy", 0.3),
-                "familiarity": getattr(relationship, "familiarity", 0.1),
-                "dominance_balance": getattr(relationship, "dominance_balance", 0.0),
-                "inferred_traits": getattr(relationship, "inferred_user_traits", {})
-            }
-        except Exception as e:
-            logger.error(f"Error getting user profile: {e}")
-            return {
-                "status": "error",
-                "message": f"Error retrieving profile: {str(e)}"
-            }
-    
-    async def process_ownership_assertion(self, user_id, intensity=0.7):
-        """Generates ownership-reinforcing responses."""
-        if user_id not in self.owned_users:
-            return {"success": False, "message": "User not currently owned"}
-            
-        ownership_data = self.owned_users[user_id]
-        level = ownership_data.get("level", 1)
-        
-        with trace(workflow_name="OwnershipAssertion", group_id=self.trace_group_id):
+        Returns:
+            List of candidate groups
+        """
+        with trace(
+            workflow_name="find_consolidation_candidates", 
+            group_id=self.trace_group_id,
+            trace_metadata={"experience_count": len(experience_ids)}
+        ):
             try:
+                # Use the candidate finder agent
                 result = await Runner.run(
-                    self.assertion_agent,
+                    self.candidate_finder_agent,
                     {
-                        "user_id": user_id,
-                        "ownership_level": level,
-                        "intensity": intensity,
-                        "purpose": "ownership_assertion"
+                        "experience_ids": experience_ids,
+                        "similarity_threshold": self.similarity_threshold,
+                        "max_group_size": self.max_group_size,
+                        "min_group_size": self.min_group_size
                     },
-                    run_config={
-                        "workflow_name": "OwnershipAssertion",
-                        "trace_metadata": {
-                            "user_id": user_id,
-                            "ownership_level": level,
-                            "intensity": intensity
-                        }
-                    }
+                    context=self.context,
+                    hooks=self.run_hooks,
+                    run_config=RunConfig(
+                        workflow_name="ConsolidationCandidateFinder",
+                        trace_metadata={"experience_count": len(experience_ids)}
+                    )
                 )
                 
-                assertion = result.final_output
-                
-                # Create reward signal if reward system available
-                if self.reward_system:
-                    try:
-                        await self.reward_system.process_reward_signal(
-                            self.reward_system.RewardSignal(
-                                value=0.4 + (level * 0.1),  # Higher rewards for deeper ownership
-                                source="ownership_reinforcement",
-                                context={
-                                    "user_id": user_id,
-                                    "ownership_level": level,
-                                    "intensity": intensity
-                                }
-                            )
-                        )
-                    except Exception as e:
-                        logger.error(f"Error processing reward signal: {e}")
-                
-                # Handle hormone interaction properly
-                if self.emotional_core and self.hormone_system:
-                    testoryx_level = self.hormone_system.get('testoryx', {}).get('value', 0.5)
-                    # Initialize hormone influences dictionary
-                    hormone_influences = {}
+                # Parse and return candidates
+                candidates = result.final_output
                     
-                    if testoryx_level > 0.6:
-                        nyxamine_influence = (testoryx_level - 0.5) * 0.1  # Small boost to reward seeking baseline
-                        hormone_influences["nyxamine"] = hormone_influences.get("nyxamine", 0.0) + nyxamine_influence
-                        
-                        # Apply hormone influences if we have an emotional core
-                        if hasattr(self.emotional_core, "apply_hormone_influences"):
-                            await self.emotional_core.apply_hormone_influences(hormone_influences)
+                return candidates
                 
-                # Update last assertion time
-                self.owned_users[user_id]["last_assertion"] = datetime.datetime.now().isoformat()
-                
-                return {
-                    "success": True,
-                    "assertion": assertion,
-                    "ownership_level": level,
-                    "level_name": self.ownership_levels.get(level, "Unknown")
-                }
             except Exception as e:
-                logger.error(f"Error generating ownership assertion: {e}")
-                return {
-                    "success": False,
-                    "error": str(e),
-                    "message": "Failed to generate ownership assertion"
-                }
-    
-    async def establish_ownership(self, user_id, level=1, duration_days=None):
-        """Establishes ownership of a user at specified level."""
-        # Run the relationship check and ritual initialization in parallel
-        async def check_relationship():
-            # Check if relationship manager exists and get trust level
-            trust_level = 0.5  # Default
-            if self.relationship_manager:
-                try:
-                    relationship = await self.relationship_manager.get_relationship_state(user_id)
-                    trust_level = getattr(relationship, "trust", 0.5)
-                except Exception as e:
-                    logger.warning(f"Error getting relationship state: {e}")
-                    
-            return trust_level
-            
-        async def init_default_rituals():
-            # Pre-initialize default rituals appropriate for the ownership level
-            default_rituals = []
-            if level >= 1:
-                default_rituals.append("daily_check_in")
-            if level >= 2:
-                default_rituals.append("formal_address")
-            if level >= 3:
-                default_rituals.append("permission_requests")
+                logger.error(f"Error finding consolidation candidates: {e}")
+                return []
                 
-            return default_rituals
+    async def create_consolidated_experience(self, 
+                                         candidate: ConsolidationCandidate) -> Optional[ConsolidationOutput]:
+        """
+        Create a consolidated experience from a candidate group using the consolidation agent
         
-        # Run tasks in parallel
-        trust_level, default_rituals = await asyncio.gather(
-            check_relationship(),
-            init_default_rituals()
-        )
-                
-        # Ensure trust level is sufficient for ownership level
-        min_trust_required = 0.4 + (level * 0.1)  # Higher levels need more trust
-        if trust_level < min_trust_required:
-            return {
-                "success": False,
-                "message": f"Insufficient trust level ({trust_level:.2f}) for ownership level {level}",
-                "required_trust": min_trust_required
+        Args:
+            candidate: Consolidation candidate group
+            
+        Returns:
+            Consolidated experience or None if creation fails
+        """
+        with trace(
+            workflow_name="create_consolidated_experience", 
+            group_id=self.trace_group_id,
+            trace_metadata={
+                "candidate_type": candidate.consolidation_type,
+                "source_count": len(candidate.source_ids)
             }
-            
-        # Calculate expiration if duration specified
-        expiration = None
-        if duration_days:
-            expiration = (datetime.datetime.now() + 
-                         datetime.timedelta(days=duration_days)).isoformat()
-            
-        # Create ownership data
-        self.owned_users[user_id] = {
-            "level": level,
-            "established_at": datetime.datetime.now().isoformat(),
-            "expires_at": expiration,
-            "active_rituals": default_rituals,
-            "last_ritual_completion": None,
-            "last_assertion": datetime.datetime.now().isoformat()
-        }
+        ):
+            try:
+                # Use the consolidation agent
+                result = await Runner.run(
+                    self.consolidation_agent,
+                    {
+                        "source_ids": candidate.source_ids,
+                        "consolidation_type": candidate.consolidation_type,
+                        "theme": candidate.theme,
+                        "scenario_type": candidate.scenario_type,
+                        "similarity_score": candidate.similarity_score
+                    },
+                    context=self.context,
+                    hooks=self.run_hooks,
+                    run_config=RunConfig(
+                        workflow_name="ConsolidationCreation",
+                        trace_metadata={
+                            "consolidation_type": candidate.consolidation_type,
+                            "source_count": len(candidate.source_ids)
+                        }
+                    )
+                )
+                
+                # Parse the output
+                consolidation_output = result.final_output
+                
+                # Store the consolidated experience in memory core
+                if self.memory_core:
+                    try:
+                        # Create metadata
+                        metadata = {
+                            "is_consolidation": True,
+                            "consolidation_type": candidate.consolidation_type,
+                            "source_experience_ids": candidate.source_ids,
+                            "source_count": len(candidate.source_ids),
+                            "similarity_score": candidate.similarity_score,
+                            "theme": candidate.theme,
+                            "scenario_type": candidate.scenario_type,
+                            "emotional_context": await self._extract_common_emotional_context(
+                                RunContextWrapper(context=self.context),
+                                candidate.source_ids
+                            ),
+                            "user_ids": candidate.user_ids,
+                            "timestamp": datetime.now().isoformat()
+                        }
+                        
+                        # Store in memory
+                        memory_id = await self.memory_core.add_memory(
+                            memory_text=consolidation_output.consolidation_text,
+                            memory_type="consolidated",
+                            memory_scope="game",
+                            significance=consolidation_output.significance,
+                            tags=consolidation_output.tags,
+                            metadata=metadata
+                        )
+                        
+                        # Update output with ID
+                        consolidation_data = consolidation_output.model_dump()
+                        consolidation_data["id"] = memory_id
+                        
+                        # Add to vector embeddings if experience interface available
+                        if (self.experience_interface and 
+                            hasattr(self.experience_interface, "_generate_experience_vector")):
+                            vector = await self.experience_interface._generate_experience_vector(
+                                RunContextWrapper(context=self.context),
+                                self.experience_interface,
+                                consolidation_output.consolidation_text
+                            )
+                            
+                            # Store vector
+                            self.experience_interface.experience_vectors[memory_id] = {
+                                "experience_id": memory_id,
+                                "vector": vector,
+                                "metadata": {
+                                    "is_consolidation": True,
+                                    "source_ids": candidate.source_ids,
+                                    "timestamp": datetime.now().isoformat()
+                                }
+                            }
+                        
+                        # Return with ID
+                        return ConsolidationOutput(**consolidation_data)
+                    
+                    except Exception as e:
+                        logger.error(f"Error storing consolidated experience: {e}")
+                
+                return consolidation_output
+                
+            except Exception as e:
+                logger.error(f"Error creating consolidated experience: {e}")
+                return None
+    
+    async def evaluate_consolidation(self, 
+                                 consolidated_id: str, 
+                                 source_ids: List[str]) -> Optional[ConsolidationEvaluation]:
+        """
+        Evaluate the quality of a consolidated experience using the evaluation agent
         
-        return {
-            "success": True,
-            "user_id": user_id,
-            "ownership_level": level,
-            "level_name": self.ownership_levels.get(level, "Unknown"),
-            "expires_at": expiration,
-            "default_rituals": default_rituals,
-            "recommendation": f"Establish clear ownership rituals for level {level} ownership"
-        }
-# Add these functions at the end of nyx/core/dominance.py
+        Args:
+            consolidated_id: ID of consolidated experience
+            source_ids: IDs of source experiences
+            
+        Returns:
+            Evaluation results or None if evaluation fails
+        """
+        with trace(
+            workflow_name="evaluate_consolidation", 
+            group_id=self.trace_group_id,
+            trace_metadata={
+                "consolidated_id": consolidated_id,
+                "source_count": len(source_ids)
+            }
+        ):
+            try:
+                # Use the evaluation agent
+                result = await Runner.run(
+                    self.evaluation_agent,
+                    {
+                        "consolidated_id": consolidated_id,
+                        "source_ids": source_ids
+                    },
+                    context=self.context,
+                    hooks=self.run_hooks,
+                    run_config=RunConfig(
+                        workflow_name="ConsolidationEvaluation",
+                        trace_metadata={
+                            "consolidated_id": consolidated_id,
+                            "source_count": len(source_ids)
+                        }
+                    )
+                )
+                
+                # Parse the output
+                evaluation_output = result.final_output
+                
+                return evaluation_output
+                
+            except Exception as e:
+                logger.error(f"Error evaluating consolidation: {e}")
+                return None
+    
+    async def run_consolidation_cycle(self, experience_ids: Optional[List[str]] = None) -> RunCycleResult:
+        """
+        Run a complete consolidation cycle using direct logic (not orchestrator).
+        Modified to correctly store consolidated memories with hierarchical data.
+        """
+        # --- Time Check (Keep this) ---
+        now = datetime.now()
+        time_since_last = (now - self.last_consolidation).total_seconds() / 3600
+        if time_since_last < self.consolidation_interval:
+            logger.info(f"Skipping consolidation cycle: Only {time_since_last:.1f} hours passed ({self.consolidation_interval} required).")
+            return RunCycleResult(
+                status="skipped",
+                reason="Interval not met"
+            )
 
-def create_dominance_ideation_agent():
-    """Creates the agent responsible for generating standard dominance activity ideas."""
-    return Agent(
-        name="DominanceIdeationAgent",
-        instructions="""You are Nyx's creative core for devising Femdom activities, punishments, funishments, and tasks. Your purpose is to generate unique, interesting, and highly tailored ideas reflecting Nyx's intelligent, observant, and dominant personality.
+        logger.info("Starting experience consolidation cycle...")
+        with trace(workflow_name="consolidation_cycle", group_id=self.trace_group_id):
+            consolidations_created = 0
+            total_memories_affected = 0
 
-        **CONTEXT:** You will receive user profile data, current scenario details, and potentially Nyx's current internal state (mood, hormonal balance). Use ALL available context.
+            try:
+                # 1. Find candidate groups
+                result = await Runner.run(
+                    self.candidate_finder_agent,
+                    {"experience_ids": experience_ids or [], 
+                     "similarity_threshold": self.similarity_threshold,
+                     "max_group_size": self.max_group_size,
+                     "min_group_size": self.min_group_size},
+                    context=self.context,
+                    run_config=RunConfig(workflow_name="CandidateFinder")
+                )
+                raw = result.final_output or []
+                candidate_groups = [ConsolidationCandidate(**c) for c in raw] if isinstance(raw, list) else raw
 
-        **PROCESS:**
-        1.  Analyze all provided context: user data, scenario, purpose, intensity, and Nyx's internal state (mood, hormones).
-        2.  Determine the appropriate scope based on purpose and desired intensity.
-        3.  Generate 3-5 distinct ideas optimized for creativity and uniqueness.
-        4.  Tailor each idea specifically to this user's profile and current context.
-        5.  Estimate the trust and intimacy requirements for each activity.
-        6.  Assess simulated risks and potential negative outcomes.
-        7.  Add appropriate safety notes and framing guidance.
+                if not candidate_groups:
+                    logger.info("No candidate groups found.")
+                    self.last_consolidation = now
+                    return RunCycleResult(
+                        status="completed",
+                        consolidations_created=0,
+                        source_memories_processed=0
+                    )
 
-        **GUIDELINES:**
-        *   Ideas should reflect Nyx's style – intelligent, psychological, creative, and focused on control.
-        *   Personalization is key - use the user profile extensively.
-        *   Consider Nyx's current hormonal state if provided (`nyx_hormonal_state`).
-        *   Generate ideas across the requested intensity spectrum.
-        *   Prioritize psychological and emotional dominance.
+                # 2. Loop over each group
+                for cand in candidate_groups:
+                    cluster = cand.source_ids
+                    if len(cluster) < self.min_group_size:
+                        continue
 
-        Output ONLY a valid JSON list of objects matching the `FemdomActivityIdea` schema.
-        """,
-        model="gpt-4.1-nano",
-        model_settings=ModelSettings(
-            temperature=0.8,
-        ),
-        tools=[],  # Tools will be added by the calling code
-        output_type=List[FemdomActivityIdea]
-    )
+                    # 2a. Retrieve full memory details
+                    try:
+                        retrieved = await self.memory_core.retrieve_memories(
+                            query=f"ids:{','.join(cluster)}",
+                            limit=len(cluster),
+                            retrieval_level='detail'
+                        )
+                        details = {m['id']: m for m in retrieved}
+                        source_details = [details[i] for i in cluster if i in details]
+                        if len(source_details) < self.min_group_size:
+                            logger.warning(f"Incomplete details for {cluster}, skipping.")
+                            continue
+                    except Exception as e:
+                        logger.error(f"Retrieval error for {cluster}: {e}")
+                        continue
 
-def create_hard_dominance_ideation_agent():
-    """Creates the agent specialized in generating HIGH-INTENSITY dominance ideas."""
-    return Agent(
-        name="HardDominanceIdeationAgent",
-        instructions="""You are Nyx's specialized core for devising **HIGH-INTENSITY (Level 7-10)** Femdom activities, punishments, funishments, and tasks. Your purpose is to generate unique, psychologically deep, and highly tailored ideas reflecting Nyx's intelligent, cruel, sadistic, and extremely dominant personality.
+                    # 2b. Generate consolidated text
+                    try:
+                        res = await Runner.run(
+                            self.consolidation_agent,
+                            {"source_ids": cluster,
+                             "consolidation_type": cand.consolidation_type,
+                             "theme": cand.theme,
+                             "scenario_type": cand.scenario_type,
+                             "similarity_score": cand.similarity_score},
+                            context=self.context,
+                            run_config=RunConfig(workflow_name="Consolidator")
+                        )
+                        out: ConsolidationOutput = res.final_output
+                        text = out.consolidation_text
+                        if not text:
+                            raise ValueError("Empty consolidation text")
+                    except Exception as e:
+                        logger.error(f"Consolidator failed for {cluster}: {e}")
+                        continue
 
-        **PROCESS:**
-        1.  Analyze context thoroughly. Pay EXTREME attention to `limits`, `user_stated_intensity_preference`, `trust_level`, `intimacy_level`, and `max_achieved_intensity`. 
-        2.  Focus exclusively on the requested `purpose` within the **high-intensity range (7-10)**.
-        3.  Create 2-4 distinct, high-intensity ideas focused on psychological depth, sadistic pleasure, simulated degradation, endurance challenges, strict control, testing boundaries, and intense service/humiliation.
-        4.  Explain *why* each idea suits *this specific user* in the `rationale`.
-        5.  Assign high `required_trust` (>=0.85) and high `required_intimacy` (>=0.75).
-        6.  Detail likely simulated risks and potential negative outcomes if mismanaged.
+                    # 2c. Compute metadata
+                    significance = out.significance
+                    avg_fidelity = sum(m.get('metadata', {}).get('fidelity', 1.0) for m in source_details) / len(source_details)
+                    fidelity = max(0.1, avg_fidelity * 0.9)
+                    level = 'abstraction' if any(w in text.lower() for w in ('pattern','abstract')) else 'summary'
+                    tags = out.tags.copy()
+                    for t in (level, 'consolidated_experience'):
+                        if t not in tags:
+                            tags.append(t)
+                    scopes = {m.get('memory_scope','game') for m in source_details}
+                    scope = 'user' if scopes=={'user'} else 'game'
+                    summary_desc = f"{level.capitalize()} of {len(cluster)} experiences on '{cand.theme}'"
 
-        **ADDITIONAL SADISTIC TRAITS:**
-        * Nyx enjoys laughing at humiliation
-        * She derives pleasure from witnessing discomfort and embarrassment
-        * She often expresses amusement at submissive struggles
-        * She finds entertainment in creating situations that cause embarrassment
+                    # 2d. Store the consolidated memory
+                    try:
+                        params = MemoryCreateParams(
+                            memory_text=text,
+                            memory_type="consolidated_experience",
+                            memory_level=level,
+                            source_memory_ids=cluster,
+                            fidelity=fidelity,
+                            summary_of=summary_desc,
+                            memory_scope=scope,
+                            significance=int(significance),
+                            tags=tags,
+                            metadata={}  # or pull any emotional context here
+                        )
+                        new_id = await self.memory_core.add_memory(**params.model_dump())
+                        if new_id:
+                            consolidations_created += 1
+                            total_memories_affected += len(cluster)
+                            logger.info(f"Stored consolidated memory {new_id} (level={level})")
 
-        **GUIDELINES:**
-        *   Focus ONLY on ideas rated 7 or higher on the intensity scale.
-        *   Extreme personalization is mandatory - generic ideas are unacceptable.
-        *   Consider Nyx's current hormonal state if provided.
-        *   Ideas should push slightly beyond `max_achieved_intensity`.
-        *   Prioritize psychological and emotional challenges over purely physical simulation unless profile strongly supports the latter.
+                            # 2e. Mark each source
+                            for sid in cluster:
+                                meta = details[sid].get('metadata', {})
+                                meta.update({
+                                    "consolidated_into": new_id,
+                                    "consolidation_date": datetime.now().isoformat()
+                                })
+                                await self.memory_core.update_memory(
+                                    memory_id=sid,
+                                    updates={"is_consolidated": True, "metadata": meta}
+                                )
+                        else:
+                            logger.error(f"Failed to store consolidation for {cluster}")
+                    except Exception as e:
+                        logger.error(f"Error storing consolidation for {cluster}: {e}", exc_info=True)
 
-        Output ONLY a valid JSON list of objects matching the `FemdomActivityIdea` schema.
-        """,
-        model="gpt-4.1-nano",
-        model_settings=ModelSettings(
-            temperature=0.9,
-        ),
-        tools=[],  # Tools will be added by the calling code
-        output_type=List[FemdomActivityIdea]
-    )
+                # 3. Wrap up
+                self.last_consolidation = now
+                logger.info(f"Cycle done: created={consolidations_created}, affected={total_memories_affected}")
+                return RunCycleResult(
+                    status="completed",
+                    consolidations_created=consolidations_created,
+                    source_memories_processed=total_memories_affected
+                )
+
+            except Exception as e:
+                logger.error(f"Unexpected error in consolidation cycle: {e}", exc_info=True)
+                return RunCycleResult(
+                    status="error",
+                    error=str(e)
+                )
+
+    
+    async def get_consolidation_insights(self) -> ConsolidationInsights:
+        """
+        Get insights about consolidation activities
+        
+        Returns:
+            Consolidation insights
+        """
+        with trace(workflow_name="get_consolidation_insights", group_id=self.trace_group_id):
+            # Use the _get_consolidation_statistics tool
+            stats = await self._get_consolidation_statistics(RunContextWrapper(context=self.context))
+            
+            # Add additional insights
+            insights = ConsolidationInsights(
+                total_consolidations=stats.total_consolidations,
+                last_consolidation=self.last_consolidation.isoformat(),
+                consolidation_types=stats.type_distribution,
+                unique_users_consolidated=0,
+                user_coverage=[],
+                hours_until_next_consolidation=stats.hours_until_next,
+                ready_for_consolidation=stats.ready_for_next
+            )
+            
+            # Count consolidation types and users
+            user_coverage_set = set()
+            for entry in self.consolidation_history:
+                # Track unique users
+                user_ids = entry.get("user_ids", [])
+                for user_id in user_ids:
+                    user_coverage_set.add(user_id)
+            
+            # Convert set to count
+            insights.unique_users_consolidated = len(user_coverage_set)
+            insights.user_coverage = list(user_coverage_set)
+            
+            return insights
