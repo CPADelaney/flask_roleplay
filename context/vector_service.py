@@ -746,7 +746,8 @@ async def add_entity_tool(
     if request.description:
         data["description"] = request.description
     if request.metadata:
-        data.update(request.metadata)
+        # Convert Pydantic model to dict
+        data.update(request.metadata.dict(exclude_none=True))
     
     await service.batch_queue.put({
         "operation": "add_entity",
