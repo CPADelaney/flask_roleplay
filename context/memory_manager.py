@@ -21,6 +21,12 @@ from context.vector_service import get_vector_service, VectorService
 # Updated import for async connection management
 from db.connection import get_db_connection_context
 
+from context.models import (
+    MemoryMetadata, TimeSpanMetadata,
+    MemorySearchRequest as MemorySearchRequestModel,
+    MemoryAddRequest as MemoryAddRequestModel
+)
+
 logger = logging.getLogger(__name__)
 
 class Memory:
@@ -36,7 +42,7 @@ class Memory:
         access_count: int = 0,
         last_accessed: Optional[datetime] = None,
         tags: Optional[List[str]] = None,
-        metadata: Optional[Dict[str, Any]] = None
+        metadata: Optional[MemoryMetadata] = None
     ):
         self.memory_id = memory_id
         self.content = content
@@ -46,7 +52,7 @@ class Memory:
         self.access_count = access_count
         self.last_accessed = last_accessed or self.created_at
         self.tags = tags or []
-        self.metadata = metadata or {}
+        self.metadata = metadata or MemoryMetadata()
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization"""
@@ -59,7 +65,7 @@ class Memory:
             "access_count": self.access_count,
             "last_accessed": self.last_accessed.isoformat(),
             "tags": self.tags,
-            "metadata": self.metadata
+            "metadata": self.metadata.dict() if self.metadata else {}
         }
     
     @classmethod
@@ -67,6 +73,10 @@ class Memory:
         """Create from dictionary"""
         timestamp = datetime.fromisoformat(data["created_at"]) if isinstance(data["created_at"], str) else data["created_at"]
         last_accessed = datetime.fromisoformat(data["last_accessed"]) if isinstance(data["last_accessed"], str) else data["last_accessed"]
+        
+        # Parse metadata
+        metadata_dict = data.get("metadata", {})
+        metadata = MemoryMetadata(**metadata_dict) if metadata_dict else MemoryMetadata()
         
         memory = cls(
             memory_id=data["memory_id"],
@@ -77,7 +87,7 @@ class Memory:
             access_count=data.get("access_count", 0),
             last_accessed=last_accessed,
             tags=data.get("tags", []),
-            metadata=data.get("metadata", {})
+            metadata=metadata
         )
         return memory
     
@@ -1367,7 +1377,7 @@ async def search_memories_tool(
     mgr = await get_memory_manager(user_id, conversation_id)
     return await mgr._search_memories(request)
 
-@function_tool
+@function_tool(strict=False)
 async def add_memory_tool(
     ctx: RunContextWrapper,
     user_id: int,
@@ -1377,7 +1387,7 @@ async def add_memory_tool(
     mgr = await get_memory_manager(user_id, conversation_id)
     return await mgr._add_memory(request)
 
-@function_tool
+@function_tool(strict=False)
 async def get_memory_tool(
     ctx: RunContextWrapper,
     user_id: int,
@@ -1388,7 +1398,7 @@ async def get_memory_tool(
     mem = await mgr._get_memory(memory_id)
     return MemoryModel.from_memory(mem) if mem else None
 
-@function_tool
+@function_tool(strict=False)
 async def get_recent_memories_tool(
     ctx: RunContextWrapper,
     user_id: int,
@@ -1401,7 +1411,7 @@ async def get_recent_memories_tool(
     mems = await mgr._get_recent_memories(days, memory_types, limit)
     return [MemoryModel.from_memory(m) for m in mems]
 
-@function_tool
+@function_tool(strict=False)
 async def get_memories_by_npc_tool(
     ctx: RunContextWrapper,
     user_id: int,
