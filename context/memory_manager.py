@@ -441,7 +441,7 @@ class MemoryManager:
             metadata_json = None
             if request.metadata:
                 try:
-                    metadata_json = json.dumps(request.metadata.dict())
+                    metadata_json = json.dumps(request.metadata.dict(exclude_none=True))
                 except TypeError:
                     logger.error("Failed to serialize metadata", exc_info=True)
                     metadata_json = "{}"
@@ -1021,7 +1021,7 @@ class MemoryManager:
         values_list = []
         for summary in summaries:
             try:
-                metadata_json = json.dumps(summary.metadata)
+                metadata_json = json.dumps(summary.metadata.dict(exclude_none=True))
             except TypeError:
                 metadata_json = json.dumps({"error": "serialization failed"})
             try:
