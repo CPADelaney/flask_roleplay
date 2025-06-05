@@ -2,11 +2,88 @@
 
 import logging
 from typing import Dict, List, Any, Optional
+from pydantic import BaseModel, Field
 
 from nyx.core.brain.integration_layer import ContextAwareModule
 from nyx.core.brain.context_distribution import SharedContext, ContextUpdate, ContextScope, ContextPriority
 
 logger = logging.getLogger(__name__)
+
+# Pydantic models for structured data
+class NavigationContext(BaseModel, extra="forbid"):
+    """Context for navigation initialization"""
+    navigation_intent_detected: bool
+    intent_type: Optional[str] = None
+    navigator_ready: bool
+    spatial_mapper_available: bool
+
+class NavigationParameters(BaseModel, extra="forbid"):
+    """Parameters for navigation"""
+    destination: Optional[str] = None
+    preferences: Dict[str, str] = Field(default_factory=dict)
+    constraints: List[str] = Field(default_factory=list)
+
+class NavigationResult(BaseModel, extra="forbid"):
+    """Result of navigation processing"""
+    success: bool
+    route_id: Optional[str] = None
+    distance: Optional[float] = None
+    message: Optional[str] = None
+    error: Optional[str] = None
+    contextual_notes: List[str] = Field(default_factory=list)
+
+class NavigationAnalysis(BaseModel, extra="forbid"):
+    """Analysis of navigation context"""
+    navigation_feasibility: 'NavigationFeasibility'
+    route_options: List['RouteOption']
+    contextual_preferences: 'ContextualPreferences'
+    navigation_risks: List['NavigationRisk']
+
+class NavigationFeasibility(BaseModel, extra="forbid"):
+    """Feasibility analysis for navigation"""
+    can_navigate: bool
+    confidence: float
+    limiting_factors: List[str] = Field(default_factory=list)
+
+class RouteOption(BaseModel, extra="forbid"):
+    """Available route option"""
+    route_id: str
+    distance: float
+    estimated_time: float
+    usage_count: int
+
+class ContextualPreferences(BaseModel, extra="forbid"):
+    """Contextual navigation preferences"""
+    speed_priority: float = 0.5
+    safety_priority: float = 0.5
+    landmark_preference: float = 0.5
+    exploration_tendency: float = 0.5
+
+class NavigationRisk(BaseModel, extra="forbid"):
+    """Navigation risk information"""
+    risk_type: str
+    severity: str
+    description: str
+
+class NavigationSynthesis(BaseModel, extra="forbid"):
+    """Synthesis for navigation guidance"""
+    navigation_recommendations: List[str]
+    contextual_directions: List[str]
+    landmark_guidance: List[str]
+    safety_considerations: List[str]
+
+class ProcessInputResult(BaseModel, extra="forbid"):
+    """Result of processing navigation input"""
+    navigation_processing: bool
+    success: Optional[bool] = None
+    route_id: Optional[str] = None
+    distance: Optional[float] = None
+    error: Optional[str] = None
+    route_found: Optional[bool] = None
+    message: Optional[str] = None
+    path_analysis: Optional[str] = None
+    description: Optional[Dict[str, Any]] = None  # This may need refinement
+    memory_note: Optional[str] = None
 
 class ContextAwareSpatialNavigatorAgent(ContextAwareModule):
     """
@@ -30,14 +107,16 @@ class ContextAwareSpatialNavigatorAgent(ContextAwareModule):
         nav_intent = self._detect_navigation_intent(context.user_input)
         
         # Send initial navigation context
+        nav_context = NavigationContext(
+            navigation_intent_detected=nav_intent is not None,
+            intent_type=nav_intent,
+            navigator_ready=True,
+            spatial_mapper_available=self.original_navigator.spatial_mapper is not None
+        )
+        
         await self.send_context_update(
             update_type="navigation_context_initialized",
-            data={
-                "navigation_intent_detected": nav_intent is not None,
-                "intent_type": nav_intent,
-                "navigator_ready": True,
-                "spatial_mapper_available": self.original_navigator.spatial_mapper is not None
-            },
+            data=nav_context.model_dump(),
             priority=ContextPriority.NORMAL
         )
     
@@ -66,13 +145,13 @@ class ContextAwareSpatialNavigatorAgent(ContextAwareModule):
             memory_data = update.data
             await self._incorporate_memory_hints(memory_data)
     
-    async def process_input(self, context: SharedContext) -> Dict[str, Any]:
+    async def process_input(self, context: SharedContext) -> ProcessInputResult:
         """Process navigation requests with context awareness"""
         # Detect navigation intent
         nav_intent = self._detect_navigation_intent(context.user_input)
         
         if not nav_intent:
-            return {"navigation_processing": False}
+            return ProcessInputResult(navigation_processing=False)
         
         # Get cross-module context
         messages = await self.get_cross_module_messages()
@@ -81,51 +160,54 @@ class ContextAwareSpatialNavigatorAgent(ContextAwareModule):
         nav_params = await self._extract_navigation_parameters(context, messages)
         
         # Process navigation based on intent
-        result = {}
+        result = ProcessInputResult(navigation_processing=True)
         
         if nav_intent == "navigate_to":
-            result = await self._process_navigation_request(nav_params, context, messages)
+            nav_result = await self._process_navigation_request(nav_params, context, messages)
+            result.model_copy(update=nav_result)
         elif nav_intent == "find_path":
-            result = await self._process_pathfinding_request(nav_params, context, messages)
+            path_result = await self._process_pathfinding_request(nav_params, context, messages)
+            result.model_copy(update=path_result)
         elif nav_intent == "describe_location":
-            result = await self._process_location_description(nav_params, context, messages)
+            desc_result = await self._process_location_description(nav_params, context, messages)
+            result.model_copy(update=desc_result)
         
         # Send navigation result update
-        if result.get("success"):
+        if result.success:
             await self.send_context_update(
                 update_type="navigation_processed",
                 data={
-                    "destination": nav_params.get("destination"),
-                    "route_found": result.get("route_id") is not None,
-                    "distance": result.get("distance")
+                    "destination": nav_params.destination,
+                    "route_found": result.route_id is not None,
+                    "distance": result.distance
                 }
             )
         
         return result
     
-    async def process_analysis(self, context: SharedContext) -> Dict[str, Any]:
+    async def process_analysis(self, context: SharedContext) -> NavigationAnalysis:
         """Analyze navigation context and options"""
         messages = await self.get_cross_module_messages()
         
-        analysis = {
-            "navigation_feasibility": await self._analyze_navigation_feasibility(context, messages),
-            "route_options": await self._analyze_route_options(context),
-            "contextual_preferences": await self._analyze_contextual_preferences(messages),
-            "navigation_risks": await self._analyze_navigation_risks(context)
-        }
+        analysis = NavigationAnalysis(
+            navigation_feasibility=await self._analyze_navigation_feasibility(context, messages),
+            route_options=await self._analyze_route_options(context),
+            contextual_preferences=await self._analyze_contextual_preferences(messages),
+            navigation_risks=await self._analyze_navigation_risks(context)
+        )
         
         return analysis
     
-    async def process_synthesis(self, context: SharedContext) -> Dict[str, Any]:
+    async def process_synthesis(self, context: SharedContext) -> NavigationSynthesis:
         """Synthesize navigation guidance for response"""
         messages = await self.get_cross_module_messages()
         
-        synthesis = {
-            "navigation_recommendations": await self._synthesize_recommendations(context, messages),
-            "contextual_directions": await self._synthesize_contextual_directions(context, messages),
-            "landmark_guidance": await self._synthesize_landmark_guidance(context),
-            "safety_considerations": await self._synthesize_safety_considerations(context, messages)
-        }
+        synthesis = NavigationSynthesis(
+            navigation_recommendations=await self._synthesize_recommendations(context, messages),
+            contextual_directions=await self._synthesize_contextual_directions(context, messages),
+            landmark_guidance=await self._synthesize_landmark_guidance(context),
+            safety_considerations=await self._synthesize_safety_considerations(context, messages)
+        )
         
         return synthesis
     
@@ -207,13 +289,9 @@ class ContextAwareSpatialNavigatorAgent(ContextAwareModule):
             # Would use hints to influence route selection
             logger.debug(f"Navigation hint from memory: {hint}")
     
-    async def _extract_navigation_parameters(self, context: SharedContext, messages: Dict) -> Dict[str, Any]:
+    async def _extract_navigation_parameters(self, context: SharedContext, messages: Dict) -> NavigationParameters:
         """Extract navigation parameters from context"""
-        params = {
-            "destination": None,
-            "preferences": {},
-            "constraints": []
-        }
+        params = NavigationParameters()
         
         # Extract destination from input
         input_lower = context.user_input.lower()
@@ -226,7 +304,7 @@ class ContextAwareSpatialNavigatorAgent(ContextAwareModule):
                 remaining = context.user_input[idx:].strip()
                 if remaining:
                     # Take the rest as destination
-                    params["destination"] = remaining.split('.')[0].strip()
+                    params.destination = remaining.split('.')[0].strip()
                     break
         
         # Check for emotional preferences
@@ -236,15 +314,15 @@ class ContextAwareSpatialNavigatorAgent(ContextAwareModule):
                     if msg.get("type") == "emotional_state_update":
                         emotional_state = msg.get("data", {}).get("emotional_state", {})
                         if emotional_state.get("Anxiety", 0) > 0.5:
-                            params["preferences"]["prefer_landmarks"] = True
-                            params["preferences"]["avoid_complex"] = True
+                            params.preferences["prefer_landmarks"] = "true"
+                            params.preferences["avoid_complex"] = "true"
         
         return params
     
-    async def _process_navigation_request(self, nav_params: Dict[str, Any], 
+    async def _process_navigation_request(self, nav_params: NavigationParameters, 
                                         context: SharedContext, messages: Dict) -> Dict[str, Any]:
         """Process a navigation request with context"""
-        destination = nav_params.get("destination")
+        destination = nav_params.destination
         
         if not destination:
             return {"success": False, "error": "No destination specified"}
@@ -273,10 +351,10 @@ class ContextAwareSpatialNavigatorAgent(ContextAwareModule):
         else:
             return {"success": False, "error": result.message}
     
-    async def _process_pathfinding_request(self, nav_params: Dict[str, Any],
+    async def _process_pathfinding_request(self, nav_params: NavigationParameters,
                                          context: SharedContext, messages: Dict) -> Dict[str, Any]:
         """Process a pathfinding request"""
-        destination = nav_params.get("destination")
+        destination = nav_params.destination
         
         if not destination:
             return {"success": False, "error": "No destination specified"}
@@ -292,7 +370,7 @@ class ContextAwareSpatialNavigatorAgent(ContextAwareModule):
         
         return {"success": False, "error": "Spatial mapper not available"}
     
-    async def _process_location_description(self, nav_params: Dict[str, Any],
+    async def _process_location_description(self, nav_params: NavigationParameters,
                                           context: SharedContext, messages: Dict) -> Dict[str, Any]:
         """Process a location description request"""
         # Use the navigator's describe_surroundings function
@@ -319,19 +397,19 @@ class ContextAwareSpatialNavigatorAgent(ContextAwareModule):
             "description": description_dict
         }
     
-    async def _analyze_navigation_feasibility(self, context: SharedContext, messages: Dict) -> Dict[str, Any]:
+    async def _analyze_navigation_feasibility(self, context: SharedContext, messages: Dict) -> NavigationFeasibility:
         """Analyze feasibility of navigation"""
-        feasibility = {
-            "can_navigate": True,
-            "confidence": 1.0,
-            "limiting_factors": []
-        }
+        feasibility = NavigationFeasibility(
+            can_navigate=True,
+            confidence=1.0,
+            limiting_factors=[]
+        )
         
         # Check if spatial mapper is available
         if not self.original_navigator.spatial_mapper:
-            feasibility["can_navigate"] = False
-            feasibility["confidence"] = 0.0
-            feasibility["limiting_factors"].append("No spatial map available")
+            feasibility.can_navigate = False
+            feasibility.confidence = 0.0
+            feasibility.limiting_factors.append("No spatial map available")
         
         # Check emotional factors
         for module_name, module_messages in messages.items():
@@ -340,12 +418,12 @@ class ContextAwareSpatialNavigatorAgent(ContextAwareModule):
                     if msg.get("type") == "emotional_state_update":
                         emotional_state = msg.get("data", {}).get("emotional_state", {})
                         if emotional_state.get("Fear", 0) > 0.8:
-                            feasibility["confidence"] *= 0.5
-                            feasibility["limiting_factors"].append("High fear affecting navigation")
+                            feasibility.confidence *= 0.5
+                            feasibility.limiting_factors.append("High fear affecting navigation")
         
         return feasibility
     
-    async def _analyze_route_options(self, context: SharedContext) -> List[Dict[str, Any]]:
+    async def _analyze_route_options(self, context: SharedContext) -> List[RouteOption]:
         """Analyze available route options"""
         options = []
         
@@ -356,23 +434,18 @@ class ContextAwareSpatialNavigatorAgent(ContextAwareModule):
             
             if map_obj:
                 for route_id, route in map_obj.routes.items():
-                    options.append({
-                        "route_id": route_id,
-                        "distance": route.distance,
-                        "estimated_time": route.estimated_time,
-                        "usage_count": route.usage_count
-                    })
+                    options.append(RouteOption(
+                        route_id=route_id,
+                        distance=route.distance,
+                        estimated_time=route.estimated_time,
+                        usage_count=route.usage_count
+                    ))
         
         return options[:5]  # Top 5 options
     
-    async def _analyze_contextual_preferences(self, messages: Dict) -> Dict[str, Any]:
+    async def _analyze_contextual_preferences(self, messages: Dict) -> ContextualPreferences:
         """Analyze contextual navigation preferences"""
-        preferences = {
-            "speed_priority": 0.5,
-            "safety_priority": 0.5,
-            "landmark_preference": 0.5,
-            "exploration_tendency": 0.5
-        }
+        preferences = ContextualPreferences()
         
         # Adjust based on module contexts
         for module_name, module_messages in messages.items():
@@ -382,11 +455,11 @@ class ContextAwareSpatialNavigatorAgent(ContextAwareModule):
                         # Urgent goals increase speed priority
                         goal_priorities = msg.get("data", {}).get("goal_priorities", {})
                         max_priority = max(goal_priorities.values()) if goal_priorities else 0
-                        preferences["speed_priority"] = min(1.0, 0.5 + max_priority * 0.5)
+                        preferences.speed_priority = min(1.0, 0.5 + max_priority * 0.5)
         
         return preferences
     
-    async def _analyze_navigation_risks(self, context: SharedContext) -> List[Dict[str, Any]]:
+    async def _analyze_navigation_risks(self, context: SharedContext) -> List[NavigationRisk]:
         """Analyze potential navigation risks"""
         risks = []
         
@@ -397,11 +470,11 @@ class ContextAwareSpatialNavigatorAgent(ContextAwareModule):
                 map_obj = self.original_navigator.spatial_mapper.maps.get(map_id)
                 
                 if map_obj and map_obj.completeness < 0.5:
-                    risks.append({
-                        "risk_type": "incomplete_map",
-                        "severity": "medium",
-                        "description": "Map is less than 50% complete"
-                    })
+                    risks.append(NavigationRisk(
+                        risk_type="incomplete_map",
+                        severity="medium",
+                        description="Map is less than 50% complete"
+                    ))
         
         return risks
     
@@ -468,3 +541,10 @@ class ContextAwareSpatialNavigatorAgent(ContextAwareModule):
     def __getattr__(self, name):
         """Delegate any missing methods to the original navigator"""
         return getattr(self.original_navigator, name)
+
+# Update model forward references
+NavigationAnalysis.model_rebuild()
+NavigationFeasibility.model_rebuild()
+RouteOption.model_rebuild()
+ContextualPreferences.model_rebuild()
+NavigationRisk.model_rebuild()
