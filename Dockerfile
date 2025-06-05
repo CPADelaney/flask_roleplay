@@ -10,14 +10,33 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     default-libmysqlclient-dev \
     libpq-dev \
     git \
+    curl \
  && apt-get clean \
  && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements first (for better caching)
-COPY requirements.txt .
+# Install uv for faster pip operations
+RUN pip install uv
 
-# Install Python dependencies globally (don't use --user flag with root)
-RUN pip install --no-cache-dir -r requirements.txt
+# Copy constraints file first
+COPY constraints.txt .
+
+# Install heavy/stable dependencies first (better layer caching)
+RUN --mount=type=cache,target=/root/.cache/pip \
+    uv pip install --system \
+    numpy==2.1.3 \
+    pandas==2.2.3 \
+    torch==2.7.0 \
+    tensorflow==2.19.0
+
+# Copy requirements and install remaining dependencies
+COPY requirements.txt .
+RUN --mount=type=cache,target=/root/.cache/pip \
+    uv pip install --system \
+    -c constraints.txt \
+    -r requirements.txt \
+    --verbose
+
+# Download spacy model
 RUN python -m spacy download en_core_web_sm
 
 # Copy the application code
@@ -29,6 +48,4 @@ RUN chmod +x entrypoint.sh
 # Expose the port
 EXPOSE 8080
 
-# Choose either ENTRYPOINT or CMD, not both
-# Using ENTRYPOINT makes the container act like an executable
 ENTRYPOINT ["/app/entrypoint.sh"]
