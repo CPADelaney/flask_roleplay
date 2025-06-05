@@ -157,16 +157,6 @@ class MemoryModel(BaseModel):
 MemorySearchRequest = MemorySearchRequestModel
 MemoryAddRequest = MemoryAddRequestModel
 
-
-class MemorySearchRequest(BaseModel):
-    """Request model for memory search"""
-    query_text: str
-    memory_types: Optional[List[str]] = None
-    tags: Optional[List[str]] = None
-    limit: int = 5
-    use_vector: bool = True
-
-
 class MemorySearchResult(BaseModel):
     """Result model for memory search"""
     memories: List[MemoryModel] = []
@@ -174,16 +164,6 @@ class MemorySearchResult(BaseModel):
     total_found: int
     vector_search_used: bool
     search_time_ms: float
-
-
-class MemoryAddRequest(BaseModel):
-    """Request model for adding a memory"""
-    content: str
-    memory_type: str = "observation"
-    importance: Optional[float] = None
-    tags: Optional[List[str]] = None
-    metadata: Optional[Dict[str, Any]] = None
-    store_vector: bool = True
 
 
 class MemoryAddResult(BaseModel):
