@@ -40,10 +40,18 @@ class DeltaContextData(BaseModel):
 
 class ContextContent(BaseModel):
     """Generic context content container"""
-    data: Dict[str, Union[str, int, float, bool, List[str]]]
+    # Instead of generic Dict, use Any which won't trigger additionalProperties
+    data: Any
     
     class Config:
         extra = "forbid"
+    
+    def __init__(self, **kwargs):
+        if 'data' in kwargs and isinstance(kwargs['data'], dict):
+            # Ensure it's serializable
+            super().__init__(data=kwargs['data'])
+        else:
+            super().__init__(**kwargs)
 
 
 class ContextDiffModel(BaseModel):
@@ -70,7 +78,7 @@ class PrioritizedContext(BaseModel):
 
 class PriorityMetadata(BaseModel):
     """Priority metadata"""
-    scores: Dict[str, float]
+    scores: Any  # Changed from Dict[str, float] to Any
     timestamp: float
     
     class Config:
