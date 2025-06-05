@@ -5,7 +5,7 @@ Pydantic models for context data using the OpenAI Agents SDK
 
 from pydantic import BaseModel, Field
 from typing import Dict, List, Any, Optional, Union
-
+from __future__ import annotations
 
 # Base metadata models
 class BaseMetadata(BaseModel):
