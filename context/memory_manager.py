@@ -90,7 +90,7 @@ class Memory:
             metadata=metadata
         )
         return memory
-    
+
     def access(self) -> None:
         """Record an access to this memory"""
         self.access_count += 1
@@ -135,7 +135,7 @@ class MemoryModel(BaseModel):
     access_count: int = 0
     last_accessed: str
     tags: List[str] = []
-    metadata: Dict[str, Any] = {}
+    metadata: MemoryMetadata = Field(default_factory=MemoryMetadata)
     
     @classmethod
     def from_memory(cls, memory: Memory) -> 'MemoryModel':
@@ -149,8 +149,13 @@ class MemoryModel(BaseModel):
             access_count=memory.access_count,
             last_accessed=memory.last_accessed.isoformat(),
             tags=memory.tags,
-            metadata=memory.metadata
+            metadata=memory.metadata if memory.metadata else MemoryMetadata()
         )
+
+
+# Use the imported models from context.models
+MemorySearchRequest = MemorySearchRequestModel
+MemoryAddRequest = MemoryAddRequestModel
 
 
 class MemorySearchRequest(BaseModel):
@@ -425,17 +430,18 @@ class MemoryManager:
                 content=request.content,
                 memory_type=request.memory_type,
                 tags=request.tags or [],
-                metadata=request.metadata or {}
+                metadata=request.metadata or MemoryMetadata()
             )
             
             calculated_importance = memory.calculate_importance()
             final_importance = request.importance if request.importance is not None else calculated_importance
             memory.importance = final_importance
     
+            # Serialize metadata properly
             metadata_json = None
             if request.metadata:
                 try:
-                    metadata_json = json.dumps(request.metadata)
+                    metadata_json = json.dumps(request.metadata.dict())
                 except TypeError:
                     logger.error("Failed to serialize metadata", exc_info=True)
                     metadata_json = "{}"
@@ -949,20 +955,26 @@ class MemoryManager:
             summary_id = f"summary_{key}_{datetime.now().timestamp()}"
             content = self._generate_summary_content(top_memories)
             importance = self._calculate_group_importance(top_memories)
+            
+            # Create metadata with TimeSpanMetadata
+            time_span = TimeSpanMetadata(
+                start=min(m.created_at for m in group_list).isoformat(),
+                end=max(m.created_at for m in group_list).isoformat()
+            )
+            
+            metadata = MemoryMetadata(
+                group_key=key,
+                memory_count=len(group_list),
+                time_span=time_span
+            )
+            
             summary = Memory(
                 memory_id=summary_id,
                 content=content,
                 memory_type="summary",
                 importance=importance,
                 created_at=datetime.now(),
-                metadata={
-                    "group_key": key,
-                    "memory_count": len(group_list),
-                    "time_span": {
-                        "start": min(m.created_at for m in group_list).isoformat(),
-                        "end": max(m.created_at for m in group_list).isoformat()
-                    }
-                }
+                metadata=metadata
             )
             summaries.append(summary)
         return summaries
@@ -1105,12 +1117,13 @@ class MemoryManager:
         logger.debug("Memory indices built.")
 
     def _parse_journal_row(self, row) -> Memory:
-        metadata = {}
+        metadata = None
         if row["entry_metadata"]:
             try:
-                metadata = json.loads(row["entry_metadata"])
-            except (json.JSONDecodeError, TypeError):
-                pass
+                metadata_dict = json.loads(row["entry_metadata"])
+                metadata = MemoryMetadata(**metadata_dict)
+            except (json.JSONDecodeError, TypeError, ValidationError):
+                metadata = MemoryMetadata()
         
         tags = []
         if row["tags"]:
@@ -1377,7 +1390,7 @@ async def search_memories_tool(
     mgr = await get_memory_manager(user_id, conversation_id)
     return await mgr._search_memories(request)
 
-@function_tool(strict=False)
+@function_tool
 async def add_memory_tool(
     ctx: RunContextWrapper,
     user_id: int,
@@ -1387,7 +1400,7 @@ async def add_memory_tool(
     mgr = await get_memory_manager(user_id, conversation_id)
     return await mgr._add_memory(request)
 
-@function_tool(strict=False)
+@function_tool
 async def get_memory_tool(
     ctx: RunContextWrapper,
     user_id: int,
@@ -1398,7 +1411,7 @@ async def get_memory_tool(
     mem = await mgr._get_memory(memory_id)
     return MemoryModel.from_memory(mem) if mem else None
 
-@function_tool(strict=False)
+@function_tool
 async def get_recent_memories_tool(
     ctx: RunContextWrapper,
     user_id: int,
@@ -1411,7 +1424,7 @@ async def get_recent_memories_tool(
     mems = await mgr._get_recent_memories(days, memory_types, limit)
     return [MemoryModel.from_memory(m) for m in mems]
 
-@function_tool(strict=False)
+@function_tool
 async def get_memories_by_npc_tool(
     ctx: RunContextWrapper,
     user_id: int,
