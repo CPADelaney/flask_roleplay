@@ -84,7 +84,7 @@ httpx==0.28.1
 orjson==3.10.18
 python-dateutil==2.8.2
 pytz==2023.3
-tenacity==8.2.3
+tenacity==9.1.2
 
 # Other specific versions
 jax==0.6.0
