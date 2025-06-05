@@ -12,7 +12,7 @@ from collections import defaultdict
 
 # Agent SDK imports
 from agents import Agent, function_tool, RunContextWrapper, trace
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from context.unified_cache import context_cache
 from context.context_config import get_config
