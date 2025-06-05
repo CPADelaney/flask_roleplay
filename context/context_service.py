@@ -940,21 +940,7 @@ async def validate_context_budget_tool(
     return await service._validate_context_budget(context, context_budget)
 
 
-@function_tool
-async def run_context_maintenance_tool(
-    ctx: RunContextWrapper
-) -> Dict[str, Any]:
-    """
-    Standalone tool: run maintenance tasks 
-    (calls the private method _run_maintenance inside the ContextService).
-    """
-    user_id = ctx.get("user_id", 0)
-    conversation_id = ctx.get("conversation_id", 0)
-    service = await get_context_service(user_id, conversation_id)
-    return await service._run_maintenance()
-
-
-@function_tool
+@function_tool(strict=False)
 async def get_base_context_tool(
     ctx: RunContextWrapper,
     location: Optional[str] = None
@@ -967,6 +953,46 @@ async def get_base_context_tool(
     conversation_id = ctx.get("conversation_id", 0)
     service = await get_context_service(user_id, conversation_id)
     return await service._get_base_context(location)
+
+@function_tool(strict=False)
+async def get_narrative_summaries_tool(
+    ctx: RunContextWrapper,
+    input_text: str
+) -> Dict[str, Any]:
+    """
+    Standalone tool: get summarized narratives from `_get_narrative_summaries`.
+    """
+    user_id = ctx.get("user_id", 0)
+    conversation_id = ctx.get("conversation_id", 0)
+    service = await get_context_service(user_id, conversation_id)
+    return await service._get_narrative_summaries(input_text)
+
+@function_tool(strict=False)
+async def trim_to_budget_tool(
+    ctx: RunContextWrapper,
+    context: Dict[str, Any],
+    budget: int
+) -> Dict[str, Any]:
+    """
+    Standalone tool: trim context to fit within `budget` tokens.
+    """
+    user_id = ctx.get("user_id", 0)
+    conversation_id = ctx.get("conversation_id", 0)
+    service = await get_context_service(user_id, conversation_id)
+    return await service._trim_to_budget(context, budget)
+
+@function_tool(strict=False)
+async def run_context_maintenance_tool(
+    ctx: RunContextWrapper
+) -> Dict[str, Any]:
+    """
+    Standalone tool: run maintenance tasks 
+    (calls the private method _run_maintenance inside the ContextService).
+    """
+    user_id = ctx.get("user_id", 0)
+    conversation_id = ctx.get("conversation_id", 0)
+    service = await get_context_service(user_id, conversation_id)
+    return await service._run_maintenance()
 
 
 @function_tool
@@ -1012,35 +1038,6 @@ async def get_quest_information_tool(
     conversation_id = ctx.get("conversation_id", 0)
     service = await get_context_service(user_id, conversation_id)
     return await service._get_quest_information()
-
-
-@function_tool
-async def get_narrative_summaries_tool(
-    ctx: RunContextWrapper,
-    input_text: str
-) -> Dict[str, Any]:
-    """
-    Standalone tool: get summarized narratives from `_get_narrative_summaries`.
-    """
-    user_id = ctx.get("user_id", 0)
-    conversation_id = ctx.get("conversation_id", 0)
-    service = await get_context_service(user_id, conversation_id)
-    return await service._get_narrative_summaries(input_text)
-
-
-@function_tool
-async def trim_to_budget_tool(
-    ctx: RunContextWrapper,
-    context: Dict[str, Any],
-    budget: int
-) -> Dict[str, Any]:
-    """
-    Standalone tool: trim context to fit within `budget` tokens.
-    """
-    user_id = ctx.get("user_id", 0)
-    conversation_id = ctx.get("conversation_id", 0)
-    service = await get_context_service(user_id, conversation_id)
-    return await service._trim_to_budget(context, budget)
 
 
 # ---------------------------------------------------------------------
