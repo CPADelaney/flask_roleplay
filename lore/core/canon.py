@@ -552,3 +552,161 @@ async def find_or_create_conflict(
     )
     
     return conflict_id
+
+# lore/core/canon.py - Additional functions needed
+
+async def find_or_create_cultural_element(
+    ctx, conn, 
+    name: str, 
+    element_type: str, 
+    description: str,
+    practiced_by: List[str],
+    significance: int,
+    historical_origin: str
+) -> int:
+    """Find or create a cultural element with semantic matching."""
+    embed_text = f"{name} {element_type} {description}"
+    
+    create_data = {
+        'name': name,
+        'element_type': element_type,
+        'description': description,
+        'practiced_by': practiced_by,
+        'significance': significance,
+        'historical_origin': historical_origin
+    }
+    
+    search_fields = {
+        'name': name,
+        'element_type': element_type,
+        'name_field': 'name'
+    }
+    
+    return await find_or_create_entity(
+        ctx=ctx,
+        conn=conn,
+        entity_type="cultural_element",
+        entity_name=name,
+        search_fields=search_fields,
+        create_data=create_data,
+        table_name="CulturalElements",
+        embedding_text=embed_text,
+        similarity_threshold=0.85
+    )
+
+async def find_or_create_culinary_tradition(
+    ctx, conn,
+    name: str,
+    nation_origin: int,
+    description: str,
+    **kwargs
+) -> int:
+    """Find or create a culinary tradition."""
+    embed_text = f"{name} {description} cuisine"
+    
+    create_data = {
+        'name': name,
+        'nation_origin': nation_origin,
+        'description': description,
+        'ingredients': kwargs.get('ingredients', []),
+        'preparation': kwargs.get('preparation', ''),
+        'cultural_significance': kwargs.get('cultural_significance', ''),
+        'adopted_by': kwargs.get('adopted_by', [])
+    }
+    
+    search_fields = {
+        'name': name,
+        'name_field': 'name'
+    }
+    
+    return await find_or_create_entity(
+        ctx=ctx,
+        conn=conn,
+        entity_type="culinary_tradition",
+        entity_name=name,
+        search_fields=search_fields,
+        create_data=create_data,
+        table_name="CulinaryTraditions",
+        embedding_text=embed_text,
+        similarity_threshold=0.90
+    )
+
+async def find_or_create_social_custom(
+    ctx, conn,
+    name: str,
+    nation_origin: int,
+    description: str,
+    **kwargs
+) -> int:
+    """Find or create a social custom."""
+    embed_text = f"{name} {description} custom"
+    
+    create_data = {
+        'name': name,
+        'nation_origin': nation_origin,
+        'description': description,
+        'context': kwargs.get('context', 'social'),
+        'formality_level': kwargs.get('formality_level', 'medium'),
+        'adopted_by': kwargs.get('adopted_by', []),
+        'adoption_date': kwargs.get('adoption_date', datetime.now())
+    }
+    
+    search_fields = {
+        'name': name,
+        'name_field': 'name'
+    }
+    
+    return await find_or_create_entity(
+        ctx=ctx,
+        conn=conn,
+        entity_type="social_custom",
+        entity_name=name,
+        search_fields=search_fields,
+        create_data=create_data,
+        table_name="SocialCustoms",
+        embedding_text=embed_text,
+        similarity_threshold=0.85
+    )
+
+# Helper functions to add nations to existing elements
+
+async def add_nation_to_cultural_element(ctx, conn, element_id: int, nation_ref: str) -> None:
+    """Add a nation to the practiced_by array of a cultural element."""
+    await conn.execute("""
+        UPDATE CulturalElements
+        SET practiced_by = array_append(practiced_by, $1)
+        WHERE id = $2 AND NOT ($1 = ANY(practiced_by))
+    """, nation_ref, element_id)
+
+async def add_nation_to_culinary_tradition(ctx, conn, tradition_id: int, nation_id: int) -> None:
+    """Add a nation to the adopted_by array of a culinary tradition."""
+    await conn.execute("""
+        UPDATE CulinaryTraditions
+        SET adopted_by = array_append(adopted_by, $1)
+        WHERE id = $2 AND NOT ($1 = ANY(adopted_by))
+    """, nation_id, tradition_id)
+
+async def add_nation_to_social_custom(ctx, conn, custom_id: int, nation_id: int) -> None:
+    """Add a nation to the adopted_by array of a social custom."""
+    await conn.execute("""
+        UPDATE SocialCustoms
+        SET adopted_by = array_append(adopted_by, $1)
+        WHERE id = $2 AND NOT ($1 = ANY(adopted_by))
+    """, nation_id, custom_id)
+
+async def create_cultural_exchange(ctx, conn, **kwargs) -> int:
+    """Create a cultural exchange record."""
+    return await conn.fetchval("""
+        INSERT INTO CulturalExchanges (
+            nation1_id, nation2_id, exchange_type, 
+            exchange_details, timestamp
+        )
+        VALUES ($1, $2, $3, $4, $5)
+        RETURNING id
+    """, 
+        kwargs['nation1_id'],
+        kwargs['nation2_id'],
+        kwargs['exchange_type'],
+        kwargs['exchange_details'],
+        kwargs['timestamp']
+    )
