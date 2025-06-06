@@ -26,6 +26,85 @@ from lore.managers.base_manager import BaseLoreManager
 
 logger = logging.getLogger(__name__)
 
+async def _analyze_multi_party_dynamics(
+    entities_data: Dict[int, Dict[str, Any]], 
+    regions_data: Dict[int, Dict[str, Any]],
+    alliances: Optional[Dict[str, List[int]]]
+) -> Dict[str, Any]:
+    """
+    Analyze power dynamics for multi-party conflicts.
+    
+    Returns dict with:
+    - power_rankings: Sorted list of entities by total power
+    - alliance_strengths: Power of each alliance
+    - geographic_clusters: Which entities are geographically close
+    - likely_battlefronts: Where conflicts will occur
+    """
+    power_scores = {}
+    
+    # Calculate individual power scores
+    for entity_id, entity_data in entities_data.items():
+        military = entity_data.get("military_strength", 5)
+        matriarchy = entity_data.get("matriarchy_level", 5)
+        
+        # Get terrain bonus from region
+        terrain_bonus = 0
+        if entity_id in regions_data:
+            region = regions_data[entity_id]
+            strategic_value = region.get("strategic_value", 5)
+            defensive_chars = region.get("defensive_characteristics", "")
+            
+            terrain_bonus = strategic_value / 10
+            if "easily defensible" in defensive_chars.lower():
+                terrain_bonus += 0.2
+        
+        # Calculate total power
+        power = military + (matriarchy * 0.3) + terrain_bonus
+        power_scores[entity_id] = {
+            "entity_name": entity_data["name"],
+            "total_power": power,
+            "military": military,
+            "terrain_advantage": terrain_bonus,
+            "government_stability": 10 - len(entity_data.get("internal_conflicts", []))
+        }
+    
+    # Calculate alliance strengths
+    alliance_strengths = {}
+    if alliances:
+        for alliance_name, members in alliances.items():
+            total_strength = sum(power_scores[m]["total_power"] for m in members if m in power_scores)
+            alliance_strengths[alliance_name] = {
+                "members": members,
+                "combined_strength": total_strength,
+                "member_count": len(members)
+            }
+    
+    # Identify geographic clusters
+    geographic_clusters = []
+    if regions_data:
+        # Group entities by geographic proximity (simplified)
+        for entity_id, region in regions_data.items():
+            # Find other entities in same or adjacent regions
+            cluster = [entity_id]
+            for other_id, other_region in regions_data.items():
+                if entity_id != other_id:
+                    # Simple proximity check - in real implementation would use actual geography
+                    if region.get("region_type") == other_region.get("region_type"):
+                        cluster.append(other_id)
+            
+            if len(cluster) > 1:
+                geographic_clusters.append(cluster)
+    
+    return {
+        "power_rankings": sorted(power_scores.items(), key=lambda x: x[1]["total_power"], reverse=True),
+        "alliance_strengths": alliance_strengths,
+        "geographic_clusters": geographic_clusters,
+        "unaligned_entities": [
+            eid for eid in entities_data.keys()
+            if not any(eid in alliance_members for alliance_members in (alliances or {}).values())
+        ]
+    }
+
 # Pydantic models for structured outputs
 class GeographicRegion(BaseModel):
     """Model for geographic regions."""
@@ -831,7 +910,7 @@ class GeopoliticalSystemManager(BaseLoreManager):
     # 3) Conflict simulation between nations/regions
     # ------------------------------------------------------------------------
     @staticmethod
-    @function_tool
+    @function_tool(strict=False)  # Disable strict schema to allow flexible alliance structure
     async def simulate_conflict(
         ctx: RunContextWrapper,
         entity_ids: List[int],
@@ -1256,86 +1335,6 @@ class GeopoliticalSystemManager(BaseLoreManager):
             except Exception as e:
                 logger.error(f"Error storing multi-party conflict simulation: {e}")
                 return simulation.dict()
-    
-    
-    async def _analyze_multi_party_dynamics(
-        entities_data: Dict[int, Dict[str, Any]], 
-        regions_data: Dict[int, Dict[str, Any]],
-        alliances: Optional[Dict[str, List[int]]]
-    ) -> Dict[str, Any]:
-        """
-        Analyze power dynamics for multi-party conflicts.
-        
-        Returns dict with:
-        - power_rankings: Sorted list of entities by total power
-        - alliance_strengths: Power of each alliance
-        - geographic_clusters: Which entities are geographically close
-        - likely_battlefronts: Where conflicts will occur
-        """
-        power_scores = {}
-        
-        # Calculate individual power scores
-        for entity_id, entity_data in entities_data.items():
-            military = entity_data.get("military_strength", 5)
-            matriarchy = entity_data.get("matriarchy_level", 5)
-            
-            # Get terrain bonus from region
-            terrain_bonus = 0
-            if entity_id in regions_data:
-                region = regions_data[entity_id]
-                strategic_value = region.get("strategic_value", 5)
-                defensive_chars = region.get("defensive_characteristics", "")
-                
-                terrain_bonus = strategic_value / 10
-                if "easily defensible" in defensive_chars.lower():
-                    terrain_bonus += 0.2
-            
-            # Calculate total power
-            power = military + (matriarchy * 0.3) + terrain_bonus
-            power_scores[entity_id] = {
-                "entity_name": entity_data["name"],
-                "total_power": power,
-                "military": military,
-                "terrain_advantage": terrain_bonus,
-                "government_stability": 10 - len(entity_data.get("internal_conflicts", []))
-            }
-        
-        # Calculate alliance strengths
-        alliance_strengths = {}
-        if alliances:
-            for alliance_name, members in alliances.items():
-                total_strength = sum(power_scores[m]["total_power"] for m in members if m in power_scores)
-                alliance_strengths[alliance_name] = {
-                    "members": members,
-                    "combined_strength": total_strength,
-                    "member_count": len(members)
-                }
-        
-        # Identify geographic clusters
-        geographic_clusters = []
-        if regions_data:
-            # Group entities by geographic proximity (simplified)
-            for entity_id, region in regions_data.items():
-                # Find other entities in same or adjacent regions
-                cluster = [entity_id]
-                for other_id, other_region in regions_data.items():
-                    if entity_id != other_id:
-                        # Simple proximity check - in real implementation would use actual geography
-                        if region.get("region_type") == other_region.get("region_type"):
-                            cluster.append(other_id)
-                
-                if len(cluster) > 1:
-                    geographic_clusters.append(cluster)
-        
-        return {
-            "power_rankings": sorted(power_scores.items(), key=lambda x: x[1]["total_power"], reverse=True),
-            "alliance_strengths": alliance_strengths,
-            "geographic_clusters": geographic_clusters,
-            "unaligned_entities": [
-                eid for eid in entities_data.keys()
-                if not any(eid in alliance_members for alliance_members in (alliances or {}).values())
-            ]
-        }
         
     async def _record_border_dispute(
         self,
