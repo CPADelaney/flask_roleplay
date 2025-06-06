@@ -448,6 +448,7 @@ class GeopoliticalSystemManager(BaseLoreManager):
                     
                     return region_id
 
+
     @staticmethod
     @function_tool
     async def add_geographic_region(
@@ -468,32 +469,41 @@ class GeopoliticalSystemManager(BaseLoreManager):
         matriarchal_influence: int = 5
     ) -> int:
         """
-        Add a geographic region to the database.
+        Add a geographic region to the database using canon system.
         
         Args:
             ctx: Context object
             name: Name of the region
             region_type: Type of region (mountains, coast, desert, etc.)
             description: Description of the region
-            climate: Climate type
-            resources: Available resources
-            governing_faction: Faction in control of the region
-            population_density: How populated the region is
-            major_settlements: List of major settlements
-            cultural_traits: Cultural characteristics
-            dangers: Dangers in the region
-            terrain_features: Special terrain features
-            defensive_characteristics: Defensive advantages/disadvantages
-            strategic_value: Strategic value (1-10)
-            matriarchal_influence: Level of matriarchal influence (1-10)
+            [other args...]
             
         Returns:
             ID of the created region
         """
+        manager = ctx.context.get("manager")
+        if not manager:
+            from lore.managers.geopolitical import GeopoliticalSystemManager
+            manager = GeopoliticalSystemManager(
+                ctx.context.get("user_id"), 
+                ctx.context.get("conversation_id")
+            )
+            await manager.ensure_initialized()
+        
+        # Get LoreSystem for canon operations
+        from lore.core.lore_system import LoreSystem
+        lore_system = await LoreSystem.get_instance(
+            ctx.context.get("user_id"), 
+            ctx.context.get("conversation_id")
+        )
+        
         # Apply governance if available
         try:
-            from nyx.nyx_governance import NyxUnifiedGovernor
-            governor = await NyxUnifiedGovernor(ctx.context.get("user_id"), ctx.context.get("conversation_id")).initialize()
+            from nyx.nyx_governance import NyxUnifiedGovernor, AgentType
+            governor = await NyxUnifiedGovernor(
+                ctx.context.get("user_id"), 
+                ctx.context.get("conversation_id")
+            ).initialize()
             permission = await governor.check_action_permission(
                 agent_type=AgentType.NARRATIVE_CRAFTER,
                 agent_id="geopolitical_manager",
@@ -504,14 +514,127 @@ class GeopoliticalSystemManager(BaseLoreManager):
             if not permission.get("approved", True):
                 return {"error": permission.get("reasoning", "Action not permitted by governance")}
         except (ImportError, Exception):
-            # Governance optional - continue if not available
             pass
+        
+        with trace(
+            "AddGeographicRegion", 
+            group_id=manager.trace_group_id,
+            metadata={**manager.trace_metadata, "region_name": name}
+        ):
+            await manager.ensure_initialized()
             
-        return await self._add_geographic_region_impl(
-            ctx, name, region_type, description, climate, resources, governing_faction, 
-            population_density, major_settlements, cultural_traits, dangers, 
-            terrain_features, defensive_characteristics, strategic_value, matriarchal_influence
-        )
+            # Check for semantic duplicates
+            async with get_db_connection_context() as conn:
+                # Generate embedding for the new region
+                embedding_text = f"{name} {region_type} {description} {climate or ''}"
+                search_vector = await generate_embedding(embedding_text)
+                
+                # Search for similar regions
+                similar_region = await conn.fetchrow("""
+                    SELECT id, name, region_type, 1 - (embedding <=> $1) AS similarity
+                    FROM GeographicRegions
+                    WHERE 1 - (embedding <=> $1) > 0.85
+                    ORDER BY embedding <=> $1
+                    LIMIT 1
+                """, search_vector)
+                
+                if similar_region:
+                    # Use validation to check if it's truly a duplicate
+                    from lore.core.validation import CanonValidationAgent
+                    validation_agent = CanonValidationAgent()
+                    
+                    existing_region = await conn.fetchrow("""
+                        SELECT * FROM GeographicRegions WHERE id = $1
+                    """, similar_region['id'])
+                    
+                    is_duplicate = await validation_agent.confirm_is_duplicate_region(
+                        conn,
+                        proposal={
+                            "name": name,
+                            "region_type": region_type,
+                            "description": description
+                        },
+                        existing_region=dict(existing_region)
+                    )
+                    
+                    if is_duplicate:
+                        logger.warning(f"Region '{name}' is a duplicate of existing region ID {similar_region['id']}")
+                        # Update the existing region with any new information
+                        await lore_system.propose_and_enact_change(
+                            ctx=ctx,
+                            entity_type="GeographicRegions",
+                            entity_identifier={"id": similar_region['id']},
+                            updates={
+                                "resources": resources,
+                                "strategic_value": strategic_value,
+                                "matriarchal_influence": matriarchal_influence
+                            },
+                            reason=f"Updating existing region with new information from duplicate submission"
+                        )
+                        return similar_region['id']
+            
+            # Canonically establish governing faction if specified
+            if governing_faction:
+                async with get_db_connection_context() as conn:
+                    from lore.core import canon
+                    faction_id = await canon.find_or_create_faction(
+                        ctx, conn, governing_faction, faction_type="regional_authority"
+                    )
+            
+            # Canonically establish major settlements
+            settlement_ids = []
+            if major_settlements:
+                async with get_db_connection_context() as conn:
+                    from lore.core import canon
+                    for settlement in major_settlements:
+                        location_id = await canon.find_or_create_location(ctx, conn, settlement)
+                        settlement_ids.append(location_id)
+            
+            resources = resources or []
+            cultural_traits = cultural_traits or []
+            dangers = dangers or []
+            terrain_features = terrain_features or []
+            
+            # Apply matriarchal theming
+            try:
+                from lore.utils.theming import MatriarchalThemingUtils
+                description = MatriarchalThemingUtils.apply_matriarchal_theme("region", description)
+            except ImportError:
+                pass
+            
+            # Generate embedding
+            embedding = await generate_embedding(embedding_text)
+            
+            # Create the region
+            async with manager.get_connection_pool() as pool:
+                async with pool.acquire() as conn:
+                    region_id = await conn.fetchval("""
+                        INSERT INTO GeographicRegions (
+                            name, region_type, description, climate, resources,
+                            governing_faction, population_density, major_settlements,
+                            cultural_traits, dangers, terrain_features,
+                            defensive_characteristics, strategic_value,
+                            matriarchal_influence, embedding
+                        )
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+                        RETURNING id
+                    """,
+                    name, region_type, description, climate, resources,
+                    governing_faction, population_density, major_settlements,
+                    cultural_traits, dangers, terrain_features,
+                    defensive_characteristics, strategic_value,
+                    matriarchal_influence, embedding)
+                    
+                    # Log canonical event
+                    from lore.core import canon
+                    await canon.log_canonical_event(
+                        ctx, conn,
+                        f"Geographic region '{name}' established as {region_type} with strategic value {strategic_value}",
+                        tags=["geography", "region", "canon"],
+                        significance=8
+                    )
+                    
+                    return region_id
     
     # ------------------------------------------------------------------------
     # 2) Generate world nations with agent-based distribution
@@ -711,162 +834,195 @@ class GeopoliticalSystemManager(BaseLoreManager):
     @function_tool
     async def simulate_conflict(
         ctx: RunContextWrapper,
-        entity1_id: int,
-        entity2_id: int,
+        entity_ids: List[int],
         conflict_type: str,
+        alliances: Optional[Dict[str, List[int]]] = None,
         duration_months: int = 12
     ) -> Dict[str, Any]:
         """
-        Simulate a conflict between two political entities or regions.
+        Simulate a conflict between multiple political entities or regions.
+        Uses canon system to ensure consistency.
         
         Args:
             ctx: Context object
-            entity1_id: ID of first entity
-            entity2_id: ID of second entity
-            conflict_type: Type of conflict (war, border_dispute, trade_war, etc.)
+            entity_ids: List of entity IDs involved in the conflict
+            conflict_type: Type of conflict (war, border_dispute, trade_war, civil_war, proxy_war, etc.)
+            alliances: Optional dict mapping alliance names to lists of entity IDs
+                      e.g., {"Northern Alliance": [1, 3], "Southern Pact": [2, 4, 5]}
             duration_months: Duration to simulate in months
             
         Returns:
             A ConflictSimulation object with detailed simulation results
         """
+        if len(entity_ids) < 2:
+            return {"error": "Conflict requires at least 2 entities"}
+        
+        manager = ctx.context.get("manager")
+        if not manager:
+            from lore.managers.geopolitical import GeopoliticalSystemManager
+            manager = GeopoliticalSystemManager(
+                ctx.context.get("user_id"), 
+                ctx.context.get("conversation_id")
+            )
+            await manager.ensure_initialized()
+        
+        # Get LoreSystem for canon operations
+        from lore.core.lore_system import LoreSystem
+        lore_system = await LoreSystem.get_instance(
+            ctx.context.get("user_id"), 
+            ctx.context.get("conversation_id")
+        )
+        
         # Apply governance if available
         try:
-            from nyx.nyx_governance import NyxUnifiedGovernor
-            governor = await NyxUnifiedGovernor(ctx.context.get("user_id"), ctx.context.get("conversation_id")).initialize()
+            from nyx.nyx_governance import NyxUnifiedGovernor, AgentType
+            governor = await NyxUnifiedGovernor(
+                ctx.context.get("user_id"), 
+                ctx.context.get("conversation_id")
+            ).initialize()
             permission = await governor.check_action_permission(
                 agent_type=AgentType.NARRATIVE_CRAFTER,
                 agent_id="geopolitical_manager",
                 action_type="simulate_conflict",
-                action_details={"entity1_id": entity1_id, "entity2_id": entity2_id}
+                action_details={
+                    "entity_ids": entity_ids, 
+                    "conflict_type": conflict_type,
+                    "num_parties": len(entity_ids)
+                }
             )
             
             if not permission.get("approved", True):
                 return {"error": permission.get("reasoning", "Action not permitted by governance")}
         except (ImportError, Exception):
-            # Governance optional - continue if not available
             pass
             
         with trace(
-            "SimulateConflict", 
-            group_id=self.trace_group_id,
+            "SimulateMultiPartyConflict", 
+            group_id=manager.trace_group_id,
             metadata={
-                **self.trace_metadata, 
-                "entity1_id": entity1_id,
-                "entity2_id": entity2_id,
-                "conflict_type": conflict_type
+                **manager.trace_metadata, 
+                "entity_ids": entity_ids,
+                "num_parties": len(entity_ids),
+                "conflict_type": conflict_type,
+                "has_alliances": alliances is not None
             }
         ):
-            run_ctx = self.create_run_context(ctx)
+            run_ctx = manager.create_run_context(ctx)
             
-            # Fetch entity details
-            async with self.get_connection_pool() as pool:
+            # Fetch all entity details
+            entities_data = {}
+            regions_data = {}
+            
+            async with manager.get_connection_pool() as pool:
                 async with pool.acquire() as conn:
-                    entity1 = await conn.fetchrow("""
-                        SELECT * FROM PoliticalEntities WHERE id = $1
-                    """, entity1_id)
-                    
-                    entity2 = await conn.fetchrow("""
-                        SELECT * FROM PoliticalEntities WHERE id = $2
-                    """, entity2_id)
-                    
-                    if not entity1 or not entity2:
-                        return {"error": "One or both entities not found"}
-                    
-                    # Fetch regions
-                    region1 = None
-                    if entity1["region_id"]:
-                        region1 = await conn.fetchrow("""
-                            SELECT * FROM GeographicRegions WHERE id = $1
-                        """, entity1["region_id"])
-                    
-                    region2 = None
-                    if entity2["region_id"]:
-                        region2 = await conn.fetchrow("""
-                            SELECT * FROM GeographicRegions WHERE id = $1
-                        """, entity2["region_id"])
+                    for entity_id in entity_ids:
+                        entity = await conn.fetchrow("""
+                            SELECT * FROM PoliticalEntities WHERE id = $1
+                        """, entity_id)
+                        
+                        if not entity:
+                            return {"error": f"Entity {entity_id} not found"}
+                        
+                        entity_data = dict(entity)
+                        
+                        # Parse JSON fields
+                        if "relations" in entity_data and entity_data["relations"]:
+                            try:
+                                entity_data["relations"] = json.loads(entity_data["relations"])
+                            except:
+                                entity_data["relations"] = {}
+                        
+                        if "power_centers" in entity_data and entity_data["power_centers"]:
+                            try:
+                                entity_data["power_centers"] = json.loads(entity_data["power_centers"])
+                            except:
+                                entity_data["power_centers"] = []
+                        
+                        entities_data[entity_id] = entity_data
+                        
+                        # Fetch region if exists
+                        if entity["region_id"]:
+                            region = await conn.fetchrow("""
+                                SELECT * FROM GeographicRegions WHERE id = $1
+                            """, entity["region_id"])
+                            
+                            if region:
+                                regions_data[entity_id] = dict(region)
             
-            # Parse relations and other JSON fields
-            entity1_data = dict(entity1)
-            entity2_data = dict(entity2)
-            
-            for entity in [entity1_data, entity2_data]:
-                if "relations" in entity and entity["relations"]:
-                    try:
-                        entity["relations"] = json.loads(entity["relations"])
-                    except:
-                        entity["relations"] = {}
-                
-                if "power_centers" in entity and entity["power_centers"]:
-                    try:
-                        entity["power_centers"] = json.loads(entity["power_centers"])
-                    except:
-                        entity["power_centers"] = []
-            
-            # Prepare region data
-            region1_data = dict(region1) if region1 else {}
-            region2_data = dict(region2) if region2 else {}
-            
-            # Determine relative advantages
-            military_advantage = entity1_data.get("military_strength", 5) - entity2_data.get("military_strength", 5)
-            diplomatic_advantage = 0
-            if entity1_data.get("diplomatic_stance") == "aggressive" and entity2_data.get("diplomatic_stance") == "peaceful":
-                diplomatic_advantage = 2
-            elif entity1_data.get("diplomatic_stance") == "peaceful" and entity2_data.get("diplomatic_stance") == "aggressive":
-                diplomatic_advantage = -2
-            
-            # Calculate terrain advantages if regions are present
-            terrain_advantage = 0
-            if region1 and region2:
-                if region1_data.get("defensive_characteristics") and "easily defensible" in region1_data["defensive_characteristics"].lower():
-                    terrain_advantage += 1
-                if region2_data.get("defensive_characteristics") and "easily defensible" in region2_data["defensive_characteristics"].lower():
-                    terrain_advantage -= 1
+            # Calculate power dynamics and relationships
+            power_analysis = await _analyze_multi_party_dynamics(
+                entities_data, regions_data, alliances
+            )
             
             # Create simulation prompt
+            entities_prompt = "\n\n".join([
+                f"ENTITY {eid} - {edata['name']}:\n{json.dumps(edata, indent=2)}"
+                for eid, edata in entities_data.items()
+            ])
+            
+            regions_prompt = "\n\n".join([
+                f"REGION FOR ENTITY {eid}:\n{json.dumps(rdata, indent=2)}"
+                for eid, rdata in regions_data.items()
+            ])
+            
+            alliances_prompt = ""
+            if alliances:
+                alliances_prompt = "\nALLIANCES:\n" + json.dumps(alliances, indent=2)
+            
             simulation_prompt = f"""
-            Simulate a {conflict_type} conflict between these two political entities over {duration_months} months:
+            Simulate a {conflict_type} conflict involving {len(entity_ids)} political entities over {duration_months} months:
             
-            ENTITY 1:
-            {json.dumps(entity1_data, indent=2)}
+            {entities_prompt}
             
-            ENTITY 2:
-            {json.dumps(entity2_data, indent=2)}
+            {regions_prompt}
             
-            REGION 1 (ENTITY 1):
-            {json.dumps(region1_data, indent=2) if region1_data else "No specific region"}
+            {alliances_prompt}
             
-            REGION 2 (ENTITY 2):
-            {json.dumps(region2_data, indent=2) if region2_data else "No specific region"}
-            
-            ADVANTAGES:
-            Military advantage: {military_advantage} (positive = Entity 1 advantage)
-            Diplomatic advantage: {diplomatic_advantage} (positive = Entity 1 advantage)
-            Terrain advantage: {terrain_advantage} (positive = Entity 1 advantage)
+            POWER DYNAMICS:
+            {json.dumps(power_analysis, indent=2)}
             
             Simulate the conflict progression with:
-            1. Monthly timeline of key events
-            2. Diplomatic and military developments
-            3. Civilian impacts
-            4. Multiple possible resolution scenarios
-            5. Most likely outcome
+            1. Monthly timeline showing multi-party interactions
+            2. Alliance formations and betrayals
+            3. Shifting fronts and multiple theaters of war
+            4. Diplomatic maneuvers between all parties
+            5. Cascading effects on non-aligned entities
+            6. Multiple possible resolution scenarios
+            7. Most likely outcome for all parties
             
-            Consider matriarchal leadership dynamics and gender factors in the simulation.
+            Consider:
+            - Some entities may switch sides
+            - New alliances may form during conflict
+            - Some parties may seek separate peace
+            - Proxy conflicts and client states
+            - Matriarchal leadership dynamics
+            
+            The most_likely_outcome should include:
+            - description: Overall description of the outcome
+            - status: Complex status for multi-party conflict
+            - winner_entities: List of entity IDs that achieved objectives
+            - loser_entities: List of entity IDs that failed objectives
+            - neutral_outcomes: List of entity IDs with mixed results
+            - territorial_changes: List of {region_id, old_controller, new_controller}
+            - political_changes: List of {entity_id, change_type, details}
+            - alliance_changes: New or broken alliances
+            - power_balance_shift: How regional power dynamics changed
             
             Return a ConflictSimulation object with all required fields.
             """
             
             # Run the simulation
-            conflict_agent = self.conflict_simulation_agent.clone(
+            conflict_agent = manager.conflict_simulation_agent.clone(
                 output_type=ConflictSimulation
             )
             
             run_config = RunConfig(
-                workflow_name="ConflictSimulation",
+                workflow_name="MultiPartyConflictSimulation",
                 trace_metadata={
-                    "user_id": str(self.user_id),
-                    "conversation_id": str(self.conversation_id),
-                    "entity1_id": str(entity1_id),
-                    "entity2_id": str(entity2_id)
+                    "user_id": str(manager.user_id),
+                    "conversation_id": str(manager.conversation_id),
+                    "entity_ids": str(entity_ids),
+                    "num_parties": str(len(entity_ids))
                 }
             )
             
@@ -879,12 +1035,14 @@ class GeopoliticalSystemManager(BaseLoreManager):
             
             simulation = result.final_output
             
-            # Store the simulation in the database
+            # Store the simulation
             try:
-                embed_text = f"{conflict_type} {entity1_data['name']} {entity2_data['name']} {simulation.most_likely_outcome.get('description', '')}"
+                # Create embedding text from all entity names
+                entity_names = [entities_data[eid]['name'] for eid in entity_ids]
+                embed_text = f"{conflict_type} involving {', '.join(entity_names)} - {simulation.most_likely_outcome.get('description', '')}"
                 embedding = await generate_embedding(embed_text)
                 
-                async with self.get_connection_pool() as pool:
+                async with manager.get_connection_pool() as pool:
                     async with pool.acquire() as conn:
                         sim_id = await conn.fetchval("""
                             INSERT INTO ConflictSimulations (
@@ -896,7 +1054,7 @@ class GeopoliticalSystemManager(BaseLoreManager):
                             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
                             RETURNING id
                         """,
-                        simulation.conflict_type,
+                        conflict_type + f" (Multi-party: {len(entity_ids)} entities)",
                         json.dumps(simulation.primary_actors),
                         json.dumps(simulation.timeline),
                         simulation.intensity_progression,
@@ -909,35 +1067,276 @@ class GeopoliticalSystemManager(BaseLoreManager):
                         simulation.confidence_level,
                         simulation.simulation_basis,
                         embedding)
-                        
-                        # If this was a border dispute and involves regions, update border dispute table
-                        if conflict_type.lower() in ["border_dispute", "territorial_conflict"] and entity1["region_id"] and entity2["region_id"]:
-                            await self._record_border_dispute(
-                                conn,
-                                entity1["region_id"],
-                                entity2["region_id"],
-                                conflict_type,
-                                simulation.most_likely_outcome.get("description", ""),
-                                simulation.intensity_progression[-1] if simulation.intensity_progression else 5,
-                                f"{duration_months} months",
-                                [f.get("description", "") for f in simulation.primary_actors],
-                                simulation.most_likely_outcome.get("status", "active"),
-                                [{"attempt": r.get("type", ""), "outcome": r.get("result", "")} for r in simulation.resolution_scenarios],
-                                simulation.most_likely_outcome.get("strategic_implications", ""),
-                                [],  # female_leaders_involved
-                                "Matriarchal leadership directs the conflict"
+                
+                # Apply canonical changes based on outcome
+                if simulation and simulation.most_likely_outcome:
+                    outcome = simulation.most_likely_outcome
+                    
+                    # Apply territorial changes
+                    if outcome.get("territorial_changes"):
+                        for change in outcome["territorial_changes"]:
+                            if change.get("region_id") and change.get("new_controller"):
+                                # Verify the region exists
+                                async with manager.get_connection_pool() as pool:
+                                    async with pool.acquire() as conn:
+                                        region_exists = await conn.fetchval("""
+                                            SELECT EXISTS(SELECT 1 FROM GeographicRegions WHERE id = $1)
+                                        """, change["region_id"])
+                                        
+                                        if region_exists:
+                                            old_controller = change.get("old_controller", "Unknown")
+                                            
+                                            # Apply the territorial change
+                                            await lore_system.propose_and_enact_change(
+                                                ctx=ctx,
+                                                entity_type="GeographicRegions",
+                                                entity_identifier={"id": change["region_id"]},
+                                                updates={"governing_faction": change["new_controller"]},
+                                                reason=f"Territory transferred from {old_controller} to {change['new_controller']} in multi-party {conflict_type}"
+                                            )
+                                            
+                                            # Log territorial change
+                                            from lore.core import canon
+                                            await canon.log_canonical_event(
+                                                ctx, conn,
+                                                f"Region {change['region_id']} control transferred from {old_controller} to {change['new_controller']} following multi-party conflict",
+                                                tags=["conflict", "territorial_change", "multi_party", "canon"],
+                                                significance=8
+                                            )
+                    
+                    # Apply political changes to multiple entities
+                    if outcome.get("political_changes"):
+                        for change in outcome["political_changes"]:
+                            entity_id = change.get("entity_id")
+                            change_type = change.get("change_type", "leadership")
+                            details = change.get("details", {})
+                            
+                            if change_type == "leadership" and details.get("new_leader"):
+                                # Create new leader
+                                async with get_db_connection_context() as conn:
+                                    from lore.core import canon
+                                    leader_id = await canon.find_or_create_npc(
+                                        ctx, conn,
+                                        npc_name=details["new_leader"],
+                                        role="Political Leader",
+                                        affiliations=[entities_data[entity_id]['name']]
+                                    )
+                                    
+                                    # Update entity
+                                    await lore_system.propose_and_enact_change(
+                                        ctx=ctx,
+                                        entity_type="PoliticalEntities",
+                                        entity_identifier={"id": entity_id},
+                                        updates={"leader_npc_id": leader_id},
+                                        reason=f"Leadership change in {entities_data[entity_id]['name']} due to multi-party conflict"
+                                    )
+                            
+                            elif change_type == "government":
+                                # Change government type
+                                await lore_system.propose_and_enact_change(
+                                    ctx=ctx,
+                                    entity_type="PoliticalEntities",
+                                    entity_identifier={"id": entity_id},
+                                    updates={
+                                        "governance_style": details.get("new_style", "transitional"),
+                                        "internal_conflicts": [f"Post-conflict transition from {conflict_type}"]
+                                    },
+                                    reason=f"Government change in {entities_data[entity_id]['name']} following conflict"
+                                )
+                            
+                            elif change_type == "dissolution":
+                                # Entity dissolves/splits
+                                await lore_system.propose_and_enact_change(
+                                    ctx=ctx,
+                                    entity_type="PoliticalEntities",
+                                    entity_identifier={"id": entity_id},
+                                    updates={
+                                        "entity_type": "defunct",
+                                        "description": entities_data[entity_id]['description'] + f" [Dissolved following {conflict_type}]"
+                                    },
+                                    reason=f"{entities_data[entity_id]['name']} dissolved in multi-party conflict"
+                                )
+                    
+                    # Update alliance structures
+                    if outcome.get("alliance_changes"):
+                        for alliance_change in outcome["alliance_changes"]:
+                            if alliance_change.get("type") == "new_alliance":
+                                members = alliance_change.get("members", [])
+                                alliance_name = alliance_change.get("name", "Post-Conflict Alliance")
+                                
+                                # Create new faction for alliance
+                                async with get_db_connection_context() as conn:
+                                    from lore.core import canon
+                                    alliance_id = await canon.find_or_create_faction(
+                                        ctx, conn,
+                                        faction_name=alliance_name,
+                                        faction_type="military_alliance"
+                                    )
+                                    
+                                    # Update each member's relations
+                                    for member_id in members:
+                                        if member_id in entities_data:
+                                            entity_relations = entities_data[member_id].get("relations", {})
+                                            
+                                            # Add alliance members to relations
+                                            for other_member in members:
+                                                if other_member != member_id:
+                                                    entity_relations[str(other_member)] = {
+                                                        "status": "allied",
+                                                        "alliance": alliance_name,
+                                                        "since": datetime.now().isoformat()
+                                                    }
+                                            
+                                            await lore_system.propose_and_enact_change(
+                                                ctx=ctx,
+                                                entity_type="PoliticalEntities",
+                                                entity_identifier={"id": member_id},
+                                                updates={"relations": json.dumps(entity_relations)},
+                                                reason=f"{entities_data[member_id]['name']} joins {alliance_name}"
+                                            )
+                    
+                    # Update power balance for all entities
+                    winners = outcome.get("winner_entities", [])
+                    losers = outcome.get("loser_entities", [])
+                    
+                    for entity_id in entity_ids:
+                        if entity_id in winners:
+                            # Increase military strength and influence
+                            new_strength = min(10, entities_data[entity_id].get("military_strength", 5) + 1)
+                            await lore_system.propose_and_enact_change(
+                                ctx=ctx,
+                                entity_type="PoliticalEntities",
+                                entity_identifier={"id": entity_id},
+                                updates={
+                                    "military_strength": new_strength,
+                                    "diplomatic_stance": "confident"
+                                },
+                                reason=f"{entities_data[entity_id]['name']} emerged victorious from conflict"
                             )
+                        
+                        elif entity_id in losers:
+                            # Decrease military strength
+                            new_strength = max(1, entities_data[entity_id].get("military_strength", 5) - 2)
+                            await lore_system.propose_and_enact_change(
+                                ctx=ctx,
+                                entity_type="PoliticalEntities",
+                                entity_identifier={"id": entity_id},
+                                updates={
+                                    "military_strength": new_strength,
+                                    "diplomatic_stance": "defensive",
+                                    "internal_conflicts": entities_data[entity_id].get("internal_conflicts", []) + ["Post-war instability"]
+                                },
+                                reason=f"{entities_data[entity_id]['name']} weakened by conflict"
+                            )
+                    
+                    # Log the overall conflict as a canonical event
+                    async with get_db_connection_context() as conn:
+                        from lore.core import canon
+                        
+                        conflict_summary = (
+                            f"Multi-party {conflict_type} involving {', '.join(entity_names)} concluded. "
+                            f"Winners: {', '.join([entities_data[w]['name'] for w in winners])}. "
+                            f"Losers: {', '.join([entities_data[l]['name'] for l in losers])}."
+                        )
+                        
+                        await canon.log_canonical_event(
+                            ctx, conn,
+                            conflict_summary + f" {outcome.get('description', '')}",
+                            tags=["conflict", "multi_party", "geopolitical", "canon"],
+                            significance=10  # Multi-party conflicts are highly significant
+                        )
                 
                 # Return simulation with ID
                 sim_dict = simulation.dict()
                 sim_dict["id"] = sim_id
+                sim_dict["entity_count"] = len(entity_ids)
+                sim_dict["alliance_structure"] = alliances
                 return sim_dict
                 
             except Exception as e:
-                logger.error(f"Error storing conflict simulation: {e}")
-                # Return simulation without ID
+                logger.error(f"Error storing multi-party conflict simulation: {e}")
                 return simulation.dict()
     
+    
+    async def _analyze_multi_party_dynamics(
+        entities_data: Dict[int, Dict[str, Any]], 
+        regions_data: Dict[int, Dict[str, Any]],
+        alliances: Optional[Dict[str, List[int]]]
+    ) -> Dict[str, Any]:
+        """
+        Analyze power dynamics for multi-party conflicts.
+        
+        Returns dict with:
+        - power_rankings: Sorted list of entities by total power
+        - alliance_strengths: Power of each alliance
+        - geographic_clusters: Which entities are geographically close
+        - likely_battlefronts: Where conflicts will occur
+        """
+        power_scores = {}
+        
+        # Calculate individual power scores
+        for entity_id, entity_data in entities_data.items():
+            military = entity_data.get("military_strength", 5)
+            matriarchy = entity_data.get("matriarchy_level", 5)
+            
+            # Get terrain bonus from region
+            terrain_bonus = 0
+            if entity_id in regions_data:
+                region = regions_data[entity_id]
+                strategic_value = region.get("strategic_value", 5)
+                defensive_chars = region.get("defensive_characteristics", "")
+                
+                terrain_bonus = strategic_value / 10
+                if "easily defensible" in defensive_chars.lower():
+                    terrain_bonus += 0.2
+            
+            # Calculate total power
+            power = military + (matriarchy * 0.3) + terrain_bonus
+            power_scores[entity_id] = {
+                "entity_name": entity_data["name"],
+                "total_power": power,
+                "military": military,
+                "terrain_advantage": terrain_bonus,
+                "government_stability": 10 - len(entity_data.get("internal_conflicts", []))
+            }
+        
+        # Calculate alliance strengths
+        alliance_strengths = {}
+        if alliances:
+            for alliance_name, members in alliances.items():
+                total_strength = sum(power_scores[m]["total_power"] for m in members if m in power_scores)
+                alliance_strengths[alliance_name] = {
+                    "members": members,
+                    "combined_strength": total_strength,
+                    "member_count": len(members)
+                }
+        
+        # Identify geographic clusters
+        geographic_clusters = []
+        if regions_data:
+            # Group entities by geographic proximity (simplified)
+            for entity_id, region in regions_data.items():
+                # Find other entities in same or adjacent regions
+                cluster = [entity_id]
+                for other_id, other_region in regions_data.items():
+                    if entity_id != other_id:
+                        # Simple proximity check - in real implementation would use actual geography
+                        if region.get("region_type") == other_region.get("region_type"):
+                            cluster.append(other_id)
+                
+                if len(cluster) > 1:
+                    geographic_clusters.append(cluster)
+        
+        return {
+            "power_rankings": sorted(power_scores.items(), key=lambda x: x[1]["total_power"], reverse=True),
+            "alliance_strengths": alliance_strengths,
+            "geographic_clusters": geographic_clusters,
+            "unaligned_entities": [
+                eid for eid in entities_data.keys()
+                if not any(eid in alliance_members for alliance_members in (alliances or {}).values())
+            ]
+        }
+        
     async def _record_border_dispute(
         self,
         conn,
