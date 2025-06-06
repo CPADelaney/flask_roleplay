@@ -1658,7 +1658,7 @@ class WorldPoliticsManager(BaseLoreManager):
                 name="ConflictEvolutionAgent",
                 instructions="""You evolve international conflicts over time in a matriarchal fantasy world.
                 Consider realistic progression, diplomatic efforts, and power dynamics.""",
-                model="gpt-4o-mini",
+                model="gpt-4.1-nano",
                 model_settings=ModelSettings(temperature=0.8)
             )
             
