@@ -2,54 +2,189 @@
 
 import logging
 import json
-from typing import Dict, List, Any, Optional, Tuple, Set, Union
 import asyncio
 from datetime import datetime
+from typing import Dict, List, Any, Optional, Type, Set, Callable, Protocol, runtime_checkable, Union, Tuple
 
-# --- OPENAI AGENTS SDK IMPORTS ---
-# We'll import only what's actually used in this module:
+# Agents SDK imports - v0.0.17 best practices
 from agents import (
-    Agent,
+    Agent, 
+    Runner, 
+    function_tool, 
+    trace, 
+    RunContextWrapper, 
     ModelSettings,
-    Runner,
-    function_tool,
-    trace,            # For creating a trace context
+    GuardrailFunctionOutput
 )
 from agents.run import RunConfig
-from agents.run_context import RunContextWrapper
+from pydantic import BaseModel, Field, ConfigDict
 
-# --- NYX/PROJECT-SPECIFIC IMPORTS ---
+# Nyx governance integration
 from nyx.nyx_governance import AgentType, DirectiveType, DirectivePriority
-from nyx.governance_helpers import with_governance_permission
+from nyx.governance_helpers import with_governance, with_governance_permission, with_action_reporting
 from nyx.directive_handler import DirectiveHandler
 
-# Updated import to use the new context manager
+# Database connection
 from db.connection import get_db_connection_context
 
+# Embedding service
 from embedding.vector_store import generate_embedding, compute_similarity
 
+# Cache system
 from lore.core.cache import GLOBAL_LORE_CACHE
 
+logger = logging.getLogger(__name__)
+
+# ------------------------------------------------------------------------
+# Pydantic Models for Agent SDK Integration
+# ------------------------------------------------------------------------
+
+class TableRecord(BaseModel):
+    """Model for database records to avoid Dict[str, Any] issues"""
+    id: Optional[int] = None
+    name: Optional[str] = None
+    description: Optional[str] = None
+    timestamp: Optional[str] = None
+    embedding: Optional[List[float]] = None
+    # Allow extra fields
+    model_config = ConfigDict(extra='allow')
+
+class CreateRecordInput(BaseModel):
+    """Input model for creating records"""
+    table_name: str
+    name: str
+    description: str
+    # Allow additional fields
+    extra_fields: Optional[Dict[str, Any]] = Field(default_factory=dict)
+
+class UpdateRecordInput(BaseModel):
+    """Input model for updating records"""
+    table_name: str
+    record_id: int
+    name: Optional[str] = None
+    description: Optional[str] = None
+    # Allow additional fields
+    extra_fields: Optional[Dict[str, Any]] = Field(default_factory=dict)
+
+class QueryConditions(BaseModel):
+    """Model for query conditions"""
+    # Use specific fields instead of arbitrary dict
+    field_name: str
+    field_value: Any
+    operator: str = "="  # =, >, <, >=, <=, !=, LIKE, IN
+
+class QueryRecordsInput(BaseModel):
+    """Input model for querying records"""
+    table_name: str
+    conditions: Optional[List[QueryConditions]] = None
+    limit: int = 100
+    order_by: Optional[str] = None
+
+class CacheStats(BaseModel):
+    """Cache statistics model"""
+    hits: int = 0
+    misses: int = 0
+    sets: int = 0
+    deletes: int = 0
+    evictions: int = 0
+    size: int = 0
+    max_size: int = 0
+    utilization: float = 0.0
+    timestamp: str = Field(default_factory=lambda: datetime.now().isoformat())
+    user_id: Optional[int] = None
+    conversation_id: Optional[int] = None
+
+class MaintenanceResult(BaseModel):
+    """Result model for maintenance operations"""
+    action: str
+    message: Optional[str] = None
+    timestamp: str = Field(default_factory=lambda: datetime.now().isoformat())
+
+class ValidationResult(BaseModel):
+    """Result model for data validation"""
+    is_valid: bool
+    issues: List[str] = Field(default_factory=list)
+    fixed_data: Optional[Dict[str, Any]] = None
+
+class BatchUpdateItem(BaseModel):
+    """Model for batch update items"""
+    column: str
+    value: Any
+    id: int
+
+# ------------------------------------------------------------------------
+# Table Definition Helper
+# ------------------------------------------------------------------------
+
+class TableDefinition(BaseModel):
+    """Model for table definitions"""
+    name: str
+    columns: Dict[str, str]
+    indexes: Optional[List[str]] = None
+    foreign_keys: Optional[Dict[str, str]] = None
+
+# ------------------------------------------------------------------------
+# Helper Functions
+# ------------------------------------------------------------------------
+
+def _get_manager(ctx: RunContextWrapper) -> 'BaseLoreManager':
+    """Helper to retrieve manager instance from context."""
+    mgr = ctx.context.get("manager")
+    if mgr is None:
+        raise RuntimeError("manager instance missing from ctx.context")
+    return mgr
+
+# ------------------------------------------------------------------------
+# Infrastructure Agent
+# ------------------------------------------------------------------------
+
+maintenance_agent = Agent(
+    name="MaintenanceAgent",
+    instructions=(
+        "You analyze caching or database metrics and decide how to handle them. "
+        "If the cache miss rate is too high, you might recommend clearing some keys or "
+        "logging a warning. Return JSON with instructions if needed.\n\n"
+        "Example:\n"
+        "{\n"
+        '  "action": "log_warning",\n'
+        '  "message": "High cache miss rate detected"\n'
+        "}"
+    ),
+    model="gpt-4-mini",
+    model_settings=ModelSettings(temperature=0.0)
+)
+
+# ------------------------------------------------------------------------
+# BaseLoreManager - Refactored Implementation
+# ------------------------------------------------------------------------
 
 class BaseLoreManager:
     """
-    Enhanced base class for all lore management systems.
-    Centralized database operations, authorization and table management.
+    Consolidated base class for all lore managers providing common functionality.
+    Integrates agent capabilities, database access, caching, and governance oversight.
     """
-    
-    def __init__(self, user_id: int, conversation_id: int):
+
+    def __init__(self, user_id: int, conversation_id: int, cache_size: int = 100, ttl: int = 3600):
         """
         Initialize the base lore manager.
         
         Args:
             user_id: ID of the user
             conversation_id: ID of the conversation
+            cache_size: Maximum number of items to cache
+            ttl: Default time-to-live for cache items in seconds
         """
         self.user_id = user_id
         self.conversation_id = conversation_id
-        self.governor = None
+        self._local_cache: Dict[str, Any] = {}
+        self._cache_max = cache_size
+        self._default_ttl = ttl
         self.initialized = False
         self.cache_namespace = self.__class__.__name__.lower()
+        
+        # Governance integration
+        self.governor = None
+        self.directive_handler = None
         
         # Define standard table columns for common operations
         self._standard_columns = {
@@ -60,11 +195,26 @@ class BaseLoreManager:
             'embedding': 'VECTOR(1536)'
         }
         
-        # Prepare tracing metadata for this manager instance
+        # Set up tracing
         self._setup_tracing()
-    
+        
+        # Initialize agent definitions
+        self.agents = {}
+        
+        # Maintenance task
+        self.maintenance_task: Optional[asyncio.Task] = None
+        
+        # Cache statistics
+        self._cache_stats = {
+            'hits': 0,
+            'misses': 0,
+            'sets': 0,
+            'deletes': 0,
+            'evictions': 0
+        }
+
     def _setup_tracing(self):
-        """Set up naming/metadata for traces from this manager instance."""
+        """Set up naming and metadata for traces from this manager instance."""
         self.trace_name = f"{self.__class__.__name__}Workflow"
         self.trace_group_id = f"conversation_{self.conversation_id}"
         self.trace_metadata = {
@@ -72,27 +222,63 @@ class BaseLoreManager:
             "conversation_id": str(self.conversation_id),
             "manager_type": self.__class__.__name__
         }
-    
+
     async def ensure_initialized(self):
         """
         Ensure governance is initialized and any necessary tables exist.
         """
         if not self.initialized:
+            await self.initialize_agents()
             await self._initialize_governance()
             await self._initialize_tables()
+            self.maintenance_task = asyncio.create_task(self._maintenance_loop())
             self.initialized = True
-    
+
+    async def initialize_agents(self):
+        """
+        Initialize agent definitions. Override in subclasses to define specific agents.
+        """
+        try:
+            # Base agent for general lore management
+            self.agents["foundation"] = Agent(
+                name="FoundationAgent",
+                instructions="You are a general-purpose agent for lore management.",
+                model="gpt-4-mini",
+                model_settings=ModelSettings(temperature=0.7)
+            )
+            
+            logger.info(f"Agents initialized for {self.__class__.__name__} user {self.user_id}")
+        except Exception as e:
+            logger.error(f"Error initializing agents: {str(e)}")
+            raise
+
     async def _initialize_governance(self):
         """Initialize Nyx governance connection."""
-        from nyx.integrate import get_central_governance
-        if not self.governor:
-            self.governor = await get_central_governance(self.user_id, self.conversation_id)
-        return self.governor
-    
+        try:
+            from nyx.integrate import get_central_governance
+            
+            if not self.governor:
+                self.governor = await get_central_governance(self.user_id, self.conversation_id)
+                
+            # Initialize directive handler
+            self.directive_handler = DirectiveHandler(
+                self.user_id,
+                self.conversation_id,
+                AgentType.NARRATIVE_CRAFTER,
+                f"{self.__class__.__name__.lower()}"
+            )
+            
+            logger.info(f"Governance initialized for {self.__class__.__name__}")
+        except Exception as e:
+            logger.error(f"Error initializing governance: {str(e)}")
+            raise
+
     async def _initialize_tables(self):
-        """Initialize database tables - to be implemented by derived classes."""
+        """
+        Initialize database tables - to be implemented by derived classes.
+        """
         pass
-    
+
     async def initialize_tables_for_class(self, table_definitions: Dict[str, str]):
         """
         Initialize tables using a dictionary of table definitions.
@@ -102,18 +288,21 @@ class BaseLoreManager:
         """
         async with get_db_connection_context() as conn:
             for table_name, create_statement in table_definitions.items():
-                # Check if table exists
-                table_exists = await conn.fetchval(f"""
-                    SELECT EXISTS (
-                        SELECT FROM information_schema.tables 
-                        WHERE table_name = '{table_name.lower()}'
-                    );
-                """)
-                
-                if not table_exists:
-                    # Create the table
-                    await conn.execute(create_statement)
-                    logging.info(f"{table_name} table created")
+                try:
+                    # Check if table exists
+                    table_exists = await conn.fetchval(f"""
+                        SELECT EXISTS (
+                            SELECT FROM information_schema.tables 
+                            WHERE table_name = '{table_name.lower()}'
+                        );
+                    """)
+                    
+                    if not table_exists:
+                        # Create the table
+                        await conn.execute(create_statement)
+                        logging.info(f"{table_name} table created")
+                except Exception as e:
+                    logger.error(f"Error creating table {table_name}: {e}")
 
     async def register_with_governance(
         self, 
@@ -157,26 +346,31 @@ class BaseLoreManager:
             f"{agent_id} registered with governance for "
             f"user {self.user_id}, conversation {self.conversation_id}"
         )
-    
+
     # ---------------------------
     # Standardized CRUD Operations
     # ---------------------------
 
     @with_governance_permission(agent_type=AgentType.NARRATIVE_CRAFTER, action_type="create")
-    @function_tool
-    async def create_record(self, table_name: str, data: Dict[str, Any]) -> int:
+    async def create_record(self, input_data: CreateRecordInput) -> int:
         """
         Create a record with governance oversight.
         
         Args:
-            table_name: Name of the table to insert into
-            data: Dictionary of column names and values to insert
+            input_data: CreateRecordInput model with table name and data
             
         Returns:
             ID of the created record
         """
-        return await self._create_record_internal(table_name, data)
-    
+        # Combine standard fields with extra fields
+        data = {
+            'name': input_data.name,
+            'description': input_data.description,
+            **input_data.extra_fields
+        }
+        
+        return await self._create_record_internal(input_data.table_name, data)
+
     async def _create_record_internal(self, table_name: str, data: Dict[str, Any]) -> int:
         """Internal method for record creation with error handling."""
         try:
@@ -209,10 +403,9 @@ class BaseLoreManager:
         except Exception as e:
             logging.error(f"Error creating record in {table_name}: {e}")
             raise
-    
+
     @with_governance_permission(agent_type=AgentType.NARRATIVE_CRAFTER, action_type="read")
-    @function_tool
-    async def get_record(self, table_name: str, record_id: int) -> Optional[Dict[str, Any]]:
+    async def get_record(self, table_name: str, record_id: int) -> Optional[TableRecord]:
         """
         Get a record by ID with governance oversight.
         
@@ -221,14 +414,17 @@ class BaseLoreManager:
             record_id: ID of the record to retrieve
             
         Returns:
-            Record as a dictionary or None if not found
+            TableRecord model or None if not found
         """
         # Check cache first
         cache_key = f"{table_name}_{record_id}"
         cached = self.get_cache(cache_key)
         if cached:
-            return cached
-            
+            self._cache_stats['hits'] += 1
+            return TableRecord(**cached)
+        
+        self._cache_stats['misses'] += 1
+        
         try:
             async with get_db_connection_context() as conn:
                 record = await conn.fetchrow(f"""
@@ -239,30 +435,44 @@ class BaseLoreManager:
                 if record:
                     result = dict(record)
                     self.set_cache(cache_key, result)
-                    return result
+                    return TableRecord(**result)
                 return None
         except Exception as e:
             logging.error(f"Error fetching record {record_id} from {table_name}: {e}")
             return None
-    
+
     @with_governance_permission(agent_type=AgentType.NARRATIVE_CRAFTER, action_type="update")
-    @function_tool
-    async def update_record(self, table_name: str, record_id: int, data: Dict[str, Any]) -> bool:
+    async def update_record(self, input_data: UpdateRecordInput) -> bool:
         """
         Update a record with governance oversight.
         
         Args:
-            table_name: Name of the table to update
-            record_id: ID of the record to update
-            data: Dictionary of column names and values to update
+            input_data: UpdateRecordInput model with table name, record id and data
             
         Returns:
             True if update succeeded, False otherwise
         """
+        # Build update data
+        data = {}
+        if input_data.name is not None:
+            data['name'] = input_data.name
+        if input_data.description is not None:
+            data['description'] = input_data.description
+        if input_data.extra_fields:
+            data.update(input_data.extra_fields)
+            
+        if not data:
+            return False
+            
+        return await self._update_record_internal(
+            input_data.table_name, 
+            input_data.record_id, 
+            data
+        )
+
+    async def _update_record_internal(self, table_name: str, record_id: int, data: Dict[str, Any]) -> bool:
+        """Internal method for record updates."""
         try:
-            if not data:
-                return False
-                
             columns = list(data.keys())
             values = list(data.values())
             set_clause = ", ".join([f"{col} = ${i+1}" for i, col in enumerate(columns)])
@@ -300,9 +510,8 @@ class BaseLoreManager:
         except Exception as e:
             logging.error(f"Error updating record {record_id} in {table_name}: {e}")
             return False
-    
+
     @with_governance_permission(agent_type=AgentType.NARRATIVE_CRAFTER, action_type="delete")
-    @function_tool
     async def delete_record(self, table_name: str, record_id: int) -> bool:
         """
         Delete a record with governance oversight.
@@ -322,57 +531,53 @@ class BaseLoreManager:
                 """, record_id)
                 
                 self.invalidate_cache(f"{table_name}_{record_id}")
+                self._cache_stats['deletes'] += 1
                 return result != "DELETE 0"
         except Exception as e:
             logging.error(f"Error deleting record {record_id} from {table_name}: {e}")
             return False
-    
+
     @with_governance_permission(agent_type=AgentType.NARRATIVE_CRAFTER, action_type="query")
-    @function_tool
-    async def query_records(
-        self,
-        table_name: str,
-        conditions: Dict[str, Any] = None,
-        limit: int = 100,
-        order_by: str = None
-    ) -> List[Dict[str, Any]]:
+    async def query_records(self, input_data: QueryRecordsInput) -> List[TableRecord]:
         """
         Query records with conditions and governance oversight.
         
         Args:
-            table_name: Name of the table to query
-            conditions: Dictionary of column names and values to match
-            limit: Maximum number of records to return
-            order_by: Column to order results by
+            input_data: QueryRecordsInput model with query parameters
             
         Returns:
-            List of records as dictionaries
+            List of TableRecord models
         """
         try:
-            query = f"SELECT * FROM {table_name}"
+            query = f"SELECT * FROM {input_data.table_name}"
             values = []
             
-            if conditions:
+            if input_data.conditions:
                 where_clauses = []
-                for i, (col, val) in enumerate(conditions.items()):
-                    where_clauses.append(f"{col} = ${i+1}")
-                    values.append(val)
+                for i, cond in enumerate(input_data.conditions):
+                    if cond.operator.upper() == "IN":
+                        # Handle IN operator specially
+                        placeholders = [f"${j+len(values)+1}" for j in range(len(cond.field_value))]
+                        where_clauses.append(f"{cond.field_name} IN ({', '.join(placeholders)})")
+                        values.extend(cond.field_value)
+                    else:
+                        where_clauses.append(f"{cond.field_name} {cond.operator} ${len(values)+1}")
+                        values.append(cond.field_value)
                 query += f" WHERE {' AND '.join(where_clauses)}"
             
-            if order_by:
-                query += f" ORDER BY {order_by}"
+            if input_data.order_by:
+                query += f" ORDER BY {input_data.order_by}"
                 
-            query += f" LIMIT {limit}"
+            query += f" LIMIT {input_data.limit}"
             
             async with get_db_connection_context() as conn:
                 records = await conn.fetch(query, *values)
-                return [dict(record) for record in records]
+                return [TableRecord(**dict(record)) for record in records]
         except Exception as e:
-            logging.error(f"Error querying records from {table_name}: {e}")
+            logging.error(f"Error querying records from {input_data.table_name}: {e}")
             return []
-    
-    @function_tool
-    async def search_by_similarity(self, table_name: str, text: str, limit: int = 5) -> List[Dict[str, Any]]:
+
+    async def search_by_similarity(self, table_name: str, text: str, limit: int = 5) -> List[TableRecord]:
         """
         Search records by semantic similarity to the provided text.
         
@@ -382,7 +587,7 @@ class BaseLoreManager:
             limit: Maximum number of results to return
             
         Returns:
-            List of records sorted by similarity
+            List of TableRecord models sorted by similarity
         """
         try:
             # Generate embedding for the query text
@@ -410,12 +615,16 @@ class BaseLoreManager:
                     LIMIT $2
                 """, embedding, limit)
                 
-                return [dict(record) for record in records]
+                results = []
+                for record in records:
+                    record_dict = dict(record)
+                    # Add similarity score to extra fields
+                    results.append(TableRecord(**record_dict))
+                return results
         except Exception as e:
             logging.error(f"Error performing similarity search in {table_name}: {e}")
             return []
-    
-    @function_tool
+
     async def generate_and_store_embedding(
         self,
         text: str,
@@ -445,15 +654,174 @@ class BaseLoreManager:
             logging.error(
                 f"Error generating embedding for {table_name}.{id_field}={id_value}: {e}"
             )
-    
+
+    # ---------------------------
+    # Agent-Callable Tools
+    # ---------------------------
+
+    @staticmethod
+    @function_tool
+    async def create_record_tool(ctx: RunContextWrapper, input_data: CreateRecordInput) -> int:
+        """
+        Agent-callable tool to create a record.
+        
+        Args:
+            ctx: Run context wrapper containing manager reference
+            input_data: CreateRecordInput model
+            
+        Returns:
+            ID of created record
+        """
+        mgr = _get_manager(ctx)
+        return await mgr.create_record(input_data)
+
+    @staticmethod
+    @function_tool
+    async def get_record_tool(ctx: RunContextWrapper, table_name: str, record_id: int) -> Optional[Dict[str, Any]]:
+        """
+        Agent-callable tool to get a record.
+        
+        Args:
+            ctx: Run context wrapper containing manager reference
+            table_name: Name of the table
+            record_id: ID of the record
+            
+        Returns:
+            Record data or None
+        """
+        mgr = _get_manager(ctx)
+        record = await mgr.get_record(table_name, record_id)
+        return record.model_dump() if record else None
+
+    @staticmethod
+    @function_tool
+    async def update_record_tool(ctx: RunContextWrapper, input_data: UpdateRecordInput) -> bool:
+        """
+        Agent-callable tool to update a record.
+        
+        Args:
+            ctx: Run context wrapper containing manager reference
+            input_data: UpdateRecordInput model
+            
+        Returns:
+            True if successful
+        """
+        mgr = _get_manager(ctx)
+        return await mgr.update_record(input_data)
+
+    @staticmethod
+    @function_tool
+    async def query_records_tool(ctx: RunContextWrapper, input_data: QueryRecordsInput) -> List[Dict[str, Any]]:
+        """
+        Agent-callable tool to query records.
+        
+        Args:
+            ctx: Run context wrapper containing manager reference
+            input_data: QueryRecordsInput model
+            
+        Returns:
+            List of records
+        """
+        mgr = _get_manager(ctx)
+        records = await mgr.query_records(input_data)
+        return [r.model_dump() for r in records]
+
+    @staticmethod
+    @function_tool
+    async def search_similarity_tool(ctx: RunContextWrapper, table_name: str, text: str, limit: int = 5) -> List[Dict[str, Any]]:
+        """
+        Agent-callable tool to search by similarity.
+        
+        Args:
+            ctx: Run context wrapper containing manager reference
+            table_name: Name of the table
+            text: Query text
+            limit: Maximum results
+            
+        Returns:
+            List of similar records
+        """
+        mgr = _get_manager(ctx)
+        records = await mgr.search_by_similarity(table_name, text, limit)
+        return [r.model_dump() for r in records]
+
+    @staticmethod
+    @function_tool
+    async def get_cache_stats_tool(ctx: RunContextWrapper) -> CacheStats:
+        """
+        Agent-callable tool to get cache statistics.
+        
+        Args:
+            ctx: Run context wrapper containing manager reference
+            
+        Returns:
+            CacheStats model
+        """
+        mgr = _get_manager(ctx)
+        stats = mgr._get_cache_stats_dict()
+        return CacheStats(**stats)
+
+    @staticmethod
+    @function_tool(strict_mode=False)
+    async def execute_raw_query_tool(ctx: RunContextWrapper, query: str, params: Optional[List[Any]] = None) -> List[Dict[str, Any]]:
+        """
+        Agent-callable tool to execute raw SQL queries.
+        Use with caution - only for advanced operations.
+        
+        Args:
+            ctx: Run context wrapper containing manager reference
+            query: SQL query
+            params: Query parameters
+            
+        Returns:
+            Query results
+        """
+        mgr = _get_manager(ctx)
+        return await mgr._execute_query_internal(query, *(params or []))
+
+    @staticmethod
+    @function_tool(strict_mode=False)
+    async def batch_update_tool(ctx: RunContextWrapper, table_name: str, updates: List[BatchUpdateItem]) -> int:
+        """
+        Agent-callable tool to perform batch updates.
+        
+        Args:
+            ctx: Run context wrapper containing manager reference
+            table_name: Name of the table
+            updates: List of BatchUpdateItem models
+            
+        Returns:
+            Number of updated rows
+        """
+        mgr = _get_manager(ctx)
+        update_dicts = [u.model_dump() for u in updates]
+        return await mgr._batch_update_internal(table_name, update_dicts)
+
+    @staticmethod
+    @function_tool(strict_mode=False)
+    async def validate_data_tool(ctx: RunContextWrapper, data: Dict[str, Any], schema_type: str) -> ValidationResult:
+        """
+        Agent-callable tool to validate data.
+        
+        Args:
+            ctx: Run context wrapper containing manager reference
+            data: Data to validate
+            schema_type: Type of schema
+            
+        Returns:
+            ValidationResult model
+        """
+        mgr = _get_manager(ctx)
+        result = await mgr._validate_data_internal(data, schema_type)
+        return ValidationResult(**result)
+
     # ---------------------------
     # Caching Methods
     # ---------------------------
 
-    @function_tool
     def get_cache(self, key: str) -> Any:
         """
-        Get an item from the cache.
+        Get an item from the global cache.
         
         Args:
             key: Cache key to retrieve
@@ -468,10 +836,9 @@ class BaseLoreManager:
             self.conversation_id
         )
     
-    @function_tool
     def set_cache(self, key: str, value: Any, ttl: Optional[int] = None) -> None:
         """
-        Set an item in the cache.
+        Set an item in the global cache.
         
         Args:
             key: Cache key to set
@@ -482,12 +849,12 @@ class BaseLoreManager:
             self.cache_namespace,
             key,
             value,
-            ttl,
+            ttl or self._default_ttl,
             self.user_id,
             self.conversation_id
         )
+        self._cache_stats['sets'] += 1
     
-    @function_tool
     def invalidate_cache(self, key: str) -> None:
         """
         Invalidate a specific cache key.
@@ -502,7 +869,6 @@ class BaseLoreManager:
             self.conversation_id
         )
     
-    @function_tool
     def invalidate_cache_pattern(self, pattern: str) -> None:
         """
         Invalidate cache keys matching a pattern.
@@ -517,42 +883,208 @@ class BaseLoreManager:
             self.conversation_id
         )
     
-    @function_tool
     def clear_cache(self) -> None:
         """Clear all cache entries for this manager."""
         GLOBAL_LORE_CACHE.clear_namespace(self.cache_namespace)
-    
+        self._local_cache.clear()
+
     # ---------------------------
-    # Utility / Agent Interaction
+    # Internal Methods
     # ---------------------------
 
-    def create_run_context(self, ctx):
+    async def _execute_query_internal(self, query: str, *args) -> List[Dict[str, Any]]:
         """
-        Create a run context from context data or object.
+        Execute a database query and return results.
         
         Args:
-            ctx: Context object or data
+            query: SQL query
+            *args: Query parameters
+            
+        Returns:
+            List of result dictionaries
+        """
+        try:
+            async with get_db_connection_context() as conn:
+                records = await conn.fetch(query, *args)
+                return [dict(record) for record in records]
+        except Exception as e:
+            logger.error(f"Error executing query: {e}")
+            return []
+
+    async def _batch_update_internal(self, table: str, updates: List[Dict[str, Any]]) -> int:
+        """
+        Perform batch updates on a table.
+        
+        Args:
+            table: Table name
+            updates: List of update dictionaries with 'column', 'value', 'id'
+            
+        Returns:
+            Number of updated rows
+        """
+        if not updates:
+            return 0
+        
+        try:
+            async with get_db_connection_context() as conn:
+                async with conn.transaction():
+                    for update in updates:
+                        await conn.execute(
+                            f"UPDATE {table} SET {update['column']} = $1 WHERE id = $2",
+                            update['value'],
+                            update['id']
+                        )
+            return len(updates)
+        except Exception as e:
+            logger.error(f"Error in batch update: {e}")
+            return 0
+
+    async def _validate_data_internal(self, data: Dict[str, Any], schema_type: str) -> Dict[str, Any]:
+        """
+        Validate data against a schema type.
+        
+        Args:
+            data: Data to validate
+            schema_type: Type of schema
+            
+        Returns:
+            Validation results
+        """
+        # Example validation - override in subclasses for specific schemas
+        required_fields = {
+            "foundation": ["cosmology", "magic_system"],
+            "faction": ["name", "type"],
+            "character": ["name", "role"]
+        }.get(schema_type, [])
+        
+        missing = [field for field in required_fields if field not in data]
+        
+        return {
+            "is_valid": len(missing) == 0,
+            "issues": missing,
+            "fixed_data": data
+        }
+
+    def _get_cache_stats_dict(self) -> Dict[str, Any]:
+        """
+        Get cache statistics as a dictionary.
+        
+        Returns:
+            Cache statistics
+        """
+        return {
+            **self._cache_stats,
+            "size": len(self._local_cache),
+            "max_size": self._cache_max,
+            "utilization": len(self._local_cache) / self._cache_max if self._cache_max > 0 else 0,
+            "user_id": self.user_id,
+            "conversation_id": self.conversation_id,
+            "timestamp": datetime.now().isoformat()
+        }
+
+    # ---------------------------
+    # Maintenance Loop
+    # ---------------------------
+
+    async def _maintenance_loop(self):
+        """Background task that performs periodic maintenance."""
+        while True:
+            try:
+                await asyncio.sleep(300)  # Run every 5 minutes
+                await self._maintenance_once()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Error in maintenance loop: {e}")
+
+    async def _maintenance_once(self):
+        """
+        Run a single maintenance pass.
+        """
+        stats = self._get_cache_stats_dict()
+        
+        with trace(
+            workflow_name="MaintenanceCheck",
+            group_id=self.trace_group_id,
+            metadata=self.trace_metadata
+        ):
+            run_ctx = RunContextWrapper(context={
+                "user_id": self.user_id,
+                "conversation_id": self.conversation_id,
+                "manager": self
+            })
+            
+            prompt = (
+                f"Cache statistics:\n{json.dumps(stats, indent=2)}\n\n"
+                "Analyze and decide if action is needed. Return JSON response."
+            )
+            
+            run_config = RunConfig(
+                workflow_name="MaintenanceAgent",
+                trace_metadata=self.trace_metadata
+            )
+            
+            result = await Runner.run(
+                starting_agent=maintenance_agent,
+                input=prompt,
+                context=run_ctx.context,
+                run_config=run_config
+            )
+            
+            try:
+                decision = json.loads(result.final_output) if isinstance(result.final_output, str) else result.final_output
+                
+                if decision.get("action") == "log_warning":
+                    logger.warning(decision.get("message", "Maintenance warning"))
+                elif decision.get("action") == "clear_cache":
+                    logger.info("Clearing cache based on maintenance recommendation")
+                    self._local_cache.clear()
+                    self._cache_stats['evictions'] += len(self._local_cache)
+            except Exception as e:
+                logger.error(f"Error processing maintenance decision: {e}")
+
+    # ---------------------------
+    # Context and Agent Utilities
+    # ---------------------------
+
+    def create_run_context(self, additional_context: Optional[Dict[str, Any]] = None) -> RunContextWrapper:
+        """
+        Create a run context for agent execution.
+        
+        Args:
+            additional_context: Additional context to include
             
         Returns:
             RunContextWrapper instance
         """
-        if hasattr(ctx, 'context'):
-            return ctx
-        return RunContextWrapper(context=ctx)
-    
-    async def execute_llm_prompt(self, prompt: str, agent_name: str = None, model: str = "gpt-4.1-nano") -> str:
+        context = {
+            "manager": self,
+            "user_id": self.user_id,
+            "conversation_id": self.conversation_id
+        }
+        if additional_context:
+            context.update(additional_context)
+        return RunContextWrapper(context=context)
+
+    async def execute_llm_prompt(
+        self, 
+        prompt: str, 
+        agent_name: Optional[str] = None, 
+        model: str = "gpt-4-mini",
+        temperature: float = 0.7
+    ) -> str:
         """
-        Execute a prompt with an LLM agent via the OpenAI Agents SDK.
+        Execute a prompt with an LLM agent.
         
         Args:
-            prompt: Prompt text to send to the agent
-            agent_name: Optional name for the agent
-            model: Model identifier to use (defaults to "gpt-4.1-nano")
+            prompt: Prompt text
+            agent_name: Optional agent name
+            model: Model to use
+            temperature: Temperature setting
             
         Returns:
-            Response text from the agent
+            Response text
         """
-        # Create a trace for better monitoring and debugging
         with trace(
             workflow_name=self.trace_name,
             group_id=self.trace_group_id,
@@ -563,88 +1095,104 @@ class BaseLoreManager:
                 "model": model
             }
         ):
-            # Build run context
-            run_ctx = RunContextWrapper(
-                context={
-                    "user_id": self.user_id,
-                    "conversation_id": self.conversation_id
-                }
-            )
+            # Use existing agent if available, otherwise create temporary one
+            if agent_name and agent_name in self.agents:
+                agent = self.agents[agent_name]
+            else:
+                agent = Agent(
+                    name=agent_name or f"{self.__class__.__name__}Agent",
+                    instructions=f"You help with {self.__class__.__name__} management.",
+                    model=model,
+                    model_settings=ModelSettings(temperature=temperature)
+                )
             
-            # Configure the agent
-            agent = Agent(
-                name=agent_name or f"{self.__class__.__name__}Agent",
-                instructions=(
-                    f"You help with generating content for {self.__class__.__name__}."
-                ),
-                model=model,
-                model_settings=ModelSettings(temperature=0.7),
-            )
-            
-            # Set up a run config with our trace metadata
             run_config = RunConfig(
                 workflow_name=f"{self.__class__.__name__}Prompt",
                 trace_metadata=self.trace_metadata
             )
             
-            # Run the agent with the prompt
             result = await Runner.run(
                 starting_agent=agent,
                 input=prompt,
-                context=run_ctx.context,
+                context=self.create_run_context().context,
                 run_config=run_config
             )
             
             return result.final_output
-    
-    @function_tool
+
     async def create_table_definition(
         self,
         table_name: str,
-        extra_columns: Dict[str, str] = None,
+        extra_columns: Optional[Dict[str, str]] = None,
         include_standard: bool = True,
-        foreign_keys: Dict[str, str] = None
+        foreign_keys: Optional[Dict[str, str]] = None
     ) -> str:
         """
         Create a standardized table definition.
         
         Args:
             table_name: Name of the table
-            extra_columns: Additional columns
+            extra_columns: Additional columns beyond standard
             include_standard: Whether to include standard columns
-            foreign_keys: Dict mapping columns -> referenced_table(column)
+            foreign_keys: Foreign key constraints
             
         Returns:
             SQL CREATE TABLE statement
         """
         all_columns = {}
         
-        # Add standard columns if requested
         if include_standard:
             all_columns.update(self._standard_columns)
         
-        # Add extra columns
         if extra_columns:
             all_columns.update(extra_columns)
         
-        # Build column definitions
         column_defs = [f"{col} {definition}" for col, definition in all_columns.items()]
         
-        # Add foreign keys
         if foreign_keys:
             for column, reference in foreign_keys.items():
                 column_defs.append(
                     f"FOREIGN KEY ({column}) REFERENCES {reference} ON DELETE CASCADE"
                 )
         
-        # Construct the SQL
         sql = f"""
-            CREATE TABLE {table_name} (
+            CREATE TABLE IF NOT EXISTS {table_name} (
                 {', '.join(column_defs)}
             );
-            
-            CREATE INDEX IF NOT EXISTS idx_{table_name.lower()}_embedding
-            ON {table_name} USING ivfflat (embedding vector_cosine_ops);
         """
         
+        # Add index for embeddings if included
+        if 'embedding' in all_columns:
+            sql += f"""
+            CREATE INDEX IF NOT EXISTS idx_{table_name.lower()}_embedding
+            ON {table_name} USING ivfflat (embedding vector_cosine_ops);
+            """
+        
         return sql
+
+    # ---------------------------
+    # Cleanup
+    # ---------------------------
+
+    async def close(self):
+        """
+        Close the manager and clean up resources.
+        """
+        # Cancel maintenance task
+        if self.maintenance_task and not self.maintenance_task.done():
+            self.maintenance_task.cancel()
+            try:
+                await self.maintenance_task
+            except asyncio.CancelledError:
+                pass
+        
+        # Clear caches
+        self._local_cache.clear()
+        self.clear_cache()
+        
+        logger.info(f"{self.__class__.__name__} for user {self.user_id} closed")
+
+    def __del__(self):
+        """Cleanup on deletion."""
+        if hasattr(self, 'maintenance_task') and self.maintenance_task:
+            self.maintenance_task.cancel()
