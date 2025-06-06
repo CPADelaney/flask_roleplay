@@ -17,7 +17,7 @@ from agents import (
     GuardrailFunctionOutput
 )
 from agents.run import RunConfig
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field
 
 # Nyx governance integration
 from nyx.nyx_governance import AgentType, DirectiveType, DirectivePriority
@@ -46,15 +46,15 @@ class TableRecord(BaseModel):
     description: Optional[str] = None
     timestamp: Optional[str] = None
     embedding: Optional[List[float]] = None
-    # Allow extra fields
-    model_config = ConfigDict(extra='allow')
+    # Store extra fields as a dict instead of using extra='allow'
+    extra_fields: Optional[Dict[str, Any]] = Field(default_factory=dict)
 
 class CreateRecordInput(BaseModel):
     """Input model for creating records"""
     table_name: str
     name: str
     description: str
-    # Allow additional fields
+    # Store additional fields explicitly
     extra_fields: Optional[Dict[str, Any]] = Field(default_factory=dict)
 
 class UpdateRecordInput(BaseModel):
@@ -63,7 +63,7 @@ class UpdateRecordInput(BaseModel):
     record_id: int
     name: Optional[str] = None
     description: Optional[str] = None
-    # Allow additional fields
+    # Store additional fields explicitly
     extra_fields: Optional[Dict[str, Any]] = Field(default_factory=dict)
 
 class QueryConditions(BaseModel):
@@ -348,6 +348,31 @@ class BaseLoreManager:
         )
 
     # ---------------------------
+    # Helper Methods
+    # ---------------------------
+
+    def _dict_to_table_record(self, data: Dict[str, Any]) -> TableRecord:
+        """
+        Convert a dictionary to a TableRecord, handling extra fields.
+        
+        Args:
+            data: Dictionary of record data
+            
+        Returns:
+            TableRecord instance
+        """
+        # Extract known fields
+        known_fields = {'id', 'name', 'description', 'timestamp', 'embedding'}
+        record_data = {k: v for k, v in data.items() if k in known_fields}
+        
+        # Put remaining fields in extra_fields
+        extra = {k: v for k, v in data.items() if k not in known_fields and k != 'similarity'}
+        if extra:
+            record_data['extra_fields'] = extra
+            
+        return TableRecord(**record_data)
+
+    # ---------------------------
     # Standardized CRUD Operations
     # ---------------------------
 
@@ -421,7 +446,7 @@ class BaseLoreManager:
         cached = self.get_cache(cache_key)
         if cached:
             self._cache_stats['hits'] += 1
-            return TableRecord(**cached)
+            return self._dict_to_table_record(cached)
         
         self._cache_stats['misses'] += 1
         
@@ -435,7 +460,7 @@ class BaseLoreManager:
                 if record:
                     result = dict(record)
                     self.set_cache(cache_key, result)
-                    return TableRecord(**result)
+                    return self._dict_to_table_record(result)
                 return None
         except Exception as e:
             logging.error(f"Error fetching record {record_id} from {table_name}: {e}")
@@ -572,7 +597,7 @@ class BaseLoreManager:
             
             async with get_db_connection_context() as conn:
                 records = await conn.fetch(query, *values)
-                return [TableRecord(**dict(record)) for record in records]
+                return [self._dict_to_table_record(dict(record)) for record in records]
         except Exception as e:
             logging.error(f"Error querying records from {input_data.table_name}: {e}")
             return []
@@ -618,8 +643,13 @@ class BaseLoreManager:
                 results = []
                 for record in records:
                     record_dict = dict(record)
-                    # Add similarity score to extra fields
-                    results.append(TableRecord(**record_dict))
+                    # Store similarity score in extra_fields
+                    table_record = self._dict_to_table_record(record_dict)
+                    if 'similarity' in record_dict:
+                        if table_record.extra_fields is None:
+                            table_record.extra_fields = {}
+                        table_record.extra_fields['similarity'] = record_dict['similarity']
+                    results.append(table_record)
                 return results
         except Exception as e:
             logging.error(f"Error performing similarity search in {table_name}: {e}")
@@ -691,7 +721,13 @@ class BaseLoreManager:
         """
         mgr = _get_manager(ctx)
         record = await mgr.get_record(table_name, record_id)
-        return record.model_dump() if record else None
+        if record:
+            # Flatten the record for agent use
+            data = record.model_dump(exclude={'extra_fields'})
+            if record.extra_fields:
+                data.update(record.extra_fields)
+            return data
+        return None
 
     @staticmethod
     @function_tool
@@ -724,7 +760,14 @@ class BaseLoreManager:
         """
         mgr = _get_manager(ctx)
         records = await mgr.query_records(input_data)
-        return [r.model_dump() for r in records]
+        # Flatten records for agent use
+        result = []
+        for record in records:
+            data = record.model_dump(exclude={'extra_fields'})
+            if record.extra_fields:
+                data.update(record.extra_fields)
+            result.append(data)
+        return result
 
     @staticmethod
     @function_tool
@@ -743,7 +786,14 @@ class BaseLoreManager:
         """
         mgr = _get_manager(ctx)
         records = await mgr.search_by_similarity(table_name, text, limit)
-        return [r.model_dump() for r in records]
+        # Flatten records for agent use
+        result = []
+        for record in records:
+            data = record.model_dump(exclude={'extra_fields'})
+            if record.extra_fields:
+                data.update(record.extra_fields)
+            result.append(data)
+        return result
 
     @staticmethod
     @function_tool
