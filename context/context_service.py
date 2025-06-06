@@ -7,6 +7,7 @@ import json
 from typing import Dict, List, Any, Optional, Union, Tuple
 from datetime import datetime, timedelta
 import hashlib
+from dataclasses import dataclass
 
 # Agent SDK imports
 from agents import (
@@ -31,6 +32,20 @@ from context.models import (
 
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------
+# Define the Context Type for the SDK
+# ---------------------------------------------------------------------
+@dataclass
+class ServiceContext:
+    """Context object for service operations containing user and conversation info"""
+    user_id: int
+    conversation_id: int
+    # Add any other context data that should be available to all tools
+    # For example:
+    # session_id: Optional[str] = None
+    # request_id: Optional[str] = None
+    # user_permissions: Optional[List[str]] = None
 
 class BaseContextData(BaseModel):
     """Base context data from database"""
@@ -310,7 +325,8 @@ class ContextService:
                     tool_description_override="Use this for memory-related tasks"
                 )
                 # We could add vector/narrative agent handoffs if needed
-            ]
+            ],
+            model="gpt-4.1-nano"
         )
     
     async def close(self):
@@ -1109,20 +1125,16 @@ async def cleanup_context_services():
 
 @function_tool
 async def validate_context_budget_tool(
-    ctx: RunContextWrapper,
-    context: Dict[str, Any],
+    ctx: RunContextWrapper[ServiceContext],
+    context: Any,
     context_budget: int
 ) -> GuardrailFunctionOutput:
     """
     Standalone tool: Validate that the context stays within token budget.
-    Library sees `ctx` as the first parameter => correct signature.
     """
-    # We must figure out how to get the relevant ContextService instance (by user_id?).
-    # If your code can pass user_id in the signature, do so. Otherwise assume "ctx" includes it.
-    
-    # Example: assume "ctx" has "user_id" / "conversation_id" in it
-    user_id = ctx.get("user_id", 0)
-    conversation_id = ctx.get("conversation_id", 0)
+    # Access context through ctx.context
+    user_id = ctx.context.user_id
+    conversation_id = ctx.context.conversation_id
     
     service = await get_context_service(user_id, conversation_id)
     return await service._validate_context_budget(context, context_budget)
@@ -1130,74 +1142,75 @@ async def validate_context_budget_tool(
 
 @function_tool
 async def get_base_context_tool(
-    ctx: RunContextWrapper,
+    ctx: RunContextWrapper[ServiceContext],
     location: Optional[str] = None
 ) -> BaseContextData:
     """
     Standalone tool: get base context from DB or fallback,
     calling the private method `_get_base_context`.
     """
-    user_id = ctx.get("user_id", 0)
-    conversation_id = ctx.get("conversation_id", 0)
+    # Access context through ctx.context
+    user_id = ctx.context.user_id
+    conversation_id = ctx.context.conversation_id
+    
     service = await get_context_service(user_id, conversation_id)
     return await service._get_base_context(location)
 
 
 @function_tool
 async def run_context_maintenance_tool(
-    ctx: RunContextWrapper
+    ctx: RunContextWrapper[ServiceContext]
 ) -> MaintenanceResult:
     """
     Standalone tool: run maintenance tasks 
     (calls the private method _run_maintenance inside the ContextService).
     """
-    user_id = ctx.get("user_id", 0)
-    conversation_id = ctx.get("conversation_id", 0)
+    # Access context through ctx.context
+    user_id = ctx.context.user_id
+    conversation_id = ctx.context.conversation_id
+    
     service = await get_context_service(user_id, conversation_id)
     return await service._run_maintenance()
 
 
 @function_tool
 async def get_narrative_summaries_tool(
-    ctx: RunContextWrapper,
+    ctx: RunContextWrapper[ServiceContext],
     input_text: str
 ) -> NarrativeSummaryData:
     """
     Standalone tool: get summarized narratives from `_get_narrative_summaries`.
     """
-    user_id = ctx.get("user_id", 0)
-    conversation_id = ctx.get("conversation_id", 0)
+    # Access context through ctx.context
+    user_id = ctx.context.user_id
+    conversation_id = ctx.context.conversation_id
+    
     service = await get_context_service(user_id, conversation_id)
     result = await service._get_narrative_summaries(input_text)
     # Convert dict to NarrativeSummaryData
     if result:
-        return NarrativeSummaryData(
-            summary_text=result.get("summary_text", ""),
-            summary_level=result.get("summary_level", 0),
-            key_events=result.get("key_events", []),
-            important_npcs=result.get("important_npcs", []),
-            locations_visited=result.get("locations_visited", []),
-            time_period=TimeSpanMetadata(**result["time_period"]) if "time_period" in result else None
-        )
+        return result
     return NarrativeSummaryData(summary_text="", summary_level=0)
     
 @function_tool
 async def trim_to_budget_tool(
-    ctx: RunContextWrapper,
-    context: Dict[str, Any],
+    ctx: RunContextWrapper[ServiceContext],
+    context: Any,
     budget: int
-) -> Dict[str, Any]:
+) -> Any:
     """
     Standalone tool: trim context to fit within `budget` tokens.
     """
-    user_id = ctx.get("user_id", 0)
-    conversation_id = ctx.get("conversation_id", 0)
+    # Access context through ctx.context
+    user_id = ctx.context.user_id
+    conversation_id = ctx.context.conversation_id
+    
     service = await get_context_service(user_id, conversation_id)
     return await service._trim_to_budget(context, budget)
 
 @function_tool
 async def get_relevant_npcs_tool(
-    ctx: RunContextWrapper,
+    ctx: RunContextWrapper[ServiceContext],
     input_text: str,
     location: Optional[str] = None
 ) -> List[NPCData]:
@@ -1205,37 +1218,43 @@ async def get_relevant_npcs_tool(
     Standalone tool: get NPCs relevant to the current input & location
     from the private method `_get_relevant_npcs`.
     """
-    user_id = ctx.get("user_id", 0)
-    conversation_id = ctx.get("conversation_id", 0)
+    # Access context through ctx.context
+    user_id = ctx.context.user_id
+    conversation_id = ctx.context.conversation_id
+    
     service = await get_context_service(user_id, conversation_id)
     return await service._get_relevant_npcs(input_text, location)
 
 
 @function_tool
 async def get_location_details_tool(
-    ctx: RunContextWrapper,
+    ctx: RunContextWrapper[ServiceContext],
     location: Optional[str] = None
 ) -> LocationData:
     """
     Standalone tool: get details about the current location
     from `_get_location_details`.
     """
-    user_id = ctx.get("user_id", 0)
-    conversation_id = ctx.get("conversation_id", 0)
+    # Access context through ctx.context
+    user_id = ctx.context.user_id
+    conversation_id = ctx.context.conversation_id
+    
     service = await get_context_service(user_id, conversation_id)
     return await service._get_location_details(location)
 
 
 @function_tool
 async def get_quest_information_tool(
-    ctx: RunContextWrapper
+    ctx: RunContextWrapper[ServiceContext]
 ) -> List[QuestData]:
     """
     Standalone tool: get info about active quests
     via `_get_quest_information`.
     """
-    user_id = ctx.get("user_id", 0)
-    conversation_id = ctx.get("conversation_id", 0)
+    # Access context through ctx.context
+    user_id = ctx.context.user_id
+    conversation_id = ctx.context.conversation_id
+    
     service = await get_context_service(user_id, conversation_id)
     return await service._get_quest_information()
 
@@ -1244,12 +1263,13 @@ async def get_quest_information_tool(
 # Agent Creation referencing the standalone tool functions
 # ---------------------------------------------------------------------
 
-def create_context_service_orchestrator() -> Agent:
+def create_context_service_orchestrator() -> Agent[ServiceContext]:
     """
     Create the orchestration agent for the context service,
     now referencing the standalone tool functions instead of instance methods.
     """
-    agent = Agent(
+    # Type the agent with ServiceContext
+    agent = Agent[ServiceContext](
         name="Context Service Orchestrator",
         instructions="""
         You are a context service orchestrator specialized in managing 
@@ -1264,11 +1284,12 @@ def create_context_service_orchestrator() -> Agent:
             get_quest_information_tool,
             get_narrative_summaries_tool,
             trim_to_budget_tool
-        ]
+        ],
+        model="gpt-4.1-nano"
     )
     return agent
 
 
-def get_context_service_orchestrator() -> Agent:
+def get_context_service_orchestrator() -> Agent[ServiceContext]:
     """Get the context service orchestrator agent."""
     return create_context_service_orchestrator()
