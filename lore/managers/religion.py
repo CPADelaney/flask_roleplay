@@ -632,58 +632,42 @@ class ReligionManager(BaseLoreManager):
     )
     @function_tool(strict_mode=True)
     async def add_deity(self, ctx, params: DeityParams) -> int:
-        """Add a deity using canon establishment."""
+        """Prepares deity data and uses the Canon to create the entity."""
         await self.ensure_initialized()
         
-        async with self.get_connection_pool() as pool:
-            async with pool.acquire() as conn:
-                # Prepare embedding text
-                embed_text = f"{params.name} {params.gender} {' '.join(params.domain)} {params.description}"
-                
-                # Convert relationships to JSON format
-                relationships_json = {
-                    rel.deity_name: {
-                        "type": rel.relationship_type,
-                        "description": rel.description
-                    }
-                    for rel in params.relationships
-                }
-                
-                create_data = {
-                    'name': params.name,
-                    'gender': params.gender,
-                    'domain': params.domain,
-                    'description': params.description,
-                    'pantheon_id': params.pantheon_id,
-                    'iconography': params.iconography,
-                    'holy_symbol': params.holy_symbol,
-                    'sacred_animals': params.sacred_animals,
-                    'sacred_colors': params.sacred_colors,
-                    'relationships': json.dumps(relationships_json),
-                    'rank': params.rank,
-                    'worshippers': params.worshippers
-                }
-                
-                search_fields = {
-                    'name': params.name,
-                    'pantheon_id': params.pantheon_id,
-                    'name_field': 'name'
-                }
-                
-                deity_id = await find_or_create_entity(
-                    ctx=ctx,
-                    conn=conn,
-                    entity_type="deity",
-                    entity_name=params.name,
-                    search_fields=search_fields if params.pantheon_id else {'name': params.name, 'name_field': 'name'},
-                    create_data=create_data,
-                    table_name="Deities",
-                    embedding_text=embed_text,
-                    similarity_threshold=0.85
-                )
-                
-                GLOBAL_LORE_CACHE.invalidate_pattern("deity")
-                return deity_id
+        # This manager's job is to PREPARE the data.
+        embed_text = f"{params.name} {params.gender} {' '.join(params.domain)} {params.description}"
+        embedding = await generate_embedding(embed_text)
+
+        relationships_json = json.dumps({
+            rel.deity_name: {"type": rel.relationship_type, "description": rel.description}
+            for rel in params.relationships
+        })
+
+        # Assemble all data into a dictionary for the Canon.
+        deity_data_package = {
+            "name": params.name,
+            "gender": params.gender,
+            "domain": params.domain,
+            "description": params.description,
+            "pantheon_id": params.pantheon_id,
+            "iconography": params.iconography,
+            "holy_symbol": params.holy_symbol,
+            "sacred_animals": params.sacred_animals,
+            "sacred_colors": params.sacred_colors,
+            "relationships": relationships_json,
+            "rank": params.rank,
+            "worshippers": params.worshippers,
+            "embedding": embedding
+        }
+        
+        # The LoreSystem will manage the transaction, so we just need the connection.
+        async with self.get_connection_pool() as conn:
+            # Call the SINGLE, CENTRALIZED function from the canon.
+            deity_id = await canon.find_or_create_deity(ctx, conn, **deity_data_package)
+        
+        self.invalidate_cache_pattern("deity")
+        return deity_id
             
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
@@ -693,42 +677,20 @@ class ReligionManager(BaseLoreManager):
     )
     @function_tool(strict_mode=True)
     async def add_pantheon(self, ctx, params: PantheonParams) -> int:
-        """Add a pantheon using canon establishment."""
+        """Prepares pantheon data and uses the Canon to create it."""
         await self.ensure_initialized()
         
-        async with self.get_connection_pool() as pool:
-            async with pool.acquire() as conn:
-                embed_text = f"{params.name} {params.description} {params.origin_story} {params.matriarchal_elements}"
-                
-                create_data = {
-                    'name': params.name,
-                    'description': params.description,
-                    'origin_story': params.origin_story,
-                    'matriarchal_elements': params.matriarchal_elements,
-                    'creation_myth': params.creation_myth,
-                    'afterlife_beliefs': params.afterlife_beliefs,
-                    'cosmic_structure': params.cosmic_structure,
-                    'major_holy_days': params.major_holy_days,
-                    'geographical_spread': params.geographical_spread,
-                    'dominant_nations': params.dominant_nations,
-                    'primary_worshippers': params.primary_worshippers,
-                    'taboos': params.taboos
-                }
-                
-                pantheon_id = await find_or_create_entity(
-                    ctx=ctx,
-                    conn=conn,
-                    entity_type="pantheon",
-                    entity_name=params.name,
-                    search_fields={'name': params.name, 'name_field': 'name'},
-                    create_data=create_data,
-                    table_name="Pantheons",
-                    embedding_text=embed_text,
-                    similarity_threshold=0.90  # Higher threshold for pantheons
-                )
-                
-                GLOBAL_LORE_CACHE.invalidate_pattern("pantheon")
-                return pantheon_id
+        pantheon_data_package = params.dict()
+        pantheon_data_package['embedding'] = await generate_embedding(
+            f"{params.name} {params.description}"
+        )
+
+        # Call the Canon...
+        async with self.get_connection_pool() as conn:
+            pantheon_id = await canon.find_or_create_pantheon(ctx, conn, **pantheon_data_package)
+
+        self.invalidate_cache_pattern("pantheon")
+        return pantheon_id
 
 
     @with_governance(
@@ -739,30 +701,34 @@ class ReligionManager(BaseLoreManager):
     )
     @function_tool(strict_mode=True)
     async def add_religious_practice(self, ctx, params: ReligiousPracticeParams) -> int:
-        """Add a religious practice."""
+        """Add a religious practice using canon establishment."""
         await self.ensure_initialized()
         
         embed_text = f"{params.name} {params.practice_type} {params.description} {params.purpose}"
-        embedding = await generate_embedding(embed_text)
+        
+        # Prepare data package for canon
+        practice_data_package = {
+            "name": params.name,
+            "practice_type": params.practice_type,
+            "description": params.description,
+            "purpose": params.purpose,
+            "frequency": params.frequency,
+            "required_elements": params.required_elements,
+            "performed_by": params.performed_by,
+            "restricted_to": params.restricted_to,
+            "deity_id": params.deity_id,
+            "pantheon_id": params.pantheon_id
+        }
         
         async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
-                practice_id = await conn.fetchval("""
-                    INSERT INTO ReligiousPractices (
-                        name, practice_type, description, purpose,
-                        frequency, required_elements, performed_by,
-                        restricted_to, deity_id, pantheon_id, embedding
-                    )
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-                    RETURNING id
-                """,
-                params.name, params.practice_type, params.description, 
-                params.purpose, params.frequency, params.required_elements, 
-                params.performed_by, params.restricted_to, params.deity_id, 
-                params.pantheon_id, embedding)
-                
-                GLOBAL_LORE_CACHE.invalidate_pattern("practice")
-                return practice_id
+                from lore.core import canon
+                practice_id = await canon.find_or_create_religious_practice(
+                    ctx, conn, **practice_data_package, embedding_text=embed_text
+                )
+        
+        GLOBAL_LORE_CACHE.invalidate_pattern("practice")
+        return practice_id
 
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
@@ -772,33 +738,37 @@ class ReligionManager(BaseLoreManager):
     )
     @function_tool(strict_mode=True)
     async def add_holy_site(self, ctx, params: HolySiteParams) -> int:
-        """Add a holy site."""
+        """Add a holy site using canon establishment."""
         await self.ensure_initialized()
         
         embed_text = f"{params.name} {params.site_type} {params.description} {params.clergy_type}"
-        embedding = await generate_embedding(embed_text)
+        
+        # Prepare data package for canon
+        site_data_package = {
+            "name": params.name,
+            "site_type": params.site_type,
+            "description": params.description,
+            "clergy_type": params.clergy_type,
+            "location_id": params.location_id,
+            "location_description": params.location_description,
+            "deity_id": params.deity_id,
+            "pantheon_id": params.pantheon_id,
+            "clergy_hierarchy": params.clergy_hierarchy,
+            "pilgrimage_info": params.pilgrimage_info,
+            "miracles_reported": params.miracles_reported,
+            "restrictions": params.restrictions,
+            "architectural_features": params.architectural_features
+        }
         
         async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
-                site_id = await conn.fetchval("""
-                    INSERT INTO HolySites (
-                        name, site_type, description, clergy_type,
-                        location_id, location_description, deity_id,
-                        pantheon_id, clergy_hierarchy, pilgrimage_info,
-                        miracles_reported, restrictions, architectural_features,
-                        embedding
-                    )
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
-                    RETURNING id
-                """,
-                params.name, params.site_type, params.description, params.clergy_type,
-                params.location_id, params.location_description, params.deity_id,
-                params.pantheon_id, params.clergy_hierarchy, params.pilgrimage_info,
-                params.miracles_reported, params.restrictions, 
-                params.architectural_features, embedding)
-                
-                GLOBAL_LORE_CACHE.invalidate_pattern("site")
-                return site_id
+                from lore.core import canon
+                site_id = await canon.find_or_create_holy_site(
+                    ctx, conn, **site_data_package, embedding_text=embed_text
+                )
+        
+        GLOBAL_LORE_CACHE.invalidate_pattern("site")
+        return site_id
 
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
@@ -808,31 +778,34 @@ class ReligionManager(BaseLoreManager):
     )
     @function_tool(strict_mode=True)
     async def add_religious_text(self, ctx, params: ReligiousTextParams) -> int:
-        """Add a religious text."""
+        """Add a religious text using canon establishment."""
         await self.ensure_initialized()
         
         embed_text = f"{params.name} {params.text_type} {params.description} {' '.join(params.key_teachings)}"
-        embedding = await generate_embedding(embed_text)
+        
+        # Prepare data package for canon
+        text_data_package = {
+            "name": params.name,
+            "text_type": params.text_type,
+            "description": params.description,
+            "key_teachings": params.key_teachings,
+            "authorship": params.authorship,
+            "restricted_to": params.restricted_to,
+            "deity_id": params.deity_id,
+            "pantheon_id": params.pantheon_id,
+            "notable_passages": params.notable_passages,
+            "age_description": params.age_description
+        }
         
         async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
-                text_id = await conn.fetchval("""
-                    INSERT INTO ReligiousTexts (
-                        name, text_type, description, key_teachings,
-                        authorship, restricted_to, deity_id,
-                        pantheon_id, notable_passages, age_description,
-                        embedding
-                    )
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-                    RETURNING id
-                """,
-                params.name, params.text_type, params.description, 
-                params.key_teachings, params.authorship, params.restricted_to, 
-                params.deity_id, params.pantheon_id, params.notable_passages, 
-                params.age_description, embedding)
-                
-                GLOBAL_LORE_CACHE.invalidate_pattern("text")
-                return text_id
+                from lore.core import canon
+                text_id = await canon.create_religious_text(
+                    ctx, conn, **text_data_package, embedding_text=embed_text
+                )
+        
+        GLOBAL_LORE_CACHE.invalidate_pattern("text")
+        return text_id
 
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
@@ -842,34 +815,39 @@ class ReligionManager(BaseLoreManager):
     )
     @function_tool(strict_mode=True)
     async def add_religious_order(self, ctx, params: ReligiousOrderParams) -> int:
-        """Add a religious order."""
+        """Add a religious order using canon establishment."""
         await self.ensure_initialized()
         
         embed_text = f"{params.name} {params.order_type} {params.description} {params.gender_composition}"
-        embedding = await generate_embedding(embed_text)
+        
+        # Prepare data package for canon
+        order_data_package = {
+            "name": params.name,
+            "order_type": params.order_type,
+            "description": params.description,
+            "gender_composition": params.gender_composition,
+            "founding_story": params.founding_story,
+            "headquarters": params.headquarters,
+            "hierarchy_structure": params.hierarchy_structure,
+            "vows": params.vows,
+            "practices": params.practices,
+            "deity_id": params.deity_id,
+            "pantheon_id": params.pantheon_id,
+            "special_abilities": params.special_abilities,
+            "notable_members": params.notable_members
+        }
         
         async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
-                order_id = await conn.fetchval("""
-                    INSERT INTO ReligiousOrders (
-                        name, order_type, description, gender_composition,
-                        founding_story, headquarters, hierarchy_structure,
-                        vows, practices, deity_id, pantheon_id,
-                        special_abilities, notable_members, embedding
-                    )
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
-                    RETURNING id
-                """,
-                params.name, params.order_type, params.description, 
-                params.gender_composition, params.founding_story, 
-                params.headquarters, params.hierarchy_structure,
-                params.vows, params.practices, params.deity_id, 
-                params.pantheon_id, params.special_abilities, 
-                params.notable_members, embedding)
-                
-                GLOBAL_LORE_CACHE.invalidate_pattern("order")
-                return order_id
+                from lore.core import canon
+                order_id = await canon.find_or_create_religious_order(
+                    ctx, conn, **order_data_package, embedding_text=embed_text
+                )
+        
+        GLOBAL_LORE_CACHE.invalidate_pattern("order")
+        return order_id
 
+    
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
         action_type="add_religious_conflict",
@@ -878,31 +856,34 @@ class ReligionManager(BaseLoreManager):
     )
     @function_tool(strict_mode=True)
     async def add_religious_conflict(self, ctx, params: ReligiousConflictParams) -> int:
-        """Add a religious conflict."""
+        """Add a religious conflict using canon establishment."""
         await self.ensure_initialized()
         
         embed_text = f"{params.name} {params.conflict_type} {params.description} {params.core_disagreement}"
-        embedding = await generate_embedding(embed_text)
+        
+        # Prepare data package for canon
+        conflict_data_package = {
+            "name": params.name,
+            "conflict_type": params.conflict_type,
+            "description": params.description,
+            "parties_involved": params.parties_involved,
+            "core_disagreement": params.core_disagreement,
+            "beginning_date": params.beginning_date,
+            "resolution_date": params.resolution_date,
+            "status": params.status,
+            "casualties": params.casualties,
+            "historical_impact": params.historical_impact
+        }
         
         async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
-                conflict_id = await conn.fetchval("""
-                    INSERT INTO ReligiousConflicts (
-                        name, conflict_type, description, parties_involved,
-                        core_disagreement, beginning_date, resolution_date,
-                        status, casualties, historical_impact, embedding
-                    )
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-                    RETURNING id
-                """,
-                params.name, params.conflict_type, params.description, 
-                params.parties_involved, params.core_disagreement, 
-                params.beginning_date, params.resolution_date,
-                params.status, params.casualties, params.historical_impact, 
-                embedding)
-                
-                GLOBAL_LORE_CACHE.invalidate_pattern("conflict")
-                return conflict_id
+                from lore.core import canon
+                conflict_id = await canon.log_religious_conflict(
+                    ctx, conn, **conflict_data_package, embedding_text=embed_text
+                )
+        
+        GLOBAL_LORE_CACHE.invalidate_pattern("conflict")
+        return conflict_id
 
     # ===========================
     # Generation Methods Using Agents
