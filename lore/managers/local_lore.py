@@ -626,6 +626,7 @@ class LocalLoreManager(BaseLoreManager):
     async def add_urban_myth(self, ctx, input: MythCreationInput) -> int:
         """
         Add an urban myth to the database with full validation and theming.
+        Uses canon system to ensure consistency.
         
         Args:
             input: MythCreationInput with all myth details
@@ -633,6 +634,10 @@ class LocalLoreManager(BaseLoreManager):
         Returns:
             ID of the created urban myth
         """
+        # Get LoreSystem for canon operations
+        from lore.core.lore_system import LoreSystem
+        lore_system = await LoreSystem.get_instance(self.user_id, self.conversation_id)
+        
         with trace(
             "AddUrbanMyth", 
             group_id=self.trace_group_id,
@@ -640,13 +645,72 @@ class LocalLoreManager(BaseLoreManager):
         ):
             await self.ensure_initialized()
             
+            # Check for semantic duplicates
+            async with self.get_connection_pool() as pool:
+                async with pool.acquire() as conn:
+                    # Generate embedding for the new myth
+                    embedding_text = f"{input.name} {input.description} {input.narrative_style} {' '.join(input.themes)}"
+                    search_vector = await generate_embedding(embedding_text)
+                    
+                    # Search for similar myths
+                    similar_myth = await conn.fetchrow("""
+                        SELECT id, name, description, 1 - (embedding <=> $1) AS similarity
+                        FROM UrbanMyths
+                        WHERE 1 - (embedding <=> $1) > 0.80
+                        ORDER BY embedding <=> $1
+                        LIMIT 1
+                    """, search_vector)
+                    
+                    if similar_myth:
+                        # Use validation to check if it's truly a duplicate
+                        from lore.core.validation import CanonValidationAgent
+                        validation_agent = CanonValidationAgent()
+                        
+                        is_duplicate = await validation_agent.confirm_is_duplicate_myth(
+                            conn,
+                            proposal={
+                                "name": input.name,
+                                "description": input.description,
+                                "themes": input.themes
+                            },
+                            existing_myth_id=similar_myth['id']
+                        )
+                        
+                        if is_duplicate:
+                            logger.warning(f"Urban myth '{input.name}' is a duplicate of existing myth ID {similar_myth['id']}")
+                            
+                            # Update the existing myth with new regions if any
+                            if input.regions_known:
+                                existing_regions = await conn.fetchval(
+                                    "SELECT regions_known FROM UrbanMyths WHERE id = $1",
+                                    similar_myth['id']
+                                )
+                                
+                                new_regions = list(set(existing_regions + input.regions_known))
+                                
+                                await conn.execute("""
+                                    UPDATE UrbanMyths
+                                    SET regions_known = $1,
+                                        spread_rate = GREATEST(spread_rate, $2)
+                                    WHERE id = $3
+                                """, new_regions, input.spread_rate, similar_myth['id'])
+                            
+                            return similar_myth['id']
+            
+            # Canonically establish the origin location if specified
+            if input.origin_location:
+                async with get_db_connection_context() as conn:
+                    from lore.core import canon
+                    location_id = await canon.find_or_create_location(
+                        ctx, conn, input.origin_location
+                    )
+            
             # Apply matriarchal theming
             themed_description = MatriarchalThemingUtils.apply_matriarchal_theme(
                 "myth", input.description
             )
             
             # Generate embedding
-            embedding_text = f"{input.name} {themed_description} {input.narrative_style} {' '.join(input.themes)}"
             embedding = await generate_embedding(embedding_text)
             
             # Ensure regions_known has at least the origin
@@ -671,9 +735,16 @@ class LocalLoreManager(BaseLoreManager):
                     input.regions_known, input.narrative_style.value, input.themes, 
                     input.matriarchal_elements, embedding)
                     
-                    # Log the creation
-                    logger.info(f"Created urban myth '{input.name}' with ID {myth_id}")
+                    # Log canonical event
+                    from lore.core import canon
+                    await canon.log_canonical_event(
+                        ctx, conn,
+                        f"Urban myth '{input.name}' emerges in {input.origin_location or 'the local area'}",
+                        tags=["myth", "folklore", "canon"],
+                        significance=5
+                    )
                     
+                    logger.info(f"Created urban myth '{input.name}' with ID {myth_id}")
                     return myth_id
 
     # ===== LOCAL HISTORY OPERATIONS =====
@@ -762,6 +833,7 @@ class LocalLoreManager(BaseLoreManager):
     async def add_landmark(self, ctx, input: LandmarkCreationInput) -> int:
         """
         Add a landmark with full narrative integration.
+        Uses canon system to ensure consistency.
         
         Args:
             input: LandmarkCreationInput with all landmark details
@@ -769,6 +841,10 @@ class LocalLoreManager(BaseLoreManager):
         Returns:
             ID of the created landmark
         """
+        # Get LoreSystem for canon operations
+        from lore.core.lore_system import LoreSystem
+        lore_system = await LoreSystem.get_instance(self.user_id, self.conversation_id)
+        
         with trace(
             "AddLandmark", 
             group_id=self.trace_group_id,
@@ -776,13 +852,66 @@ class LocalLoreManager(BaseLoreManager):
         ):
             await self.ensure_initialized()
             
+            # Verify the location exists canonically
+            async with get_db_connection_context() as conn:
+                location = await conn.fetchrow("""
+                    SELECT * FROM Locations WHERE id = $1
+                """, input.location_id)
+                
+                if not location:
+                    return {"error": "Location not found"}
+            
+            # Check for semantic duplicates
+            async with self.get_connection_pool() as pool:
+                async with pool.acquire() as conn:
+                    # Generate embedding
+                    embedding_text = f"{input.name} {input.landmark_type} {input.description} at {location['location_name']}"
+                    search_vector = await generate_embedding(embedding_text)
+                    
+                    # Search for similar landmarks at this location
+                    similar_landmark = await conn.fetchrow("""
+                        SELECT id, name, landmark_type, 1 - (embedding <=> $1) AS similarity
+                        FROM Landmarks
+                        WHERE location_id = $2 AND 1 - (embedding <=> $1) > 0.85
+                        ORDER BY embedding <=> $1
+                        LIMIT 1
+                    """, search_vector, input.location_id)
+                    
+                    if similar_landmark:
+                        logger.warning(
+                            f"Landmark '{input.name}' appears similar to existing landmark "
+                            f"'{similar_landmark['name']}' (ID: {similar_landmark['id']})"
+                        )
+                        
+                        # Update existing landmark instead
+                        await lore_system.propose_and_enact_change(
+                            ctx=ctx,
+                            entity_type="Landmarks",
+                            entity_identifier={"id": similar_landmark['id']},
+                            updates={
+                                "description": input.description,
+                                "current_use": input.current_use,
+                                "matriarchal_significance": input.matriarchal_significance
+                            },
+                            reason=f"Updating landmark with new information from duplicate submission"
+                        )
+                        
+                        return similar_landmark['id']
+            
+            # Canonically establish the controlling faction if specified
+            if input.controlled_by:
+                async with get_db_connection_context() as conn:
+                    from lore.core import canon
+                    controller_id = await canon.find_or_create_faction(
+                        ctx, conn, input.controlled_by, faction_type="landmark_controller"
+                    )
+            
             # Apply matriarchal theming
             themed_description = MatriarchalThemingUtils.apply_matriarchal_theme(
                 "landmark", input.description
             )
             
             # Generate embedding
-            embedding_text = f"{input.name} {input.landmark_type} {themed_description} {input.matriarchal_significance}"
             embedding = await generate_embedding(embedding_text)
             
             async with self.get_connection_pool() as pool:
@@ -802,7 +931,26 @@ class LocalLoreManager(BaseLoreManager):
                     input.legends, input.connected_histories, input.architectural_style,
                     input.symbolic_meaning, input.matriarchal_significance, embedding)
                     
-                    # Create narrative connections
+                    # If this is a significant landmark, update the location
+                    if input.matriarchal_significance == "high":
+                        await lore_system.propose_and_enact_change(
+                            ctx=ctx,
+                            entity_type="Locations",
+                            entity_identifier={"id": input.location_id},
+                            updates={"has_significant_landmarks": True},
+                            reason=f"High significance landmark '{input.name}' established"
+                        )
+                    
+                    # Log canonical event
+                    from lore.core import canon
+                    await canon.log_canonical_event(
+                        ctx, conn,
+                        f"Landmark '{input.name}' established at {location['location_name']} as {input.landmark_type}",
+                        tags=["landmark", "location", "canon"],
+                        significance=6
+                    )
+                    
+                    # Create narrative connections to historical events
                     for history_id in input.connected_histories:
                         await self._create_narrative_connection(
                             conn, "history", history_id, "landmark", landmark_id,
@@ -815,7 +963,6 @@ class LocalLoreManager(BaseLoreManager):
                     
                     logger.info(f"Created landmark '{input.name}' with ID {landmark_id}")
                     return landmark_id
-
     # ===== MYTH EVOLUTION =====
     
     @with_governance(
@@ -1867,6 +2014,7 @@ Be historically plausible and culturally sensitive.
     ) -> LoreEvolutionResult:
         """
         Evolve location lore based on a significant event.
+        Uses canon system to ensure changes are consistent.
         
         Args:
             location_id: ID of the location
@@ -1875,6 +2023,10 @@ Be historically plausible and culturally sensitive.
         Returns:
             LoreEvolutionResult with changes made
         """
+        # Get LoreSystem for canon operations
+        from lore.core.lore_system import LoreSystem
+        lore_system = await LoreSystem.get_instance(self.user_id, self.conversation_id)
+        
         run_ctx = self.create_run_context(ctx)
         
         with trace(
@@ -1949,47 +2101,128 @@ Return a JSON object with your analysis and specific recommendations.
             
             # Create new history if recommended
             if recommendations.get('new_history'):
-                history_input = HistoryCreationInput(
-                    location_id=location_id,
-                    event_name=f"The {self._generate_event_title(themed_event)}",
-                    description=themed_event,
-                    date_description="Recently",
-                    significance=7,
-                    impact_type="transformative",
-                    current_relevance="Still unfolding",
-                    narrative_category="contemporary"
-                )
+                # Generate a proper event title
+                event_title = f"The {self._generate_event_title(themed_event)}"
                 
-                history_id = await self.add_local_history(run_ctx, history_input)
-                evolution_result.new_history = LocalHistory(
-                    id=history_id,
-                    **history_input.model_dump()
-                )
+                # Check if this event already exists to avoid duplicates
+                async with get_db_connection_context() as conn:
+                    existing_event = await conn.fetchrow("""
+                        SELECT id FROM LocalHistories
+                        WHERE location_id = $1 
+                        AND (event_name = $2 OR description ILIKE $3)
+                        AND date_description = 'Recently'
+                    """, location_id, event_title, f"%{themed_event[:50]}%")
+                    
+                    if not existing_event:
+                        history_input = HistoryCreationInput(
+                            location_id=location_id,
+                            event_name=event_title,
+                            description=themed_event,
+                            date_description="Recently",
+                            significance=7,
+                            impact_type="transformative",
+                            current_relevance="Still unfolding",
+                            narrative_category="contemporary"
+                        )
+                        
+                        history_id = await self.add_local_history(run_ctx, history_input)
+                        evolution_result.new_history = LocalHistory(
+                            id=history_id,
+                            **history_input.model_dump()
+                        )
+                        
+                        # Log as canonical event
+                        from lore.core import canon
+                        await canon.log_canonical_event(
+                            ctx, conn,
+                            f"{event_title} occurred at {location_lore.location['location_name']}",
+                            tags=["history", "location", "evolution", "canon"],
+                            significance=7
+                        )
             
             # Create new myth if recommended
             if recommendations.get('new_myth') and random.random() > 0.5:
+                # Check myth doesn't already exist
                 myth_name = f"The {self._generate_myth_title(themed_event)}"
-                myth_input = MythCreationInput(
-                    name=myth_name,
-                    description=self._mythologize_event(themed_event),
-                    origin_location=location_lore.location['location_name'],
-                    origin_event=themed_event,
-                    believability=4,
-                    spread_rate=7,
-                    themes=['contemporary', 'transformation']
-                )
                 
-                myth_id = await self.add_urban_myth(run_ctx, myth_input)
-                evolution_result.new_myth = UrbanMyth(
-                    id=myth_id,
-                    **myth_input.model_dump()
-                )
+                async with get_db_connection_context() as conn:
+                    existing_myth = await conn.fetchrow("""
+                        SELECT id FROM UrbanMyths
+                        WHERE name = $1 AND origin_location = $2
+                    """, myth_name, location_lore.location['location_name'])
+                    
+                    if not existing_myth:
+                        myth_input = MythCreationInput(
+                            name=myth_name,
+                            description=self._mythologize_event(themed_event),
+                            origin_location=location_lore.location['location_name'],
+                            origin_event=themed_event,
+                            believability=4,
+                            spread_rate=7,
+                            themes=['contemporary', 'transformation']
+                        )
+                        
+                        myth_id = await self.add_urban_myth(run_ctx, myth_input)
+                        evolution_result.new_myth = UrbanMyth(
+                            id=myth_id,
+                            **myth_input.model_dump()
+                        )
             
             # Handle landmark changes if recommended
             if recommendations.get('landmark_change'):
-                evolution_result = await self._handle_landmark_evolution(
-                    run_ctx, location_lore, themed_event, evolution_result
-                )
+                # Check if we're modifying existing or creating new
+                if location_lore.landmarks and random.random() > 0.3:
+                    # Modify existing landmark
+                    landmark_to_modify = random.choice(location_lore.landmarks)
+                    
+                    # Use the canon system to record the change
+                    await lore_system.propose_and_enact_change(
+                        ctx=ctx,
+                        entity_type="Landmarks",
+                        entity_identifier={"id": landmark_to_modify.id},
+                        updates={
+                            "description": (
+                                f"{landmark_to_modify.description} "
+                                f"Recent events have left their mark here - {themed_event.lower()}"
+                            ),
+                            "historical_significance": f"Site of recent events: {themed_event}"
+                        },
+                        reason=f"Landmark affected by: {themed_event}"
+                    )
+                    
+                    evolution_result.updated_landmark = {
+                        "id": landmark_to_modify.id,
+                        "name": landmark_to_modify.name,
+                        "change": "Updated due to recent events"
+                    }
+                else:
+                    # Create new landmark only if it doesn't exist
+                    memorial_name = f"Memorial of {self._generate_event_title(themed_event)}"
+                    
+                    async with get_db_connection_context() as conn:
+                        existing_memorial = await conn.fetchrow("""
+                            SELECT id FROM Landmarks
+                            WHERE name = $1 AND location_id = $2
+                        """, memorial_name, location_id)
+                        
+                        if not existing_memorial:
+                            landmark_input = LandmarkCreationInput(
+                                name=memorial_name,
+                                location_id=evolution_result.location_id,
+                                landmark_type="monument",
+                                description=(
+                                    f"A newly erected monument commemorating the recent events. {themed_event}"
+                                ),
+                                current_use="Memorial and gathering place",
+                                controlled_by="The Council of Matriarchs",
+                                matriarchal_significance="high"
+                            )
+                            
+                            landmark_id = await self.add_landmark(ctx, landmark_input)
+                            evolution_result.new_landmark = Landmark(
+                                id=landmark_id,
+                                **landmark_input.model_dump()
+                            )
             
             # Create connections between new elements
             if evolution_result.new_history and evolution_result.new_myth:
