@@ -266,7 +266,7 @@ class BaseLoreManager:
     
     # agent‑callable tool, with a distinct name
     @staticmethod
-    @function_tool
+    @function_tool(strict_mode=False)
     async def initialize_tables_tool(ctx: RunContextWrapper, table_definitions: Dict[str, str]):
         """
         Agent-callable tool to initialize database tables.
@@ -422,7 +422,7 @@ class BaseLoreManager:
         return _mgr(ctx)._cache_get(cache_key)
 
     @staticmethod
-    @function_tool
+    @function_tool(strict_mode=False)
     async def set_cached_data(ctx: RunContextWrapper, cache_key: str, data: Any):
         """
         Agent-callable tool to set data in cache.
@@ -475,7 +475,7 @@ class BaseLoreManager:
         return await _mgr(ctx)._execute_query_impl(query, *args)
 
     @staticmethod
-    @function_tool
+    @function_tool(strict_mode=False)
     async def batch_update(ctx: RunContextWrapper, table: str, updates: List[Dict[str, Any]]):
         """
         Agent-callable tool to perform batch updates.
@@ -540,7 +540,7 @@ class BaseLoreManager:
         }
 
     @staticmethod
-    @function_tool
+    @function_tool(strict_mode=False)
     async def validate_data(ctx: RunContextWrapper, data: Dict[str, Any], schema_type: str):
         """
         Agent-callable tool to validate data.
@@ -645,7 +645,7 @@ class BaseLoreManager:
 
     @staticmethod
     @function_tool
-    async def maintenance_tool(self):
+    async def maintenance_tool(ctx: RunContextWrapper):
         """
         Agent-accessible: run a single maintenance pass on demand.
         
@@ -775,7 +775,7 @@ class BaseLoreManager:
     # ---------------------------
 
     @with_governance_permission(agent_type=AgentType.NARRATIVE_CRAFTER, action_type="create")
-    @function_tool
+    @function_tool(strict_mode=False)
     async def create_record(self, table_name: str, data: Dict[str, Any]) -> int:
         """
         Create a record with governance oversight.
@@ -854,7 +854,7 @@ class BaseLoreManager:
             return None
 
     @with_governance_permission(agent_type=AgentType.NARRATIVE_CRAFTER, action_type="update")
-    @function_tool
+    @function_tool(strict_mode=False)
     async def update_record(self, table_name: str, record_id: int, data: Dict[str, Any]) -> bool:
         """
         Update a record with governance oversight.
@@ -936,7 +936,7 @@ class BaseLoreManager:
             return False
 
     @with_governance_permission(agent_type=AgentType.NARRATIVE_CRAFTER, action_type="query")
-    @function_tool
+    @function_tool(strict_mode=False)
     async def query_records(
         self,
         table_name: str,
