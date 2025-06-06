@@ -273,7 +273,7 @@ class SpecializedAgents:
                 "that center matriarchal values and feminine wisdom. "
                 "Always maintain the core identity while enhancing folkloric qualities."
             ),
-            model="gpt-4-turbo-preview",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.9),
             output_type=str
         )
@@ -285,7 +285,7 @@ class SpecializedAgents:
                 "Add specific dates, notable female leaders, and concrete impacts. "
                 "Make myths seem like real historical events while preserving core elements."
             ),
-            model="gpt-4-turbo-preview",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.8),
             output_type=str
         )
@@ -297,7 +297,7 @@ class SpecializedAgents:
                 "Introduce divine feminine power, magical occurrences, and mystical beings. "
                 "Emphasize matriarchal spiritual authority and cosmic feminine forces."
             ),
-            model="gpt-4-turbo-preview",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.9),
             output_type=str
         )
@@ -310,7 +310,7 @@ class SpecializedAgents:
                 "Show how myths might originate from real occurrences or vice versa. "
                 "Always highlight matriarchal power dynamics in connections."
             ),
-            model="gpt-4-turbo-preview",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.8),
             output_type=NarrativeConnection
         )
@@ -322,7 +322,7 @@ class SpecializedAgents:
                 "Explain how events shaped places or how landmarks witnessed history. "
                 "Emphasize the role of female leaders and matriarchal institutions."
             ),
-            model="gpt-4-turbo-preview",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.8),
             output_type=NarrativeConnection
         )
@@ -335,7 +335,7 @@ class SpecializedAgents:
                 "Identify contradictions, timeline issues, and thematic conflicts. "
                 "Suggest fixes that strengthen matriarchal narrative coherence."
             ),
-            model="gpt-4-turbo-preview",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.7),
             output_type=ConsistencyCheckResult
         )
@@ -347,7 +347,7 @@ class SpecializedAgents:
                 "Track transformations, distortions, and local adaptations. "
                 "Show how matriarchal elements persist or transform across cultures."
             ),
-            model="gpt-4-turbo-preview",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.8),
             output_type=MythTransmissionResult
         )
@@ -360,7 +360,7 @@ class SpecializedAgents:
                 "Each variant must have believable cultural origins for its differences. "
                 "Maintain some core elements while introducing compelling contradictions."
             ),
-            model="gpt-4-turbo-preview",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.9),
             output_type=List[LegendVariant]
         )
@@ -372,7 +372,7 @@ class SpecializedAgents:
                 "Create compelling marketing that highlights matriarchal themes. "
                 "Balance authenticity with visitor appeal and economic viability."
             ),
-            model="gpt-4-turbo-preview",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.8),
             output_type=TouristDevelopment
         )
@@ -384,7 +384,7 @@ class SpecializedAgents:
                 "Highlight differences in detail, consistency, and local variations. "
                 "Show how matriarchal elements evolve in different mediums."
             ),
-            model="gpt-4-turbo-preview",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.8),
             output_type=TraditionDynamics
         )
@@ -397,7 +397,7 @@ class SpecializedAgents:
                 "Analyze the context and select the best specialist for each evolution. "
                 "Ensure matriarchal themes are preserved and enhanced."
             ),
-            model="gpt-4-turbo-preview",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.8),
             handoffs=[
                 handoff(
@@ -1647,7 +1647,7 @@ Be historically plausible and culturally sensitive.
         myth_gen_agent = Agent(
             name="LocationMythGenerator",
             instructions="You create authentic urban myths for specific locations.",
-            model="gpt-4-turbo-preview",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.85),
             output_type=List[Dict[str, Any]]
         )
@@ -1714,7 +1714,7 @@ Be historically plausible and culturally sensitive.
         history_gen_agent = Agent(
             name="LocationHistoryGenerator",
             instructions="You create compelling historical events for locations.",
-            model="gpt-4-turbo-preview",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.8),
             output_type=List[Dict[str, Any]]
         )
@@ -1781,7 +1781,7 @@ Be historically plausible and culturally sensitive.
         landmark_gen_agent = Agent(
             name="LocationLandmarkGenerator",
             instructions="You create memorable landmarks for locations.",
-            model="gpt-4-turbo-preview",
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.8),
             output_type=List[Dict[str, Any]]
         )
@@ -1901,7 +1901,7 @@ Be historically plausible and culturally sensitive.
                     "You analyze how major events impact local lore. "
                     "Create realistic consequences that respect existing narratives."
                 ),
-                model="gpt-4-turbo-preview",
+                model="gpt-4.1-nano",
                 model_settings=ModelSettings(temperature=0.8)
             )
             
