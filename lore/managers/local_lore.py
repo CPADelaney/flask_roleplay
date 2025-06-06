@@ -869,25 +869,25 @@ class LocalLoreManager(BaseLoreManager):
             
             # Prepare evolution prompt
             evolution_prompt = f"""
-            Evolve this urban myth based on the following context:
-            
-            MYTH: {myth_data['name']}
-            CURRENT DESCRIPTION: {myth_data['description']}
-            BELIEVABILITY: {myth_data['believability']}/10
-            SPREAD RATE: {myth_data['spread_rate']}/10
-            REGIONS KNOWN: {', '.join(myth_data['regions_known'] or [])}
-            
-            EVOLUTION TYPE: {evolution_type.value}
-            CAUSAL FACTORS: {', '.join(causal_factors)}
-            
-            Transform this myth according to the evolution type while:
-            1. Maintaining the core narrative identity
-            2. Enhancing matriarchal themes appropriately
-            3. Making the changes feel natural and believable
-            4. Adjusting believability and spread rate as appropriate
-            
-            Return only the evolved description.
-            """
+Evolve this urban myth based on the following context:
+
+MYTH: {myth_data['name']}
+CURRENT DESCRIPTION: {myth_data['description']}
+BELIEVABILITY: {myth_data['believability']}/10
+SPREAD RATE: {myth_data['spread_rate']}/10
+REGIONS KNOWN: {', '.join(myth_data['regions_known'] or [])}
+
+EVOLUTION TYPE: {evolution_type.value}
+CAUSAL FACTORS: {', '.join(causal_factors)}
+
+Transform this myth according to the evolution type while:
+1. Maintaining the core narrative identity
+2. Enhancing matriarchal themes appropriately
+3. Making the changes feel natural and believable
+4. Adjusting believability and spread rate as appropriate
+
+Return only the evolved description.
+"""
             
             # Select agent based on evolution type
             agent_map = {
@@ -1090,23 +1090,23 @@ class LocalLoreManager(BaseLoreManager):
             
             # Create connection prompt
             connection_prompt = f"""
-            Analyze the connection between this myth and historical event:
-            
-            MYTH: {myth['name']}
-            {myth['description']}
-            
-            HISTORICAL EVENT: {history['event_name']}
-            {history['description']}
-            Date: {history['date_description']}
-            
-            Create a narrative connection that:
-            1. Explains how they might be related
-            2. Preserves the integrity of both narratives
-            3. Highlights matriarchal elements in the connection
-            4. Suggests how one might have influenced the other
-            
-            Be specific and compelling in your connection.
-            """
+Analyze the connection between this myth and historical event:
+
+MYTH: {myth['name']}
+{myth['description']}
+
+HISTORICAL EVENT: {history['event_name']}
+{history['description']}
+Date: {history['date_description']}
+
+Create a narrative connection that:
+1. Explains how they might be related
+2. Preserves the integrity of both narratives
+3. Highlights matriarchal elements in the connection
+4. Suggests how one might have influenced the other
+
+Be specific and compelling in your connection.
+"""
             
             # Use the connector agent
             result = await Runner.run(
@@ -1192,25 +1192,25 @@ class LocalLoreManager(BaseLoreManager):
             
             # Create connection prompt
             connection_prompt = f"""
-            Analyze the connection between this historical event and landmark:
-            
-            HISTORICAL EVENT: {history['event_name']}
-            {history['description']}
-            Date: {history['date_description']}
-            Significance: {history['significance']}/10
-            
-            LANDMARK: {landmark['name']} ({landmark['landmark_type']})
-            {landmark['description']}
-            Historical Significance: {landmark['historical_significance'] or 'Unknown'}
-            
-            Create a narrative connection that:
-            1. Explains how the event and place are linked
-            2. Shows how the landmark witnessed or was shaped by the event
-            3. Emphasizes matriarchal power dynamics
-            4. Suggests how the landmark commemorates the event
-            
-            Be historically plausible and culturally sensitive.
-            """
+Analyze the connection between this historical event and landmark:
+
+HISTORICAL EVENT: {history['event_name']}
+{history['description']}
+Date: {history['date_description']}
+Significance: {history['significance']}/10
+
+LANDMARK: {landmark['name']} ({landmark['landmark_type']})
+{landmark['description']}
+Historical Significance: {landmark['historical_significance'] or 'Unknown'}
+
+Create a narrative connection that:
+1. Explains how the event and place are linked
+2. Shows how the landmark witnessed or was shaped by the event
+3. Emphasizes matriarchal power dynamics
+4. Suggests how the landmark commemorates the event
+
+Be historically plausible and culturally sensitive.
+"""
             
             # Use the connector agent
             result = await Runner.run(
@@ -1886,23 +1886,23 @@ class LocalLoreManager(BaseLoreManager):
             
             # Determine what type of lore to create/modify
             evolution_prompt = f"""
-            A significant event has occurred in {location_lore.location['location_name']}:
-            
-            EVENT: {themed_event}
-            
-            CURRENT LORE SUMMARY:
-            - {len(location_lore.myths)} myths
-            - {len(location_lore.histories)} historical events
-            - {len(location_lore.landmarks)} landmarks
-            
-            Based on this event, determine:
-            1. Should we create a new historical record? (yes/no and why)
-            2. Should we create a new myth about it? (yes/no and why)
-            3. Should we create or modify a landmark? (yes/no and why)
-            4. Which existing elements might be affected?
-            
-            Return a JSON object with your analysis and specific recommendations.
-            """
+A significant event has occurred in {location_lore.location['location_name']}:
+
+EVENT: {themed_event}
+
+CURRENT LORE SUMMARY:
+- {len(location_lore.myths)} myths
+- {len(location_lore.histories)} historical events
+- {len(location_lore.landmarks)} landmarks
+
+Based on this event, determine:
+1. Should we create a new historical record? (yes/no and why)
+2. Should we create a new myth about it? (yes/no and why)
+3. Should we create or modify a landmark? (yes/no and why)
+4. Which existing elements might be affected?
+
+Return a JSON object with your analysis and specific recommendations.
+"""
             
             result = await Runner.run(
                 evolution_agent,
