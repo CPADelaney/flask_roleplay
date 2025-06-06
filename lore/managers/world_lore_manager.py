@@ -211,14 +211,14 @@ class WorldLoreManager(BaseLoreManager):
         from lore.core import canon
         from lore.core.lore_system import LoreSystem
         
-        # Map element types to their handlers
+        # Map element types to their canon handlers
         element_handlers = {
-            'nation': self._create_nation_element,
-            'culture': self._create_culture_element,
-            'historical_event': self._create_historical_event,
-            'faction': self._create_faction_element,
-            'location': self._create_location_element,
-            'notable_figure': self._create_notable_figure
+            'nation': canon.find_or_create_nation,
+            'culture': canon.find_or_create_culture,
+            'historical_event': canon.create_historical_event,
+            'faction': canon.find_or_create_faction,
+            'location': canon.find_or_create_location,
+            'notable_figure': canon.find_or_create_notable_figure
         }
         
         handler = element_handlers.get(element_type)
@@ -227,7 +227,12 @@ class WorldLoreManager(BaseLoreManager):
         
         async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
-                result = await handler(conn, element_data)
+                # Call the appropriate canon handler
+                element_id = await handler(
+                    self.create_run_context({}), 
+                    conn, 
+                    **element_data
+                )
                 
                 # Log canonical event
                 await canon.log_canonical_event(
@@ -236,8 +241,9 @@ class WorldLoreManager(BaseLoreManager):
                     tags=[element_type, 'world_building'],
                     significance=7
                 )
-        
-        return result
+                
+                return {**element_data, 'id': element_id}
+
 
     @function_tool
     async def invalidate_world_history(
@@ -598,7 +604,9 @@ class WorldLoreManager(BaseLoreManager):
 
     # Implementation of cultural diffusion methods
     async def _apply_language_diffusion(self, nation1_id: int, nation2_id: int, effects: Dict[str, Any]) -> None:
-        """Apply language diffusion effects between nations."""
+        """Apply language diffusion effects between nations using canon system."""
+        from lore.core import canon
+        
         async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 # Check if both nations have languages
@@ -618,9 +626,10 @@ class WorldLoreManager(BaseLoreManager):
                 # Apply vocabulary diffusion
                 if "vocabulary" in effects:
                     for vocab_change in effects["vocabulary"]:
-                        # Update common phrases or add new ones
                         for lang in nation1_langs:
                             lang_id = lang["id"]
+                            
+                            # Prepare update data
                             common_phrases = lang.get("common_phrases", {})
                             if isinstance(common_phrases, str):
                                 try:
@@ -632,159 +641,229 @@ class WorldLoreManager(BaseLoreManager):
                             for phrase, meaning in vocab_change.get("adopted_phrases", {}).items():
                                 common_phrases[phrase] = meaning
                             
-                            # Update the language
-                            await conn.execute("""
-                                UPDATE Languages
-                                SET common_phrases = $1
-                                WHERE id = $2
-                            """, json.dumps(common_phrases), lang_id)
+                            # Use canon to update language
+                            await canon.update_language(
+                                self.create_run_context({}), conn,
+                                lang_id, {"common_phrases": json.dumps(common_phrases)}
+                            )
                 
-                # Record the cultural exchange
-                exchange_id = await conn.fetchval("""
-                    INSERT INTO CulturalExchanges (
-                        nation1_id, nation2_id, exchange_type, exchange_details, timestamp
-                    )
-                    VALUES ($1, $2, $3, $4, $5)
-                    RETURNING id
-                """, nation1_id, nation2_id, "language_diffusion", json.dumps(effects), datetime.now())
+                # Record the cultural exchange using canon
+                exchange_data = {
+                    "nation1_id": nation1_id,
+                    "nation2_id": nation2_id,
+                    "exchange_type": "language_diffusion",
+                    "exchange_details": json.dumps(effects),
+                    "timestamp": datetime.now()
+                }
+                
+                await canon.create_cultural_exchange(
+                    self.create_run_context({}), conn, **exchange_data
+                )
                 
                 # Log the exchange in world history
-                await conn.execute("""
-                    INSERT INTO WorldHistory (
-                        event_type, description, involved_entities, timestamp
-                    )
-                    VALUES ($1, $2, $3, $4)
-                """, "cultural_exchange", 
-                f"Language exchange occurred between nations {nation1_id} and {nation2_id}",
-                json.dumps([nation1_id, nation2_id]), datetime.now())
+                await canon.log_canonical_event(
+                    self.create_run_context({}), conn,
+                    f"Language exchange occurred between nations {nation1_id} and {nation2_id}",
+                    tags=['cultural_exchange', 'language'],
+                    significance=5
+                )
 
     async def _apply_artistic_diffusion(self, nation1_id: int, nation2_id: int, effects: Dict[str, Any]) -> None:
-        """Apply artistic and creative diffusion between nations."""
+        """Apply artistic and creative diffusion between nations using canon system."""
+        from lore.core import canon
+        
         async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 # Record artistic exchange in cultural elements
                 if "artistic_elements" in effects:
                     for element in effects["artistic_elements"]:
-                        # Check if the cultural element already exists
-                        existing = await conn.fetchrow("""
-                            SELECT id FROM CulturalElements
-                            WHERE name = $1 AND element_type = 'artistic'
-                        """, element["name"])
+                        # Prepare data for canon
+                        element_data = {
+                            "name": element["name"],
+                            "element_type": "artistic",
+                            "description": element["description"],
+                            "practiced_by": [f"Nation {nation1_id}", f"Nation {nation2_id}"],
+                            "significance": element.get("significance", 5),
+                            "historical_origin": f"Cultural exchange between nations {nation1_id} and {nation2_id}"
+                        }
                         
-                        if existing:
-                            # Update existing element
-                            await conn.execute("""
-                                UPDATE CulturalElements
-                                SET description = $1, practiced_by = array_append(practiced_by, $2)
-                                WHERE id = $3
-                            """, element["description"], f"Nation {nation2_id}", existing["id"])
-                        else:
-                            # Create new cultural element
-                            await conn.execute("""
-                                INSERT INTO CulturalElements (
-                                    name, element_type, description, practiced_by, significance,
-                                    historical_origin
-                                )
-                                VALUES ($1, $2, $3, $4, $5, $6)
-                            """, element["name"], "artistic", element["description"],
-                            [f"Nation {nation1_id}", f"Nation {nation2_id}"],
-                            element.get("significance", 5),
-                            f"Cultural exchange between nations {nation1_id} and {nation2_id}")
-
+                        # Use canon to find or create cultural element
+                        await canon.find_or_create_cultural_element(
+                            self.create_run_context({}), conn, **element_data
+                        )
+                
+                # Log the artistic exchange
+                await canon.log_canonical_event(
+                    self.create_run_context({}), conn,
+                    f"Artistic exchange occurred between nations {nation1_id} and {nation2_id}",
+                    tags=['cultural_diffusion', 'artistic'],
+                    significance=5
+                )
+    
     async def _apply_religious_diffusion(self, nation1_id: int, nation2_id: int, effects: Dict[str, Any]) -> None:
-        """Apply religious practice and belief diffusion between nations."""
+        """Apply religious practice and belief diffusion between nations using canon system."""
+        from lore.core import canon
+        
         async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 # Track religious changes in the appropriate tables
-                # This is a simplified implementation
                 if "religious_practices" in effects:
                     for practice in effects["religious_practices"]:
-                        # Add or update practice in religious tables
-                        existing = await conn.fetchrow("""
-                            SELECT id FROM ReligiousPractices
-                            WHERE name = $1
-                        """, practice["name"])
+                        # Prepare data for canon
+                        practice_data = {
+                            "name": practice["name"],
+                            "practice_type": "diffused",
+                            "description": practice["description"],
+                            "purpose": practice.get("purpose", "Cultural synthesis"),
+                            "origin": f"Cultural exchange with Nation {nation1_id}",
+                            "followers": [f"Nation {nation1_id}", f"Nation {nation2_id}"],
+                            "significance": practice.get("significance", 5)
+                        }
                         
-                        if existing:
-                            # Update existing practice
-                            await conn.execute("""
-                                UPDATE ReligiousPractices
-                                SET description = $1, followers = array_append(followers, $2)
-                                WHERE id = $3
-                            """, practice["description"], f"Nation {nation2_id}", existing["id"])
-                        else:
-                            # Create new practice
-                            await conn.execute("""
-                                INSERT INTO ReligiousPractices (
-                                    name, description, origin, followers, significance
-                                )
-                                VALUES ($1, $2, $3, $4, $5)
-                            """, practice["name"], practice["description"],
-                            f"Cultural exchange with Nation {nation1_id}",
-                            [f"Nation {nation1_id}", f"Nation {nation2_id}"],
-                            practice.get("significance", 5))
-
+                        # Use canon to create or update religious practice
+                        await canon.find_or_create_religious_practice(
+                            self.create_run_context({}), conn, **practice_data
+                        )
+                
+                # Log the religious exchange
+                await canon.log_canonical_event(
+                    self.create_run_context({}), conn,
+                    f"Religious practices exchanged between nations {nation1_id} and {nation2_id}",
+                    tags=['cultural_diffusion', 'religious'],
+                    significance=6
+                )
+    
     async def _apply_fashion_diffusion(self, nation1_id: int, nation2_id: int, effects: Dict[str, Any]) -> None:
-        """Apply fashion and clothing diffusion between nations."""
+        """Apply fashion and clothing diffusion between nations using canon system."""
+        from lore.core import canon
+        
         async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 # Implement fashion diffusion effects
-                # This is a simplified implementation
                 if "fashion_elements" in effects:
                     for element in effects["fashion_elements"]:
-                        # Add to cultural elements table with fashion type
-                        await conn.execute("""
-                            INSERT INTO CulturalElements (
-                                name, element_type, description, practiced_by, significance,
-                                historical_origin
+                        # Prepare data for canon
+                        element_data = {
+                            "name": element["name"],
+                            "element_type": "fashion",
+                            "description": element["description"],
+                            "practiced_by": [f"Nation {nation2_id}"],
+                            "significance": element.get("significance", 5),
+                            "historical_origin": f"Adopted from Nation {nation1_id}"
+                        }
+                        
+                        # Use canon to create or update cultural element
+                        cultural_element_id = await canon.find_or_create_cultural_element(
+                            self.create_run_context({}), conn, **element_data
+                        )
+                        
+                        # If element already existed, update to add new nation
+                        if cultural_element_id:
+                            await canon.add_nation_to_cultural_element(
+                                self.create_run_context({}), conn,
+                                cultural_element_id, f"Nation {nation2_id}"
                             )
-                            VALUES ($1, $2, $3, $4, $5, $6)
-                            ON CONFLICT (name, element_type) 
-                            DO UPDATE SET description = EXCLUDED.description,
-                                        practiced_by = array_append(CulturalElements.practiced_by, $7)
-                        """, element["name"], "fashion", element["description"],
-                        [f"Nation {nation2_id}"], element.get("significance", 5),
-                        f"Adopted from Nation {nation1_id}", f"Nation {nation2_id}")
-
+                
+                # Log the fashion exchange
+                await canon.log_canonical_event(
+                    self.create_run_context({}), conn,
+                    f"Fashion trends spread from Nation {nation1_id} to Nation {nation2_id}",
+                    tags=['cultural_diffusion', 'fashion'],
+                    significance=4
+                )
+    
     async def _apply_cuisine_diffusion(self, nation1_id: int, nation2_id: int, effects: Dict[str, Any]) -> None:
-        """Apply culinary and food diffusion between nations."""
+        """Apply culinary and food diffusion between nations using canon system."""
+        from lore.core import canon
+        
         async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 # Implement cuisine diffusion
                 if "cuisine_elements" in effects:
                     for dish in effects["cuisine_elements"]:
-                        # Add to culinary database or cultural elements
-                        await conn.execute("""
-                            INSERT INTO CulinaryTraditions (
-                                name, nation_origin, description, ingredients, preparation,
-                                cultural_significance, adopted_by
+                        # Prepare data for canon
+                        culinary_data = {
+                            "name": dish["name"],
+                            "nation_origin": nation1_id,
+                            "description": dish["description"],
+                            "ingredients": dish.get("ingredients", []),
+                            "preparation": dish.get("preparation", ""),
+                            "cultural_significance": dish.get("significance", ""),
+                            "adopted_by": [nation2_id]
+                        }
+                        
+                        # Use canon to create or update culinary tradition
+                        tradition_id = await canon.find_or_create_culinary_tradition(
+                            self.create_run_context({}), conn, **culinary_data
+                        )
+                        
+                        # If tradition already existed, add adopting nation
+                        if tradition_id:
+                            await canon.add_nation_to_culinary_tradition(
+                                self.create_run_context({}), conn,
+                                tradition_id, nation2_id
                             )
-                            VALUES ($1, $2, $3, $4, $5, $6, $7)
-                            ON CONFLICT (name) 
-                            DO UPDATE SET adopted_by = array_append(CulinaryTraditions.adopted_by, $8)
-                        """, dish["name"], nation1_id, dish["description"],
-                        dish.get("ingredients", []), dish.get("preparation", ""),
-                        dish.get("significance", ""), [nation2_id], nation2_id)
-
+                
+                # Log the culinary exchange
+                await canon.log_canonical_event(
+                    self.create_run_context({}), conn,
+                    f"Culinary traditions exchanged between Nation {nation1_id} and Nation {nation2_id}",
+                    tags=['cultural_diffusion', 'cuisine'],
+                    significance=4
+                )
+    
     async def _apply_customs_diffusion(self, nation1_id: int, nation2_id: int, effects: Dict[str, Any]) -> None:
-        """Apply social customs and etiquette diffusion between nations."""
+        """Apply social customs and etiquette diffusion between nations using canon system."""
+        from lore.core import canon
+        
         async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 # Implement social customs diffusion
                 if "social_customs" in effects:
                     for custom in effects["social_customs"]:
-                        # Create or update social norms/customs
-                        await conn.execute("""
-                            INSERT INTO SocialCustoms (
-                                name, nation_origin, description, context, formality_level,
-                                adopted_by, adoption_date
+                        # Prepare data for canon
+                        custom_data = {
+                            "name": custom["name"],
+                            "nation_origin": nation1_id,
+                            "description": custom["description"],
+                            "context": custom.get("context", "social"),
+                            "formality_level": custom.get("formality_level", "medium"),
+                            "adopted_by": [nation2_id],
+                            "adoption_date": datetime.now()
+                        }
+                        
+                        # Use canon to create or update social custom
+                        custom_id = await canon.find_or_create_social_custom(
+                            self.create_run_context({}), conn, **custom_data
+                        )
+                        
+                        # If custom already existed, add adopting nation
+                        if custom_id:
+                            await canon.add_nation_to_social_custom(
+                                self.create_run_context({}), conn,
+                                custom_id, nation2_id
                             )
-                            VALUES ($1, $2, $3, $4, $5, $6, $7)
-                            ON CONFLICT (name) 
-                            DO UPDATE SET adopted_by = array_append(SocialCustoms.adopted_by, $8)
-                        """, custom["name"], nation1_id, custom["description"],
-                        custom.get("context", "social"), custom.get("formality_level", "medium"),
-                        [nation2_id], datetime.now(), nation2_id)
+                
+                # Log the social custom exchange
+                await canon.log_canonical_event(
+                    self.create_run_context({}), conn,
+                    f"Social customs spread from Nation {nation1_id} to Nation {nation2_id}",
+                    tags=['cultural_diffusion', 'customs'],
+                    significance=5
+                )
+                
+                # Record overall cultural exchange
+                exchange_data = {
+                    "nation1_id": nation1_id,
+                    "nation2_id": nation2_id,
+                    "exchange_type": "customs_diffusion",
+                    "exchange_details": json.dumps(effects),
+                    "timestamp": datetime.now()
+                }
+                
+                await canon.create_cultural_exchange(
+                    self.create_run_context({}), conn, **exchange_data
+                )
 
     async def _create_culture_element(self, conn, data: Dict[str, Any]) -> Dict[str, Any]:
         """Create a cultural element with canon checks."""
