@@ -629,11 +629,16 @@ async def add_educational_system(
 ) -> Dict[str, Any]:
     """
     Add an educational system to the database with matriarchal elements and censorship controls.
+    Uses canon system to ensure consistency.
     
     Returns:
         Dictionary with system ID or error
     """
     manager = await get_education_manager(ctx.context.user_id, ctx.context.conversation_id)
+    
+    # Get LoreSystem instance for canon operations
+    from lore.core.lore_system import LoreSystem
+    lore_system = await LoreSystem.get_instance(ctx.context.user_id, ctx.context.conversation_id)
     
     # Check governance permission
     approved, reasoning = await manager._check_governance_permission(
@@ -644,6 +649,15 @@ async def add_educational_system(
         return {"error": reasoning}
     
     with trace("AddEducationalSystem", metadata={"system_name": name}):
+        # First, ensure the controlling faction exists canonically
+        if controlled_by:
+            async with get_db_connection_context() as conn:
+                from lore.core import canon
+                # This will find or create the faction canonically
+                faction_id = await canon.find_or_create_faction(
+                    ctx, conn, controlled_by, faction_type="educational_authority"
+                )
+        
         # Set defaults for optional matriarchal elements
         female_leadership_roles = female_leadership_roles or ["Headmistress", "Teacher", "Mentor"]
         male_roles = male_roles or ["Assistant", "Aide", "Custodian"]
@@ -673,8 +687,51 @@ async def add_educational_system(
             censorship_enforcement=censorship_enforcement
         )
         
-        # Save to database
+        # Check for semantic duplicates using embedding similarity
+        async with get_db_connection_context() as conn:
+            # Generate embedding for the new system
+            embedding_text = f"{name} {system_type} {description} {' '.join(core_teachings)}"
+            search_vector = await generate_embedding(embedding_text)
+            
+            # Search for similar systems
+            similar_system = await conn.fetchrow("""
+                SELECT id, name, system_type, 1 - (embedding <=> $1) AS similarity
+                FROM EducationalSystems
+                WHERE user_id = $2 AND conversation_id = $3
+                ORDER BY embedding <=> $1
+                LIMIT 1
+            """, search_vector, ctx.context.user_id, ctx.context.conversation_id)
+            
+            if similar_system and similar_system['similarity'] > 0.85:
+                # Potential duplicate found - use validation agent
+                from lore.core.validation import CanonValidationAgent
+                validation_agent = CanonValidationAgent()
+                
+                existing_system = await conn.fetchrow("""
+                    SELECT * FROM EducationalSystems WHERE id = $1
+                """, similar_system['id'])
+                
+                is_duplicate = await validation_agent.confirm_is_duplicate_educational_system(
+                    conn,
+                    proposal=system.dict(),
+                    existing_system=dict(existing_system)
+                )
+                
+                if is_duplicate:
+                    logger.warning(f"Educational system '{name}' is a duplicate of existing system ID {similar_system['id']}")
+                    return {"id": similar_system['id'], "status": "existing", "message": "Found existing similar system"}
+        
+        # Save to database using the manager's internal method
         system_id = await manager._save_educational_system_impl(system)
+        
+        # Log canonical event
+        async with get_db_connection_context() as conn:
+            await canon.log_canonical_event(
+                ctx, conn,
+                f"Educational system '{name}' established with {system_type} approach",
+                tags=["education", "institution", "canon"],
+                significance=7
+            )
         
         return {"id": system_id, "status": "created"}
 
@@ -755,6 +812,7 @@ async def add_teaching_content(
 ) -> Dict[str, Any]:
     """
     Add teaching content to an educational system.
+    Uses canon system to ensure consistency with world state.
     
     Returns:
         Dictionary with content ID or error
@@ -770,6 +828,32 @@ async def add_teaching_content(
         return {"error": reasoning}
     
     with trace("AddTeachingContent", metadata={"system_id": system_id, "title": title}):
+        # Verify the educational system exists
+        async with get_db_connection_context() as conn:
+            system = await conn.fetchrow("""
+                SELECT * FROM EducationalSystems 
+                WHERE id = $1 AND user_id = $2 AND conversation_id = $3
+            """, system_id, ctx.context.user_id, ctx.context.conversation_id)
+            
+            if not system:
+                return {"error": "Educational system not found"}
+            
+            # Check if content contradicts taboo subjects
+            if system['taboo_subjects']:
+                for taboo in system['taboo_subjects']:
+                    if taboo.lower() in description.lower() or any(taboo.lower() in kp.lower() for kp in key_points):
+                        restricted = True
+                        restriction_reason = f"Contains taboo subject: {taboo}"
+                        
+                        # Log this as a canonical event
+                        from lore.core import canon
+                        await canon.log_canonical_event(
+                            ctx, conn,
+                            f"Teaching content '{title}' flagged for containing taboo subject in {system['name']}",
+                            tags=["education", "censorship", "canon"],
+                            significance=4
+                        )
+        
         # Create content object
         content = TeachingContent(
             title=title,
@@ -786,6 +870,20 @@ async def add_teaching_content(
         
         # Save to database
         content_id = await manager._save_teaching_content_impl(system_id, content)
+        
+        # If this is significant content, update the educational system's state
+        if len(key_points) > 5 or subject_area in ["leadership", "governance", "authority"]:
+            from lore.core.lore_system import LoreSystem
+            lore_system = await LoreSystem.get_instance(ctx.context.user_id, ctx.context.conversation_id)
+            
+            # Use the generic change system to record this update
+            await lore_system.propose_and_enact_change(
+                ctx=ctx,
+                entity_type="EducationalSystems",
+                entity_identifier={"id": system_id},
+                updates={"last_content_update": "CURRENT_TIMESTAMP"},
+                reason=f"Added significant teaching content: {title}"
+            )
         
         return {"id": content_id, "status": "created", "restricted": content.restricted}
 
