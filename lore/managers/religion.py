@@ -684,7 +684,7 @@ class ReligionManager(BaseLoreManager):
                 
                 GLOBAL_LORE_CACHE.invalidate_pattern("deity")
                 return deity_id
-
+            
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
         action_type="add_pantheon",
@@ -1225,47 +1225,73 @@ class ReligionManager(BaseLoreManager):
         return created_texts
 
     async def _generate_religious_orders(self, ctx, pantheon_id: int) -> List[Dict[str, Any]]:
-        """Generate religious orders for a pantheon."""
+        """Generate religious orders with full canon integration."""
         async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 pantheon = await conn.fetchrow("""
-                    SELECT name, description, matriarchal_elements
-                    FROM Pantheons WHERE id = $1
+                    SELECT * FROM Pantheons WHERE id = $1
                 """, pantheon_id)
                 
                 deities = await conn.fetch("""
-                    SELECT id, name, gender, domain
+                    SELECT id, name, gender, domain, rank
                     FROM Deities
                     WHERE pantheon_id = $1
                     ORDER BY rank DESC
-                    LIMIT 5
+                    LIMIT 7
                 """, pantheon_id)
                 
                 holy_sites = await conn.fetch("""
-                    SELECT id, name, site_type
+                    SELECT id, name, site_type, clergy_type
                     FROM HolySites
                     WHERE pantheon_id = $1
-                    LIMIT 5
                 """, pantheon_id)
-
+                
+                # Check existing orders to avoid duplicates
+                existing_orders = await conn.fetch("""
+                    SELECT name, order_type, deity_id
+                    FROM ReligiousOrders
+                    WHERE pantheon_id = $1
+                """, pantheon_id)
+                
+                existing_names = {o['name'].lower() for o in existing_orders}
+                existing_deity_orders = {}
+                for o in existing_orders:
+                    if o['deity_id']:
+                        if o['deity_id'] not in existing_deity_orders:
+                            existing_deity_orders[o['deity_id']] = []
+                        existing_deity_orders[o['deity_id']].append(o['order_type'])
+    
         if not pantheon:
             return []
-
+    
+        pantheon_data = dict(pantheon)
+        deities_data = [dict(d) for d in deities]
+        sites_data = [dict(s) for s in holy_sites]
+    
         prompt = f"""
-        Generate 3-4 religious orders for pantheon: {dict(pantheon)['name']}
+        Generate 3-4 religious orders for pantheon: {pantheon_data['name']}
         
-        MATRIARCHAL ELEMENTS: {dict(pantheon)['matriarchal_elements']}
+        MATRIARCHAL ELEMENTS: {pantheon_data['matriarchal_elements']}
         
         DEITIES:
-        {json.dumps([dict(d) for d in deities], indent=2)}
+        {json.dumps(deities_data, indent=2)}
         
         HOLY SITES:
-        {json.dumps([dict(s) for s in holy_sites], indent=2)}
+        {json.dumps(sites_data, indent=2)}
         
-        Create orders with clear gender compositions and hierarchies that
-        reflect the matriarchal religious structure.
+        EXISTING ORDERS (avoid duplicating these):
+        {json.dumps([dict(o) for o in existing_orders], indent=2)}
+        
+        Create orders that:
+        1. Have unique names not in the existing list
+        2. Serve different purposes (militant, scholarly, charitable, mystic)
+        3. Have clear gender compositions reflecting matriarchal hierarchy
+        4. Are associated with specific deities when appropriate
+        5. Have distinct practices and hierarchies
+        
+        Focus on orders that haven't been created yet.
         """
-
+    
         run_config = RunConfig(workflow_name="OrderGeneration")
         result = await Runner.run(
             self.order_generator,
@@ -1275,60 +1301,160 @@ class ReligionManager(BaseLoreManager):
         )
         
         orders = result.final_output_as(List[ReligiousOrderParams])
-        
         created_orders = []
-        for order in orders:
-            order.pantheon_id = pantheon_id
-            try:
-                order_id = await self.add_religious_order(ctx, order)
-                created_orders.append({
-                    "id": order_id,
-                    **order.dict()
-                })
-            except Exception as e:
-                logger.error(f"Error creating order {order.name}: {e}")
+        
+        async with self.get_connection_pool() as pool:
+            async with pool.acquire() as conn:
+                for order in orders:
+                    # Check for duplicates
+                    if order.name.lower() in existing_names:
+                        logger.info(f"Skipping duplicate order: {order.name}")
+                        continue
+                    
+                    # Check if this deity already has this type of order
+                    if order.deity_id and order.deity_id in existing_deity_orders:
+                        if order.order_type in existing_deity_orders[order.deity_id]:
+                            logger.info(f"Deity {order.deity_id} already has a {order.order_type} order")
+                            continue
+                    
+                    # Use canon system for creation
+                    from lore.core import canon
+                    embed_text = f"{order.name} {order.order_type} {order.description} {order.gender_composition}"
+                    
+                    create_data = {
+                        'name': order.name,
+                        'order_type': order.order_type,
+                        'description': order.description,
+                        'gender_composition': order.gender_composition,
+                        'founding_story': order.founding_story,
+                        'headquarters': order.headquarters,
+                        'hierarchy_structure': order.hierarchy_structure,
+                        'vows': order.vows,
+                        'practices': order.practices,
+                        'deity_id': order.deity_id,
+                        'pantheon_id': pantheon_id,
+                        'special_abilities': order.special_abilities,
+                        'notable_members': order.notable_members
+                    }
+                    
+                    order_id = await canon.find_or_create_entity(
+                        ctx=ctx,
+                        conn=conn,
+                        entity_type="religious_order",
+                        entity_name=order.name,
+                        search_fields={'name': order.name, 'pantheon_id': pantheon_id, 'name_field': 'name'},
+                        create_data=create_data,
+                        table_name="ReligiousOrders",
+                        embedding_text=embed_text,
+                        similarity_threshold=0.90
+                    )
+                    
+                    created_dict = order.dict()
+                    created_dict["id"] = order_id
+                    created_dict["pantheon_id"] = pantheon_id
+                    created_orders.append(created_dict)
+                    
+                    # Create order hierarchy positions
+                    if order.hierarchy_structure:
+                        await self._create_order_positions(conn, order_id, order.hierarchy_structure, order.gender_composition)
         
         return created_orders
 
+    async def _create_order_positions(self, conn, order_id: int, hierarchy: List[str], gender_composition: str) -> None:
+        """Create specific positions within a religious order."""
+        for i, position in enumerate(hierarchy):
+            # Determine gender requirements based on order composition
+            if gender_composition == "female_only":
+                gender_requirement = "female"
+            elif gender_composition == "male_only":
+                gender_requirement = "male"
+            elif gender_composition == "female_led":
+                gender_requirement = "female" if i < len(hierarchy) // 2 else "any"
+            else:
+                gender_requirement = "any"
+            
+            try:
+                await conn.execute("""
+                    INSERT INTO OrderPositions (
+                        order_id, position_name, rank_level, 
+                        gender_requirement, responsibilities
+                    )
+                    VALUES ($1, $2, $3, $4, $5)
+                    ON CONFLICT (order_id, position_name) DO NOTHING
+                """,
+                    order_id, position, i + 1, gender_requirement,
+                    f"Responsibilities of {position} in the order"
+                )
+            except Exception as e:
+                logger.error(f"Error creating order position: {e}")
+
     async def _generate_religious_conflicts(self, ctx, pantheon_id: int) -> List[Dict[str, Any]]:
-        """Generate religious conflicts for a pantheon."""
+        """Generate religious conflicts with sophisticated duplicate checking."""
         async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 pantheon = await conn.fetchrow("""
-                    SELECT name, description
-                    FROM Pantheons WHERE id = $1
+                    SELECT * FROM Pantheons WHERE id = $1
                 """, pantheon_id)
                 
                 orders = await conn.fetch("""
-                    SELECT id, name, order_type, gender_composition
-                    FROM ReligiousOrders
+                    SELECT * FROM ReligiousOrders
+                    WHERE pantheon_id = $1
+                """, pantheon_id)
+                
+                texts = await conn.fetch("""
+                    SELECT id, name, key_teachings
+                    FROM ReligiousTexts
                     WHERE pantheon_id = $1
                     LIMIT 5
                 """, pantheon_id)
                 
-                nations = await conn.fetch("""
-                    SELECT id, name, government_type, matriarchy_level
-                    FROM Nations
-                    LIMIT 5
-                """)
-
+                # Get existing conflicts to avoid duplicates
+                existing_conflicts = await conn.fetch("""
+                    SELECT name, conflict_type, parties_involved, core_disagreement
+                    FROM ReligiousConflicts
+                    WHERE $1 = ANY(parties_involved) OR 
+                          EXISTS (
+                              SELECT 1 FROM ReligiousOrders ro
+                              WHERE ro.pantheon_id = $1 
+                              AND ro.name = ANY(ReligiousConflicts.parties_involved)
+                          )
+                """, pantheon['name'])
+    
         if not pantheon or len(orders) < 2:
             return []
-
+    
+        pantheon_data = dict(pantheon)
+        orders_data = [dict(o) for o in orders]
+        texts_data = [dict(t) for t in texts]
+        existing_data = [dict(c) for c in existing_conflicts]
+    
         prompt = f"""
-        Generate 2-3 religious conflicts for pantheon: {dict(pantheon)['name']}
+        Generate 2-3 religious conflicts for pantheon: {pantheon_data['name']}
         
         RELIGIOUS ORDERS:
-        {json.dumps([dict(o) for o in orders], indent=2)}
+        {json.dumps(orders_data, indent=2)}
         
-        NATIONS:
-        {json.dumps([dict(n) for n in nations], indent=2)}
+        RELIGIOUS TEXTS:
+        {json.dumps(texts_data, indent=2)}
         
-        Create conflicts that add depth without threatening the core
-        matriarchal religious order. Focus on theological disputes or
-        jurisdictional issues.
+        EXISTING CONFLICTS (avoid duplicating):
+        {json.dumps(existing_data, indent=2)}
+        
+        Create conflicts that:
+        1. Add theological depth without threatening matriarchal order
+        2. Involve different parties than existing conflicts
+        3. Have unique core disagreements
+        4. Could believably arise from doctrinal interpretation
+        5. Show realistic progression potential
+        
+        Focus on:
+        - Interpretation disputes
+        - Jurisdictional conflicts
+        - Ritual disagreements
+        - Succession disputes (within matriarchal framework)
+        - Resource allocation conflicts
         """
-
+    
         run_config = RunConfig(workflow_name="ConflictGeneration")
         result = await Runner.run(
             self.conflict_generator,
@@ -1338,19 +1464,98 @@ class ReligionManager(BaseLoreManager):
         )
         
         conflicts = result.final_output_as(List[ReligiousConflictParams])
-        
         created_conflicts = []
-        for conflict in conflicts:
-            try:
-                conflict_id = await self.add_religious_conflict(ctx, conflict)
-                created_conflicts.append({
-                    "id": conflict_id,
-                    **conflict.dict()
-                })
-            except Exception as e:
-                logger.error(f"Error creating conflict {conflict.name}: {e}")
+        
+        async with self.get_connection_pool() as pool:
+            async with pool.acquire() as conn:
+                for conflict in conflicts:
+                    # Check for similar existing conflicts
+                    is_duplicate = False
+                    for existing in existing_conflicts:
+                        # Check if same parties involved
+                        existing_parties = set(existing['parties_involved'])
+                        new_parties = set(conflict.parties_involved)
+                        
+                        if len(existing_parties & new_parties) >= len(new_parties) * 0.7:
+                            # High overlap - check if same disagreement
+                            if existing['conflict_type'] == conflict.conflict_type:
+                                is_duplicate = True
+                                break
+                    
+                    if is_duplicate:
+                        logger.info(f"Skipping duplicate conflict: {conflict.name}")
+                        continue
+                    
+                    # Create the conflict
+                    from lore.core import canon
+                    embed_text = f"{conflict.name} {conflict.conflict_type} {conflict.core_disagreement}"
+                    
+                    create_data = {
+                        'name': conflict.name,
+                        'conflict_type': conflict.conflict_type,
+                        'description': conflict.description,
+                        'parties_involved': conflict.parties_involved,
+                        'core_disagreement': conflict.core_disagreement,
+                        'beginning_date': conflict.beginning_date,
+                        'resolution_date': conflict.resolution_date,
+                        'status': conflict.status,
+                        'casualties': conflict.casualties,
+                        'historical_impact': conflict.historical_impact
+                    }
+                    
+                    conflict_id = await canon.find_or_create_entity(
+                        ctx=ctx,
+                        conn=conn,
+                        entity_type="religious_conflict",
+                        entity_name=conflict.name,
+                        search_fields={'name': conflict.name, 'name_field': 'name'},
+                        create_data=create_data,
+                        table_name="ReligiousConflicts",
+                        embedding_text=embed_text,
+                        similarity_threshold=0.85
+                    )
+                    
+                    # Create conflict timeline entries
+                    await self._create_conflict_timeline(conn, conflict_id, conflict)
+                    
+                    created_dict = conflict.dict()
+                    created_dict["id"] = conflict_id
+                    created_conflicts.append(created_dict)
         
         return created_conflicts
+
+    async def _create_conflict_timeline(self, conn, conflict_id: int, conflict: ReligiousConflictParams) -> None:
+        """Create timeline entries for a religious conflict."""
+        # Initial outbreak
+        await conn.execute("""
+            INSERT INTO ReligiousConflictTimeline (
+                conflict_id, event_date, event_description, 
+                severity_change, key_figures
+            )
+            VALUES ($1, $2, $3, $4, $5)
+        """,
+            conflict_id,
+            conflict.beginning_date or "Unknown date",
+            f"Initial disagreement over {conflict.core_disagreement}",
+            0,
+            []
+        )
+        
+        # If resolved, add resolution
+        if conflict.status == "resolved" and conflict.resolution_date:
+            await conn.execute("""
+                INSERT INTO ReligiousConflictTimeline (
+                    conflict_id, event_date, event_description,
+                    severity_change, key_figures
+                )
+                VALUES ($1, $2, $3, $4, $5)
+            """,
+                conflict_id,
+                conflict.resolution_date,
+                f"Conflict resolved. Impact: {conflict.historical_impact or 'Unknown'}",
+                -10,  # Severity drops to 0
+                []
+            )    
 
     # ===========================
     # Distribution and Evolution Methods
