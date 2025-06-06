@@ -3,7 +3,7 @@
 import logging
 import json
 import random
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, AsyncGenerator
 from pydantic import BaseModel, Field
 
 # ------------------ AGENTS SDK IMPORTS ------------------
@@ -30,9 +30,10 @@ from lore.managers.geopolitical import GeopoliticalSystemManager
 from lore.utils.theming import MatriarchalThemingUtils
 from lore.core.cache import GLOBAL_LORE_CACHE
 
-# ---------------------------------------------------------------------------
-# Pydantic Models for structured outputs & guardrails
-# ---------------------------------------------------------------------------
+# ===========================================================================
+# PYDANTIC MODELS FOR STRUCTURED DATA
+# ===========================================================================
+
 class NationValidation(BaseModel):
     """Validation model for nation IDs"""
     is_valid: bool
@@ -53,15 +54,6 @@ class LanguageOutput(BaseModel):
     minority_regions: List[int] = []
 
 class CulturalNormOutput(BaseModel):
-    """Structured output for cultural norm generation"""
-    category: str
-    description: str
-    formality_level: str
-    gender_specific: bool
-    female_variation: Optional[str] = None
-    male_variation: Optional[str] = None
-
-class CulturalNormCompleteOutput(BaseModel):
     """Complete structure for cultural norm output"""
     category: str
     description: str
@@ -88,9 +80,78 @@ class EtiquetteOutput(BaseModel):
     gender_distinctions: str
     taboos: List[str]
 
-# ---------------------------------------------------------------------------
-# Main Class
-# ---------------------------------------------------------------------------
+class LanguageDistribution(BaseModel):
+    """Model for language distribution among nations"""
+    primary_region_ids: List[int]
+    minority_region_ids: List[int]
+
+class NormCategories(BaseModel):
+    """Model for cultural norm categories"""
+    categories: List[str]
+    count: int
+
+class CulturalConflictAnalysis(BaseModel):
+    """Model for cultural conflict analysis"""
+    potential_conflicts: List[str]
+    severity_level: int = Field(..., ge=1, le=10)
+    recommendations: str
+
+class DialectEvolutionModel(BaseModel):
+    """Model for dialect evolution information"""
+    dialect_name: str
+    parent_language: str
+    vocabulary_changes: Dict[str, str]
+    grammatical_changes: List[str]
+    pronunciation_shifts: List[str]
+    social_context: str
+    prestige_level: int = Field(..., ge=1, le=10)
+    example_phrases: Dict[str, str]
+    regional_distribution: List[str]
+
+class CulturalDiffusionResult(BaseModel):
+    """Model for cultural diffusion simulation results"""
+    language_influence: Dict[str, Any]
+    artistic_exchanges: Dict[str, Any]
+    religious_practices: Dict[str, Any]
+    fashion_changes: Dict[str, Any]
+    cuisine_evolution: Dict[str, Any]
+    social_customs: Dict[str, Any]
+    timeline: List[Dict[str, Any]]
+
+class DiffusionEffect(BaseModel):
+    """Model for specific diffusion effects"""
+    category: str
+    from_nation: int
+    to_nation: int
+    elements_transferred: List[str]
+    modifications: List[str]
+    adoption_groups: List[str]
+    resistance_groups: List[str]
+    timeline_years: List[int]
+
+class LanguageInfluenceEffect(BaseModel):
+    """Model for language diffusion effects"""
+    vocabulary_borrowed: Dict[str, str]
+    idioms_adopted: List[str]
+    accent_influences: str
+    formality_changes: List[str]
+
+class ArtisticDiffusionEffect(BaseModel):
+    """Model for artistic diffusion"""
+    art_forms: List[str]
+    literary_influences: List[str]
+    musical_elements: List[str]
+    architectural_styles: List[str]
+
+class CulturalSummary(BaseModel):
+    """Model for cultural summary generation"""
+    format_type: str
+    content: str
+
+# ===========================================================================
+# MAIN REGIONAL CULTURE SYSTEM CLASS
+# ===========================================================================
+
 class RegionalCultureSystem(BaseLoreManager):
     """
     Manages culturally specific norms, customs, manners, and languages
@@ -102,9 +163,15 @@ class RegionalCultureSystem(BaseLoreManager):
         super().__init__(user_id, conversation_id)
         self.geopolitical_manager = GeopoliticalSystemManager(user_id, conversation_id)
         self.cache_namespace = "regional_culture"
-        
-        # Initialize specialized agents for different cultural tasks
-        self._initialize_agents()
+        self._agents_initialized = False
+        self._agents = {}
+    
+    def _get_agent(self, agent_name: str) -> Agent:
+        """Lazy-load agents on demand to avoid initialization overhead"""
+        if not self._agents_initialized:
+            self._initialize_agents()
+            self._agents_initialized = True
+        return self._agents.get(agent_name)
     
     def _initialize_agents(self):
         """Initialize specialized agents for different cultural tasks"""
@@ -114,42 +181,123 @@ class RegionalCultureSystem(BaseLoreManager):
             "Male elements are typically supportive or subordinate. Provide detail and realism."
         )
         
-        # Language generation agent
-        self.language_agent = Agent(
-            name="LanguageGenerationAgent",
-            instructions=(
-                f"{base_instructions}\n\n"
-                "You create realistic languages for a fantasy world with matriarchal power. "
-                "Reflect how language encodes status, formality, and gender hierarchy."
-            ),
-            model="gpt-4.1-nano",
-            model_settings=ModelSettings(temperature=0.9)
-        )
+        model_settings = ModelSettings(temperature=0.9)
         
-        # Cultural norm agent
-        self.norm_agent = Agent(
-            name="CulturalNormAgent",
-            instructions=(
-                f"{base_instructions}\n\n"
-                "You create cultural norms for fantasy nations. Norms must reflect matriarchal structures. "
-                "Consider differences by gender, status, and context. Provide taboos, consequences, variations."
-            ),
-            model="gpt-4.1-nano",
-            model_settings=ModelSettings(temperature=0.9)
-        )
+        agent_configs = {
+            "language": {
+                "name": "LanguageGenerationAgent",
+                "instructions": (
+                    f"{base_instructions}\n\n"
+                    "You create realistic languages for a fantasy world with matriarchal power. "
+                    "Reflect how language encodes status, formality, and gender hierarchy."
+                ),
+                "model": "gpt-4o-mini",
+                "settings": model_settings
+            },
+            "norm": {
+                "name": "CulturalNormAgent",
+                "instructions": (
+                    f"{base_instructions}\n\n"
+                    "You create cultural norms for fantasy nations. Norms must reflect matriarchal structures. "
+                    "Consider differences by gender, status, and context. Provide taboos, consequences, variations."
+                ),
+                "model": "gpt-4o-mini",
+                "settings": model_settings
+            },
+            "etiquette": {
+                "name": "EtiquetteAgent",
+                "instructions": (
+                    f"{base_instructions}\n\n"
+                    "You create detailed etiquette systems for matriarchal fantasy nations. "
+                    "Include greetings, body language, titles, gift-giving, and display of power. "
+                    "Be explicit about how men must defer to female authority."
+                ),
+                "model": "gpt-4o-mini",
+                "settings": model_settings
+            },
+            "distribution": {
+                "name": "LanguageDistributionAgent",
+                "instructions": (
+                    "You receive a list of nations and a desired number of languages to create. "
+                    "Propose how to distribute each new language among these nations. "
+                    "Consider geography, politics, and cultural influence. "
+                    "Some languages might be major (used by multiple large nations), others minor."
+                ),
+                "model": "gpt-4o-mini",
+                "settings": ModelSettings(temperature=0.8)
+            },
+            "category": {
+                "name": "NormCategoryAgent",
+                "instructions": (
+                    "Given a single nation's data, decide which categories of cultural norms to generate "
+                    "(e.g. greeting, dining, authority, gift_giving, personal_space, gender_relations, etc.), "
+                    "and how many norms total. Consider the nation's specific characteristics."
+                ),
+                "model": "gpt-4o-mini",
+                "settings": ModelSettings(temperature=0.8)
+            },
+            "context": {
+                "name": "EtiquetteContextAgent",
+                "instructions": (
+                    "We have a matriarchal nation. Decide which contexts we need specific etiquette for. "
+                    "Example contexts might be 'court', 'noble', 'public', 'private', 'religious', 'business'. "
+                    "Consider the nation's government type and cultural traits."
+                ),
+                "model": "gpt-4o-mini",
+                "settings": ModelSettings(temperature=0.8)
+            },
+            "summary": {
+                "name": "CultureSummaryAgent",
+                "instructions": (
+                    "You create coherent, matriarchal-themed cultural summaries. "
+                    "Highlight the most distinctive norms, how matriarchal authority is expressed, "
+                    "and any notable linguistic or etiquette features."
+                ),
+                "model": "gpt-4o-mini",
+                "settings": ModelSettings(temperature=0.8)
+            },
+            "conflict": {
+                "name": "CulturalConflictAnalyst",
+                "instructions": (
+                    "You analyze how two different matriarchal cultures might conflict. "
+                    "Focus on greeting norms, etiquette, taboos, religious differences, etc. "
+                    "Provide specific conflicts, severity assessment, and diplomatic recommendations."
+                ),
+                "model": "gpt-4o-mini",
+                "settings": ModelSettings(temperature=0.8)
+            },
+            "diffusion": {
+                "name": "CulturalDiffusionAgent",
+                "instructions": (
+                    "You simulate cultural diffusion between two nations over time. "
+                    "Model how language, customs, fashion, cuisine, arts, and other cultural elements "
+                    "flow between societies based on proximity, relations, and power dynamics. "
+                    "Maintain matriarchal power structures as the dominant framework."
+                ),
+                "model": "gpt-4o-mini",
+                "settings": model_settings
+            },
+            "dialect": {
+                "name": "DialectEvolutionAgent",
+                "instructions": (
+                    "You simulate linguistic evolution of dialects in fantasy languages. "
+                    "Model vocabulary changes, grammatical shifts, pronunciation differences, "
+                    "and social contexts. Pay special attention to how language reflects "
+                    "matriarchal power structures and feminine-dominated society."
+                ),
+                "model": "gpt-4o-mini",
+                "settings": model_settings
+            }
+        }
         
-        # Etiquette agent
-        self.etiquette_agent = Agent(
-            name="EtiquetteAgent",
-            instructions=(
-                f"{base_instructions}\n\n"
-                "You create detailed etiquette systems for matriarchal fantasy nations. "
-                "Include greetings, body language, titles, gift-giving, and display of power. "
-                "Be explicit about how men must defer to female authority."
-            ),
-            model="gpt-4.1-nano",
-            model_settings=ModelSettings(temperature=0.9)
-        )
+        # Create agents
+        for key, config in agent_configs.items():
+            self._agents[key] = Agent(
+                name=config["name"],
+                instructions=config["instructions"],
+                model=config["model"],
+                model_settings=config["settings"]
+            )
     
     async def ensure_initialized(self):
         """Ensure system is initialized"""
@@ -230,6 +378,29 @@ class RegionalCultureSystem(BaseLoreManager):
                 
                 CREATE INDEX IF NOT EXISTS idx_etiquette_nation
                 ON Etiquette(nation_id);
+            """,
+            "LanguageDialects": """
+                CREATE TABLE IF NOT EXISTS LanguageDialects (
+                    id SERIAL PRIMARY KEY,
+                    language_id INTEGER NOT NULL,
+                    region_id INTEGER NOT NULL,
+                    name TEXT NOT NULL,
+                    parent_language TEXT,
+                    vocabulary_changes JSONB,
+                    grammatical_changes TEXT[],
+                    pronunciation_shifts TEXT[],
+                    social_context TEXT,
+                    prestige_level INTEGER CHECK (prestige_level BETWEEN 1 AND 10),
+                    example_phrases JSONB,
+                    regional_distribution TEXT[],
+                    embedding VECTOR(1536),
+                    UNIQUE(language_id, region_id),
+                    FOREIGN KEY (language_id) REFERENCES Languages(id) ON DELETE CASCADE,
+                    FOREIGN KEY (region_id) REFERENCES Nations(id) ON DELETE CASCADE
+                );
+                
+                CREATE INDEX IF NOT EXISTS idx_languagedialects_embedding
+                ON LanguageDialects USING ivfflat (embedding vector_cosine_ops);
             """
         }
         
@@ -296,25 +467,8 @@ class RegionalCultureSystem(BaseLoreManager):
             
             # 1) Ask the LLM how to distribute primary vs minority usage for each planned language
             #    instead of random code-based logic.
-            distribution_agent = Agent(
-                name="LanguageDistributionAgent",
-                instructions=(
-                    "You receive a list of nations and a desired number of languages to create. "
-                    "Propose how to distribute each new language among these nations. "
-                    "You must return JSON containing an array of languages, each with a list "
-                    "of primary_region_ids and minority_region_ids. Example:\n\n"
-                    "[\n"
-                    "  {\n"
-                    '    "primary_region_ids": [1,2],\n'
-                    '    "minority_region_ids": [3]\n'
-                    "  },\n"
-                    "  ...\n"
-                    "]\n\n"
-                    "Remember we have matriarchal nations of varying size and importance; "
-                    "some languages might be major (used by multiple large nations), others minor."
-                ),
-                model="gpt-4.1-nano",
-                model_settings=ModelSettings(temperature=0.8)
+            distribution_agent = self._get_agent("distribution").clone(
+                output_type=List[LanguageDistribution]
             )
             
             # Build distribution prompt
@@ -325,7 +479,7 @@ class RegionalCultureSystem(BaseLoreManager):
 
             We want to create {count} new languages. 
             Decide which nations are primary speakers vs. minority speakers for each new language.
-            Return a JSON array with exactly {count} items, each item having:
+            Return exactly {count} LanguageDistribution objects with:
               - "primary_region_ids": array of nation IDs
               - "minority_region_ids": array of nation IDs
             """
@@ -337,9 +491,9 @@ class RegionalCultureSystem(BaseLoreManager):
             dist_result = await Runner.run(distribution_agent, dist_prompt, context=run_ctx.context, run_config=dist_config)
             
             try:
-                distribution_data = json.loads(dist_result.final_output)
-            except json.JSONDecodeError:
-                # Fallback if the LLM didn't produce valid JSON
+                distribution_data = dist_result.final_output
+            except Exception:
+                # Fallback if the LLM didn't produce valid output
                 distribution_data = []
             
             # If distribution_data is malformed or doesn't match count, fallback:
@@ -349,18 +503,21 @@ class RegionalCultureSystem(BaseLoreManager):
                 for i in range(count):
                     # Simplistic fallback: pick random primary & minority
                     if len(nations) <= 1:
-                        distribution_data.append({"primary_region_ids": [nations[0]["id"]], "minority_region_ids": []})
+                        distribution_data.append(LanguageDistribution(
+                            primary_region_ids=[nations[0]["id"]], 
+                            minority_region_ids=[]
+                        ))
                     else:
                         primary_choice = random.sample(nations, min(2, len(nations)))
                         minority_candidates = [n for n in nations if n not in primary_choice]
-                        minority_choice = random.sample(minority_candidates, min(1, len(minority_candidates)))
-                        distribution_data.append({
-                            "primary_region_ids": [n["id"] for n in primary_choice],
-                            "minority_region_ids": [n["id"] for n in minority_choice]
-                        })
+                        minority_choice = random.sample(minority_candidates, min(1, len(minority_candidates))) if minority_candidates else []
+                        distribution_data.append(LanguageDistribution(
+                            primary_region_ids=[n["id"] for n in primary_choice],
+                            minority_region_ids=[n["id"] for n in minority_choice]
+                        ))
             
             # 2) Now for each language distribution, we call the language generation agent
-            language_agent = self.language_agent.clone(output_type=LanguageOutput)
+            language_agent = self._get_agent("language").clone(output_type=LanguageOutput)
             run_config = RunConfig(
                 workflow_name="LanguageGeneration",
                 trace_metadata={"user_id": str(self.user_id), "conversation_id": str(self.conversation_id)}
@@ -376,13 +533,9 @@ class RegionalCultureSystem(BaseLoreManager):
                             return nn
                     return {}
                 
-                primary_nations = [find_nation_data(nid) for nid in dist.get("primary_region_ids", [])]
-                minority_nations = [find_nation_data(nid) for nid in dist.get("minority_region_ids", [])]
+                primary_nations = [find_nation_data(nid) for nid in dist.primary_region_ids]
+                minority_nations = [find_nation_data(nid) for nid in dist.minority_region_ids]
                 
-                prompt_data = {
-                    "primary_nations": primary_nations,
-                    "minority_nations": minority_nations
-                }
                 gen_prompt = (
                     "Create a new language for a matriarchal fantasy setting. Some nations speak it primarily; "
                     "others use it as a minority language. Output a LanguageOutput object."
@@ -393,8 +546,8 @@ class RegionalCultureSystem(BaseLoreManager):
                 result = await Runner.run(language_agent, gen_prompt, context=run_ctx.context, run_config=run_config)
                 language_data = result.final_output
                 # Attach the distribution
-                language_data.primary_regions = dist.get("primary_region_ids", [])
-                language_data.minority_regions = dist.get("minority_region_ids", [])
+                language_data.primary_regions = dist.primary_region_ids
+                language_data.minority_regions = dist.minority_region_ids
                 
                 # 3) Insert into DB
                 async with self.get_connection_pool() as pool:
@@ -467,19 +620,8 @@ class RegionalCultureSystem(BaseLoreManager):
                     nation_data = dict(nation)
             
             # Let the LLM decide how many norms to generate, and for which categories
-            category_agent = Agent(
-                name="NormCategoryAgent",
-                instructions=(
-                    "Given a single nation's data, decide which categories of cultural norms to generate "
-                    "(e.g. greeting, dining, authority, gift_giving, personal_space, gender_relations, etc.), "
-                    "and how many norms total. Return a JSON array of categories or a JSON object with categories + number. "
-                    "Example:\n\n"
-                    "[\"greeting\",\"authority\",\"dining\"]\n\n"
-                    "or\n"
-                    "{ \"categories\": [\"greeting\",\"public_behavior\",\"religious_practice\"], \"count\": 5 }"
-                ),
-                model="gpt-4.1-nano",
-                model_settings=ModelSettings(temperature=0.8)
+            category_agent = self._get_agent("category").clone(
+                output_type=NormCategories
             )
             
             cat_prompt = f"""
@@ -487,8 +629,14 @@ class RegionalCultureSystem(BaseLoreManager):
             {json.dumps(nation_data, indent=2)}
 
             Decide which categories of cultural norms we should generate (like greeting, authority, dining, etc.), 
-            and how many norms total. Return valid JSON with either an array or an object that includes categories 
-            and an overall count.
+            and how many norms total. Consider categories like:
+            - greeting, dining, authority, gift_giving, personal_space
+            - gender_relations, religious_practice, public_behavior
+            - business_conduct, family_dynamics
+            
+            Return a NormCategories object with:
+            - categories: array of category strings
+            - count: total number of norms to generate
             """
             
             cat_config = RunConfig(
@@ -497,29 +645,18 @@ class RegionalCultureSystem(BaseLoreManager):
             )
             cat_result = await Runner.run(category_agent, cat_prompt, context=run_ctx.context, run_config=cat_config)
             
-            # Attempt to parse
             try:
-                category_data = json.loads(cat_result.final_output)
-            except json.JSONDecodeError:
+                category_data = cat_result.final_output
+                categories = category_data.categories
+                norms_count = category_data.count
+            except Exception:
                 # fallback
-                category_data = ["greeting","dining","authority","gift_giving","gender_relations"]
-            
-            # Extract categories from category_data
-            # e.g. it might be a list or an object with keys "categories" & "count"
-            if isinstance(category_data, list):
-                categories = category_data
-                norms_count = len(category_data)
-            elif isinstance(category_data, dict):
-                categories = category_data.get("categories", [])
-                norms_count = category_data.get("count", len(categories) or 5)
-            else:
-                categories = ["greeting","dining","authority"]
+                categories = ["greeting","dining","authority","gift_giving","gender_relations"]
                 norms_count = len(categories)
             
             # Now we generate that many norms with the norm agent
-            norm_agent = self.norm_agent.clone(
-                name="CulturalNormAgent",
-                output_type=CulturalNormCompleteOutput,
+            norm_agent = self._get_agent("norm").clone(
+                output_type=CulturalNormOutput,
                 input_guardrails=[input_guardrail]
             )
             
@@ -542,9 +679,14 @@ class RegionalCultureSystem(BaseLoreManager):
                 NATION DATA:
                 {json.dumps(nation_data, indent=2)}
                 
-                Return a CulturalNormCompleteOutput object with:
+                Return a CulturalNormOutput object with:
                 - category: {cat}
-                - description, formality_level, gender_specific, taboo_level, consequence, etc.
+                - description, formality_level, gender_specific
+                - female_variation, male_variation (if gender_specific)
+                - taboo_level (0-10), consequence
+                - regional_variations dictionary
+                
+                Ensure strong matriarchal themes.
                 """
                 
                 result = await Runner.run(norm_agent, prompt, context=run_ctx.context, run_config=run_config)
@@ -618,15 +760,8 @@ class RegionalCultureSystem(BaseLoreManager):
                     nation_data = dict(nation)
             
             # Let an agent decide which contexts to produce
-            context_agent = Agent(
-                name="EtiquetteContextAgent",
-                instructions=(
-                    "We have a matriarchal nation. Decide which contexts we need specific etiquette for. "
-                    "Example contexts might be 'court', 'noble', 'public', 'private', 'religious', 'business'. "
-                    "Return a JSON array of strings for contexts. Example:\n[\"court\",\"public\",\"business\"]"
-                ),
-                model="gpt-4.1-nano",
-                model_settings=ModelSettings(temperature=0.8)
+            context_agent = self._get_agent("context").clone(
+                output_type=List[str]
             )
             
             ctx_prompt = f"""
@@ -634,7 +769,8 @@ class RegionalCultureSystem(BaseLoreManager):
             {json.dumps(nation_data, indent=2)}
 
             Suggest an array of relevant 'contexts' for which we should generate distinct etiquette systems.
-            Only valid JSON, e.g. ["court","religious","military"].
+            Consider contexts like: court, noble, public, private, religious, business, military, academic, artistic, intimate.
+            Return an array of context strings.
             """
             
             ctx_config = RunConfig(
@@ -644,14 +780,17 @@ class RegionalCultureSystem(BaseLoreManager):
             ctx_result = await Runner.run(context_agent, ctx_prompt, context=run_ctx.context, run_config=ctx_config)
             
             try:
-                contexts = json.loads(ctx_result.final_output)
+                contexts = ctx_result.final_output
                 if not isinstance(contexts, list):
                     contexts = ["court","public","private"]
-            except json.JSONDecodeError:
+            except Exception:
                 contexts = ["court","public","private"]
             
             # Now produce etiquette for each context
-            etiquette_agent = self.etiquette_agent.clone(output_type=EtiquetteOutput, input_guardrails=[input_guardrail])
+            etiquette_agent = self._get_agent("etiquette").clone(
+                output_type=EtiquetteOutput, 
+                input_guardrails=[input_guardrail]
+            )
             run_config = RunConfig(workflow_name="EtiquetteGeneration", trace_metadata=self.trace_metadata)
             
             etiquette_systems = []
@@ -660,7 +799,21 @@ class RegionalCultureSystem(BaseLoreManager):
                 Generate a detailed etiquette system for {context_item} contexts in this matriarchal nation:
                 {json.dumps(nation_data, indent=2)}
                 
-                Return an EtiquetteOutput with fields describing how titles, greetings, body language, etc. vary.
+                Return an EtiquetteOutput with:
+                - context: "{context_item}"
+                - title_system: how titles and honorifics work
+                - greeting_ritual: detailed greeting procedures
+                - body_language: expected postures and gestures
+                - eye_contact: rules about looking at others
+                - distance_norms: personal space expectations
+                - gift_giving: protocols for gifts
+                - dining_etiquette: meal behavior rules
+                - power_display: how authority is shown
+                - respect_indicators: signs of deference
+                - gender_distinctions: different rules by gender
+                - taboos: list of forbidden behaviors
+                
+                Be explicit about male deference to female authority.
                 """
                 result = await Runner.run(etiquette_agent, prompt, context=run_ctx.context, run_config=run_config)
                 etiquette_data = result.final_output
@@ -779,7 +932,7 @@ class RegionalCultureSystem(BaseLoreManager):
                     self.set_cache(cache_key, result)
                     return result
     
-    @function_tool
+    @function_tool(strict_mode=False)
     async def summarize_culture(self, nation_id: int, format_type: str = "brief") -> str:
         """
         Generate a textual summary of a nation's culture, using an LLM.
@@ -797,24 +950,21 @@ class RegionalCultureSystem(BaseLoreManager):
                 return f"Error: {cultural_data['error']}"
             
             # Summarize with an agent
-            summary_agent = Agent(
-                name="CultureSummaryAgent",
-                instructions=(
-                    "You create coherent, matriarchal-themed cultural summaries. "
-                    "Highlight the most distinctive norms, how matriarchal authority is expressed, "
-                    "and any notable linguistic or etiquette features."
-                ),
-                model="gpt-4.1-nano",
-                model_settings=ModelSettings(temperature=0.8)
-            )
+            summary_agent = self._get_agent("summary")
             
             run_ctx = RunContextWrapper(context={
                 "user_id": self.user_id,
                 "conversation_id": self.conversation_id
             })
             
+            format_instructions = {
+                "brief": "Create a concise 2-3 paragraph summary",
+                "detailed": "Create a comprehensive multi-section summary with headers",
+                "narrative": "Write an immersive narrative description as if from a traveler's journal"
+            }.get(format_type, "Create an appropriate summary")
+            
             prompt = f"""
-            Create a {format_type} summary of this nation's culture:
+            {format_instructions} of this nation's culture:
             
             NATION: {cultural_data['nation']['name']}
             
@@ -827,7 +977,7 @@ class RegionalCultureSystem(BaseLoreManager):
             result = await Runner.run(summary_agent, prompt, context=run_ctx.context)
             return result.final_output
     
-    @function_tool
+    @function_tool(strict_mode=False)
     async def detect_cultural_conflicts(self, nation_id1: int, nation_id2: int) -> Dict[str, Any]:
         """
         Analyze potential cultural conflicts between two nations,
@@ -849,15 +999,8 @@ class RegionalCultureSystem(BaseLoreManager):
             if "error" in data1 or "error" in data2:
                 return {"error": "One or both nations not found"}
             
-            conflict_agent = Agent(
-                name="CulturalConflictAnalyst",
-                instructions=(
-                    "You analyze how two different matriarchal cultures might conflict. "
-                    "Focus on greeting norms, etiquette, taboos, religious differences, etc. "
-                    "Return a JSON object with fields 'potential_conflicts', 'severity_level', and 'recommendations'."
-                ),
-                model="gpt-4.1-nano",
-                model_settings=ModelSettings(temperature=0.8)
+            conflict_agent = self._get_agent("conflict").clone(
+                output_type=CulturalConflictAnalysis
             )
             
             run_ctx = RunContextWrapper(context={"user_id": self.user_id, "conversation_id": self.conversation_id})
@@ -870,22 +1013,23 @@ class RegionalCultureSystem(BaseLoreManager):
             NATION 2 DATA:
             {json.dumps(data2, indent=2)}
             
-            Return JSON with:
-            {{
-              "potential_conflicts": [...],
-              "severity_level": <1-10>,
-              "recommendations": "..."
-            }}
+            Consider:
+            - Greeting and etiquette mismatches
+            - Taboo violations
+            - Language barriers and miscommunications
+            - Conflicting power structure expectations
+            - Religious or value differences
+            - Gender role expectations
+            - Gift-giving faux pas
+            
+            Return a CulturalConflictAnalysis with:
+            - potential_conflicts: list of specific conflict scenarios
+            - severity_level: 1-10 overall severity
+            - recommendations: diplomatic advice
             """
             
             result = await Runner.run(conflict_agent, prompt, context=run_ctx.context)
-            try:
-                return json.loads(result.final_output)
-            except json.JSONDecodeError:
-                return {
-                    "analysis": result.final_output,
-                    "parsing_error": "Could not parse response as JSON"
-                }
+            return result.final_output.dict()
                 
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
@@ -916,16 +1060,8 @@ class RegionalCultureSystem(BaseLoreManager):
             nation2_culture = await self.get_nation_culture(run_ctx, nation2_id)
             
             # Create a diffusion simulation agent
-            diffusion_agent = Agent(
-                name="CulturalDiffusionAgent",
-                instructions="""
-                You simulate cultural diffusion between two nations over time.
-                Model how language, customs, fashion, cuisine, arts, and other cultural elements
-                flow between societies based on proximity, relations, and power dynamics.
-                Maintain matriarchal power structures as the dominant framework.
-                """,
-                model="gpt-4.1-nano",
-                model_settings=ModelSettings(temperature=0.9)
+            diffusion_agent = self._get_agent("diffusion").clone(
+                output_type=CulturalDiffusionResult
             )
             
             # Get geopolitical data about the two nations' relationship
@@ -971,226 +1107,483 @@ class RegionalCultureSystem(BaseLoreManager):
             - Social groups that adopt or resist the changes
             - Timeline of adoption over {years} years
             
-            Return detailed JSON with these diffusion patterns, maintaining matriarchal frameworks.
+            Return a CulturalDiffusionResult with detailed diffusion patterns, maintaining matriarchal frameworks.
             """
             
             # Run the simulation
             result = await Runner.run(diffusion_agent, prompt, context=run_ctx.context)
+            diffusion_data = result.final_output
             
-            try:
-                diffusion_data = json.loads(result.final_output)
-                
-                # Apply the diffusion effects to the database
-                await self._apply_diffusion_effects(nation1_id, nation2_id, diffusion_data)
-                
-                return {
-                    "nations": [nation1_id, nation2_id],
-                    "years_simulated": years,
-                    "diffusion_results": diffusion_data
-                }
-            except json.JSONDecodeError:
-                return {"error": "Failed to parse diffusion data", "raw_output": result.final_output}
-        
-        async def _apply_diffusion_effects(self, nation1_id: int, nation2_id: int, diffusion_data: Dict[str, Any]) -> None:
-            """Apply cultural diffusion effects to both nations."""
-            # This implementation depends on your database structure
-            # Here's a simplified approach
+            # Apply the diffusion effects to the database
+            await self._apply_diffusion_effects(nation1_id, nation2_id, diffusion_data)
             
-            # For each diffusion category
-            for category, effects in diffusion_data.items():
-                if category in ["language_influence", "vocabulary", "idioms"]:
-                    await self._apply_language_diffusion(nation1_id, nation2_id, effects)
-                
-                elif category in ["artistic", "literary", "art"]:
-                    await self._apply_artistic_diffusion(nation1_id, nation2_id, effects)
-                
-                elif category in ["religious", "beliefs", "practices"]:
-                    await self._apply_religious_diffusion(nation1_id, nation2_id, effects)
-                
-                elif category in ["fashion", "clothing", "appearance"]:
-                    await self._apply_fashion_diffusion(nation1_id, nation2_id, effects)
-                
-                elif category in ["cuisine", "food", "culinary"]:
-                    await self._apply_cuisine_diffusion(nation1_id, nation2_id, effects)
-                
-                elif category in ["social", "customs", "etiquette"]:
-                    await self._apply_customs_diffusion(nation1_id, nation2_id, effects)
+            return {
+                "nations": [nation1_id, nation2_id],
+                "years_simulated": years,
+                "diffusion_results": diffusion_data.dict()
+            }
+    
+    async def _apply_diffusion_effects(self, nation1_id: int, nation2_id: int, diffusion_data: CulturalDiffusionResult) -> None:
+        """Apply cultural diffusion effects to both nations."""
+        # This implementation depends on your database structure
+        # Here's a simplified approach
         
-        async def _apply_language_diffusion(self, nation1_id: int, nation2_id: int, effects: Dict[str, Any]) -> None:
-            """Apply language diffusion effects."""
-            # Implementation would depend on your database structure
-            pass
-
-class DialectEvolutionModel(BaseModel):
-    """Model for dialect evolution information."""
-    dialect_name: str
-    parent_language: str
-    vocabulary_changes: Dict[str, str]
-    grammatical_changes: List[str]
-    pronunciation_shifts: List[str]
-    social_context: str
-    prestige_level: int = Field(..., ge=1, le=10)
-    example_phrases: Dict[str, str]
-    regional_distribution: List[str]
-
-@with_governance(
-    agent_type=AgentType.NARRATIVE_CRAFTER,
-    action_type="evolve_dialect",
-    action_description="Evolving regional dialect through language agents",
-    id_from_context=lambda ctx: "regional_culture_system"
-)
-async def evolve_dialect(self, ctx, language_id: int, region_id: int, years: int = 100) -> Dict[str, Any]:
-    """
-    Evolve a regional dialect using language agents that simulate linguistic evolution.
-    """
-    with trace(
-        "DialectEvolution", 
-        group_id=self.trace_group_id,
-        metadata={"language_id": language_id, "region_id": region_id, "years": years}
-    ):
-        run_ctx = self.create_run_context(ctx)
+        # For each diffusion category
+        for category, effects in diffusion_data.dict().items():
+            if category in ["language_influence", "vocabulary", "idioms"]:
+                await self._apply_language_diffusion(nation1_id, nation2_id, effects)
+            
+            elif category in ["artistic_exchanges", "literary", "art"]:
+                await self._apply_artistic_diffusion(nation1_id, nation2_id, effects)
+            
+            elif category in ["religious_practices", "beliefs", "practices"]:
+                await self._apply_religious_diffusion(nation1_id, nation2_id, effects)
+            
+            elif category in ["fashion_changes", "clothing", "appearance"]:
+                await self._apply_fashion_diffusion(nation1_id, nation2_id, effects)
+            
+            elif category in ["cuisine_evolution", "food", "culinary"]:
+                await self._apply_cuisine_diffusion(nation1_id, nation2_id, effects)
+            
+            elif category in ["social_customs", "customs", "etiquette"]:
+                await self._apply_customs_diffusion(nation1_id, nation2_id, effects)
         
-        # Get language and region data
+        # Invalidate caches for both nations
+        self.invalidate_cache_pattern(f"nation_culture_{nation1_id}")
+        self.invalidate_cache_pattern(f"nation_culture_{nation2_id}")
+    
+    async def _apply_language_diffusion(self, nation1_id: int, nation2_id: int, effects: Dict[str, Any]) -> None:
+        """Apply language diffusion effects."""
+        # Create an agent to determine specific language changes
+        language_diffusion_agent = Agent(
+            name="LanguageDiffusionAgent",
+            instructions="Generate specific vocabulary borrowings and linguistic influences between nations.",
+            model="gpt-4o-mini",
+            output_type=LanguageInfluenceEffect
+        )
+        
+        prompt = f"""
+        Based on these diffusion effects:
+        {json.dumps(effects, indent=2)}
+        
+        Generate specific language influences including:
+        - vocabulary_borrowed: dictionary of borrowed words with meanings
+        - idioms_adopted: list of adopted idiomatic expressions
+        - accent_influences: description of pronunciation changes
+        - formality_changes: list of changes in formal/informal speech
+        """
+        
+        result = await Runner.run(language_diffusion_agent, prompt, context={})
+        influence_data = result.final_output
+        
+        # Store the influence data (implementation depends on your DB structure)
+        # This is a placeholder - you might want to create a LanguageInfluences table
+        logging.info(f"Applied language diffusion between nations {nation1_id} and {nation2_id}")
+    
+    async def _apply_artistic_diffusion(self, nation1_id: int, nation2_id: int, effects: Dict[str, Any]) -> None:
+        """Apply artistic and literary diffusion effects."""
+        # Similar pattern to language diffusion
+        artistic_agent = Agent(
+            name="ArtisticDiffusionAgent",
+            instructions="Generate specific artistic and literary influences between nations.",
+            model="gpt-4o-mini",
+            output_type=ArtisticDiffusionEffect
+        )
+        
+        prompt = f"""
+        Based on these diffusion effects:
+        {json.dumps(effects, indent=2)}
+        
+        Generate specific artistic influences including:
+        - art_forms: list of shared or influenced art forms
+        - literary_influences: list of literary styles or themes
+        - musical_elements: list of musical influences
+        - architectural_styles: list of architectural borrowings
+        """
+        
+        result = await Runner.run(artistic_agent, prompt, context={})
+        artistic_data = result.final_output
+        
+        logging.info(f"Applied artistic diffusion between nations {nation1_id} and {nation2_id}")
+    
+    async def _apply_religious_diffusion(self, nation1_id: int, nation2_id: int, effects: Dict[str, Any]) -> None:
+        """Apply religious practice diffusion effects."""
+        # Placeholder implementation
+        logging.info(f"Applied religious diffusion between nations {nation1_id} and {nation2_id}")
+    
+    async def _apply_fashion_diffusion(self, nation1_id: int, nation2_id: int, effects: Dict[str, Any]) -> None:
+        """Apply fashion and clothing diffusion effects."""
+        # Placeholder implementation
+        logging.info(f"Applied fashion diffusion between nations {nation1_id} and {nation2_id}")
+    
+    async def _apply_cuisine_diffusion(self, nation1_id: int, nation2_id: int, effects: Dict[str, Any]) -> None:
+        """Apply culinary diffusion effects."""
+        # Placeholder implementation
+        logging.info(f"Applied cuisine diffusion between nations {nation1_id} and {nation2_id}")
+    
+    async def _apply_customs_diffusion(self, nation1_id: int, nation2_id: int, effects: Dict[str, Any]) -> None:
+        """Apply social customs diffusion effects."""
+        # Placeholder implementation
+        logging.info(f"Applied customs diffusion between nations {nation1_id} and {nation2_id}")
+    
+    @with_governance(
+        agent_type=AgentType.NARRATIVE_CRAFTER,
+        action_type="evolve_dialect",
+        action_description="Evolving regional dialect through language agents",
+        id_from_context=lambda ctx: "regional_culture_system"
+    )
+    async def evolve_dialect(self, ctx, language_id: int, region_id: int, years: int = 100) -> Dict[str, Any]:
+        """
+        Evolve a regional dialect using language agents that simulate linguistic evolution.
+        """
+        with trace(
+            "DialectEvolution", 
+            group_id=self.trace_group_id,
+            metadata={"language_id": language_id, "region_id": region_id, "years": years}
+        ):
+            run_ctx = self.create_run_context(ctx)
+            
+            # Get language and region data
+            async with self.get_connection_pool() as pool:
+                async with pool.acquire() as conn:
+                    language = await conn.fetchrow("""
+                        SELECT * FROM Languages WHERE id = $1
+                    """, language_id)
+                    
+                    region = await conn.fetchrow("""
+                        SELECT * FROM Nations WHERE id = $1
+                    """, region_id)
+                    
+                    if not language or not region:
+                        return {"error": "Language or region not found"}
+                    
+                    language_data = dict(language)
+                    region_data = dict(region)
+                    
+                    # Parse JSON fields
+                    if language_data.get('common_phrases'):
+                        language_data['common_phrases'] = json.loads(language_data['common_phrases'])
+                    if language_data.get('dialects'):
+                        language_data['dialects'] = json.loads(language_data['dialects'])
+                    
+                    # Get existing dialects in this language
+                    existing_dialects = language_data.get('dialects', {})
+                    
+                    # Get cultural elements for context
+                    cultural_elements = await conn.fetch("""
+                        SELECT * FROM CulturalElements 
+                        WHERE $1 = ANY(practiced_by)
+                        LIMIT 10
+                    """, region_data["name"])
+                    
+                    cultural_data = [dict(c) for c in cultural_elements]
+            
+            # Create language evolution agent
+            dialect_agent = self._get_agent("dialect").clone(
+                output_type=DialectEvolutionModel
+            )
+            
+            # Build the prompt
+            prompt = f"""
+            Evolve a regional dialect for this language and region over {years} years:
+            
+            LANGUAGE:
+            {json.dumps(language_data, indent=2)}
+            
+            REGION:
+            {json.dumps(region_data, indent=2)}
+            
+            EXISTING DIALECTS:
+            {json.dumps(existing_dialects, indent=2)}
+            
+            CULTURAL CONTEXT:
+            {json.dumps(cultural_data, indent=2)}
+            
+            Create a DialectEvolutionModel for a new or evolved dialect that:
+            1. Reflects the region's culture and social structure
+            2. Shows matriarchal power in feminine-dominant language forms
+            3. Includes specific vocabulary and grammatical changes
+            4. Has example phrases showing the dialect in use
+            5. Explains its social context and prestige level
+            
+            Include:
+            - dialect_name: unique name for this dialect
+            - parent_language: the base language name
+            - vocabulary_changes: dict of original->dialectal words
+            - grammatical_changes: list of grammar shifts
+            - pronunciation_shifts: list of sound changes
+            - social_context: who speaks it and when
+            - prestige_level: 1-10 social status
+            - example_phrases: dict showing usage
+            - regional_distribution: list of areas where spoken
+            """
+            
+            # Run the simulation
+            result = await Runner.run(dialect_agent, prompt, context=run_ctx.context)
+            dialect_model = result.final_output
+            
+            # Store the dialect in the database
+            async with self.get_connection_pool() as pool:
+                async with pool.acquire() as conn:
+                    # Update the language's dialects
+                    current_dialects = language_data.get("dialects", {})
+                    if not current_dialects:
+                        current_dialects = {}
+                    
+                    # Add or update the dialect for this region
+                    region_name = region_data["name"]
+                    current_dialects[region_name] = dialect_model.dialect_name
+                    
+                    # Update the dialect details in the Languages table
+                    await conn.execute("""
+                        UPDATE Languages
+                        SET dialects = $1
+                        WHERE id = $2
+                    """, json.dumps(current_dialects), language_id)
+                    
+                    # Store detailed dialect information in LanguageDialects table
+                    try:
+                        await conn.execute("""
+                            INSERT INTO LanguageDialects
+                            (language_id, region_id, name, parent_language, vocabulary_changes,
+                             grammatical_changes, pronunciation_shifts, social_context,
+                             prestige_level, example_phrases, regional_distribution)
+                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                            ON CONFLICT (language_id, region_id) DO UPDATE
+                            SET name = EXCLUDED.name,
+                                vocabulary_changes = EXCLUDED.vocabulary_changes,
+                                grammatical_changes = EXCLUDED.grammatical_changes,
+                                pronunciation_shifts = EXCLUDED.pronunciation_shifts,
+                                social_context = EXCLUDED.social_context,
+                                prestige_level = EXCLUDED.prestige_level,
+                                example_phrases = EXCLUDED.example_phrases,
+                                regional_distribution = EXCLUDED.regional_distribution
+                        """,
+                        language_id, 
+                        region_id,
+                        dialect_model.dialect_name,
+                        dialect_model.parent_language,
+                        json.dumps(dialect_model.vocabulary_changes),
+                        dialect_model.grammatical_changes,
+                        dialect_model.pronunciation_shifts,
+                        dialect_model.social_context,
+                        dialect_model.prestige_level,
+                        json.dumps(dialect_model.example_phrases),
+                        dialect_model.regional_distribution)
+                        
+                        # Generate embedding for the dialect
+                        embed_text = f"{dialect_model.dialect_name} {dialect_model.social_context}"
+                        
+                        # Get the ID of the inserted/updated dialect
+                        dialect_id = await conn.fetchval("""
+                            SELECT id FROM LanguageDialects 
+                            WHERE language_id = $1 AND region_id = $2
+                        """, language_id, region_id)
+                        
+                        if dialect_id:
+                            await self.generate_and_store_embedding(
+                                embed_text, conn, "LanguageDialects", "id", dialect_id
+                            )
+                    except Exception as e:
+                        logging.error(f"Error storing dialect data: {e}")
+                        # Continue anyway since we've already updated the main language record
+            
+            # Return the dialect evolution results
+            return {
+                "language_id": language_id,
+                "region_id": region_id,
+                "years_simulated": years,
+                "dialect": dialect_model.dict()
+            }
+    
+    # ---------------------------------------------------------------------------
+    # Additional Helper Methods
+    # ---------------------------------------------------------------------------
+    
+    @function_tool(strict_mode=False)
+    async def get_all_languages(self) -> List[Dict[str, Any]]:
+        """Get all languages in the world."""
+        async with self.get_connection_pool() as pool:
+            async with pool.acquire() as conn:
+                languages = await conn.fetch("""
+                    SELECT id, name, language_family, description, 
+                           writing_system, difficulty, relation_to_power
+                    FROM Languages
+                    ORDER BY name
+                """)
+                return [dict(lang) for lang in languages]
+    
+    @function_tool(strict_mode=False)
+    async def get_language_details(self, language_id: int) -> Dict[str, Any]:
+        """Get detailed information about a specific language."""
         async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 language = await conn.fetchrow("""
                     SELECT * FROM Languages WHERE id = $1
                 """, language_id)
                 
-                region = await conn.fetchrow("""
-                    SELECT * FROM Nations WHERE id = $1
-                """, region_id)
+                if not language:
+                    return {"error": "Language not found"}
                 
-                if not language or not region:
-                    return {"error": "Language or region not found"}
+                lang_data = dict(language)
                 
-                language_data = dict(language)
-                region_data = dict(region)
+                # Parse JSON fields
+                if lang_data.get('common_phrases'):
+                    lang_data['common_phrases'] = json.loads(lang_data['common_phrases'])
+                if lang_data.get('dialects'):
+                    lang_data['dialects'] = json.loads(lang_data['dialects'])
                 
-                # Get existing dialects in this language
+                # Get dialects
                 dialects = await conn.fetch("""
-                    SELECT key, value
-                    FROM jsonb_each_text($1)
-                """, language_data.get("dialects", {}))
+                    SELECT * FROM LanguageDialects
+                    WHERE language_id = $1
+                """, language_id)
                 
-                dialect_data = {k: v for k, v in [(d["key"], d["value"]) for d in dialects]}
+                lang_data['dialect_details'] = []
+                for dialect in dialects:
+                    d = dict(dialect)
+                    if d.get('vocabulary_changes'):
+                        d['vocabulary_changes'] = json.loads(d['vocabulary_changes'])
+                    if d.get('example_phrases'):
+                        d['example_phrases'] = json.loads(d['example_phrases'])
+                    lang_data['dialect_details'].append(d)
                 
-                # Get cultural elements for context
-                cultural_elements = await conn.fetch("""
-                    SELECT * FROM CulturalElements 
-                    WHERE $1 = ANY(practiced_by)
-                """, region_data["name"])
+                # Get nations that speak this language
+                nations = await conn.fetch("""
+                    SELECT id, name FROM Nations
+                    WHERE id = ANY($1) OR id = ANY($2)
+                """, lang_data.get('primary_regions', []), 
+                    lang_data.get('minority_regions', []))
                 
-                cultural_data = [dict(c) for c in cultural_elements]
-        
-        # Create language evolution agent
-        language_agent = Agent(
-            name="DialectEvolutionAgent",
-            instructions="""
-            You simulate linguistic evolution of dialects in fantasy languages.
-            Model vocabulary changes, grammatical shifts, pronunciation differences,
-            and social contexts. Pay special attention to how language reflects
-            matriarchal power structures and feminine-dominated society.
-            """,
-            model="gpt-4.1-nano",
-            model_settings=ModelSettings(temperature=0.9),
-            output_type=DialectEvolutionModel
-        )
-        
-        # Build the prompt
-        prompt = f"""
-        Evolve a regional dialect for this language and region over {years} years:
-        
-        LANGUAGE:
-        {json.dumps(language_data, indent=2)}
-        
-        REGION:
-        {json.dumps(region_data, indent=2)}
-        
-        EXISTING DIALECTS:
-        {json.dumps(dialect_data, indent=2)}
-        
-        CULTURAL CONTEXT:
-        {json.dumps(cultural_data, indent=2)}
-        
-        Create a DialectEvolutionModel for a new or evolved dialect that:
-        1. Reflects the region's culture and social structure
-        2. Shows matriarchal power in feminine-dominant language forms
-        3. Includes specific vocabulary and grammatical changes
-        4. Has example phrases showing the dialect in use
-        5. Explains its social context and prestige level
-        """
-        
-        # Run the simulation
-        result = await Runner.run(language_agent, prompt, context=run_ctx.context)
-        dialect_model = result.final_output
-        
-        # Store the dialect in the database
+                lang_data['speaking_nations'] = {
+                    'primary': [
+                        dict(n) for n in nations 
+                        if n['id'] in lang_data.get('primary_regions', [])
+                    ],
+                    'minority': [
+                        dict(n) for n in nations 
+                        if n['id'] in lang_data.get('minority_regions', [])
+                    ]
+                }
+                
+                return lang_data
+    
+    @function_tool(strict_mode=False)
+    async def compare_etiquette(self, nation_id1: int, nation_id2: int, context: str) -> Dict[str, Any]:
+        """Compare etiquette between two nations for a specific context."""
         async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
-                # Update the language's dialects
-                current_dialects = language_data.get("dialects", {})
-                if not current_dialects:
-                    current_dialects = {}
+                etiq1 = await conn.fetchrow("""
+                    SELECT * FROM Etiquette
+                    WHERE nation_id = $1 AND context = $2
+                """, nation_id1, context)
                 
-                # Add or update the dialect for this region
-                region_name = region_data["name"]
-                current_dialects[region_name] = dialect_model.dialect_name
+                etiq2 = await conn.fetchrow("""
+                    SELECT * FROM Etiquette
+                    WHERE nation_id = $1 AND context = $2
+                """, nation_id2, context)
                 
-                # Update the dialect details in a dedicated table or as part of the language
-                await conn.execute("""
-                    UPDATE Languages
-                    SET dialects = $1
-                    WHERE id = $2
-                """, json.dumps(current_dialects), language_id)
+                if not etiq1 or not etiq2:
+                    return {"error": "Etiquette not found for one or both nations in this context"}
                 
-                # Store detailed dialect information in a new table if available
-                try:
-                    await conn.execute("""
-                        INSERT INTO LanguageDialects
-                        (language_id, region_id, name, parent_language, vocabulary_changes,
-                         grammatical_changes, pronunciation_shifts, social_context,
-                         prestige_level, example_phrases, regional_distribution)
-                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-                        ON CONFLICT (language_id, region_id) DO UPDATE
-                        SET name = EXCLUDED.name,
-                            vocabulary_changes = EXCLUDED.vocabulary_changes,
-                            grammatical_changes = EXCLUDED.grammatical_changes,
-                            pronunciation_shifts = EXCLUDED.pronunciation_shifts,
-                            social_context = EXCLUDED.social_context,
-                            prestige_level = EXCLUDED.prestige_level,
-                            example_phrases = EXCLUDED.example_phrases,
-                            regional_distribution = EXCLUDED.regional_distribution
-                    """,
-                    language_id, 
-                    region_id,
-                    dialect_model.dialect_name,
-                    dialect_model.parent_language,
-                    json.dumps(dialect_model.vocabulary_changes),
-                    dialect_model.grammatical_changes,
-                    dialect_model.pronunciation_shifts,
-                    dialect_model.social_context,
-                    dialect_model.prestige_level,
-                    json.dumps(dialect_model.example_phrases),
-                    dialect_model.regional_distribution)
-                except Exception as e:
-                    logging.error(f"Error storing dialect data: {e}")
-                    # Continue anyway since we've already updated the main language record
-        
-        # Return the dialect evolution results
-        return {
-            "language_id": language_id,
-            "region_id": region_id,
-            "years_simulated": years,
-            "dialect": {
-                "name": dialect_model.dialect_name,
-                "parent_language": dialect_model.parent_language,
-                "vocabulary_changes": dialect_model.vocabulary_changes,
-                "grammatical_changes": dialect_model.grammatical_changes,
-                "pronunciation_shifts": dialect_model.pronunciation_shifts,
-                "social_context": dialect_model.social_context,
-                "prestige_level": dialect_model.prestige_level,
-                "example_phrases": dialect_model.example_phrases,
-                "regional_distribution": dialect_model.regional_distribution
+                # Create comparison agent
+                comparison_agent = Agent(
+                    name="EtiquetteComparisonAgent",
+                    instructions="Compare etiquette systems and highlight key differences and potential misunderstandings.",
+                    model="gpt-4o-mini"
+                )
+                
+                prompt = f"""
+                Compare these two etiquette systems for {context} contexts:
+                
+                NATION 1 ETIQUETTE:
+                {json.dumps(dict(etiq1), indent=2)}
+                
+                NATION 2 ETIQUETTE:
+                {json.dumps(dict(etiq2), indent=2)}
+                
+                Highlight:
+                - Major differences that could cause offense
+                - Conflicting expectations
+                - Areas of compatibility
+                - Advice for visitors from each nation
+                """
+                
+                result = await Runner.run(comparison_agent, prompt, context={})
+                
+                return {
+                    "nation1_id": nation_id1,
+                    "nation2_id": nation_id2,
+                    "context": context,
+                    "comparison": result.final_output
+                }
+    
+    @function_tool(strict_mode=False)
+    async def generate_diplomatic_protocol(self, nation_id1: int, nation_id2: int) -> Dict[str, Any]:
+        """Generate a diplomatic protocol guide for interactions between two nations."""
+        with trace(
+            "DiplomaticProtocolGeneration", 
+            group_id=self.trace_group_id,
+            metadata={"nation1_id": nation_id1, "nation2_id": nation_id2}
+        ):
+            # Get cultural data for both nations
+            run_ctx = RunContextWrapper(context={
+                "user_id": self.user_id,
+                "conversation_id": self.conversation_id
+            })
+            
+            culture1 = await self.get_nation_culture(run_ctx, nation_id1)
+            culture2 = await self.get_nation_culture(run_ctx, nation_id2)
+            
+            if "error" in culture1 or "error" in culture2:
+                return {"error": "Failed to retrieve cultural data"}
+            
+            # Get conflict analysis
+            conflicts = await self.detect_cultural_conflicts(nation_id1, nation_id2)
+            
+            # Create protocol generation agent
+            protocol_agent = Agent(
+                name="DiplomaticProtocolAgent",
+                instructions=(
+                    "Create comprehensive diplomatic protocols for interactions between nations. "
+                    "Consider cultural sensitivities, power dynamics, and matriarchal structures. "
+                    "Provide specific guidance for successful diplomatic engagement."
+                ),
+                model="gpt-4o-mini"
+            )
+            
+            prompt = f"""
+            Create a diplomatic protocol guide for interactions between these nations:
+            
+            NATION 1:
+            {json.dumps(culture1, indent=2)}
+            
+            NATION 2:
+            {json.dumps(culture2, indent=2)}
+            
+            KNOWN CONFLICTS:
+            {json.dumps(conflicts, indent=2)}
+            
+            Create a comprehensive guide including:
+            1. Pre-meeting preparations
+            2. Arrival and initial greetings
+            3. Gift exchange protocols
+            4. Meeting room arrangements
+            5. Speaking order and titles
+            6. Topics to avoid
+            7. Meal protocols
+            8. Closing ceremonies
+            9. Follow-up expectations
+            10. Emergency conflict resolution
+            
+            Ensure the protocol respects both nations' matriarchal structures.
+            """
+            
+            result = await Runner.run(protocol_agent, prompt, context=run_ctx.context)
+            
+            return {
+                "nation1_id": nation_id1,
+                "nation2_id": nation_id2,
+                "protocol_guide": result.final_output,
+                "based_on_conflicts": conflicts
             }
-        }
