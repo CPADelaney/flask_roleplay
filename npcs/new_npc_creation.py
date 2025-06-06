@@ -1091,7 +1091,7 @@ class NPCCreationHandler:
     
     async def generate_npc_name(self, ctx: RunContextWrapper, desired_gender="female", style="unique", forbidden_names=None) -> str:
         """
-        Generate a unique name for an NPC.
+        Generate a unique name for an NPC using the canon system to ensure no duplicates.
         
         Args:
             ctx: Context wrapper with user and conversation IDs
@@ -1105,6 +1105,9 @@ class NPCCreationHandler:
         try:
             user_id = ctx.context.get("user_id")
             conversation_id = ctx.context.get("conversation_id")
+            
+            # Import canon system
+            from lore.core import canon
             
             # Get environment for context
             env_details = await self.get_environment_details(ctx)
@@ -1122,13 +1125,52 @@ class NPCCreationHandler:
             if forbidden_names:
                 existing_names.extend(forbidden_names)
             
-            # Use existing function to get a name
-            name = await fetch_npc_name(desired_gender, existing_names, env_details["environment_desc"], style)
+            # Keep trying to generate a unique name
+            max_attempts = 10
+            for attempt in range(max_attempts):
+                # Use existing function to get a name
+                candidate_name = await fetch_npc_name(
+                    desired_gender, 
+                    existing_names, 
+                    env_details["environment_desc"], 
+                    style
+                )
+                
+                # Check if this name already exists canonically
+                async with get_db_connection_context() as conn:
+                    existing_npc = await conn.fetchrow(
+                        "SELECT npc_id FROM NPCStats WHERE npc_name = $1 AND user_id = $2 AND conversation_id = $3",
+                        candidate_name, user_id, conversation_id
+                    )
+                    
+                    if not existing_npc:
+                        # Also check semantic similarity to prevent near-duplicates
+                        similar_npc_id = await canon._find_semantically_similar_npc(
+                            conn, candidate_name, None, threshold=0.95
+                        )
+                        
+                        if not similar_npc_id:
+                            # This name is unique enough
+                            return candidate_name
+                
+                # Add to forbidden list for next iteration
+                existing_names.append(candidate_name)
             
-            # Ensure uniqueness
-            unique_name = self.get_unique_npc_name(name, existing_names)
-            
-            return unique_name
+            # If we couldn't find a unique name, add a number suffix
+            base_name = candidate_name
+            suffix = 2
+            while True:
+                numbered_name = f"{base_name} {suffix}"
+                async with get_db_connection_context() as conn:
+                    existing_npc = await conn.fetchrow(
+                        "SELECT npc_id FROM NPCStats WHERE npc_name = $1 AND user_id = $2 AND conversation_id = $3",
+                        numbered_name, user_id, conversation_id
+                    )
+                    
+                    if not existing_npc:
+                        return numbered_name
+                suffix += 1
+                
         except Exception as e:
             logging.error(f"Error generating NPC name: {e}")
             
@@ -1691,7 +1733,7 @@ class NPCCreationHandler:
     
     async def create_npc_in_database(self, ctx: RunContextWrapper, npc_data) -> Dict[str, Any]:
         """
-        Create an NPC in the database with complete details.
+        Create an NPC in the database using the canon system for consistency.
         
         Args:
             ctx: Context wrapper with user and conversation IDs
@@ -1703,6 +1745,13 @@ class NPCCreationHandler:
         try:
             user_id = ctx.context.get("user_id")
             conversation_id = ctx.context.get("conversation_id")
+            
+            # Import lore system components
+            from lore.core.lore_system import LoreSystem
+            from lore.core import canon
+            
+            # Get lore system instance
+            lore_system = await LoreSystem.get_instance(user_id, conversation_id)
             
             # Get day names for scheduling
             day_names = await self.get_day_names(ctx)
@@ -1775,7 +1824,34 @@ class NPCCreationHandler:
                     ctx, npc_name, environment_desc
                 )
             
-            # Get current location based on schedule
+            # Apply subtle femdom elements
+            npc_data_with_femdom = await self.integrate_femdom_elements({
+                "npc_name": npc_name,
+                "dominance": dominance,
+                "cruelty": cruelty,
+                "personality_traits": personality_traits,
+                "likes": likes,
+                "dislikes": dislikes
+            })
+            
+            # Get updated traits
+            personality_traits = npc_data_with_femdom.get("personality_traits", personality_traits)
+            likes = npc_data_with_femdom.get("likes", likes)
+            dislikes = npc_data_with_femdom.get("dislikes", dislikes)
+            
+            # Generate age and birthdate
+            age = random.randint(20, 50)
+            calendar_data = load_calendar_names(user_id, conversation_id)
+            months_list = calendar_data.get("months", [
+                "Frostmoon", "Windspeak", "Bloomrise", "Dawnsveil",
+                "Emberlight", "Goldencrest", "Shadowleaf", "Harvesttide",
+                "Stormcall", "Nightwhisper", "Snowbound", "Yearsend"
+            ])
+            birth_month = random.choice(months_list)
+            birth_day = random.randint(1, 28)
+            birthdate = f"{birth_month} {birth_day}"
+            
+            # Determine current location
             current_location = npc_data.get("current_location", "")
             if not current_location:
                 # Determine current time of day and day
@@ -1810,88 +1886,66 @@ class NPCCreationHandler:
                             parts = activity.split(keyword, 1)
                             if len(parts) > 1:
                                 potential_location = parts[1].split(".")[0].split(",")[0].strip()
-                                if len(potential_location) > 3:  # Avoid very short fragments
+                                if len(potential_location) > 3:
                                     current_location = potential_location
                                     break
                 
-                # If we couldn't extract a location, use a random location from the database
+                # If we couldn't extract a location, get a canonical location
                 if not current_location:
-                    location_query = """
-                        SELECT location_name FROM Locations 
-                        WHERE user_id=$1 AND conversation_id=$2 
-                        ORDER BY RANDOM() LIMIT 1
-                    """
-                    
-                    location_row = await conn.fetchrow(location_query, user_id, conversation_id)
-                    current_location = location_row['location_name'] if location_row else "Unknown"
+                    async with get_db_connection_context() as conn:
+                        current_location = await canon.find_or_create_location(
+                            ctx, conn, "Town Square"
+                        )
             
-            # Generate age and birthdate
-            age = random.randint(20, 50)  # Default age range
-            # Get calendar data for birthdate
-            calendar_data = load_calendar_names(user_id, conversation_id)
-            months_list = calendar_data.get("months", [
-                "Frostmoon", "Windspeak", "Bloomrise", "Dawnsveil",
-                "Emberlight", "Goldencrest", "Shadowleaf", "Harvesttide",
-                "Stormcall", "Nightwhisper", "Snowbound", "Yearsend"
-            ])
-            birth_month = random.choice(months_list)
-            birth_day = random.randint(1, 28)
-            birthdate = f"{birth_month} {birth_day}"
-            
-            # Apply subtle femdom elements
-            npc_data_with_femdom = await self.integrate_femdom_elements({
-                "npc_name": npc_name,
-                "dominance": dominance,
-                "cruelty": cruelty,
-                "personality_traits": personality_traits,
-                "likes": likes,
-                "dislikes": dislikes
-            })
-            
-            # Get updated traits
-            personality_traits = npc_data_with_femdom.get("personality_traits", personality_traits)
-            likes = npc_data_with_femdom.get("likes", likes)
-            dislikes = npc_data_with_femdom.get("dislikes", dislikes)
-            
-            # Insert into database
+            # Use canon system to find or create the NPC
             async with get_db_connection_context() as conn:
-                query = """
-                    INSERT INTO NPCStats (
-                        user_id, conversation_id,
-                        npc_name, introduced, sex,
-                        dominance, cruelty, closeness, trust, respect, intensity,
-                        archetypes, archetype_summary, archetype_extras_summary,
-                        likes, dislikes, hobbies, personality_traits,
-                        age, birthdate,
-                        relationships, memory, schedule,
-                        physical_description, current_location
-                    )
-                    VALUES ($1, $2,
-                            $3, $4, $5,
-                            $6, $7, $8, $9, $10, $11,
-                            $12, $13, $14,
-                            $15, $16, $17, $18,
-                            $19, $20,
-                            $21, $22, $23,
-                            $24, $25
-                    )
-                    RETURNING npc_id
-                """
-                
-                npc_id = await conn.fetchval(
-                    query,
-                    user_id, conversation_id,
-                    npc_name, introduced, sex,
-                    dominance, cruelty, closeness, trust, respect, intensity,
-                    json.dumps(archetype_objs), archetype_summary, archetype_extras_summary,
-                    json.dumps(likes), json.dumps(dislikes), json.dumps(hobbies), json.dumps(personality_traits),
-                    age, birthdate,
-                    '[]', json.dumps(memories), json.dumps(schedule),
-                    physical_description, current_location
+                # Check if NPC already exists canonically
+                npc_id = await canon.find_or_create_npc(
+                    ctx, conn, npc_name,
+                    role=archetype_summary,
+                    affiliations=npc_data.get("affiliations", [])
                 )
+                
+                # Now update the NPC with full details using the lore system
+                updates = {
+                    "introduced": introduced,
+                    "sex": sex,
+                    "dominance": dominance,
+                    "cruelty": cruelty,
+                    "closeness": closeness,
+                    "trust": trust,
+                    "respect": respect,
+                    "intensity": intensity,
+                    "archetypes": json.dumps(archetype_objs),
+                    "archetype_summary": archetype_summary,
+                    "archetype_extras_summary": archetype_extras_summary,
+                    "likes": json.dumps(likes),
+                    "dislikes": json.dumps(dislikes),
+                    "hobbies": json.dumps(hobbies),
+                    "personality_traits": json.dumps(personality_traits),
+                    "age": age,
+                    "birthdate": birthdate,
+                    "relationships": '[]',
+                    "memory": json.dumps(memories),
+                    "schedule": json.dumps(schedule),
+                    "physical_description": physical_description,
+                    "current_location": current_location
+                }
+                
+                # Use lore system to update the NPC canonically
+                update_result = await lore_system.propose_and_enact_change(
+                    ctx,
+                    entity_type="NPCStats",
+                    entity_identifier={"npc_id": npc_id},
+                    updates=updates,
+                    reason=f"Fully initializing NPC {npc_name} with personality, stats, and background"
+                )
+                
+                if update_result.get("status") == "error":
+                    raise Exception(f"Failed to update NPC: {update_result.get('message')}")
             
-            # Assign random relationships
-            await self.assign_random_relationships(
+            # Assign random relationships using canon system
+            await self.assign_random_relationships_canonical(
                 user_id, conversation_id, npc_id, npc_name, archetype_objs
             )
             
@@ -1899,7 +1953,7 @@ class NPCCreationHandler:
             try:
                 memory_system = await MemorySystem.get_instance(user_id, conversation_id)
                 
-                # Store memories in the memory system
+                # Store memories in the memory system with governance
                 await self.store_npc_memories(user_id, conversation_id, npc_id, memories)
                 
                 # Initialize emotional state
@@ -2002,9 +2056,8 @@ class NPCCreationHandler:
                 "current_location": current_location
             }
     
-            # NEW: Inform Nyx about the new NPC
+            # Inform Nyx about the new NPC canonically
             try:
-                # Import here to avoid circular imports
                 from nyx.integrate import NyxNPCIntegrationManager
                 
                 nyx_manager = NyxNPCIntegrationManager(
@@ -2061,6 +2114,7 @@ class NPCCreationHandler:
         except Exception as e:
             logging.error(f"Error creating NPC in database: {e}")
             return {"error": f"Failed to create NPC: {str(e)}"}
+
     
     # --- Main NPC creation method ---
     
@@ -2569,6 +2623,7 @@ class NPCCreationHandler:
     async def check_for_mask_slippage(self, user_id, conversation_id, npc_id):
         """
         Check if an NPC has reached thresholds where their true nature begins to show.
+        Updates are made through the canon system.
         
         Args:
             user_id: User ID
@@ -2579,6 +2634,18 @@ class NPCCreationHandler:
             List of triggered events or None if error
         """
         try:
+            # Import lore system components
+            from lore.core.lore_system import LoreSystem
+            
+            # Get lore system instance
+            lore_system = await LoreSystem.get_instance(user_id, conversation_id)
+            
+            # Create context
+            ctx = RunContextWrapper(context={
+                "user_id": user_id,
+                "conversation_id": conversation_id
+            })
+            
             async with get_db_connection_context() as conn:
                 # Get NPC's current stats
                 stats_query = """
@@ -2626,6 +2693,7 @@ class NPCCreationHandler:
                     
                 # Check each stat for slippage triggers
                 triggered_events = []
+                physical_description_updates = []
                 
                 for stat_name, thresholds in MASK_SLIPPAGE_TRIGGERS.items():
                     stat_value = locals().get(stat_name, 0)  # Get the stat value from local vars
@@ -2654,73 +2722,95 @@ class NPCCreationHandler:
                                 
                             # Subtle physical description changes based on mask slippage
                             if stat_name == "dominance" and threshold["threshold"] >= 50:
-                                update_query = """
-                                    UPDATE NPCStats
-                                    SET physical_description = CONCAT(physical_description, ' In unguarded moments, her demeanor shifts subtly—a barely perceptible straightening of posture, a flash of something commanding in her eyes that quickly vanishes when noticed.')
-                                    WHERE user_id=$1 AND conversation_id=$2 AND npc_id=$3
-                                """
-                                await conn.execute(update_query, user_id, conversation_id, npc_id)
+                                physical_description_updates.append(
+                                    " In unguarded moments, her demeanor shifts subtly—a barely perceptible straightening of posture, a flash of something commanding in her eyes that quickly vanishes when noticed."
+                                )
                             
                             if stat_name == "cruelty" and threshold["threshold"] >= 50:
-                                update_query = """
-                                    UPDATE NPCStats
-                                    SET physical_description = CONCAT(physical_description, ' Occasionally her smile doesn't quite reach her eyes, revealing a momentary coldness before she adjusts her expression back to warmth.')
-                                    WHERE user_id=$1 AND conversation_id=$2 AND npc_id=$3
-                                """
-                                await conn.execute(update_query, user_id, conversation_id, npc_id)
+                                physical_description_updates.append(
+                                    " Occasionally her smile doesn't quite reach her eyes, revealing a momentary coldness before she adjusts her expression back to warmth."
+                                )
                                 
                             if stat_name == "intensity" and threshold["threshold"] >= 50:
-                                update_query = """
-                                    UPDATE NPCStats
-                                    SET physical_description = CONCAT(physical_description, ' Sometimes when she thinks no one is watching, her gaze becomes unnervingly focused, studying others with an analytical intensity that disappears behind a pleasant mask when attention returns to her.')
-                                    WHERE user_id=$1 AND conversation_id=$2 AND npc_id=$3
-                                """
-                                await conn.execute(update_query, user_id, conversation_id, npc_id)
-                
-                # Update memory
-                memory_update_query = """
-                    UPDATE NPCStats
-                    SET memory = $1
-                    WHERE user_id=$2 AND conversation_id=$3 AND npc_id=$4
+                                physical_description_updates.append(
+                                    " Sometimes when she thinks no one is watching, her gaze becomes unnervingly focused, studying others with an analytical intensity that disappears behind a pleasant mask when attention returns to her."
+                                )
+            
+            # Update memory using lore system
+            if memory != json.loads(memory_json if memory_json else "[]"):
+                await lore_system.propose_and_enact_change(
+                    ctx,
+                    entity_type="NPCStats",
+                    entity_identifier={"npc_id": npc_id},
+                    updates={"memory": json.dumps(memory)},
+                    reason=f"Mask slippage events occurred for {npc_name}, revealing deeper aspects of personality"
+                )
+            
+            # Update physical description if needed
+            if physical_description_updates:
+                # Get current description
+                desc_query = """
+                    SELECT physical_description FROM NPCStats
+                    WHERE user_id=$1 AND conversation_id=$2 AND npc_id=$3
                 """
-                await conn.execute(memory_update_query, json.dumps(memory), user_id, conversation_id, npc_id)
                 
-                # Update slippage history
-                if triggered_events:
-                    slippage_history.extend(triggered_events)
-                    
-                    # Check if NPCEvolution record exists
-                    exists_query = """
-                        SELECT 1 FROM NPCEvolution
-                        WHERE user_id=$1 AND conversation_id=$2 AND npc_id=$3
+                desc_row = await conn.fetchrow(desc_query, user_id, conversation_id, npc_id)
+                current_desc = desc_row['physical_description'] if desc_row else ""
+                
+                # Append new descriptions
+                new_desc = current_desc + "".join(physical_description_updates)
+                
+                await lore_system.propose_and_enact_change(
+                    ctx,
+                    entity_type="NPCStats",
+                    entity_identifier={"npc_id": npc_id},
+                    updates={"physical_description": new_desc},
+                    reason=f"Physical manifestations of {npc_name}'s true nature are becoming visible"
+                )
+            
+            # Update slippage history
+            if triggered_events:
+                slippage_history.extend(triggered_events)
+                
+                # Check if NPCEvolution record exists
+                exists_query = """
+                    SELECT 1 FROM NPCEvolution
+                    WHERE user_id=$1 AND conversation_id=$2 AND npc_id=$3
+                """
+                
+                exists_row = await conn.fetchrow(exists_query, user_id, conversation_id, npc_id)
+                
+                if exists_row:
+                    # Update using lore system
+                    await lore_system.propose_and_enact_change(
+                        ctx,
+                        entity_type="NPCEvolution",
+                        entity_identifier={
+                            "user_id": user_id,
+                            "conversation_id": conversation_id,
+                            "npc_id": npc_id
+                        },
+                        updates={"mask_slippage_events": json.dumps(slippage_history)},
+                        reason=f"Recording mask slippage progression for {npc_name}"
+                    )
+                else:
+                    # Create new record - direct insert since it doesn't exist
+                    insert_query = """
+                        INSERT INTO NPCEvolution
+                        (user_id, conversation_id, npc_id, mask_slippage_events)
+                        VALUES ($1, $2, $3, $4)
                     """
-                    
-                    exists_row = await conn.fetchrow(exists_query, user_id, conversation_id, npc_id)
-                    
-                    if exists_row:
-                        update_query = """
-                            UPDATE NPCEvolution
-                            SET mask_slippage_events = $1
-                            WHERE user_id=$2 AND conversation_id=$3 AND npc_id=$4
-                        """
-                        await conn.execute(update_query, json.dumps(slippage_history), user_id, conversation_id, npc_id)
-                    else:
-                        insert_query = """
-                            INSERT INTO NPCEvolution
-                            (user_id, conversation_id, npc_id, mask_slippage_events)
-                            VALUES ($1, $2, $3, $4)
-                        """
-                        await conn.execute(insert_query, user_id, conversation_id, npc_id, json.dumps(slippage_history))
-                
-                return triggered_events
-                
+                    await conn.execute(insert_query, user_id, conversation_id, npc_id, json.dumps(slippage_history))
+            
+            return triggered_events
+            
         except Exception as e:
             logging.error(f"Error checking mask slippage: {e}")
             return None
     
-    async def assign_random_relationships(self, user_id, conversation_id, npc_id, npc_name, npc_archetypes=None):
+    async def assign_random_relationships_canonical(self, user_id, conversation_id, npc_id, npc_name, npc_archetypes=None):
         """
-        Assign random relationships between the new NPC and other entities.
+        Assign random relationships between the new NPC and other entities using the canon system.
         
         Args:
             user_id: User ID
@@ -2729,11 +2819,18 @@ class NPCCreationHandler:
             npc_name: NPC name
             npc_archetypes: List of NPC archetypes (optional)
         """
-        logging.info(f"Assigning relationships for NPC {npc_id} ({npc_name})")
+        logging.info(f"Assigning canonical relationships for NPC {npc_id} ({npc_name})")
+        
+        # Import lore system components
+        from lore.core.lore_system import LoreSystem
+        from lore.core import canon
+        
+        # Get lore system instance
+        lore_system = await LoreSystem.get_instance(user_id, conversation_id)
         
         relationships = []
-
-        # Define explicit mapping for archetypes to relationship labels.
+    
+        # Define explicit mapping for archetypes to relationship labels
         explicit_role_map = {
             "mother": "mother",
             "stepmother": "stepmother",
@@ -2762,13 +2859,13 @@ class NPCCreationHandler:
             "best friend's sister": "friend's sister"
         }
         
-        # First, add relationships based on explicit archetype mapping.
+        # First, add relationships based on explicit archetype mapping
         if npc_archetypes:
             for arc in npc_archetypes:
                 arc_name = arc.get("name", "").strip().lower()
                 if arc_name in explicit_role_map:
                     rel_label = explicit_role_map[arc_name]
-                    # Add relationship from NPC to player using the explicit role.
+                    # Add relationship from NPC to player using the explicit role
                     relationships.append({
                         "target_entity_type": "player",
                         "target_entity_id": user_id,  # player ID
@@ -2776,15 +2873,16 @@ class NPCCreationHandler:
                     })
                     logging.info(f"Added explicit relationship '{rel_label}' for NPC {npc_id} to player.")
         
-        # Next, determine which explicit roles (if any) were already added.
+        # Next, determine which explicit roles (if any) were already added
         explicit_roles_added = {rel["relationship_label"] for rel in relationships}
         
-        # Define default lists for random selection.
+        # Define default lists for random selection
         default_familial = ["mother", "sister", "aunt"]
         default_non_familial = ["enemy", "friend", "best friend", "lover", "neighbor",
-                              "colleague", "classmate", "teammate", "underling", "rival", "ex-girlfriend", "ex-wife", "boss", "roommate", "childhood friend"]
+                              "colleague", "classmate", "teammate", "underling", "rival", 
+                              "ex-girlfriend", "ex-wife", "boss", "roommate", "childhood friend"]
         
-        # If no explicit familial role was added, consider assigning a random non-familial relationship with the player.
+        # If no explicit familial role was added, consider assigning a random non-familial relationship with the player
         if not (explicit_roles_added & set(default_familial)):
             if random.random() < 0.5:
                 rel_type = random.choice(default_non_familial)
@@ -2795,7 +2893,7 @@ class NPCCreationHandler:
                 })
                 logging.info(f"Randomly added non-familial relationship '{rel_type}' for NPC {npc_id} to player.")
         
-        # Now add relationships with other NPCs.
+        # Now add relationships with other NPCs
         async with get_db_connection_context() as conn:
             query = """
                 SELECT npc_id, npc_name, archetype_summary
@@ -2805,14 +2903,14 @@ class NPCCreationHandler:
             
             rows = await conn.fetch(query, user_id, conversation_id, npc_id)
             
-            # For each other NPC, use explicit mapping if possible; otherwise, fall back to random choice.
+            # For each other NPC, use explicit mapping if possible; otherwise, fall back to random choice
             for row in rows:
                 old_npc_id, old_npc_name, old_arche_summary = row['npc_id'], row['npc_name'], row['archetype_summary']
                 
                 if random.random() < 0.3:
-                    # Check if the current NPC's explicit roles should be used.
+                    # Check if the current NPC's explicit roles should be used
                     if explicit_roles_added:
-                        # Prefer one of the explicit roles if available.
+                        # Prefer one of the explicit roles if available
                         rel_type = random.choice(list(explicit_roles_added))
                     else:
                         rel_type = random.choice(default_non_familial)
@@ -2824,11 +2922,12 @@ class NPCCreationHandler:
                     })
                     logging.info(f"Added relationship '{rel_type}' between NPC {npc_id} and NPC {old_npc_id}.")
         
-        # Finally, create these relationships in the database and generate associated memories.
+        # Finally, create these relationships canonically
         memory_system = await MemorySystem.get_instance(user_id, conversation_id)
         
         for rel in relationships:
             if rel["target_entity_type"] == "player":
+                # Create canonical social link
                 create_social_link(
                     user_id, conversation_id,
                     entity1_type="npc", entity1_id=npc_id,
@@ -2836,7 +2935,7 @@ class NPCCreationHandler:
                     link_type=rel["relationship_label"]
                 )
                 
-                # Add to NPCStats.relationships
+                # Update NPCStats relationships using lore system
                 async with get_db_connection_context() as conn:
                     rel_query = """
                         SELECT relationships FROM NPCStats
@@ -2861,14 +2960,19 @@ class NPCCreationHandler:
                         "entity_id": rel["target_entity_id"]
                     })
                     
-                    # Update the NPCStats
-                    update_query = """
-                        UPDATE NPCStats
-                        SET relationships = $1
-                        WHERE user_id=$2 AND conversation_id=$3 AND npc_id=$4
-                    """
+                    # Update using lore system
+                    ctx = RunContextWrapper(context={
+                        "user_id": user_id,
+                        "conversation_id": conversation_id
+                    })
                     
-                    await conn.execute(update_query, json.dumps(current_relationships), user_id, conversation_id, npc_id)
+                    await lore_system.propose_and_enact_change(
+                        ctx,
+                        entity_type="NPCStats",
+                        entity_identifier={"npc_id": npc_id},
+                        updates={"relationships": json.dumps(current_relationships)},
+                        reason=f"Establishing {rel['relationship_label']} relationship with player"
+                    )
                 
             else:  # NPC to NPC relationship
                 old_npc_id = rel["target_entity_id"]
@@ -2882,7 +2986,7 @@ class NPCCreationHandler:
                     link_type=rel["relationship_label"]
                 )
                 
-                # Add to NPCStats.relationships
+                # Update source NPC's relationships using lore system
                 async with get_db_connection_context() as conn:
                     rel_query = """
                         SELECT relationships FROM NPCStats
@@ -2907,14 +3011,19 @@ class NPCCreationHandler:
                         "entity_id": old_npc_id
                     })
                     
-                    # Update the NPCStats
-                    update_query = """
-                        UPDATE NPCStats
-                        SET relationships = $1
-                        WHERE user_id=$2 AND conversation_id=$3 AND npc_id=$4
-                    """
+                    # Update using lore system
+                    ctx = RunContextWrapper(context={
+                        "user_id": user_id,
+                        "conversation_id": conversation_id
+                    })
                     
-                    await conn.execute(update_query, json.dumps(current_relationships), user_id, conversation_id, npc_id)
+                    await lore_system.propose_and_enact_change(
+                        ctx,
+                        entity_type="NPCStats",
+                        entity_identifier={"npc_id": npc_id},
+                        updates={"relationships": json.dumps(current_relationships)},
+                        reason=f"Establishing {rel['relationship_label']} relationship with NPC {old_npc_name}"
+                    )
                 
                 # Create reverse link with reciprocal relationship
                 rec_type = self.dynamic_reciprocal_relationship(
@@ -2929,7 +3038,7 @@ class NPCCreationHandler:
                     link_type=rec_type
                 )
                 
-                # Add to target NPC's relationships
+                # Update target NPC's relationships using lore system
                 async with get_db_connection_context() as conn:
                     target_rel_query = """
                         SELECT relationships FROM NPCStats
@@ -2954,28 +3063,33 @@ class NPCCreationHandler:
                         "entity_id": npc_id
                     })
                     
-                    # Update the target NPC's relationships
-                    update_query = """
-                        UPDATE NPCStats
-                        SET relationships = $1
-                        WHERE user_id=$2 AND conversation_id=$3 AND npc_id=$4
-                    """
-                    
-                    await conn.execute(update_query, json.dumps(target_relationships), user_id, conversation_id, old_npc_id)
+                    # Update using lore system
+                    await lore_system.propose_and_enact_change(
+                        ctx,
+                        entity_type="NPCStats",
+                        entity_identifier={"npc_id": old_npc_id},
+                        updates={"relationships": json.dumps(target_relationships)},
+                        reason=f"Establishing reciprocal {rec_type} relationship with new NPC {npc_name}"
+                    )
                 
                 # Generate shared memories for both NPCs
                 try:
+                    # Get target NPC name
+                    target_npc_name = old_npc_name
+                    
                     # Generate a relationship-specific memory for the new NPC
                     specific_memory = await self.generate_relationship_specific_memory(
                         user_id, conversation_id, 
-                        npc_data, 
-                        {"npc_id": old_npc_id, "npc_name": old_npc_name},
+                        {"npc_id": npc_id, "npc_name": npc_name}, 
+                        {"npc_id": old_npc_id, "npc_name": target_npc_name},
                         rel["relationship_label"]
                     )
                     
                     if specific_memory:
-                        # Store in memory system
-                        await memory_system.remember(
+                        # Store in memory system with governance
+                        await remember_through_nyx(
+                            user_id=user_id,
+                            conversation_id=conversation_id,
                             entity_type="npc",
                             entity_id=npc_id,
                             memory_text=specific_memory,
@@ -2986,12 +3100,14 @@ class NPCCreationHandler:
                         
                         # Create a reciprocal memory for the target NPC
                         reciprocal_memory = self.create_reciprocal_memory(
-                            specific_memory, npc_name, old_npc_name, 
+                            specific_memory, npc_name, target_npc_name, 
                             rel["relationship_label"], rec_type
                         )
                         
                         if reciprocal_memory:
-                            await memory_system.remember(
+                            await remember_through_nyx(
+                                user_id=user_id,
+                                conversation_id=conversation_id,
                                 entity_type="npc",
                                 entity_id=old_npc_id,
                                 memory_text=reciprocal_memory,
@@ -3002,7 +3118,7 @@ class NPCCreationHandler:
                 except Exception as e:
                     logging.error(f"Error generating relationship memories: {e}")
         
-        logging.info(f"Finished assigning relationships for NPC {npc_id}.")
+        logging.info(f"Finished assigning canonical relationships for NPC {npc_id}.")
     
     async def generate_relationship_specific_memory(self, user_id, conversation_id, npc_data, target_data, relationship_type):
         """
