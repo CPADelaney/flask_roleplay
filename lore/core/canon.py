@@ -285,3 +285,270 @@ async def ensure_npc_exists(ctx, conn, npc_reference: Union[int, str, Dict[str, 
     
     else:
         raise ValueError(f"Invalid NPC reference type: {type(npc_reference)}")
+
+
+# lore/core/canon.py - More sophisticated entity handling
+
+async def find_or_create_nation(
+    ctx,
+    conn,
+    nation_name: str,
+    government_type: str = None,
+    matriarchy_level: int = None,
+    **kwargs
+) -> int:
+    """
+    Find or create a nation with sophisticated matching logic.
+    """
+    # Step 1: Exact name match
+    existing = await conn.fetchrow("""
+        SELECT id, name, government_type, matriarchy_level, description
+        FROM Nations 
+        WHERE LOWER(name) = LOWER($1)
+    """, nation_name)
+    
+    if existing:
+        logger.info(f"Nation '{nation_name}' found via exact match with ID {existing['id']}")
+        return existing['id']
+    
+    # Step 2: Fuzzy name matching
+    similar_names = await conn.fetch("""
+        SELECT id, name, government_type, matriarchy_level, description,
+               similarity(name, $1) as sim
+        FROM Nations
+        WHERE similarity(name, $1) > 0.6
+        ORDER BY sim DESC
+        LIMIT 5
+    """, nation_name)
+    
+    if similar_names:
+        # Check with validation agent
+        validation_agent = CanonValidationAgent()
+        for similar in similar_names:
+            prompt = f"""
+            Are these the same nation?
+            
+            Proposed: {nation_name} ({government_type or 'unknown government'})
+            Existing: {similar['name']} ({similar['government_type']})
+            
+            Consider name variations, abbreviations, and translations.
+            Answer only 'true' or 'false'.
+            """
+            
+            result = await Runner.run(validation_agent.agent, prompt)
+            if result.final_output.strip().lower() == 'true':
+                logger.info(f"Nation '{nation_name}' matched to existing '{similar['name']}' (ID: {similar['id']})")
+                return similar['id']
+    
+    # Step 3: Semantic similarity check
+    description = kwargs.get('description', '')
+    embedding_text = f"{nation_name} {government_type or ''} {description}"
+    search_vector = await generate_embedding(embedding_text)
+    
+    semantic_matches = await conn.fetch("""
+        SELECT id, name, government_type, description,
+               1 - (embedding <=> $1) AS similarity
+        FROM Nations
+        WHERE embedding IS NOT NULL
+        ORDER BY embedding <=> $1
+        LIMIT 3
+    """, search_vector)
+    
+    for match in semantic_matches:
+        if match['similarity'] > 0.85:
+            # High similarity - verify with agent
+            prompt = f"""
+            I found a semantically similar nation. Are these the same?
+            
+            Proposed Nation:
+            - Name: {nation_name}
+            - Government: {government_type}
+            - Description: {description[:200]}
+            
+            Existing Nation:
+            - Name: {match['name']}
+            - Government: {match['government_type']}
+            - Description: {match['description'][:200]}
+            
+            Answer only 'true' or 'false'.
+            """
+            
+            result = await Runner.run(validation_agent.agent, prompt)
+            if result.final_output.strip().lower() == 'true':
+                logger.info(f"Nation '{nation_name}' semantically matched to '{match['name']}' (ID: {match['id']})")
+                return match['id']
+    
+    # Step 4: Create new nation
+    nation_id = await conn.fetchval("""
+        INSERT INTO Nations (
+            name, government_type, description, relative_power,
+            matriarchy_level, population_scale, major_resources,
+            major_cities, cultural_traits, notable_features,
+            neighboring_nations, embedding
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+        RETURNING id
+    """,
+        nation_name,
+        government_type or kwargs.get('government_type', 'Unknown'),
+        description or kwargs.get('description', f"The nation of {nation_name}"),
+        kwargs.get('relative_power', 5),
+        matriarchy_level or kwargs.get('matriarchy_level', 5),
+        kwargs.get('population_scale'),
+        kwargs.get('major_resources', []),
+        kwargs.get('major_cities', []),
+        kwargs.get('cultural_traits', []),
+        kwargs.get('notable_features'),
+        kwargs.get('neighboring_nations', []),
+        search_vector
+    )
+    
+    await log_canonical_event(
+        ctx, conn,
+        f"Established new nation: {nation_name} with {government_type or 'unknown'} government",
+        tags=['nation', 'creation', 'political'],
+        significance=8
+    )
+    
+    return nation_id
+
+async def find_or_create_conflict(
+    ctx,
+    conn,
+    conflict_name: str,
+    involved_nations: List[int],
+    conflict_type: str,
+    **kwargs
+) -> int:
+    """
+    Find or create a conflict with sophisticated duplicate detection.
+    Conflicts between the same nations can be different conflicts.
+    """
+    # Step 1: Check for very similar active conflicts
+    existing_conflicts = await conn.fetch("""
+        SELECT c.*, 
+               array_agg(n.name ORDER BY n.id) as nation_names
+        FROM NationalConflicts c
+        LEFT JOIN Nations n ON n.id = ANY(c.involved_nations)
+        WHERE c.involved_nations @> $1 
+          AND c.involved_nations <@ $1
+          AND c.status != 'resolved'
+        GROUP BY c.id
+    """, involved_nations)
+    
+    if existing_conflicts:
+        # Check each for similarity
+        for conflict in existing_conflicts:
+            # If same type and similar time period, might be duplicate
+            if conflict['conflict_type'] == conflict_type:
+                validation_agent = CanonValidationAgent()
+                prompt = f"""
+                Are these the same conflict?
+                
+                Existing Conflict:
+                - Name: {conflict['name']}
+                - Type: {conflict['conflict_type']}
+                - Nations: {', '.join(conflict['nation_names'])}
+                - Description: {conflict['description'][:200]}
+                - Status: {conflict['status']}
+                
+                Proposed Conflict:
+                - Name: {conflict_name}
+                - Type: {conflict_type}
+                - Description: {kwargs.get('description', '')[:200]}
+                
+                Consider if this is a continuation, escalation, or separate conflict.
+                Answer only 'true' or 'false'.
+                """
+                
+                result = await Runner.run(validation_agent.agent, prompt)
+                if result.final_output.strip().lower() == 'true':
+                    logger.info(f"Conflict '{conflict_name}' matched to existing conflict ID {conflict['id']}")
+                    return conflict['id']
+    
+    # Step 2: Semantic search for similar conflicts
+    embedding_text = f"{conflict_name} {conflict_type} {kwargs.get('description', '')}"
+    search_vector = await generate_embedding(embedding_text)
+    
+    semantic_matches = await conn.fetch("""
+        SELECT c.*, 
+               1 - (c.embedding <=> $1) AS similarity,
+               array_agg(n.name ORDER BY n.id) as nation_names
+        FROM NationalConflicts c
+        LEFT JOIN Nations n ON n.id = ANY(c.involved_nations)
+        WHERE c.embedding IS NOT NULL
+        GROUP BY c.id
+        HAVING 1 - (c.embedding <=> $1) > 0.8
+        ORDER BY c.embedding <=> $1
+        LIMIT 5
+    """, search_vector)
+    
+    for match in semantic_matches:
+        # Check if nations overlap significantly
+        match_nations = set(match['involved_nations'])
+        proposed_nations = set(involved_nations)
+        overlap = match_nations & proposed_nations
+        
+        if len(overlap) >= min(len(match_nations), len(proposed_nations)) * 0.5:
+            # Significant overlap - verify with agent
+            validation_agent = CanonValidationAgent()
+            prompt = f"""
+            Found a similar conflict. Are these the same?
+            
+            Existing: {match['name']} ({match['conflict_type']})
+            - Nations: {', '.join(match['nation_names'])}
+            - Status: {match['status']}
+            - Similarity: {match['similarity']:.2f}
+            
+            Proposed: {conflict_name} ({conflict_type})
+            
+            Answer only 'true' or 'false'.
+            """
+            
+            result = await Runner.run(validation_agent.agent, prompt)
+            if result.final_output.strip().lower() == 'true':
+                return match['id']
+    
+    # Step 3: Create new conflict
+    conflict_id = await conn.fetchval("""
+        INSERT INTO NationalConflicts (
+            name, conflict_type, description, severity, status,
+            start_date, involved_nations, primary_aggressor, primary_defender,
+            current_casualties, economic_impact, diplomatic_consequences,
+            public_opinion, recent_developments, potential_resolution, embedding
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+        RETURNING id
+    """,
+        conflict_name,
+        conflict_type,
+        kwargs.get('description', ''),
+        kwargs.get('severity', 5),
+        kwargs.get('status', 'active'),
+        kwargs.get('start_date', 'Recently'),
+        involved_nations,
+        kwargs.get('primary_aggressor'),
+        kwargs.get('primary_defender'),
+        kwargs.get('current_casualties', 'Unknown'),
+        kwargs.get('economic_impact', 'Being assessed'),
+        kwargs.get('diplomatic_consequences', 'Developing'),
+        json.dumps(kwargs.get('public_opinion', {})),
+        kwargs.get('recent_developments', []),
+        kwargs.get('potential_resolution', 'Uncertain'),
+        search_vector
+    )
+    
+    # Get nation names for the event log
+    nation_names = await conn.fetch("""
+        SELECT name FROM Nations WHERE id = ANY($1)
+    """, involved_nations)
+    nation_list = [n['name'] for n in nation_names]
+    
+    await log_canonical_event(
+        ctx, conn,
+        f"New conflict erupted: {conflict_name} between {', '.join(nation_list)}",
+        tags=['conflict', 'political', conflict_type],
+        significance=9
+    )
+    
+    return conflict_id
