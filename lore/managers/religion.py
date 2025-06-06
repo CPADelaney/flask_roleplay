@@ -632,36 +632,55 @@ class ReligionManager(BaseLoreManager):
     )
     @function_tool(strict_mode=True)
     async def add_deity(self, ctx, params: DeityParams) -> int:
-        """Add a deity to the world's religious system."""
+        """Add a deity using canon establishment."""
         await self.ensure_initialized()
-        
-        # Convert relationships to JSON format
-        relationships_json = {
-            rel.deity_name: {
-                "type": rel.relationship_type,
-                "description": rel.description
-            }
-            for rel in params.relationships
-        }
         
         async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
-                deity_id = await conn.fetchval("""
-                    INSERT INTO Deities (
-                        name, gender, domain, description, pantheon_id,
-                        iconography, holy_symbol, sacred_animals, sacred_colors,
-                        relationships, rank, worshippers
-                    )
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-                    RETURNING id
-                """,
-                params.name, params.gender, params.domain, params.description, 
-                params.pantheon_id, params.iconography, params.holy_symbol, 
-                params.sacred_animals, params.sacred_colors,
-                json.dumps(relationships_json), params.rank, params.worshippers)
-                
+                # Prepare embedding text
                 embed_text = f"{params.name} {params.gender} {' '.join(params.domain)} {params.description}"
-                await self.generate_and_store_embedding(embed_text, conn, "Deities", "id", deity_id)
+                
+                # Convert relationships to JSON format
+                relationships_json = {
+                    rel.deity_name: {
+                        "type": rel.relationship_type,
+                        "description": rel.description
+                    }
+                    for rel in params.relationships
+                }
+                
+                create_data = {
+                    'name': params.name,
+                    'gender': params.gender,
+                    'domain': params.domain,
+                    'description': params.description,
+                    'pantheon_id': params.pantheon_id,
+                    'iconography': params.iconography,
+                    'holy_symbol': params.holy_symbol,
+                    'sacred_animals': params.sacred_animals,
+                    'sacred_colors': params.sacred_colors,
+                    'relationships': json.dumps(relationships_json),
+                    'rank': params.rank,
+                    'worshippers': params.worshippers
+                }
+                
+                search_fields = {
+                    'name': params.name,
+                    'pantheon_id': params.pantheon_id,
+                    'name_field': 'name'
+                }
+                
+                deity_id = await find_or_create_entity(
+                    ctx=ctx,
+                    conn=conn,
+                    entity_type="deity",
+                    entity_name=params.name,
+                    search_fields=search_fields if params.pantheon_id else {'name': params.name, 'name_field': 'name'},
+                    create_data=create_data,
+                    table_name="Deities",
+                    embedding_text=embed_text,
+                    similarity_threshold=0.85
+                )
                 
                 GLOBAL_LORE_CACHE.invalidate_pattern("deity")
                 return deity_id
@@ -674,33 +693,43 @@ class ReligionManager(BaseLoreManager):
     )
     @function_tool(strict_mode=True)
     async def add_pantheon(self, ctx, params: PantheonParams) -> int:
-        """Add a pantheon to the world's religious system."""
+        """Add a pantheon using canon establishment."""
         await self.ensure_initialized()
-        
-        embed_text = f"{params.name} {params.description} {params.origin_story} {params.matriarchal_elements}"
-        embedding = await generate_embedding(embed_text)
         
         async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
-                pantheon_id = await conn.fetchval("""
-                    INSERT INTO Pantheons (
-                        name, description, origin_story, matriarchal_elements,
-                        creation_myth, afterlife_beliefs, cosmic_structure,
-                        major_holy_days, geographical_spread, dominant_nations,
-                        primary_worshippers, taboos, embedding
-                    )
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-                    RETURNING id
-                """,
-                params.name, params.description, params.origin_story, 
-                params.matriarchal_elements, params.creation_myth, 
-                params.afterlife_beliefs, params.cosmic_structure,
-                params.major_holy_days, params.geographical_spread, 
-                params.dominant_nations, params.primary_worshippers, 
-                params.taboos, embedding)
+                embed_text = f"{params.name} {params.description} {params.origin_story} {params.matriarchal_elements}"
+                
+                create_data = {
+                    'name': params.name,
+                    'description': params.description,
+                    'origin_story': params.origin_story,
+                    'matriarchal_elements': params.matriarchal_elements,
+                    'creation_myth': params.creation_myth,
+                    'afterlife_beliefs': params.afterlife_beliefs,
+                    'cosmic_structure': params.cosmic_structure,
+                    'major_holy_days': params.major_holy_days,
+                    'geographical_spread': params.geographical_spread,
+                    'dominant_nations': params.dominant_nations,
+                    'primary_worshippers': params.primary_worshippers,
+                    'taboos': params.taboos
+                }
+                
+                pantheon_id = await find_or_create_entity(
+                    ctx=ctx,
+                    conn=conn,
+                    entity_type="pantheon",
+                    entity_name=params.name,
+                    search_fields={'name': params.name, 'name_field': 'name'},
+                    create_data=create_data,
+                    table_name="Pantheons",
+                    embedding_text=embed_text,
+                    similarity_threshold=0.90  # Higher threshold for pantheons
+                )
                 
                 GLOBAL_LORE_CACHE.invalidate_pattern("pantheon")
                 return pantheon_id
+
 
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
@@ -1335,7 +1364,7 @@ class ReligionManager(BaseLoreManager):
     )
     @function_tool(strict_mode=True)
     async def distribute_religions(self, ctx) -> List[Dict[str, Any]]:
-        """Distribute religions across nations."""
+        """Distribute religions across nations with canon checks."""
         nations = await self.geopolitical_manager.get_all_nations(ctx)
         
         async with self.get_connection_pool() as pool:
@@ -1344,6 +1373,12 @@ class ReligionManager(BaseLoreManager):
                     SELECT id, name, description, matriarchal_elements
                     FROM Pantheons
                 """)
+                
+                # Check existing distributions
+                existing = await conn.fetch("""
+                    SELECT nation_id FROM NationReligion
+                """)
+                existing_nation_ids = {row['nation_id'] for row in existing}
         
         if not nations or not pantheons:
             return []
@@ -1351,6 +1386,12 @@ class ReligionManager(BaseLoreManager):
         distributions = []
         
         for nation in nations:
+            # Skip if already has religion distribution
+            if nation['id'] in existing_nation_ids:
+                logger.info(f"Nation {nation['name']} already has religious distribution")
+                continue
+                
+            # Generate distribution using agent
             prompt = f"""
             Determine religious distribution for nation: {nation['name']}
             
@@ -1376,37 +1417,38 @@ class ReligionManager(BaseLoreManager):
             
             try:
                 dist_data = result.final_output_as(NationReligionDistribution)
-                dist_data.nation_id = nation["id"]  # Ensure correct nation ID
+                dist_data.nation_id = nation["id"]
                 
                 # Store distribution
                 embed_text = f"religion {nation['name']} {dist_data.religious_leadership}"
-                embedding = await generate_embedding(embed_text)
+                
+                create_data = {
+                    'nation_id': dist_data.nation_id,
+                    'state_religion': dist_data.state_religion,
+                    'primary_pantheon_id': dist_data.primary_pantheon_id,
+                    'pantheon_distribution': json.dumps(dist_data.pantheon_distribution),
+                    'religiosity_level': dist_data.religiosity_level,
+                    'religious_tolerance': dist_data.religious_tolerance,
+                    'religious_leadership': dist_data.religious_leadership,
+                    'religious_laws': json.dumps(dist_data.religious_laws),
+                    'religious_holidays': dist_data.religious_holidays,
+                    'religious_conflicts': dist_data.religious_conflicts,
+                    'religious_minorities': dist_data.religious_minorities
+                }
                 
                 async with self.get_connection_pool() as pool:
                     async with pool.acquire() as conn:
-                        distribution_id = await conn.fetchval("""
-                            INSERT INTO NationReligion (
-                                nation_id, state_religion, primary_pantheon_id,
-                                pantheon_distribution, religiosity_level,
-                                religious_tolerance, religious_leadership,
-                                religious_laws, religious_holidays,
-                                religious_conflicts, religious_minorities, embedding
-                            )
-                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-                            RETURNING id
-                        """,
-                        dist_data.nation_id,
-                        dist_data.state_religion,
-                        dist_data.primary_pantheon_id,
-                        json.dumps(dist_data.pantheon_distribution),
-                        dist_data.religiosity_level,
-                        dist_data.religious_tolerance,
-                        dist_data.religious_leadership,
-                        json.dumps(dist_data.religious_laws),
-                        dist_data.religious_holidays,
-                        dist_data.religious_conflicts,
-                        dist_data.religious_minorities,
-                        embedding)
+                        distribution_id = await find_or_create_entity(
+                            ctx=ctx,
+                            conn=conn,
+                            entity_type="religious_distribution",
+                            entity_name=f"{nation['name']} religious system",
+                            search_fields={'nation_id': nation["id"]},
+                            create_data=create_data,
+                            table_name="NationReligion",
+                            embedding_text=embed_text,
+                            similarity_threshold=0.95  # Very high threshold
+                        )
                         
                         dist_dict = dist_data.dict()
                         dist_dict["id"] = distribution_id
