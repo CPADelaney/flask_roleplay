@@ -599,28 +599,53 @@ class WorldPoliticsManager(BaseLoreManager):
         neighboring_nations: List[str] = None
     ) -> int:
         """
-        Add a nation to the database.
-        
-        Args:
-            name: Name of the nation
-            government_type: Type of government
-            description: Description of the nation
-            relative_power: Relative power level (1-10)
-            matriarchy_level: Level of matriarchal control (1-10)
-            population_scale: Description of population size
-            major_resources: List of major resources
-            major_cities: List of major cities
-            cultural_traits: List of cultural traits
-            notable_features: Notable features of the nation
-            neighboring_nations: List of neighboring nation names
-            
-        Returns:
-            ID of the created nation
+        Add a nation to the database using canon establishment.
         """
-        return await self._add_nation_impl(
-            ctx, name, government_type, description, relative_power, matriarchy_level,
-            population_scale, major_resources, major_cities, cultural_traits, notable_features, neighboring_nations
-        )
+        await self.ensure_initialized()
+        
+        # Prepare data
+        major_resources = major_resources or []
+        major_cities = major_cities or []
+        cultural_traits = cultural_traits or []
+        neighboring_nations = neighboring_nations or []
+        
+        async with self.get_connection_pool() as pool:
+            async with pool.acquire() as conn:
+                # Use canon system to check for duplicates
+                embedding_text = f"{name} {government_type} {description}"
+                
+                create_data = {
+                    'name': name,
+                    'government_type': government_type,
+                    'description': description,
+                    'relative_power': relative_power,
+                    'matriarchy_level': matriarchy_level,
+                    'population_scale': population_scale,
+                    'major_resources': major_resources,
+                    'major_cities': major_cities,
+                    'cultural_traits': cultural_traits,
+                    'notable_features': notable_features,
+                    'neighboring_nations': neighboring_nations
+                }
+                
+                search_fields = {
+                    'name': name,
+                    'name_field': 'name'  # Tell the function which field contains the name
+                }
+                
+                nation_id = await find_or_create_entity(
+                    ctx=ctx,
+                    conn=conn,
+                    entity_type="nation",
+                    entity_name=name,
+                    search_fields=search_fields,
+                    create_data=create_data,
+                    table_name="Nations",
+                    embedding_text=embedding_text,
+                    similarity_threshold=0.85
+                )
+                
+                return nation_id
 
     async def _add_international_relation_impl(
         self,
@@ -762,13 +787,7 @@ class WorldPoliticsManager(BaseLoreManager):
     @function_tool
     async def generate_initial_conflicts(self, ctx, count: int = 3) -> List[Dict[str, Any]]:
         """
-        Generate initial conflicts between nations with LLM-based approach.
-        
-        Args:
-            count: Number of conflicts to generate
-            
-        Returns:
-            List of generated conflict dictionaries
+        Generate initial conflicts between nations with canon checks.
         """
         with trace(
             "GenerateInitialConflicts",
@@ -776,31 +795,12 @@ class WorldPoliticsManager(BaseLoreManager):
             metadata={**self.trace_metadata, "count": count}
         ):
             run_ctx = RunContextWrapper(context=ctx.context)
-    
-            # (Optional) Let an agent decide how many conflicts to generate
-            distribution_prompt = (
-                "We want to create some initial conflicts among nations. Currently set to {count}, but you can override.\n"
-                "Return JSON with a 'count' field.\n"
-            ).format(count=count)
-            dist_config = RunConfig(workflow_name="ConflictDistribution")
-            dist_result = await Runner.run(
-                distribution_agent, 
-                distribution_prompt,
-                context=run_ctx.context,
-                run_config=dist_config
-            )
-    
-            try:
-                dist_data = json.loads(dist_result.final_output)
-                count = dist_data.get("count", count)
-            except json.JSONDecodeError:
-                pass  # fallback to the existing count
-    
-            # get nations
+            
+            # Get nations
             nations = await self.get_all_nations(run_ctx)
             if len(nations) < 2:
                 return []
-    
+            
             conflicts = []
             conflict_agent = Agent(
                 name="NationalConflictAgent",
@@ -808,117 +808,106 @@ class WorldPoliticsManager(BaseLoreManager):
                 model="gpt-4.1-nano",
                 model_settings=ModelSettings(temperature=0.9)
             )
-    
-            for _ in range(count):
-                # pick random nations (ensuring at least 2)
-                available_nations = [n for n in nations if not any(
-                    n["id"] in c.get("involved_nations", []) for c in conflicts
-                )]
-                if len(available_nations) < 2:
-                    available_nations = nations
-    
-                nation_pair = random.sample(available_nations, 2)
-                matriarchy_diff = abs(
-                    nation_pair[0].get("matriarchy_level", 5) -
-                    nation_pair[1].get("matriarchy_level", 5)
-                )
-    
-                if matriarchy_diff > 4:
-                    conflict_types = ["ideological_dispute", "cultural_tension", "religious_conflict", "proxy_war"]
-                elif matriarchy_diff > 2:
-                    conflict_types = ["diplomatic_tension", "border_dispute", "trade_dispute", "resource_conflict"]
-                else:
-                    conflict_types = ["territorial_dispute", "trade_war", "succession_crisis", "alliance_dispute"]
-    
-                chosen_conflict_type = random.choice(conflict_types)
-    
-                prompt = f"""
-                Generate a detailed international conflict between these two nations:
-    
-                NATION 1:
-                {json.dumps(nation_pair[0], indent=2)}
-    
-                NATION 2:
-                {json.dumps(nation_pair[1], indent=2)}
-    
-                Create a {chosen_conflict_type} that:
-                1. Makes sense given the nations' characteristics
-                2. Has appropriate severity and clear causes
-                3. Includes realistic consequences
-                4. Considers the matriarchal nature of the world
-                5. Reflects the matriarchy level difference ({matriarchy_diff} points)
-                
-                Return JSON with fields:
-                - name
-                - conflict_type: "{chosen_conflict_type}"
-                - description
-                - severity (1-10)
-                - status (active, escalating, etc.)
-                - start_date
-                - involved_nations (list of IDs)
-                - primary_aggressor
-                - primary_defender
-                - current_casualties
-                - economic_impact
-                - diplomatic_consequences
-                - public_opinion (object)
-                - recent_developments (list)
-                - potential_resolution
-                """
-    
-                run_config = RunConfig(workflow_name="ConflictGeneration")
-                result = await Runner.run(conflict_agent, prompt, context=run_ctx.context, run_config=run_config)
-    
-                try:
-                    conflict_data = json.loads(result.final_output)
-                    # Build embedding by calling your real embedding function:
-                    embed_text = f"{conflict_data.get('name','Unnamed Conflict')} {conflict_data.get('description','')} {conflict_data.get('conflict_type','')}"
-                    emb = await get_embedding(embed_text)
-                    # If needed, ensure it's a list for Postgres vector usage:
-                    if not isinstance(emb, list):
-                        emb = emb.tolist()
-    
-                    # Insert DB
-                    async with self.get_connection_pool() as pool:
-                        async with pool.acquire() as conn:
-                            conflict_id = await conn.fetchval("""
-                                INSERT INTO NationalConflicts (
-                                    name, conflict_type, description, severity, status,
-                                    start_date, involved_nations, primary_aggressor, primary_defender,
-                                    current_casualties, economic_impact, diplomatic_consequences,
-                                    public_opinion, recent_developments, potential_resolution, embedding
-                                )
-                                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
-                                RETURNING id
-                            """,
-                                conflict_data.get("name","Conflict X"),
-                                conflict_data.get("conflict_type", chosen_conflict_type),
-                                conflict_data.get("description",""),
-                                conflict_data.get("severity",5),
-                                conflict_data.get("status","active"),
-                                conflict_data.get("start_date","Recently"),
-                                conflict_data.get("involved_nations",[nation_pair[0]["id"],nation_pair[1]["id"]]),
-                                conflict_data.get("primary_aggressor", nation_pair[0]["id"]),
-                                conflict_data.get("primary_defender", nation_pair[1]["id"]),
-                                conflict_data.get("current_casualties","Unknown"),
-                                conflict_data.get("economic_impact","Unknown"),
-                                conflict_data.get("diplomatic_consequences","Unknown"),
-                                json.dumps(conflict_data.get("public_opinion",{})),
-                                conflict_data.get("recent_developments",[]),
-                                conflict_data.get("potential_resolution","TBD"),
-                                emb
+            
+            async with self.get_connection_pool() as pool:
+                async with pool.acquire() as conn:
+                    for _ in range(count):
+                        # Pick random nations
+                        available_nations = [n for n in nations if not any(
+                            n["id"] in c.get("involved_nations", []) for c in conflicts
+                        )]
+                        if len(available_nations) < 2:
+                            available_nations = nations
+                        
+                        nation_pair = random.sample(available_nations, 2)
+                        
+                        # Generate conflict details
+                        chosen_conflict_type = random.choice([
+                            "territorial_dispute", "trade_war", "ideological_dispute", "resource_conflict"
+                        ])
+                        
+                        prompt = f"""
+                        Generate a detailed international conflict between these two nations:
+                        
+                        NATION 1: {json.dumps(nation_pair[0], indent=2)}
+                        NATION 2: {json.dumps(nation_pair[1], indent=2)}
+                        
+                        Create a {chosen_conflict_type} that makes sense given the nations' characteristics.
+                        
+                        Return JSON with fields:
+                        - name
+                        - conflict_type: "{chosen_conflict_type}"
+                        - description
+                        - severity (1-10)
+                        - status (active, escalating, etc.)
+                        - start_date
+                        - involved_nations (list of IDs)
+                        - primary_aggressor
+                        - primary_defender
+                        - current_casualties
+                        - economic_impact
+                        - diplomatic_consequences
+                        - public_opinion (object)
+                        - recent_developments (list)
+                        - potential_resolution
+                        """
+                        
+                        result = await Runner.run(conflict_agent, prompt, context=run_ctx.context)
+                        
+                        try:
+                            conflict_data = json.loads(result.final_output)
+                            conflict_name = conflict_data.get('name', 'Unnamed Conflict')
+                            
+                            # Check for existing similar conflicts using canon
+                            embedding_text = f"{conflict_name} {conflict_data.get('description', '')} {chosen_conflict_type}"
+                            
+                            create_data = {
+                                'name': conflict_name,
+                                'conflict_type': conflict_data.get("conflict_type", chosen_conflict_type),
+                                'description': conflict_data.get("description", ""),
+                                'severity': conflict_data.get("severity", 5),
+                                'status': conflict_data.get("status", "active"),
+                                'start_date': conflict_data.get("start_date", "Recently"),
+                                'involved_nations': conflict_data.get("involved_nations", [nation_pair[0]["id"], nation_pair[1]["id"]]),
+                                'primary_aggressor': conflict_data.get("primary_aggressor", nation_pair[0]["id"]),
+                                'primary_defender': conflict_data.get("primary_defender", nation_pair[1]["id"]),
+                                'current_casualties': conflict_data.get("current_casualties", "Unknown"),
+                                'economic_impact': conflict_data.get("economic_impact", "Unknown"),
+                                'diplomatic_consequences': conflict_data.get("diplomatic_consequences", "Unknown"),
+                                'public_opinion': json.dumps(conflict_data.get("public_opinion", {})),
+                                'recent_developments': conflict_data.get("recent_developments", []),
+                                'potential_resolution': conflict_data.get("potential_resolution", "TBD")
+                            }
+                            
+                            # Check for existing conflicts between these nations
+                            search_fields = {
+                                'involved_nations': create_data['involved_nations'],
+                                'name_field': 'name'
+                            }
+                            
+                            conflict_id = await find_or_create_entity(
+                                ctx=ctx,
+                                conn=conn,
+                                entity_type="conflict",
+                                entity_name=conflict_name,
+                                search_fields={},  # Don't search by exact match for conflicts
+                                create_data=create_data,
+                                table_name="NationalConflicts",
+                                embedding_text=embedding_text,
+                                similarity_threshold=0.90  # Higher threshold for conflicts
                             )
-    
+                            
                             conflict_data["id"] = conflict_id
                             conflicts.append(conflict_data)
-    
+                            
                             # Generate initial news
                             await self._generate_conflict_news(run_ctx, conflict_id, conflict_data, nation_pair)
-    
-                except Exception as e:
-                    logger.error(f"Error generating conflict: {e}")
-    
+                            
+                        except Exception as e:
+                            logger.error(f"Error generating conflict: {e}")
+            
             return conflicts
+
 
     async def _generate_conflict_news(
         self,
@@ -994,6 +983,32 @@ class WorldPoliticsManager(BaseLoreManager):
     
                 except Exception as e:
                     logger.error(f"Error generating conflict news: {e}")
+    
+    async def execute_coup(self, ctx, nation_id: int, new_leader_id: int, reason: str):
+        """Execute a coup using the canon system."""
+        from lore.core.lore_system import LoreSystem
+        
+        # Get LoreSystem instance
+        lore_system = await LoreSystem.get_instance(ctx.user_id, ctx.conversation_id)
+        
+        # Verify the new leader exists
+        async with self.get_connection_pool() as pool:
+            async with pool.acquire() as conn:
+                leader = await conn.fetchrow("""
+                    SELECT id, name FROM NPCStats WHERE id = $1
+                """, new_leader_id)
+                
+                if not leader:
+                    # Create the NPC if doesn't exist
+                    from lore.core import canon
+                    new_leader_id = await canon.find_or_create_npc(
+                        ctx, conn, f"New Leader {new_leader_id}", role="Nation Leader"
+                    )
+        
+        # Use LoreSystem to execute the coup
+        result = await lore_system.execute_coup(ctx, nation_id, new_leader_id, reason)
+        
+        return result
 
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
