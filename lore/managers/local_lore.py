@@ -1341,23 +1341,44 @@ Be historically plausible and culturally sensitive.
             5. Creates regional variants
             
             Include specific transmission paths and cultural adaptations.
+
+            Provide specific, actionable fixes for each issue.
+            Rate overall consistency and matriarchal coherence (1-10).
             """
             
-            # Run transmission simulation
+            # Run consistency check
             result = await Runner.run(
-                self.agents.transmission_agent,
-                transmission_prompt,
+                self.agents.consistency_agent,
+                consistency_prompt,
                 context=run_ctx.context
             )
             
-            transmission_result: MythTransmissionResult = result.final_output
+            consistency_result: ConsistencyCheckResult = result.final_output
             
-            # Apply transmission results
-            await self._apply_transmission_results(
-                myth_id, myth_data, transmission_result
-            )
+            # Apply fixes if requested
+            fixes_applied = []
+            if auto_fix and consistency_result.suggested_fixes:
+                fixes_applied = await self._apply_consistency_fixes(
+                    consistency_result.suggested_fixes
+                )
             
-            return transmission_result
+            # Create new connections if suggested
+            new_connections = []
+            if consistency_result.potential_new_connections:
+                new_connections = await self._create_suggested_connections(
+                    consistency_result.potential_new_connections
+                )
+            
+            # Update the result with applied changes
+            consistency_result.suggested_fixes = [
+                fix for fix in consistency_result.suggested_fixes 
+                if fix not in fixes_applied
+            ]
+            
+            # Invalidate cache
+            self.invalidate_cache_pattern(f"location_lore_{location_id}")
+            
+            return consistency_result
 
     def _format_cultural_elements(self, elements: List[Any]) -> str:
         """Format cultural elements for prompts."""
@@ -2111,21 +2132,21 @@ Return a JSON object with your analysis and specific recommendations.
             
             # Create variants prompt
             variants_prompt = f"""
-            Create {variant_count} contradictory versions of this myth:
-            
-            ORIGINAL MYTH: {myth_data['name']}
-            DESCRIPTION: {myth_data['description']}
-            
-            Each variant must:
-            1. Maintain some core elements
-            2. Have at least one major contradiction
-            3. Feel culturally authentic
-            4. Have a plausible reason for the variation
-            5. Preserve matriarchal themes differently
-            
-            Make the contradictions meaningful - different moral lessons,
-            different antagonists, different outcomes, etc.
-            """
+Create {variant_count} contradictory versions of this myth:
+
+ORIGINAL MYTH: {myth_data['name']}
+DESCRIPTION: {myth_data['description']}
+
+Each variant must:
+1. Maintain some core elements
+2. Have at least one major contradiction
+3. Feel culturally authentic
+4. Have a plausible reason for the variation
+5. Preserve matriarchal themes differently
+
+Make the contradictions meaningful - different moral lessons,
+different antagonists, different outcomes, etc.
+"""
             
             # Run variant generation
             result = await Runner.run(
@@ -2203,24 +2224,24 @@ Return a JSON object with your analysis and specific recommendations.
             
             # Create tourism prompt
             tourism_prompt = f"""
-            Develop a tourist attraction based on this myth:
-            
-            MYTH: {myth_data['name']}
-            DESCRIPTION: {myth_data['description']}
-            ORIGIN: {myth_data.get('origin_location', 'Unknown')}
-            BELIEVABILITY: {myth_data['believability']}/10
-            
-            Create a comprehensive tourism plan that:
-            1. Respects the cultural significance
-            2. Highlights matriarchal themes as unique selling points
-            3. Includes interactive experiences
-            4. Suggests authentic merchandise
-            5. Estimates economic impact
-            6. Identifies target demographics
-            7. Considers seasonal factors
-            
-            Balance commercialization with cultural preservation.
-            """
+Develop a tourist attraction based on this myth:
+
+MYTH: {myth_data['name']}
+DESCRIPTION: {myth_data['description']}
+ORIGIN: {myth_data.get('origin_location', 'Unknown')}
+BELIEVABILITY: {myth_data['believability']}/10
+
+Create a comprehensive tourism plan that:
+1. Respects the cultural significance
+2. Highlights matriarchal themes as unique selling points
+3. Includes interactive experiences
+4. Suggests authentic merchandise
+5. Estimates economic impact
+6. Identifies target demographics
+7. Considers seasonal factors
+
+Balance commercialization with cultural preservation.
+"""
             
             # Run tourism development
             result = await Runner.run(
@@ -2286,21 +2307,21 @@ Return a JSON object with your analysis and specific recommendations.
             
             # Create tradition comparison prompt
             tradition_prompt = f"""
-            Analyze how this myth differs between oral and written traditions:
-            
-            MYTH: {myth_data['name']}
-            ORIGINAL VERSION: {myth_data['description']}
-            THEMES: {', '.join(myth_data.get('themes', []))}
-            
-            Compare:
-            1. How details change in oral retellings
-            2. What gets emphasized in written records
-            3. How matriarchal elements evolve in each medium
-            4. Preservation challenges for each tradition
-            5. Cultural significance of each version
-            
-            Show specific differences in language, detail, and emphasis.
-            """
+Analyze how this myth differs between oral and written traditions:
+
+MYTH: {myth_data['name']}
+ORIGINAL VERSION: {myth_data['description']}
+THEMES: {', '.join(myth_data.get('themes', []))}
+
+Compare:
+1. How details change in oral retellings
+2. What gets emphasized in written records
+3. How matriarchal elements evolve in each medium
+4. Preservation challenges for each tradition
+5. Cultural significance of each version
+
+Show specific differences in language, detail, and emphasis.
+"""
             
             # Run tradition analysis
             result = await Runner.run(
@@ -2371,44 +2392,6 @@ Return a JSON object with your analysis and specific recommendations.
         return super().invalidate_cache_pattern(f"{self.cache_namespace}:{pattern}")
 
 # End of LocalLoreManager Matriarchal representation gaps
-            
-            Provide specific, actionable fixes for each issue.
-            Rate overall consistency and matriarchal coherence (1-10).
-            """
-            
-            # Run consistency check
-            result = await Runner.run(
-                self.agents.consistency_agent,
-                consistency_prompt,
-                context=run_ctx.context
-            )
-            
-            consistency_result: ConsistencyCheckResult = result.final_output
-            
-            # Apply fixes if requested
-            fixes_applied = []
-            if auto_fix and consistency_result.suggested_fixes:
-                fixes_applied = await self._apply_consistency_fixes(
-                    consistency_result.suggested_fixes
-                )
-            
-            # Create new connections if suggested
-            new_connections = []
-            if consistency_result.potential_new_connections:
-                new_connections = await self._create_suggested_connections(
-                    consistency_result.potential_new_connections
-                )
-            
-            # Update the result with applied changes
-            consistency_result.suggested_fixes = [
-                fix for fix in consistency_result.suggested_fixes 
-                if fix not in fixes_applied
-            ]
-            
-            # Invalidate cache
-            self.invalidate_cache_pattern(f"location_lore_{location_id}")
-            
-            return consistency_result
 
     def _summarize_elements(self, elements: List[Any], element_type: str) -> str:
         """Create a summary of lore elements for the consistency check."""
