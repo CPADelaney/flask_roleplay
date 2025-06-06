@@ -87,29 +87,6 @@ class NarrativeEvaluation(BaseModel):
     engagement: int = Field(..., ge=1, le=10)
     improvements: List[str]
 
-# Foundation data models to fix the Dict[str, Any] issue
-class FoundationData(BaseModel):
-    """Foundation lore data that can be transformed."""
-    social_structure: Optional[str] = None
-    cosmology: Optional[str] = None
-    magic_system: Optional[str] = None
-    world_history: Optional[str] = None
-    calendar_system: Optional[str] = None
-    # Allow additional fields for flexibility
-    class Config:
-        extra = "allow"
-
-class TransformedFoundationData(BaseModel):
-    """Transformed foundation data."""
-    social_structure: Optional[str] = None
-    cosmology: Optional[str] = None
-    magic_system: Optional[str] = None
-    world_history: Optional[str] = None
-    calendar_system: Optional[str] = None
-    # Allow additional fields to preserve any extra data
-    class Config:
-        extra = "allow"
-
 # ------------------------------------------------------------------
 # MAIN FRAMEWORK CLASS
 # ------------------------------------------------------------------
@@ -133,7 +110,7 @@ class MatriarchalPowerStructureFramework(BaseLoreManager):
                 "Your output should be immersive, cohesive, and consistent with the premise that "
                 "women hold most or all power, and men occupy subordinate or service-based roles."
             ),
-            model="gpt-4.1-nano",  # Using valid model name
+            model="gpt-4o-mini",  # Using valid model name
             model_settings=ModelSettings(temperature=0.9)
         )
         
@@ -147,7 +124,7 @@ class MatriarchalPowerStructureFramework(BaseLoreManager):
                 "You evaluate narratives for strength of matriarchal themes, narrative quality, "
                 "consistency, and engagement. Provide constructive feedback for improvements."
             ),
-            model="gpt-4.1-nano",
+            model="gpt-4o-mini",
             model_settings=ModelSettings(temperature=0.5),
             output_type=NarrativeEvaluation
         )
@@ -162,7 +139,7 @@ class MatriarchalPowerStructureFramework(BaseLoreManager):
                 "Focus on governance, authority, and policy formation led by women, with men in advisory "
                 "or supportive roles only."
             ),
-            model="gpt-4.1-nano",
+            model="gpt-4o-mini",
             model_settings=ModelSettings(temperature=0.9)
         )
         
@@ -174,7 +151,7 @@ class MatriarchalPowerStructureFramework(BaseLoreManager):
                 "Create matriarchal religious structures with goddesses as primary deities and "
                 "priestesses as the dominant religious authorities."
             ),
-            model="gpt-4.1-nano",
+            model="gpt-4o-mini",
             model_settings=ModelSettings(temperature=0.9)
         )
         
@@ -186,7 +163,7 @@ class MatriarchalPowerStructureFramework(BaseLoreManager):
                 "Create customs, traditions, and social interactions that reinforce feminine authority "
                 "and masculine deference."
             ),
-            model="gpt-4.1-nano",
+            model="gpt-4o-mini",
             model_settings=ModelSettings(temperature=0.9)
         )
         
@@ -424,8 +401,8 @@ class MatriarchalPowerStructureFramework(BaseLoreManager):
     # ------------------------------------------------------------------
     # 3) LENS APPLICATION WITH SPECIALIZED HANDOFFS
     # ------------------------------------------------------------------
-    @function_tool
-    async def apply_power_lens(self, foundation_data: FoundationData) -> TransformedFoundationData:
+    @function_tool(strict=False)  # Disable strict schema to allow flexible data
+    async def apply_power_lens(self, foundation_data: Dict[str, Any]) -> Dict[str, Any]:
         """
         Apply a matriarchal lens to the foundation lore, using specialized narrative
         transformation agents based on content type.
@@ -434,11 +411,9 @@ class MatriarchalPowerStructureFramework(BaseLoreManager):
             foundation_data: The foundation lore data to transform
             
         Returns:
-            TransformedFoundationData with matriarchal themes applied
+            Transformed foundation data with matriarchal themes applied
         """
-        # Convert to dict for processing, preserving all fields
-        data_dict = foundation_data.dict()
-        result_dict = data_dict.copy()
+        result = foundation_data.copy()
         
         run_ctx = RunContextWrapper(context={
             "user_id": self.user_id,
@@ -446,10 +421,10 @@ class MatriarchalPowerStructureFramework(BaseLoreManager):
             "purpose": "applying power lens"
         })
         
-        if foundation_data.social_structure:
+        if "social_structure" in foundation_data:
             # Use the cultural specialist for social structures
             prompt = (
-                f"ORIGINAL SOCIAL STRUCTURE:\n{foundation_data.social_structure}\n\n"
+                f"ORIGINAL SOCIAL STRUCTURE:\n{foundation_data['social_structure']}\n\n"
                 "Transform this social structure description to reflect a strongly "
                 "matriarchal society. Focus on feminine authority, masculine deference, "
                 "and gendered power dynamics."
@@ -460,12 +435,12 @@ class MatriarchalPowerStructureFramework(BaseLoreManager):
                 prompt,
                 context=run_ctx.context
             )
-            result_dict["social_structure"] = social_result.final_output
+            result["social_structure"] = social_result.final_output
         
-        if foundation_data.cosmology:
+        if "cosmology" in foundation_data:
             # Use the religious specialist for cosmology
             prompt = (
-                f"ORIGINAL COSMOLOGY:\n{foundation_data.cosmology}\n\n"
+                f"ORIGINAL COSMOLOGY:\n{foundation_data['cosmology']}\n\n"
                 "Transform this cosmology to center feminine divine power. Emphasize "
                 "goddess figures, feminine creation principles, and matriarchal "
                 "religious structures."
@@ -476,19 +451,19 @@ class MatriarchalPowerStructureFramework(BaseLoreManager):
                 prompt,
                 context=run_ctx.context
             )
-            result_dict["cosmology"] = cosmology_result.final_output
+            result["cosmology"] = cosmology_result.final_output
         
-        if foundation_data.magic_system:
+        if "magic_system" in foundation_data:
             # General transformation for magic systems
-            result_dict["magic_system"] = await self._transform_text(
-                foundation_data.magic_system,
+            result["magic_system"] = await self._transform_text(
+                foundation_data["magic_system"],
                 context_desc="Highlight how women wield greater or central magical authority."
             )
         
-        if foundation_data.world_history:
+        if "world_history" in foundation_data:
             # Use the political specialist for world history
             prompt = (
-                f"ORIGINAL WORLD HISTORY:\n{foundation_data.world_history}\n\n"
+                f"ORIGINAL WORLD HISTORY:\n{foundation_data['world_history']}\n\n"
                 "Transform this world history to center women as the primary historical "
                 "actors, leaders, conquerors, and decision-makers. Men should appear in "
                 "supportive roles or as subjects/conquered peoples."
@@ -499,17 +474,16 @@ class MatriarchalPowerStructureFramework(BaseLoreManager):
                 prompt,
                 context=run_ctx.context
             )
-            result_dict["world_history"] = history_result.final_output
+            result["world_history"] = history_result.final_output
             
-        if foundation_data.calendar_system:
+        if "calendar_system" in foundation_data:
             # General transformation for calendar systems
-            result_dict["calendar_system"] = await self._transform_text(
-                foundation_data.calendar_system,
+            result["calendar_system"] = await self._transform_text(
+                foundation_data["calendar_system"],
                 context_desc="Show feminine significance in months, lunar cycles, and symbolic rituals."
             )
-        
-        # Create the result model from the transformed dict
-        return TransformedFoundationData(**result_dict)
+            
+        return result
 
     # ------------------------------------------------------------------
     # 4) Generating Power Expressions with Pydantic Models
@@ -595,7 +569,7 @@ class MatriarchalPowerStructureFramework(BaseLoreManager):
                 "Continue from the existing narrative, adding new developments, "
                 "conflicts, or revelations."
             ),
-            model="gpt-4.1-nano",
+            model="gpt-4o-mini",
             model_settings=ModelSettings(temperature=0.9)
         )
         
@@ -606,7 +580,7 @@ class MatriarchalPowerStructureFramework(BaseLoreManager):
                 "Focus on character growth, relationships, and internal struggles, "
                 "while maintaining matriarchal power dynamics."
             ),
-            model="gpt-4.1-nano",
+            model="gpt-4o-mini",
             model_settings=ModelSettings(temperature=0.9)
         )
         
@@ -617,7 +591,7 @@ class MatriarchalPowerStructureFramework(BaseLoreManager):
                 "Enrich the existing narrative with vivid locations, cultural details, "
                 "and environmental features that reinforce matriarchal themes."
             ),
-            model="gpt-4.1-nano",
+            model="gpt-4o-mini",
             model_settings=ModelSettings(temperature=0.9)
         )
         
