@@ -206,6 +206,40 @@ class WorldLoreManager(BaseLoreManager):
             return False
 
     @function_tool
+    async def create_world_element(self, element_type: str, element_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Create any world element using the canon system."""
+        from lore.core import canon
+        from lore.core.lore_system import LoreSystem
+        
+        # Map element types to their handlers
+        element_handlers = {
+            'nation': self._create_nation_element,
+            'culture': self._create_culture_element,
+            'historical_event': self._create_historical_event,
+            'faction': self._create_faction_element,
+            'location': self._create_location_element,
+            'notable_figure': self._create_notable_figure
+        }
+        
+        handler = element_handlers.get(element_type)
+        if not handler:
+            return {"error": f"Unknown element type: {element_type}"}
+        
+        async with self.get_connection_pool() as pool:
+            async with pool.acquire() as conn:
+                result = await handler(conn, element_data)
+                
+                # Log canonical event
+                await canon.log_canonical_event(
+                    self.create_run_context({}), conn,
+                    f"Created new {element_type}: {element_data.get('name', 'unnamed')}",
+                    tags=[element_type, 'world_building'],
+                    significance=7
+                )
+        
+        return result
+
+    @function_tool
     async def invalidate_world_history(
         self,
         world_id: Optional[str] = None,
@@ -751,6 +785,236 @@ class WorldLoreManager(BaseLoreManager):
                         """, custom["name"], nation1_id, custom["description"],
                         custom.get("context", "social"), custom.get("formality_level", "medium"),
                         [nation2_id], datetime.now(), nation2_id)
+
+    async def _create_culture_element(self, conn, data: Dict[str, Any]) -> Dict[str, Any]:
+        """Create a cultural element with canon checks."""
+        from lore.core import canon
+        
+        name = data.get('name', 'Unknown Culture')
+        description = data.get('description', '')
+        embed_text = f"{name} {description} {' '.join(data.get('values', []))}"
+        
+        create_data = {
+            'name': name,
+            'culture_type': data.get('culture_type', 'general'),
+            'description': description,
+            'values': data.get('values', []),
+            'traditions': data.get('traditions', []),
+            'taboos': data.get('taboos', []),
+            'origin_region': data.get('origin_region'),
+            'practiced_by': data.get('practiced_by', []),
+            'matriarchal_aspects': data.get('matriarchal_aspects', 'Female leadership emphasized')
+        }
+        
+        culture_id = await canon.find_or_create_entity(
+            ctx=self.create_run_context({}),
+            conn=conn,
+            entity_type="culture",
+            entity_name=name,
+            search_fields={'name': name, 'name_field': 'name'},
+            create_data=create_data,
+            table_name="Cultures",
+            embedding_text=embed_text,
+            similarity_threshold=0.85
+        )
+        
+        return {**create_data, 'id': culture_id}
+
+    async def _create_historical_event(self, conn, data: Dict[str, Any]) -> Dict[str, Any]:
+        """Create a historical event with timeline validation."""
+        from lore.core import canon
+        
+        event_name = data.get('name', 'Historical Event')
+        
+        # Check for timeline conflicts
+        date_order = data.get('date_order', 0)
+        if date_order > 0:
+            conflicting = await conn.fetch("""
+                SELECT id, name, date_order, date_description
+                FROM HistoricalEvents
+                WHERE date_order = $1
+                   OR (date_order > $1 - 5 AND date_order < $1 + 5)
+                ORDER BY date_order
+            """, date_order)
+            
+            if conflicting:
+                # Ask agent to resolve timeline
+                timeline_agent = Agent(
+                    name="TimelineResolver",
+                    instructions="Resolve timeline conflicts between historical events.",
+                    model="gpt-4.1-nano"
+                )
+                
+                prompt = f"""
+                Placing new event: {event_name} at time {date_order}
+                
+                Nearby events:
+                {json.dumps([dict(e) for e in conflicting], indent=2)}
+                
+                Adjust the date_order if needed to maintain consistency.
+                Return just the number.
+                """
+                
+                result = await Runner.run(timeline_agent, prompt)
+                try:
+                    date_order = int(result.final_output.strip())
+                except:
+                    pass
+        
+        embed_text = f"{event_name} {data.get('description', '')} {data.get('date_description', '')}"
+        
+        create_data = {
+            'name': event_name,
+            'event_type': data.get('event_type', 'general'),
+            'description': data.get('description', ''),
+            'date_order': date_order,
+            'date_description': data.get('date_description', 'Unknown time'),
+            'location': data.get('location'),
+            'participants': data.get('participants', []),
+            'consequences': data.get('consequences', []),
+            'significance': data.get('significance', 5),
+            'sources': data.get('sources', [])
+        }
+        
+        event_id = await canon.find_or_create_entity(
+            ctx=self.create_run_context({}),
+            conn=conn,
+            entity_type="historical_event",
+            entity_name=event_name,
+            search_fields={'name': event_name, 'date_order': date_order, 'name_field': 'name'},
+            create_data=create_data,
+            table_name="HistoricalEvents",
+            embedding_text=embed_text,
+            similarity_threshold=0.80  # Lower threshold for events
+        )
+        
+        # Update timeline references
+        await self._update_timeline_references(conn, event_id, create_data)
+        
+        return {**create_data, 'id': event_id}
+    
+    async def _update_timeline_references(self, conn, event_id: int, event_data: Dict[str, Any]) -> None:
+        """Update references between historical events."""
+        # Find events mentioned in description
+        mentioned_events = await conn.fetch("""
+            SELECT id, name FROM HistoricalEvents
+            WHERE id != $1
+              AND (
+                  $2 ILIKE '%' || name || '%'
+                  OR name ILIKE '%' || $3 || '%'
+              )
+        """, event_id, event_data['description'], event_data['name'])
+        
+        for mentioned in mentioned_events:
+            await conn.execute("""
+                INSERT INTO EventReferences (
+                    event_id, referenced_event_id, reference_type
+                )
+                VALUES ($1, $2, $3)
+                ON CONFLICT (event_id, referenced_event_id) DO NOTHING
+            """, event_id, mentioned['id'], 'mentioned')
+    
+    @function_tool
+    async def query_world_state(self, query: str) -> str:
+        """Query world state with canon awareness."""
+        # First check canonical events
+        async with self.get_connection_pool() as pool:
+            async with pool.acquire() as conn:
+                # Search canonical events
+                recent_events = await conn.fetch("""
+                    SELECT event_text, tags, significance, timestamp
+                    FROM CanonicalEvents
+                    WHERE user_id = $1 AND conversation_id = $2
+                    ORDER BY timestamp DESC
+                    LIMIT 10
+                """, self.user_id, self.conversation_id)
+                
+                # Use agent to interpret query
+                query_agent = self._get_agent("query")
+                
+                prompt = f"""
+                User query: {query}
+                
+                Recent canonical events:
+                {json.dumps([dict(e) for e in recent_events], indent=2)}
+                
+                Answer the query based on the world state and recent events.
+                Be specific and reference canonical events where relevant.
+                """
+                
+                result = await Runner.run(query_agent, prompt)
+                return result.final_output
+    
+    async def validate_world_consistency(self) -> Dict[str, Any]:
+        """Validate world consistency and find issues."""
+        issues = []
+        
+        async with self.get_connection_pool() as pool:
+            async with pool.acquire() as conn:
+                # Check for orphaned references
+                orphaned_npcs = await conn.fetch("""
+                    SELECT DISTINCT leader_npc_id as id
+                    FROM Nations
+                    WHERE leader_npc_id IS NOT NULL
+                      AND NOT EXISTS (
+                          SELECT 1 FROM NPCStats WHERE id = Nations.leader_npc_id
+                      )
+                """)
+                
+                for orphan in orphaned_npcs:
+                    issues.append({
+                        'type': 'orphaned_reference',
+                        'entity': 'npc',
+                        'id': orphan['id'],
+                        'severity': 'high'
+                    })
+                
+                # Check for timeline inconsistencies
+                timeline_issues = await conn.fetch("""
+                    WITH event_refs AS (
+                        SELECT e1.id, e1.name, e1.date_order,
+                               e2.id as ref_id, e2.name as ref_name, e2.date_order as ref_date
+                        FROM HistoricalEvents e1
+                        JOIN EventReferences er ON e1.id = er.event_id
+                        JOIN HistoricalEvents e2 ON er.referenced_event_id = e2.id
+                    )
+                    SELECT * FROM event_refs
+                    WHERE date_order < ref_date 
+                      AND name ILIKE '%after%' || ref_name || '%'
+                """)
+                
+                for issue in timeline_issues:
+                    issues.append({
+                        'type': 'timeline_inconsistency',
+                        'events': [issue['id'], issue['ref_id']],
+                        'description': f"{issue['name']} references {issue['ref_name']} but occurs earlier",
+                        'severity': 'medium'
+                    })
+        
+        # Use agent to propose fixes
+        if issues:
+            fix_agent = Agent(
+                name="ConsistencyFixer",
+                instructions="Propose fixes for world consistency issues.",
+                model="gpt-4.1-nano"
+            )
+            
+            prompt = f"""
+            Found these consistency issues:
+            {json.dumps(issues, indent=2)}
+            
+            Propose fixes for each issue.
+            Return JSON with: issue_index, fix_type, fix_data
+            """
+            
+            result = await Runner.run(fix_agent, prompt)
+            try:
+                fixes = json.loads(result.final_output)
+                return {'issues': issues, 'proposed_fixes': fixes}
+            except:
+                return {'issues': issues, 'proposed_fixes': []}
+        
+        return {'issues': [], 'message': 'No consistency issues found'}
 
     async def _update_plan_step(self, plan_id: str, step_index: int, outcome: Dict[str, Any]) -> None:
         """Update a plan step with its outcome."""
