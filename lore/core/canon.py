@@ -246,3 +246,42 @@ async def log_canonical_event(ctx, conn, event_text: str, tags: List[str] = None
         )
         VALUES ($1, $2, $3, $4, $5, $6)
     """, ctx.user_id, ctx.conversation_id, event_text, tags, significance, datetime.now())
+
+async def ensure_npc_exists(ctx, conn, npc_reference: Union[int, str, Dict[str, Any]]) -> int:
+    """
+    Ensure an NPC exists, creating if necessary.
+    
+    Args:
+        ctx: Context
+        conn: Database connection
+        npc_reference: Either an ID, name string, or dict with NPC details
+        
+    Returns:
+        NPC ID
+    """
+    from lore.core import canon
+    
+    if isinstance(npc_reference, int):
+        # Check if ID exists
+        existing = await conn.fetchrow("SELECT id FROM NPCStats WHERE id = $1", npc_reference)
+        if existing:
+            return npc_reference
+        else:
+            # Create with placeholder name
+            return await canon.find_or_create_npc(ctx, conn, f"Character {npc_reference}")
+    
+    elif isinstance(npc_reference, str):
+        # Create/find by name
+        return await canon.find_or_create_npc(ctx, conn, npc_reference)
+    
+    elif isinstance(npc_reference, dict):
+        # Create/find with full details
+        return await canon.find_or_create_npc(
+            ctx, conn,
+            npc_name=npc_reference.get('name', 'Unknown'),
+            role=npc_reference.get('role'),
+            affiliations=npc_reference.get('affiliations', [])
+        )
+    
+    else:
+        raise ValueError(f"Invalid NPC reference type: {type(npc_reference)}")
