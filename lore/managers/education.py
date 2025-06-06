@@ -3,7 +3,7 @@
 import logging
 import json
 import asyncio
-from typing import Dict, List, Any, Optional, AsyncGenerator
+from typing import Dict, List, Any, Optional, AsyncGenerator, Tuple
 from datetime import datetime
 from dataclasses import dataclass
 from pydantic import BaseModel, Field
@@ -16,8 +16,9 @@ from agents import (
 )
 
 # Governance & others
-from nyx.nyx_governance import AgentType, DirectivePriority
-from nyx.governance_helpers import with_governance
+from nyx.nyx_governance import AgentType, DirectivePriority, NyxUnifiedGovernor
+from nyx.governance_helpers import with_governance, with_governance_permission, with_action_reporting
+from nyx.directive_handler import DirectiveHandler
 
 # Project imports
 from embedding.vector_store import generate_embedding
@@ -35,6 +36,7 @@ class EducationContext:
     user_id: int
     conversation_id: int
     manager: Optional['EducationalSystemManager'] = None
+    governance_enabled: bool = True
 
 # ---------------------------------------------------------------------
 # Pydantic Models for Structured Outputs
@@ -104,12 +106,21 @@ class KnowledgeExchangeResult(BaseModel):
     source_system: str
     target_system: str
     knowledge_domain: str
-    transferable: List[str]
-    requires_adaptation: List[str]
-    restricted: List[str]
-    transferred_count: int = 0
-    adapted_count: int = 0
-    restricted_count: int = 0
+    transferable: List[Dict[str, Any]]
+    requires_adaptation: List[Dict[str, Any]]
+    restricted: List[Dict[str, Any]]
+    recommendations: List[str]
+    
+    class Config:
+        extra = "forbid"
+
+class StreamingPhaseUpdate(BaseModel):
+    """Update during streaming educational development"""
+    phase: str
+    status: str
+    content: Optional[str] = None
+    chunk: Optional[str] = None
+    metadata: Optional[Dict[str, Any]] = None
     
     class Config:
         extra = "forbid"
@@ -159,21 +170,28 @@ class CensorshipGuardrail(InputGuardrail):
 # ---------------------------------------------------------------------
 class EducationalSystemManager(BaseLoreManager):
     """
-    Manager for educational systems in the matriarchal setting.
+    Enhanced manager for educational systems with streaming support,
+    agent-to-agent knowledge exchange, structured outputs, and censorship guardrails.
     """
     
     def __init__(self, user_id: int, conversation_id: int):
         super().__init__(user_id, conversation_id)
+        
+        # Guardrails
         self.censorship_guardrail = CensorshipGuardrail()
         self.strict_censorship_guardrail = CensorshipGuardrail(strict_mode=True)
         
-        # Initialize agents
+        # Agents (will be initialized in initialize_agents)
         self.distribution_agent = None
         self.formal_education_agent = None
         self.apprenticeship_agent = None
         self.religious_education_agent = None
         self.education_agent = None
         self.knowledge_exchange_agent = None
+        
+        # Governance
+        self.governor = None
+        self.directive_handler = None
     
     async def initialize_agents(self):
         """Initialize all specialized agents."""
@@ -183,10 +201,15 @@ class EducationalSystemManager(BaseLoreManager):
         self.distribution_agent = Agent(
             name="EducationDistributionAgent",
             instructions=(
-                "You decide how many educational systems or knowledge traditions to create. "
-                "Return valid JSON with a 'count' field. Example: {\"count\": 4}"
+                "You decide how many educational systems or knowledge traditions to create, "
+                "and what shape or variety they should have. Return valid JSON with a 'count' field "
+                "and maybe additional info. Example:\n"
+                "{\n"
+                '  "count": 4,\n'
+                '  "notes": "Focus on advanced vs basic teaching..."\n'
+                "}"
             ),
-            model="gpt-4.1-nano",
+            model="gpt-4o-mini",
             model_settings=ModelSettings(temperature=0.8)
         )
         
@@ -198,7 +221,7 @@ class EducationalSystemManager(BaseLoreManager):
                 "Create hierarchical, structured learning programs with clear progression paths. "
                 "Emphasize matriarchal authority in educational leadership and teaching methods."
             ),
-            model="gpt-4.1-nano",
+            model="gpt-4o-mini",
             model_settings=ModelSettings(temperature=0.9)
         )
         
@@ -210,7 +233,7 @@ class EducationalSystemManager(BaseLoreManager):
                 "Create learning programs based on direct transmission of skills from expert to novice. "
                 "Emphasize matriarchal authority with female masters and gender-based access."
             ),
-            model="gpt-4.1-nano",
+            model="gpt-4o-mini",
             model_settings=ModelSettings(temperature=0.9)
         )
         
@@ -222,7 +245,7 @@ class EducationalSystemManager(BaseLoreManager):
                 "Create programs that transmit spiritual knowledge, rituals, and traditions. "
                 "Emphasize female religious authority and gendered access to sacred knowledge."
             ),
-            model="gpt-4.1-nano",
+            model="gpt-4o-mini",
             model_settings=ModelSettings(temperature=0.9)
         )
         
@@ -230,23 +253,23 @@ class EducationalSystemManager(BaseLoreManager):
         self.education_agent = Agent(
             name="EducationalSystemAgent",
             instructions="You create educational systems for fictional matriarchal societies.",
-            model="gpt-4.1-nano",
+            model="gpt-4o-mini",
             model_settings=ModelSettings(temperature=0.9),
             handoffs=[
                 handoff(
                     self.formal_education_agent,
                     tool_name_override="design_formal_education",
-                    tool_description_override="Design formal educational systems"
+                    tool_description_override="Design formal educational systems like schools and academies"
                 ),
                 handoff(
                     self.apprenticeship_agent,
                     tool_name_override="design_apprenticeship",
-                    tool_description_override="Design apprenticeship systems"
+                    tool_description_override="Design apprenticeship and mentorship-based educational systems"
                 ),
                 handoff(
                     self.religious_education_agent,
                     tool_name_override="design_religious_education",
-                    tool_description_override="Design religious educational systems"
+                    tool_description_override="Design religious educational systems like seminaries"
                 )
             ]
         )
@@ -259,10 +282,36 @@ class EducationalSystemManager(BaseLoreManager):
                 "Analyze what knowledge can be shared, adapted, or must remain separate. "
                 "Consider power dynamics, accessibility, and cultural context."
             ),
-            model="gpt-4.1-nano",
-            model_settings=ModelSettings(temperature=0.7),
-            output_type=KnowledgeExchangeResult
+            model="gpt-4o-mini",
+            model_settings=ModelSettings(temperature=0.7)
         )
+        
+        logger.info(f"Educational agents initialized for user {self.user_id}")
+    
+    async def initialize_governance(self):
+        """Initialize Nyx governance integration."""
+        try:
+            from nyx.integrate import get_central_governance
+            
+            self.governor = await get_central_governance(self.user_id, self.conversation_id)
+            
+            self.directive_handler = DirectiveHandler(
+                self.user_id,
+                self.conversation_id,
+                AgentType.NARRATIVE_CRAFTER,
+                "educational_system_manager"
+            )
+            
+            await self.governor.register_agent(
+                agent_type=AgentType.NARRATIVE_CRAFTER,
+                agent_id="educational_system_manager",
+                agent_instance=self
+            )
+            
+            logger.info(f"Education governance initialized for user {self.user_id}")
+        except Exception as e:
+            logger.error(f"Error initializing education governance: {str(e)}")
+            # Governance is optional - continue without it
     
     async def _initialize_tables(self):
         """Initialize database tables for educational systems."""
@@ -352,6 +401,9 @@ class EducationalSystemManager(BaseLoreManager):
                 CREATE INDEX IF NOT EXISTS idx_teachingcontents_system 
                 ON TeachingContents(system_id);
                 
+                CREATE INDEX IF NOT EXISTS idx_teachingcontents_user_conv 
+                ON TeachingContents(user_id, conversation_id);
+                
                 CREATE INDEX IF NOT EXISTS idx_teachingcontents_embedding 
                 ON TeachingContents USING ivfflat (embedding vector_cosine_ops);
             """
@@ -359,9 +411,29 @@ class EducationalSystemManager(BaseLoreManager):
         
         await self.initialize_tables_from_definitions(table_definitions)
     
-    # Internal methods
-    async def _save_educational_system(self, system: EducationalSystem) -> int:
-        """Save an educational system to the database."""
+    # Internal helper methods
+    async def _check_governance_permission(self, action_type: str, action_details: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
+        """Check governance permission for an action."""
+        if not self.governor:
+            return True, None
+        
+        try:
+            permission = await self.governor.check_action_permission(
+                agent_type=AgentType.NARRATIVE_CRAFTER,
+                agent_id="educational_system_manager",
+                action_type=action_type,
+                action_details=action_details
+            )
+            
+            approved = permission.get("approved", True)
+            reasoning = permission.get("reasoning", "Action not permitted by governance")
+            return approved, reasoning
+        except Exception as e:
+            logger.error(f"Governance check failed: {e}")
+            return True, None  # Default to allow if governance fails
+    
+    async def _save_educational_system_impl(self, system: EducationalSystem) -> int:
+        """Internal implementation to save an educational system."""
         # Generate embedding
         embedding_text = f"{system.name} {system.system_type} {system.description} {' '.join(system.core_teachings)}"
         embedding = await generate_embedding(embedding_text)
@@ -386,10 +458,14 @@ class EducationalSystemManager(BaseLoreManager):
             system.female_leadership_roles, system.male_roles, json.dumps(system.gender_specific_teachings),
             system.taboo_subjects, system.censorship_level, system.censorship_enforcement)
         
+        # Cache the system
+        cache_key = f"edu_system_{system_id}"
+        self.set_cache(cache_key, system.dict())
+        
         return system_id
     
-    async def _save_knowledge_tradition(self, tradition: KnowledgeTradition) -> int:
-        """Save a knowledge tradition to the database."""
+    async def _save_knowledge_tradition_impl(self, tradition: KnowledgeTradition) -> int:
+        """Internal implementation to save a knowledge tradition."""
         # Generate embedding
         embedding_text = f"{tradition.name} {tradition.tradition_type} {tradition.description} {tradition.knowledge_domain}"
         embedding = await generate_embedding(embedding_text)
@@ -412,14 +488,106 @@ class EducationalSystemManager(BaseLoreManager):
             tradition.associated_group, tradition.examples, embedding,
             tradition.female_gatekeepers, json.dumps(tradition.gendered_access), tradition.matriarchal_reinforcement)
         
+        # Cache the tradition
+        cache_key = f"knowledge_tradition_{tradition_id}"
+        self.set_cache(cache_key, tradition.dict())
+        
         return tradition_id
+    
+    async def _save_teaching_content_impl(self, system_id: int, content: TeachingContent) -> int:
+        """Internal implementation to save teaching content."""
+        # Check content with guardrail
+        guardrail_result = await self.censorship_guardrail(None, None, content.description)
+        if guardrail_result.tripwire_triggered:
+            content.restricted = True
+            content.restriction_reason = str(guardrail_result.output_info.get("forbidden_words", []))
+        
+        # Generate embedding
+        embedding_text = f"{content.title} {content.description} {' '.join(content.key_points)}"
+        embedding = await generate_embedding(embedding_text)
+        
+        async with get_db_connection_context() as conn:
+            content_id = await conn.fetchval("""
+                INSERT INTO TeachingContents (
+                    user_id, conversation_id, system_id,
+                    title, content_type, subject_area, description,
+                    target_age_group, key_points, examples, exercises,
+                    restricted, restriction_reason, embedding
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+                RETURNING id
+            """,
+            self.user_id, self.conversation_id, system_id,
+            content.title, content.content_type, content.subject_area, content.description,
+            content.target_age_group, content.key_points, content.examples, 
+            json.dumps(content.exercises), content.restricted, content.restriction_reason, embedding)
+        
+        return content_id
+    
+    async def _generate_educational_systems_impl(self, count: int) -> List[EducationalSystem]:
+        """Internal implementation for generating educational systems."""
+        # Fetch context from database
+        async with get_db_connection_context() as conn:
+            # Try to fetch faction info if available
+            try:
+                factions = await conn.fetch("""
+                    SELECT name, type FROM Factions
+                    WHERE user_id = $1 AND conversation_id = $2
+                    LIMIT 5
+                """, self.user_id, self.conversation_id)
+                faction_names = [f"{f['name']} ({f['type']})" for f in factions]
+            except:
+                faction_names = ["Sisterhood of the Moon", "Matriarchal Council", "Forest Tribe"]
+            
+            # Try to fetch cultural elements if available  
+            try:
+                elements = await conn.fetch("""
+                    SELECT name, type FROM CulturalElements
+                    WHERE user_id = $1 AND conversation_id = $2
+                    LIMIT 5
+                """, self.user_id, self.conversation_id)
+                element_names = [f"{e['name']} ({e['type']})" for e in elements]
+            except:
+                element_names = ["Rite of Womanhood", "Maternal Authority", "Feminine Leadership"]
+        
+        prompt = f"""
+        Generate {count} educational systems for a matriarchal society.
+
+        SOCIETAL CONTEXT:
+        Factions: {', '.join(faction_names)}
+        Cultural Elements: {', '.join(element_names)}
+
+        For each system:
+        1. Select an appropriate type (formal, apprenticeship, religious, etc.)
+        2. Create a cohesive design with all required fields
+        3. Ensure strong matriarchal themes
+        4. Define appropriate gender dynamics
+        
+        Return {count} EducationalSystem objects with all required fields.
+        """
+        
+        # Use the education agent with structured output
+        education_definition_agent = self.education_agent.clone(
+            output_type=List[EducationalSystem]
+        )
+        
+        run_config = RunConfig(workflow_name="EducationalSystemGeneration")
+        result = await Runner.run(
+            education_definition_agent, 
+            prompt, 
+            context={"manager": self},
+            run_config=run_config
+        )
+        
+        return result.final_output
     
     def create_context(self) -> EducationContext:
         """Create a context object for agent execution."""
         return EducationContext(
             user_id=self.user_id,
             conversation_id=self.conversation_id,
-            manager=self
+            manager=self,
+            governance_enabled=self.governor is not None
         )
 
 # ---------------------------------------------------------------------
@@ -443,180 +611,443 @@ async def get_education_manager(user_id: int, conversation_id: int) -> Education
 @function_tool(strict_mode=False)
 async def add_educational_system(
     ctx: RunContextWrapper[EducationContext],
-    system: Dict[str, Any]
-) -> int:
+    name: str,
+    system_type: str,
+    description: str,
+    target_demographics: List[str],
+    controlled_by: str,
+    core_teachings: List[str],
+    teaching_methods: List[str],
+    coming_of_age_rituals: Optional[str] = None,
+    knowledge_restrictions: Optional[str] = None,
+    female_leadership_roles: Optional[List[str]] = None,
+    male_roles: Optional[List[str]] = None,
+    gender_specific_teachings: Optional[Dict[str, List[str]]] = None,
+    taboo_subjects: Optional[List[str]] = None,
+    censorship_level: int = 5,
+    censorship_enforcement: Optional[str] = None
+) -> Dict[str, Any]:
     """
-    Add an educational system to the database.
+    Add an educational system to the database with matriarchal elements and censorship controls.
     
-    Args:
-        ctx: Context with user/conversation info
-        system: Educational system data
-        
     Returns:
-        ID of created system
+        Dictionary with system ID or error
     """
     manager = await get_education_manager(ctx.context.user_id, ctx.context.conversation_id)
     
-    # Convert dict to Pydantic model
-    edu_system = EducationalSystem(**system)
+    # Check governance permission
+    approved, reasoning = await manager._check_governance_permission(
+        "add_educational_system",
+        {"name": name, "type": system_type}
+    )
+    if not approved:
+        return {"error": reasoning}
     
-    # Save to database
-    return await manager._save_educational_system(edu_system)
+    with trace("AddEducationalSystem", metadata={"system_name": name}):
+        # Set defaults for optional matriarchal elements
+        female_leadership_roles = female_leadership_roles or ["Headmistress", "Teacher", "Mentor"]
+        male_roles = male_roles or ["Assistant", "Aide", "Custodian"]
+        gender_specific_teachings = gender_specific_teachings or {
+            "female": ["Leadership", "Authority", "Decision-making"],
+            "male": ["Service", "Support", "Compliance"]
+        }
+        taboo_subjects = taboo_subjects or ["Challenging feminine authority", "Male independence"]
+        censorship_enforcement = censorship_enforcement or "Monitored by female leadership"
+        
+        # Create system object
+        system = EducationalSystem(
+            name=name,
+            system_type=system_type,
+            description=description,
+            target_demographics=target_demographics,
+            controlled_by=controlled_by,
+            core_teachings=core_teachings,
+            teaching_methods=teaching_methods,
+            coming_of_age_rituals=coming_of_age_rituals,
+            knowledge_restrictions=knowledge_restrictions,
+            female_leadership_roles=female_leadership_roles,
+            male_roles=male_roles,
+            gender_specific_teachings=gender_specific_teachings,
+            taboo_subjects=taboo_subjects,
+            censorship_level=censorship_level,
+            censorship_enforcement=censorship_enforcement
+        )
+        
+        # Save to database
+        system_id = await manager._save_educational_system_impl(system)
+        
+        return {"id": system_id, "status": "created"}
 
 @function_tool(strict_mode=False)
 async def add_knowledge_tradition(
     ctx: RunContextWrapper[EducationContext],
-    tradition: Dict[str, Any]
-) -> int:
+    name: str,
+    tradition_type: str,
+    description: str,
+    knowledge_domain: str,
+    preservation_method: Optional[str] = None,
+    access_requirements: Optional[str] = None,
+    associated_group: Optional[str] = None,
+    examples: Optional[List[str]] = None,
+    female_gatekeepers: bool = True,
+    gendered_access: Optional[Dict[str, str]] = None,
+    matriarchal_reinforcement: Optional[str] = None
+) -> Dict[str, Any]:
     """
     Add a knowledge tradition to the database.
     
-    Args:
-        ctx: Context with user/conversation info
-        tradition: Knowledge tradition data
-        
     Returns:
-        ID of created tradition
+        Dictionary with tradition ID or error
     """
     manager = await get_education_manager(ctx.context.user_id, ctx.context.conversation_id)
     
-    # Convert dict to Pydantic model
-    knowledge_tradition = KnowledgeTradition(**tradition)
+    # Check governance permission
+    approved, reasoning = await manager._check_governance_permission(
+        "add_knowledge_tradition",
+        {"name": name, "type": tradition_type}
+    )
+    if not approved:
+        return {"error": reasoning}
     
-    # Save to database
-    return await manager._save_knowledge_tradition(knowledge_tradition)
-
-@function_tool
-async def generate_educational_systems(
-    ctx: RunContextWrapper[EducationContext],
-    count: Optional[int] = None
-) -> List[Dict[str, Any]]:
-    """
-    Generate educational systems using AI agents.
-    
-    Args:
-        ctx: Context with user/conversation info
-        count: Number of systems to generate (None = AI decides)
+    with trace("AddKnowledgeTradition", metadata={"tradition_name": name}):
+        # Set defaults
+        examples = examples or []
+        gendered_access = gendered_access or {
+            "female": "Full access with advancement opportunities",
+            "male": "Limited access under supervision"
+        }
+        matriarchal_reinforcement = matriarchal_reinforcement or "Emphasizes female wisdom and authority"
         
-    Returns:
-        List of generated systems with IDs
-    """
-    manager = await get_education_manager(ctx.context.user_id, ctx.context.conversation_id)
-    
-    with trace("GenerateEducationalSystems", metadata={"user_id": ctx.context.user_id}):
-        # Determine count if not provided
-        if count is None:
-            dist_result = await Runner.run(
-                manager.distribution_agent,
-                "How many educational systems should we create for a matriarchal society? (1-6)",
-                context={"manager": manager}
-            )
-            try:
-                count = json.loads(dist_result.final_output).get("count", 3)
-            except:
-                count = 3
-        
-        # Generate systems
-        prompt = f"""
-        Generate {count} educational systems for a matriarchal society.
-        
-        For each system:
-        1. Choose type: formal, apprenticeship, or religious
-        2. Create complete design with matriarchal themes
-        3. Include gender dynamics and restrictions
-        4. Define censorship and taboo subjects
-        
-        Return as List[EducationalSystem].
-        """
-        
-        # Use education agent with structured output
-        systems_agent = manager.education_agent.clone(
-            output_type=List[EducationalSystem]
+        # Create tradition object
+        tradition = KnowledgeTradition(
+            name=name,
+            tradition_type=tradition_type,
+            description=description,
+            knowledge_domain=knowledge_domain,
+            preservation_method=preservation_method,
+            access_requirements=access_requirements,
+            associated_group=associated_group,
+            examples=examples,
+            female_gatekeepers=female_gatekeepers,
+            gendered_access=gendered_access,
+            matriarchal_reinforcement=matriarchal_reinforcement
         )
         
-        result = await Runner.run(systems_agent, prompt, context={"manager": manager})
-        systems = result.final_output
+        # Save to database
+        tradition_id = await manager._save_knowledge_tradition_impl(tradition)
         
-        # Save all systems
-        saved_systems = []
-        for system in systems:
-            try:
-                system_id = await manager._save_educational_system(system)
-                system_dict = system.dict()
-                system_dict["id"] = system_id
-                saved_systems.append(system_dict)
-            except Exception as e:
-                logger.error(f"Error saving system {system.name}: {e}")
-        
-        return saved_systems
+        return {"id": tradition_id, "status": "created"}
 
-@function_tool
-async def generate_knowledge_traditions(
+@function_tool(strict_mode=False)
+async def add_teaching_content(
     ctx: RunContextWrapper[EducationContext],
-    count: Optional[int] = None
-) -> List[Dict[str, Any]]:
+    system_id: int,
+    title: str,
+    content_type: str,
+    subject_area: str,
+    description: str,
+    target_age_group: str,
+    key_points: List[str],
+    examples: Optional[List[str]] = None,
+    exercises: Optional[List[Dict[str, Any]]] = None,
+    restricted: bool = False,
+    restriction_reason: Optional[str] = None
+) -> Dict[str, Any]:
     """
-    Generate knowledge traditions using AI agents.
+    Add teaching content to an educational system.
     
-    Args:
-        ctx: Context with user/conversation info
-        count: Number of traditions to generate (None = AI decides)
-        
     Returns:
-        List of generated traditions with IDs
+        Dictionary with content ID or error
     """
     manager = await get_education_manager(ctx.context.user_id, ctx.context.conversation_id)
     
-    with trace("GenerateKnowledgeTraditions", metadata={"user_id": ctx.context.user_id}):
-        # Determine count if not provided
-        if count is None:
-            dist_result = await Runner.run(
-                manager.distribution_agent,
-                "How many knowledge traditions should we create? (1-6)",
-                context={"manager": manager}
-            )
-            try:
-                count = json.loads(dist_result.final_output).get("count", 4)
-            except:
-                count = 4
-        
-        # Generate traditions
-        prompt = f"""
-        Generate {count} knowledge traditions for a matriarchal society.
-        
-        Create diverse traditions spanning:
-        - Different domains (craft, spiritual, practical)
-        - Various preservation methods
-        - Matriarchal gatekeeping
-        - Gender-based access rules
-        
-        Return as List[KnowledgeTradition].
-        """
-        
-        # Create agent with structured output
-        traditions_agent = Agent(
-            name="TraditionsGenerator",
-            instructions="Generate knowledge traditions for matriarchal societies.",
-            model="gpt-4.1-nano",
-            model_settings=ModelSettings(temperature=0.9),
-            output_type=List[KnowledgeTradition]
+    # Check governance permission
+    approved, reasoning = await manager._check_governance_permission(
+        "add_teaching_content",
+        {"system_id": system_id, "title": title}
+    )
+    if not approved:
+        return {"error": reasoning}
+    
+    with trace("AddTeachingContent", metadata={"system_id": system_id, "title": title}):
+        # Create content object
+        content = TeachingContent(
+            title=title,
+            content_type=content_type,
+            subject_area=subject_area,
+            description=description,
+            target_age_group=target_age_group,
+            key_points=key_points,
+            examples=examples or [],
+            exercises=exercises or [],
+            restricted=restricted,
+            restriction_reason=restriction_reason
         )
         
-        result = await Runner.run(traditions_agent, prompt, context={"manager": manager})
-        traditions = result.final_output
+        # Save to database
+        content_id = await manager._save_teaching_content_impl(system_id, content)
         
-        # Save all traditions
-        saved_traditions = []
-        for tradition in traditions:
-            try:
-                tradition_id = await manager._save_knowledge_tradition(tradition)
-                tradition_dict = tradition.dict()
-                tradition_dict["id"] = tradition_id
-                saved_traditions.append(tradition_dict)
-            except Exception as e:
-                logger.error(f"Error saving tradition {tradition.name}: {e}")
+        return {"id": content_id, "status": "created", "restricted": content.restricted}
+
+@function_tool
+async def stream_educational_development(
+    ctx: RunContextWrapper[EducationContext],
+    system_name: str,
+    system_type: str,
+    matriarchy_level: int = 8
+) -> AsyncGenerator[StreamingPhaseUpdate, None]:
+    """
+    Stream the development of a complete educational system with progressive updates.
+    
+    Yields:
+        StreamingPhaseUpdate objects for each phase
+    """
+    manager = await get_education_manager(ctx.context.user_id, ctx.context.conversation_id)
+    
+    # Check governance permission
+    approved, reasoning = await manager._check_governance_permission(
+        "stream_educational_development",
+        {"system_name": system_name, "system_type": system_type}
+    )
+    if not approved:
+        yield StreamingPhaseUpdate(
+            phase="error",
+            status="governance_denied",
+            content=reasoning
+        )
+        return
+    
+    with trace("StreamEducationalDevelopment", metadata={
+        "system_name": system_name,
+        "system_type": system_type,
+        "matriarchy_level": matriarchy_level
+    }):
+        # Determine which specialized agent to use
+        specialist_map = {
+            "formal": manager.formal_education_agent,
+            "school": manager.formal_education_agent,
+            "academy": manager.formal_education_agent,
+            "apprenticeship": manager.apprenticeship_agent,
+            "mentorship": manager.apprenticeship_agent,
+            "guild": manager.apprenticeship_agent,
+            "religious": manager.religious_education_agent,
+            "seminary": manager.religious_education_agent,
+            "spiritual": manager.religious_education_agent
+        }
+        specialist = specialist_map.get(system_type.lower(), manager.education_agent)
         
-        return saved_traditions
+        # Phase 1: Basic system outline
+        yield StreamingPhaseUpdate(
+            phase="outline",
+            status="starting",
+            content=f"Developing {system_name} - a {system_type} educational system..."
+        )
+        
+        basic_prompt = f"""
+        Create an outline for a {system_type} educational system named '{system_name}' with 
+        a matriarchy level of {matriarchy_level}/10. Include:
+        
+        1. Core purpose
+        2. Target demographics
+        3. Main features
+        4. Matriarchal authority structure
+        """
+        
+        basic_result = await Runner.run(specialist, basic_prompt, context={"manager": manager})
+        basic_outline = basic_result.final_output
+        
+        yield StreamingPhaseUpdate(
+            phase="outline",
+            status="complete",
+            content=basic_outline
+        )
+        await asyncio.sleep(0.5)
+        
+        # Phase 2: Leadership structure with streaming
+        yield StreamingPhaseUpdate(
+            phase="leadership",
+            status="starting",
+            content="Developing leadership structure..."
+        )
+        
+        leadership_prompt = f"""
+        For the {system_type} educational system '{system_name}':
+        
+        Create a detailed leadership structure that emphasizes feminine authority 
+        with a matriarchy level of {matriarchy_level}/10.
+        
+        Define:
+        1. Female leadership roles
+        2. Male supportive roles
+        3. Power dynamics
+        4. Decision-making processes
+        """
+        
+        # Use streaming for this phase
+        stream_config = RunConfig(
+            workflow_name="LeadershipStructureGeneration",
+            trace_metadata={"component": "leadership_structure"}
+        )
+        
+        streaming_result = Runner.run_streamed(
+            specialist, 
+            leadership_prompt, 
+            context={"manager": manager},
+            run_config=stream_config
+        )
+        
+        # Process streaming events
+        leadership_content = []
+        async for event in streaming_result.stream_events():
+            if event.type == "run_item_stream_event":
+                if event.item.type == "message_output_item":
+                    # Extract text from the message output
+                    from agents.items import ItemHelpers
+                    message_text = ItemHelpers.text_message_output(event.item)
+                    leadership_content.append(message_text)
+                    yield StreamingPhaseUpdate(
+                        phase="leadership",
+                        status="streaming",
+                        chunk=message_text
+                    )
+        
+        # Get the final result
+        final_result = await streaming_result
+        leadership_structure = "".join(leadership_content) if leadership_content else final_result.final_output
+        
+        yield StreamingPhaseUpdate(
+            phase="leadership",
+            status="complete",
+            content=leadership_structure
+        )
+        await asyncio.sleep(0.5)
+        
+        # Phase 3: Curriculum and teaching methods
+        yield StreamingPhaseUpdate(
+            phase="curriculum",
+            status="starting",
+            content="Developing curriculum and teaching methods..."
+        )
+        
+        curriculum_prompt = f"""
+        For the {system_type} educational system '{system_name}':
+        
+        Create a curriculum outline with teaching methods that reinforce matriarchal values.
+        Matriarchy level: {matriarchy_level}/10
+        
+        Include:
+        1. Core subjects/skills taught
+        2. Teaching methodologies
+        3. Gender-specific tracks or teachings
+        4. Evaluation methods
+        """
+        
+        curriculum_result = await Runner.run(specialist, curriculum_prompt, context={"manager": manager})
+        curriculum = curriculum_result.final_output
+        
+        yield StreamingPhaseUpdate(
+            phase="curriculum",
+            status="complete",
+            content=curriculum
+        )
+        await asyncio.sleep(0.5)
+        
+        # Phase 4: Knowledge restrictions and taboos
+        yield StreamingPhaseUpdate(
+            phase="restrictions",
+            status="starting",
+            content="Developing knowledge restrictions and taboo subjects..."
+        )
+        
+        restrictions_prompt = f"""
+        For the {system_type} educational system '{system_name}':
+        
+        Define knowledge restrictions, censorship practices, and taboo subjects:
+        Matriarchy level: {matriarchy_level}/10
+        
+        Include:
+        1. Subjects/knowledge restricted by gender
+        2. Completely taboo topics
+        3. Censorship enforcement mechanisms
+        4. Consequences for violations
+        """
+        
+        # Apply the censorship guardrail to this phase
+        restrictions_agent = specialist.clone(
+            input_guardrails=[manager.censorship_guardrail]
+        )
+        
+        restrictions_result = await Runner.run(
+            restrictions_agent, 
+            restrictions_prompt, 
+            context={"manager": manager}
+        )
+        restrictions = restrictions_result.final_output
+        
+        yield StreamingPhaseUpdate(
+            phase="restrictions",
+            status="complete",
+            content=restrictions
+        )
+        await asyncio.sleep(0.5)
+        
+        # Phase 5: Compile and finalize
+        yield StreamingPhaseUpdate(
+            phase="finalizing",
+            status="starting",
+            content="Compiling complete educational system definition..."
+        )
+        
+        complete_prompt = f"""
+        Based on all the previous information, create a complete, structured definition
+        for the {system_type} educational system '{system_name}'.
+        
+        SYSTEM OUTLINE:
+        {basic_outline}
+        
+        LEADERSHIP STRUCTURE:
+        {leadership_structure}
+        
+        CURRICULUM:
+        {curriculum}
+        
+        RESTRICTIONS:
+        {restrictions}
+        
+        Return an EducationalSystem object with all required fields.
+        """
+        
+        # Create a system definition agent with structured output
+        system_definition_agent = specialist.clone(
+            output_type=EducationalSystem
+        )
+        
+        definition_result = await Runner.run(
+            system_definition_agent, 
+            complete_prompt, 
+            context={"manager": manager}
+        )
+        system_definition = definition_result.final_output
+        
+        # Save the educational system
+        try:
+            system_id = await manager._save_educational_system_impl(system_definition)
+            
+            yield StreamingPhaseUpdate(
+                phase="complete",
+                status="saved",
+                content=f"Educational system saved to database with ID: {system_id}",
+                metadata={
+                    "system_id": system_id,
+                    "system": system_definition.dict()
+                }
+            )
+        except Exception as e:
+            yield StreamingPhaseUpdate(
+                phase="error",
+                status="save_failed",
+                content=f"Error saving educational system: {str(e)}"
+            )
 
 @function_tool
 async def exchange_knowledge_between_systems(
@@ -626,65 +1057,329 @@ async def exchange_knowledge_between_systems(
     knowledge_domain: str
 ) -> Dict[str, Any]:
     """
-    Facilitate knowledge exchange between educational systems.
+    Facilitate knowledge exchange between two educational systems.
     
-    Args:
-        ctx: Context with user/conversation info
-        source_system_id: ID of source system
-        target_system_id: ID of target system
-        knowledge_domain: Domain of knowledge to exchange
-        
     Returns:
-        Exchange results
+        Dictionary with exchange results
     """
     manager = await get_education_manager(ctx.context.user_id, ctx.context.conversation_id)
+    
+    # Check governance permission
+    approved, reasoning = await manager._check_governance_permission(
+        "exchange_knowledge_between_systems",
+        {"source_id": source_system_id, "target_id": target_system_id}
+    )
+    if not approved:
+        return {"error": reasoning}
     
     with trace("KnowledgeExchange", metadata={
         "source_id": source_system_id,
         "target_id": target_system_id,
         "domain": knowledge_domain
     }):
-        # Fetch system data
+        # Fetch system data and teaching contents
         async with get_db_connection_context() as conn:
-            source = await conn.fetchrow(
-                "SELECT * FROM EducationalSystems WHERE id = $1 AND user_id = $2 AND conversation_id = $3",
-                source_system_id, ctx.context.user_id, ctx.context.conversation_id
-            )
-            target = await conn.fetchrow(
-                "SELECT * FROM EducationalSystems WHERE id = $1 AND user_id = $2 AND conversation_id = $3",
-                target_system_id, ctx.context.user_id, ctx.context.conversation_id
-            )
+            source_system = await conn.fetchrow("""
+                SELECT * FROM EducationalSystems 
+                WHERE id = $1 AND user_id = $2 AND conversation_id = $3
+            """, source_system_id, ctx.context.user_id, ctx.context.conversation_id)
             
-            if not source or not target:
-                return {"error": "System(s) not found"}
+            target_system = await conn.fetchrow("""
+                SELECT * FROM EducationalSystems 
+                WHERE id = $1 AND user_id = $2 AND conversation_id = $3
+            """, target_system_id, ctx.context.user_id, ctx.context.conversation_id)
+            
+            if not source_system or not target_system:
+                return {"error": "One or both systems not found"}
+            
+            # Get teaching contents from source system
+            contents = await conn.fetch("""
+                SELECT * FROM TeachingContents 
+                WHERE system_id = $1 AND subject_area = $2 
+                AND user_id = $3 AND conversation_id = $4
+            """, source_system_id, knowledge_domain, ctx.context.user_id, ctx.context.conversation_id)
+            
+            source_contents = [dict(c) for c in contents]
         
-        # Prepare prompt
-        prompt = f"""
-        Analyze knowledge exchange between:
+        # Prepare data for analysis
+        source_data = dict(source_system)
+        target_data = dict(target_system)
         
-        SOURCE: {source['name']} ({source['system_type']})
-        - Controlled by: {source['controlled_by']}
-        - Core teachings: {source['core_teachings']}
-        - Restrictions: {source['knowledge_restrictions']}
+        # Parse JSON fields
+        for data in [source_data, target_data]:
+            if data.get("gender_specific_teachings"):
+                try:
+                    data["gender_specific_teachings"] = json.loads(data["gender_specific_teachings"])
+                except:
+                    data["gender_specific_teachings"] = {}
         
-        TARGET: {target['name']} ({target['system_type']})
-        - Controlled by: {target['controlled_by']}
-        - Core teachings: {target['core_teachings']}
-        - Restrictions: {target['knowledge_restrictions']}
+        # Knowledge exchange prompt
+        exchange_prompt = f"""
+        Facilitate knowledge exchange between these two educational systems:
         
-        DOMAIN: {knowledge_domain}
+        SOURCE SYSTEM:
+        {json.dumps(source_data, indent=2, default=str)}
         
-        Determine what can be transferred, adapted, or is restricted.
+        TARGET SYSTEM:
+        {json.dumps(target_data, indent=2, default=str)}
+        
+        KNOWLEDGE DOMAIN:
+        {knowledge_domain}
+        
+        AVAILABLE CONTENT:
+        {json.dumps(source_contents, indent=2, default=str)}
+        
+        Analyze and return a KnowledgeExchangeResult with:
+        1. transferable: Knowledge that can be transferred directly
+        2. requires_adaptation: Knowledge needing modification
+        3. restricted: Knowledge that cannot be shared
+        4. recommendations: Specific recommendations for the exchange
         """
         
-        result = await Runner.run(
-            manager.knowledge_exchange_agent,
-            prompt,
-            context={"manager": manager}
+        # Use the knowledge exchange agent with structured output
+        exchange_agent = manager.knowledge_exchange_agent.clone(
+            output_type=KnowledgeExchangeResult
         )
         
-        exchange_result = result.final_output
-        return exchange_result.dict()
+        result = await Runner.run(exchange_agent, exchange_prompt, context={"manager": manager})
+        exchange_results = result.final_output
+        
+        # Actually implement the knowledge transfer based on results
+        transferred_count = 0
+        adapted_count = 0
+        restricted_count = 0
+        
+        async with get_db_connection_context() as conn:
+            # Transfer content marked as transferable
+            for item in exchange_results.transferable:
+                if isinstance(item, dict) and "id" in item:
+                    # Copy the teaching content to target system
+                    original = await conn.fetchrow("""
+                        SELECT * FROM TeachingContents WHERE id = $1
+                    """, item["id"])
+                    
+                    if original:
+                        new_content = TeachingContent(
+                            title=f"{original['title']} (from {source_data['name']})",
+                            content_type=original['content_type'],
+                            subject_area=original['subject_area'],
+                            description=original['description'],
+                            target_age_group=original['target_age_group'],
+                            key_points=original['key_points'],
+                            examples=original['examples'],
+                            exercises=json.loads(original['exercises']) if original['exercises'] else [],
+                            restricted=False,
+                            restriction_reason=None
+                        )
+                        
+                        await manager._save_teaching_content_impl(target_system_id, new_content)
+                        transferred_count += 1
+            
+            # Count adapted and restricted items
+            adapted_count = len(exchange_results.requires_adaptation)
+            restricted_count = len(exchange_results.restricted)
+        
+        return {
+            "source_system": source_data["name"],
+            "target_system": target_data["name"],
+            "knowledge_domain": knowledge_domain,
+            "exchange_results": exchange_results.dict(),
+            "transferred_count": transferred_count,
+            "adapted_count": adapted_count,
+            "restricted_count": restricted_count
+        }
+
+@function_tool
+async def generate_educational_systems(
+    ctx: RunContextWrapper[EducationContext]
+) -> List[Dict[str, Any]]:
+    """
+    Use AI agents to generate a set of educational systems for the matriarchal setting.
+    
+    Returns:
+        List of generated educational systems with IDs
+    """
+    manager = await get_education_manager(ctx.context.user_id, ctx.context.conversation_id)
+    
+    # Check governance permission
+    approved, reasoning = await manager._check_governance_permission(
+        "generate_educational_systems",
+        {}
+    )
+    if not approved:
+        return [{"error": reasoning}]
+    
+    with trace("GenerateEducationalSystems", metadata={"user_id": ctx.context.user_id}):
+        # Let an agent decide how many systems to generate
+        distribution_prompt = (
+            "We want to create some educational systems for a matriarchal society. "
+            "Propose how many we should generate (1-6) and any notes about them in JSON. "
+            "Example:\n"
+            "{\n"
+            '  "count": 4,\n'
+            '  "notes": "Focus on different classes..."'
+            "\n}"
+        )
+        
+        dist_config = RunConfig(workflow_name="EduSystemCount")
+        dist_result = await Runner.run(
+            manager.distribution_agent, 
+            distribution_prompt, 
+            context={"manager": manager}, 
+            run_config=dist_config
+        )
+        
+        try:
+            dist_data = json.loads(dist_result.final_output)
+            count = dist_data.get("count", 3)
+        except json.JSONDecodeError:
+            count = 3
+        
+        # Generate the systems
+        systems = await manager._generate_educational_systems_impl(count)
+        
+        # Save all systems
+        saved_systems = []
+        for system in systems:
+            try:
+                system_id = await manager._save_educational_system_impl(system)
+                
+                # Add to results
+                system_dict = system.dict()
+                system_dict["id"] = system_id
+                saved_systems.append(system_dict)
+                
+            except Exception as e:
+                logger.error(f"Error saving educational system '{system.name}': {e}")
+        
+        return saved_systems
+
+@function_tool
+async def generate_knowledge_traditions(
+    ctx: RunContextWrapper[EducationContext]
+) -> List[Dict[str, Any]]:
+    """
+    Generate knowledge traditions that represent how knowledge is
+    passed down across generations in informal ways.
+    
+    Returns:
+        List of generated knowledge traditions with IDs
+    """
+    manager = await get_education_manager(ctx.context.user_id, ctx.context.conversation_id)
+    
+    # Check governance permission
+    approved, reasoning = await manager._check_governance_permission(
+        "generate_knowledge_traditions",
+        {}
+    )
+    if not approved:
+        return [{"error": reasoning}]
+    
+    with trace("GenerateKnowledgeTraditions", metadata={"user_id": ctx.context.user_id}):
+        # Let the LLM decide how many traditions to generate
+        dist_prompt = (
+            "We want to create a set of knowledge traditions for a matriarchal setting. "
+            "How many should we make? Return JSON with a 'count' field. Example: {\"count\": 4}"
+        )
+        
+        dist_config = RunConfig(workflow_name="KnowledgeTraditionCount")
+        dist_result = await Runner.run(
+            manager.distribution_agent, 
+            dist_prompt, 
+            context={"manager": manager}, 
+            run_config=dist_config
+        )
+        
+        try:
+            dist_data = json.loads(dist_result.final_output)
+            count = dist_data.get("count", 4)
+        except json.JSONDecodeError:
+            count = 4
+        
+        # Get context from database
+        async with get_db_connection_context() as conn:
+            # Try to get cultural elements
+            try:
+                elements = await conn.fetch("""
+                    SELECT name, type, description 
+                    FROM CulturalElements
+                    WHERE user_id = $1 AND conversation_id = $2
+                    LIMIT 3
+                """, ctx.context.user_id, ctx.context.conversation_id)
+                culture_context = "\n".join([
+                    f"- {e['name']} ({e['type']}): {e['description'][:80]}..."
+                    for e in elements
+                ])
+            except:
+                culture_context = "- Matriarchal society with feminine authority structure"
+            
+            # Try to get existing educational systems
+            try:
+                systems = await conn.fetch("""
+                    SELECT name, system_type 
+                    FROM EducationalSystems
+                    WHERE user_id = $1 AND conversation_id = $2
+                    LIMIT 2
+                """, ctx.context.user_id, ctx.context.conversation_id)
+                systems_context = ", ".join([
+                    f"{s['name']} ({s['system_type']})"
+                    for s in systems
+                ]) if systems else "No formal systems yet"
+            except:
+                systems_context = "No formal systems yet"
+        
+        prompt = f"""
+        Generate {count} knowledge traditions for a matriarchal society.
+
+        CULTURAL CONTEXT:
+        {culture_context}
+
+        EDUCATIONAL SYSTEMS:
+        {systems_context}
+
+        Create distinctive knowledge traditions that:
+        1. Span different domains (art, craft, spiritual, practical, etc.)
+        2. Use varied preservation methods
+        3. Have appropriate matriarchal power dynamics
+        4. Include gendered access considerations
+        
+        Return {count} KnowledgeTradition objects with all required fields.
+        """
+        
+        # Create an agent with structured output
+        tradition_agent = Agent(
+            name="KnowledgeTraditionAgent",
+            instructions="You create knowledge transmission traditions for matriarchal societies.",
+            model="gpt-4o-mini",
+            model_settings=ModelSettings(temperature=0.9),
+            output_type=List[KnowledgeTradition]
+        )
+        
+        run_config = RunConfig(workflow_name="KnowledgeTraditionGeneration")
+        result = await Runner.run(
+            tradition_agent, 
+            prompt, 
+            context={"manager": manager}, 
+            run_config=run_config
+        )
+        
+        traditions = result.final_output
+        
+        # Save all traditions
+        saved_traditions = []
+        for tradition in traditions:
+            try:
+                tradition_id = await manager._save_knowledge_tradition_impl(tradition)
+                
+                # Add to results
+                tradition_dict = tradition.dict()
+                tradition_dict["id"] = tradition_id
+                saved_traditions.append(tradition_dict)
+                
+            except Exception as e:
+                logger.error(f"Error saving knowledge tradition '{tradition.name}': {e}")
+        
+        return saved_traditions
 
 @function_tool
 async def search_educational_systems(
@@ -695,15 +1390,16 @@ async def search_educational_systems(
     """
     Search educational systems by semantic similarity.
     
-    Args:
-        ctx: Context with user/conversation info
-        query: Search query
-        limit: Maximum results
-        
     Returns:
-        List of matching systems
+        List of matching systems with similarity scores
     """
     manager = await get_education_manager(ctx.context.user_id, ctx.context.conversation_id)
+    
+    # Check cache first
+    cache_key = f"edu_search_{hash(query)}_{limit}"
+    cached_results = manager.get_cache(cache_key)
+    if cached_results:
+        return cached_results
     
     # Generate embedding for query
     query_embedding = await generate_embedding(query)
@@ -717,6 +1413,46 @@ async def search_educational_systems(
             LIMIT $4
         """, query_embedding, ctx.context.user_id, ctx.context.conversation_id, limit)
         
+        search_results = [dict(r) for r in results]
+        
+        # Cache results
+        manager.set_cache(cache_key, search_results, ttl=300)
+        
+        return search_results
+
+@function_tool
+async def get_teaching_contents(
+    ctx: RunContextWrapper[EducationContext],
+    system_id: int,
+    subject_area: Optional[str] = None,
+    include_restricted: bool = False
+) -> List[Dict[str, Any]]:
+    """
+    Get teaching contents for an educational system.
+    
+    Returns:
+        List of teaching contents
+    """
+    manager = await get_education_manager(ctx.context.user_id, ctx.context.conversation_id)
+    
+    query = """
+        SELECT * FROM TeachingContents
+        WHERE system_id = $1 AND user_id = $2 AND conversation_id = $3
+    """
+    params = [system_id, ctx.context.user_id, ctx.context.conversation_id]
+    
+    if subject_area:
+        query += " AND subject_area = $4"
+        params.append(subject_area)
+    
+    if not include_restricted:
+        query += " AND restricted = FALSE"
+    
+    query += " ORDER BY created_at DESC"
+    
+    async with get_db_connection_context() as conn:
+        results = await conn.fetch(query, *params)
+        
         return [dict(r) for r in results]
 
 # ---------------------------------------------------------------------
@@ -729,18 +1465,26 @@ def create_education_orchestrator() -> Agent[EducationContext]:
         name="Education Orchestrator",
         instructions="""
         You orchestrate educational system management for a matriarchal RPG setting.
-        You can create educational systems, knowledge traditions, and facilitate
-        knowledge exchange between systems.
+        You can:
+        - Create and manage educational systems and knowledge traditions
+        - Generate teaching content with appropriate restrictions
+        - Facilitate knowledge exchange between systems
+        - Search and analyze educational infrastructure
+        
+        Always consider matriarchal power dynamics and gender-based access in all operations.
         """,
         tools=[
             add_educational_system,
             add_knowledge_tradition,
+            add_teaching_content,
             generate_educational_systems,
             generate_knowledge_traditions,
             exchange_knowledge_between_systems,
-            search_educational_systems
+            search_educational_systems,
+            get_teaching_contents
         ],
-        model="gpt-4.1-nano"
+        model="gpt-4o-mini",
+        model_settings=ModelSettings(temperature=0.7)
     )
 
 # ---------------------------------------------------------------------
