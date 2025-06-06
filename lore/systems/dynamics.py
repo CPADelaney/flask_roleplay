@@ -4,6 +4,7 @@ import logging
 import json
 import random
 import re
+import uuid
 from datetime import datetime
 from typing import Dict, List, Any, Optional, Union, AsyncGenerator
 from pydantic import BaseModel, Field
@@ -33,6 +34,153 @@ from lore.managers.base_manager import BaseLoreManager
 from lore.managers.geopolitical import GeopoliticalSystemManager
 from lore.utils.theming import MatriarchalThemingUtils
 
+# ===========================================================================
+# PYDANTIC MODELS FOR STRUCTURED DATA
+# ===========================================================================
+
+class EventValidation(BaseModel):
+    """Validation model for event descriptions"""
+    is_valid: bool
+    reasoning: str
+
+class LoreUpdate(BaseModel):
+    """Model for lore updates"""
+    lore_id: str
+    lore_type: str
+    name: str
+    old_description: str
+    new_description: str
+    update_reason: str
+    impact_level: int = Field(..., ge=1, le=10)
+
+class LoreElement(BaseModel):
+    """Model for new lore elements"""
+    lore_type: str
+    name: str
+    description: str
+    connection: str
+    significance: int = Field(..., ge=1, le=10)
+
+class SocietalImpact(BaseModel):
+    """Model for societal impact analysis"""
+    stability_impact: int = Field(..., ge=1, le=10)
+    power_structure_change: str
+    public_perception: str
+
+class EventType(BaseModel):
+    """Model for event type selection"""
+    event_type: str
+
+class MythEvolution(BaseModel):
+    """Model for myth evolution"""
+    myth_id: str
+    name: str
+    change_type: str
+    old_description: str
+    new_description: str
+    change_description: str
+    new_believability: Optional[int] = None
+    new_spread: Optional[int] = None
+
+class CulturalEvolution(BaseModel):
+    """Model for cultural element evolution"""
+    element_id: str
+    name: str
+    element_type: str
+    change_type: str
+    old_description: str
+    new_description: str
+    significance_before: int
+    significance_after: int
+
+class GeopoliticalShift(BaseModel):
+    """Model for geopolitical changes"""
+    change_type: str
+    faction_id: Optional[str] = None
+    faction_name: Optional[str] = None
+    old_description: Optional[str] = None
+    new_description: Optional[str] = None
+    additional_data: Dict[str, Any] = {}
+
+class FigureEvolution(BaseModel):
+    """Model for notable figure evolution"""
+    figure_id: str
+    name: str
+    change_type: str
+    old_description: str
+    new_description: str
+    old_reputation: int
+    new_reputation: int
+
+class EventCandidate(BaseModel):
+    """Model for event candidates in evolutionary selection"""
+    event_type: str
+    event_name: str
+    description: str
+    location: Optional[str] = None
+    factions_involved: List[str] = []
+    impact_level: int = Field(..., ge=1, le=10)
+    generation_index: int
+    selection_reasoning: Optional[str] = None
+    evaluation: Optional[Dict[str, Any]] = None
+
+class MutationDirective(BaseModel):
+    """Model for mutation directives"""
+    aspect: str
+    directive: str
+
+class MutationDirectives(BaseModel):
+    """Container for mutation directives"""
+    directives: List[MutationDirective]
+
+class EventSelection(BaseModel):
+    """Model for event selection results"""
+    selected_index: int
+    evaluation: Dict[str, Any]
+    reasoning: str
+
+class NarrativeEvaluation(BaseModel):
+    """Model for narrative evaluation"""
+    scores: Dict[str, int]
+    overall_score: int
+    feedback: List[str]
+    suggestions: List[str]
+
+class ImprovementSuggestions(BaseModel):
+    """Model for improvement suggestions"""
+    criteria: Dict[str, Dict[str, Any]]
+
+class PlanStep(BaseModel):
+    """Model for multi-step plan steps"""
+    title: str
+    type: str
+    goal: str
+    required_actions: List[str]
+    dependencies: List[int]
+    potential_branches: List[str]
+    expected_impact: Dict[str, Any]
+    status: str = "pending"
+    outcome: Optional[Dict[str, Any]] = None
+
+class NarrativePlan(BaseModel):
+    """Model for narrative plans"""
+    overview: str
+    steps: List[PlanStep]
+
+class WorldChangePhase(BaseModel):
+    """Model for world change phases"""
+    phase: str
+    content: str
+
+class EvolutionScenarioYear(BaseModel):
+    """Model for evolution scenario yearly data"""
+    year: int
+    content: str
+
+# ===========================================================================
+# MAIN LORE DYNAMICS SYSTEM CLASS
+# ===========================================================================
+
 class LoreDynamicsSystem(BaseLoreManager):
     """
     Consolidated system for evolving world lore, generating emergent events,
@@ -48,95 +196,103 @@ class LoreDynamicsSystem(BaseLoreManager):
         self.faith_system = None  # Will be initialized later if needed
         self.geopolitical_manager = GeopoliticalSystemManager(user_id, conversation_id)
         self.cache_namespace = "lore_dynamics"
-        
-        # Initialize specialized agents for different tasks
-        self._initialize_agents()
+        self._agents_initialized = False
+        self._agents = {}
+    
+    def _get_agent(self, agent_name: str) -> Agent:
+        """Lazy-load agents on demand to avoid initialization overhead"""
+        if not self._agents_initialized:
+            self._initialize_agents()
+            self._agents_initialized = True
+        return self._agents.get(agent_name)
     
     def _initialize_agents(self):
-        """Initialize specialized agents for different lore tasks"""
+        """Initialize specialized agents for different tasks"""
         base_instructions = (
             "You are working with a fantasy world featuring matriarchal power structures. "
             "All content should reflect feminine power and authority as the natural order. "
             "Male elements should be presented in supportive or subservient positions."
         )
         
-        # Lore update agent
-        self.lore_update_agent = Agent(
-            name="LoreUpdateAgent",
-            instructions=(
-                f"{base_instructions}\n\n"
-                "You update existing lore elements based on narrative events while maintaining thematic consistency. "
-                "Your updates should be meaningful and reflect the impact of events on the world. "
-                "Maintain the matriarchal power dynamics in all updates."
-            ),
-            model="gpt-4.1-nano",
-            model_settings=ModelSettings(temperature=0.9)
-        )
+        model_settings = ModelSettings(temperature=0.9)
         
-        # Event generation agent
-        self.event_generation_agent = Agent(
-            name="EventGenerationAgent",
-            instructions=(
-                f"{base_instructions}\n\n"
-                "You create emergent world events for fantasy settings with matriarchal power structures. "
-                "Events should be specific and detailed, creating opportunities for character development "
-                "and plot advancement. Focus on how events impact or reinforce matriarchal power dynamics."
-            ),
-            model="gpt-4.1-nano",
-            model_settings=ModelSettings(temperature=0.9)
-        )
+        agent_configs = {
+            "lore_update": {
+                "name": "LoreUpdateAgent",
+                "instructions": (
+                    f"{base_instructions}\n\n"
+                    "You update existing lore elements based on narrative events while maintaining thematic consistency. "
+                    "Your updates should be meaningful and reflect the impact of events on the world. "
+                    "Maintain the matriarchal power dynamics in all updates."
+                ),
+                "model": "gpt-4o-mini",
+                "settings": model_settings
+            },
+            "event_generation": {
+                "name": "EventGenerationAgent",
+                "instructions": (
+                    f"{base_instructions}\n\n"
+                    "You create emergent world events for fantasy settings with matriarchal power structures. "
+                    "Events should be specific and detailed, creating opportunities for character development "
+                    "and plot advancement. Focus on how events impact or reinforce matriarchal power dynamics."
+                ),
+                "model": "gpt-4o-mini",
+                "settings": model_settings
+            },
+            "lore_creation": {
+                "name": "LoreCreationAgent",
+                "instructions": (
+                    f"{base_instructions}\n\n"
+                    "You create new lore elements that emerge from significant events or natural evolution. "
+                    "New elements should fit seamlessly with existing lore while expanding the world. "
+                    "Ensure all new lore reinforces matriarchal power dynamics."
+                ),
+                "model": "gpt-4o-mini",
+                "settings": model_settings
+            },
+            "political_event": {
+                "name": "PoliticalEventAgent",
+                "instructions": (
+                    f"{base_instructions}\n\n"
+                    "You create detailed political events for matriarchal fantasy worlds. "
+                    "Focus on power dynamics, succession, alliances, and court intrigue. "
+                    "Events should highlight feminine leadership and authority."
+                ),
+                "model": "gpt-4o-mini",
+                "settings": model_settings
+            },
+            "military_event": {
+                "name": "MilitaryEventAgent",
+                "instructions": (
+                    f"{base_instructions}\n\n"
+                    "You create detailed military conflicts for matriarchal fantasy worlds. "
+                    "Focus on strategy, leadership, and the consequences of warfare. "
+                    "Events should highlight feminine military command structures."
+                ),
+                "model": "gpt-4o-mini",
+                "settings": model_settings
+            },
+            "cultural_event": {
+                "name": "CulturalEventAgent",
+                "instructions": (
+                    f"{base_instructions}\n\n"
+                    "You create detailed cultural developments for matriarchal fantasy worlds. "
+                    "Focus on traditions, arts, festivals, and social changes. "
+                    "Events should highlight feminine cultural influence and values."
+                ),
+                "model": "gpt-4o-mini",
+                "settings": model_settings
+            }
+        }
         
-        # Lore creation agent
-        self.lore_creation_agent = Agent(
-            name="LoreCreationAgent",
-            instructions=(
-                f"{base_instructions}\n\n"
-                "You create new lore elements that emerge from significant events or natural evolution. "
-                "New elements should fit seamlessly with existing lore while expanding the world. "
-                "Ensure all new lore reinforces matriarchal power dynamics."
-            ),
-            model="gpt-4.1-nano",
-            model_settings=ModelSettings(temperature=0.9)
-        )
-        
-        # Political event agent
-        self.political_event_agent = Agent(
-            name="PoliticalEventAgent",
-            instructions=(
-                f"{base_instructions}\n\n"
-                "You create detailed political events for matriarchal fantasy worlds. "
-                "Focus on power dynamics, succession, alliances, and court intrigue. "
-                "Events should highlight feminine leadership and authority."
-            ),
-            model="gpt-4.1-nano",
-            model_settings=ModelSettings(temperature=0.9)
-        )
-        
-        # Military event agent
-        self.military_event_agent = Agent(
-            name="MilitaryEventAgent",
-            instructions=(
-                f"{base_instructions}\n\n"
-                "You create detailed military conflicts for matriarchal fantasy worlds. "
-                "Focus on strategy, leadership, and the consequences of warfare. "
-                "Events should highlight feminine military command structures."
-            ),
-            model="gpt-4.1-nano",
-            model_settings=ModelSettings(temperature=0.9)
-        )
-        
-        # Cultural event agent
-        self.cultural_event_agent = Agent(
-            name="CulturalEventAgent",
-            instructions=(
-                f"{base_instructions}\n\n"
-                "You create detailed cultural developments for matriarchal fantasy worlds. "
-                "Focus on traditions, arts, festivals, and social changes. "
-                "Events should highlight feminine cultural influence and values."
-            ),
-            model="gpt-4.1-nano",
-            model_settings=ModelSettings(temperature=0.9)
-        )
+        # Create agents
+        for key, config in agent_configs.items():
+            self._agents[key] = Agent(
+                name=config["name"],
+                instructions=config["instructions"],
+                model=config["model"],
+                model_settings=config["settings"]
+            )
     
     async def ensure_initialized(self):
         """Ensure system is initialized"""
@@ -176,33 +332,6 @@ class LoreDynamicsSystem(BaseLoreManager):
         await self.initialize_tables_for_class(table_definitions)
     
     #===========================================================================
-    # SCHEMA MODELS
-    #===========================================================================
-    
-    class EventValidation(BaseModel):
-        """Validation model for event descriptions"""
-        is_valid: bool
-        reasoning: str
-
-    class LoreUpdate(BaseModel):
-        """Model for lore updates"""
-        lore_id: str
-        lore_type: str
-        name: str
-        old_description: str
-        new_description: str
-        update_reason: str
-        impact_level: int = Field(..., ge=1, le=10)
-    
-    class LoreElement(BaseModel):
-        """Model for new lore elements"""
-        lore_type: str
-        name: str
-        description: str
-        connection: str
-        significance: int = Field(..., ge=1, le=10)
-    
-    #===========================================================================
     # EVENT VALIDATION GUARDRAIL
     #===========================================================================
     
@@ -217,9 +346,9 @@ class LoreDynamicsSystem(BaseLoreManager):
                 "Determine if the event description is appropriate for world lore evolution. "
                 "Return a structured response with is_valid=True/False and reasoning."
             ),
-            model="gpt-4.1-nano",
+            model="gpt-4o-mini",
             model_settings=ModelSettings(temperature=0.8),
-            output_type=self.EventValidation
+            output_type=EventValidation
         )
         
         run_ctx = self.create_run_context(ctx)
@@ -299,14 +428,14 @@ class LoreDynamicsSystem(BaseLoreManager):
                     "Identify affected elements, generate updates, apply them, and create new lore. "
                     "Maintain matriarchal power dynamics in all transformations."
                 ),
-                model="gpt-4.1-nano",
+                model="gpt-4o-mini",
                 model_settings=ModelSettings(temperature=0.9),
                 input_guardrails=[input_guardrail],
                 tools=[
-                    function_tool(self._identify_affected_lore),
-                    function_tool(self._generate_lore_updates),
-                    function_tool(self._apply_lore_updates),
-                    function_tool(self._generate_consequential_lore)
+                    function_tool(self._identify_affected_lore, strict_mode=False),
+                    function_tool(self._generate_lore_updates, strict_mode=False),
+                    function_tool(self._apply_lore_updates, strict_mode=False),
+                    function_tool(self._generate_consequential_lore, strict_mode=False)
                 ]
             )
             
@@ -381,7 +510,7 @@ class LoreDynamicsSystem(BaseLoreManager):
     #===========================================================================
     # IDENTIFY AFFECTED LORE
     #===========================================================================
-    @function_tool
+    @function_tool(strict_mode=False)
     async def _identify_affected_lore(self, event_description: str) -> List[Dict[str, Any]]:
         """
         Identify lore elements that might be impacted by an event.
@@ -455,7 +584,7 @@ class LoreDynamicsSystem(BaseLoreManager):
     #===========================================================================
     # GENERATE LORE UPDATES
     #===========================================================================
-    @function_tool
+    @function_tool(strict_mode=False)
     async def _generate_lore_updates(
         self, 
         affected_elements: List[Dict[str, Any]], 
@@ -508,8 +637,8 @@ class LoreDynamicsSystem(BaseLoreManager):
                     update_history=update_history
                 )
                 
-                update_agent = self.lore_update_agent.clone(
-                    output_type=self.LoreUpdate
+                update_agent = self._get_agent("lore_update").clone(
+                    output_type=LoreUpdate
                 )
                 
                 result = await Runner.run(update_agent, prompt, context=run_ctx.context)
@@ -542,8 +671,9 @@ class LoreDynamicsSystem(BaseLoreManager):
                 "3) public_perception: short text describing how people see or react to the event\n\n"
                 "Output valid JSON with these keys."
             ),
-            model="gpt-4.1-nano",
-            model_settings=ModelSettings(temperature=0.9)
+            model="gpt-4o-mini",
+            model_settings=ModelSettings(temperature=0.9),
+            output_type=SocietalImpact
         )
         
         prompt = f"""
@@ -569,25 +699,12 @@ class LoreDynamicsSystem(BaseLoreManager):
         )
         
         result = await Runner.run(agent, prompt, context=run_ctx.context, run_config=run_config)
-        
-        try:
-            data = json.loads(result.final_output)
-            # Basic validation
-            if (
-                isinstance(data, dict) and 
-                "stability_impact" in data and 
-                "power_structure_change" in data and
-                "public_perception" in data
-            ):
-                return data
-            return {"stability_impact": 5, "power_structure_change": "minor", "public_perception": "neutral"}
-        except json.JSONDecodeError:
-            return {"stability_impact": 5, "power_structure_change": "minor", "public_perception": "neutral"}
+        return result.final_output.dict()
     
     #===========================================================================
     # APPLY LORE UPDATES
     #===========================================================================
-    @function_tool
+    @function_tool(strict_mode=False)
     async def _apply_lore_updates(self, updates: List[Dict[str, Any]]) -> None:
         """
         Apply the agent-generated updates to the database.
@@ -631,7 +748,7 @@ class LoreDynamicsSystem(BaseLoreManager):
     #===========================================================================
     # GENERATE CONSEQUENTIAL LORE
     #===========================================================================
-    @function_tool
+    @function_tool(strict_mode=False)
     async def _generate_consequential_lore(
         self, 
         event_description: str, 
@@ -658,8 +775,8 @@ class LoreDynamicsSystem(BaseLoreManager):
             context_info = ", ".join(summary_list)
             
             # Clone lore_creation_agent for structured output
-            creation_agent = self.lore_creation_agent.clone(
-                output_type=List[self.LoreElement]
+            creation_agent = self._get_agent("lore_creation").clone(
+                output_type=List[LoreElement]
             )
             
             prompt = f"""
@@ -770,8 +887,9 @@ class LoreDynamicsSystem(BaseLoreManager):
                 "Pick exactly one event type from that array that best fits the context. "
                 "Return JSON with a single field: {'event_type': 'the chosen type'}"
             ),
-            model="gpt-4.1-nano",
-            model_settings=ModelSettings(temperature=0.8)
+            model="gpt-4o-mini",
+            model_settings=ModelSettings(temperature=0.8),
+            output_type=EventType
         )
         
         prompt_data = {
@@ -797,15 +915,11 @@ class LoreDynamicsSystem(BaseLoreManager):
         )
         
         result = await Runner.run(type_agent, prompt, context=run_ctx.context, run_config=run_config)
+        event_type_data = result.final_output
         
-        try:
-            data = json.loads(result.final_output)
-            if isinstance(data, dict) and "event_type" in data and data["event_type"] in event_types:
-                return data["event_type"]
-            else:
-                # fallback
-                return self._choose_event_type_fallback(event_types)
-        except json.JSONDecodeError:
+        if event_type_data.event_type in event_types:
+            return event_type_data.event_type
+        else:
             # fallback
             return self._choose_event_type_fallback(event_types)
     
@@ -874,21 +988,21 @@ class LoreDynamicsSystem(BaseLoreManager):
                     "If it's 'military_conflict', hand off to 'transfer_to_military_agent'. "
                     "Otherwise, hand off to 'transfer_to_cultural_agent'."
                 ),
-                model="gpt-4.1-nano",
+                model="gpt-4o-mini",
                 model_settings=ModelSettings(temperature=0.8),
                 handoffs=[
                     handoff(
-                        self.political_event_agent,
+                        self._get_agent("political_event"),
                         tool_name_override="transfer_to_political_agent",
                         tool_description_override="Transfer to political event agent for politics/diplomacy/economics events"
                     ),
                     handoff(
-                        self.military_event_agent,
+                        self._get_agent("military_event"),
                         tool_name_override="transfer_to_military_agent",
                         tool_description_override="Transfer to military event agent for combat events"
                     ),
                     handoff(
-                        self.cultural_event_agent,
+                        self._get_agent("cultural_event"),
                         tool_name_override="transfer_to_cultural_agent",
                         tool_description_override="Transfer to cultural event agent for cultural/natural/technological events"
                     )
@@ -1337,7 +1451,7 @@ class LoreDynamicsSystem(BaseLoreManager):
                     myth_agent = Agent(
                         name="MythEvolutionAgent",
                         instructions="You develop and evolve urban myths over time.",
-                        model="gpt-4.1-nano"
+                        model="gpt-4o-mini"
                     )
                     
                     # Create tracing configuration
@@ -1403,134 +1517,6 @@ class LoreDynamicsSystem(BaseLoreManager):
                         logging.error(f"Error updating myth {myth_id}: {e}")
         
         return changes
-
-    async def _agentify_urban_myth_changes(self) -> List[Dict[str, Any]]:
-        """
-        Example approach: unify the creation of new myth descriptions in a single agent,
-        or call an agent for each myth. Returns a list of changes.
-        """
-        changes = []
-        async with self.get_connection_pool() as pool:
-            async with pool.acquire() as conn:
-                # Check for a table of urban myths, fallback to WorldLore
-                has_urban_myths = await conn.fetchval("""
-                    SELECT EXISTS (
-                        SELECT FROM information_schema.tables 
-                        WHERE table_name = 'urbanmyths'
-                    );
-                """)
-                
-                if has_urban_myths:
-                    rows = await conn.fetch("""
-                        SELECT id, name, description, believability, spread_rate
-                        FROM UrbanMyths
-                        ORDER BY RANDOM()
-                        LIMIT 3
-                    """)
-                    table_name = "UrbanMyths"
-                    field_map = {
-                        "id": "id",
-                        "desc_field": "description",
-                        "believability": "believability",
-                        "spread_rate": "spread_rate"
-                    }
-                else:
-                    rows = await conn.fetch("""
-                        SELECT id, name, description
-                        FROM WorldLore
-                        WHERE category = 'urban_myth'
-                        ORDER BY RANDOM()
-                        LIMIT 3
-                    """)
-                    table_name = "WorldLore"
-                    field_map = {
-                        "id": "id",
-                        "desc_field": "description",
-                        "believability": None,
-                        "spread_rate": None
-                    }
-                
-                myth_agent = Agent(
-                    name="UrbanMythEvolutionAgent",
-                    instructions=(
-                        "You update the text of an urban myth in a matriarchal fantasy world. "
-                        "Possible changes: it grows, evolves, or fades. Return only the new text."
-                    ),
-                    model="gpt-4.1-nano",
-                    model_settings=ModelSettings(temperature=0.8)
-                )
-                
-                for row in rows:
-                    myth_id = row[field_map["id"]]
-                    myth_name = row["name"]
-                    old_description = row[field_map["desc_field"]]
-                    
-                    # Weighted random selection or an agent-based approach. 
-                    # We'll do a simple random approach for the type, 
-                    # but the text transformation is agent-based:
-                    change_type = random.choice(["grow","evolve","fade"])
-                    
-                    prompt = f"""
-                    URBAN MYTH: {myth_name}
-                    CURRENT DESCRIPTION: {old_description}
-                    
-                    CHANGE TYPE: {change_type}
-
-                    If 'grow', the myth becomes more elaborate and widely believed.
-                    If 'evolve', the myth changes details while retaining core essence.
-                    If 'fade', it declines in belief or is partially forgotten.
-
-                    Return the new myth description in a matriarchal, consistent style.
-                    """
-                    
-                    # LLM call
-                    result = await Runner.run(myth_agent, prompt, context={})
-                    new_description = result.final_output
-                    new_description = MatriarchalThemingUtils.apply_matriarchal_theme("myth", new_description)
-                    
-                    # Attempt to update DB
-                    try:
-                        # Possibly update believability/spread
-                        new_bel = row.get("believability", 5)
-                        new_spread = row.get("spread_rate", 5)
-                        if change_type == "grow":
-                            new_bel = min(10, new_bel + 1)
-                            new_spread = min(10, new_spread + 1)
-                        elif change_type == "fade":
-                            new_bel = max(1, new_bel - 1)
-                            new_spread = max(1, new_spread - 1)
-                        
-                        if table_name == "UrbanMyths":
-                            await conn.execute(f"""
-                                UPDATE UrbanMyths
-                                SET description = $1,
-                                    believability = $2,
-                                    spread_rate = $3
-                                WHERE id = $4
-                            """, new_description, new_bel, new_spread, myth_id)
-                        else:
-                            # WorldLore
-                            new_embedding = await generate_embedding(f"{myth_name} {new_description}")
-                            await conn.execute("""
-                                UPDATE WorldLore
-                                SET description = $1,
-                                    embedding = $2
-                                WHERE id = $3
-                            """, new_description, new_embedding, myth_id)
-                        
-                        changes.append({
-                            "myth_id": myth_id,
-                            "name": myth_name,
-                            "change_type": change_type,
-                            "old_description": old_description,
-                            "new_description": new_description
-                        })
-                        
-                        self.invalidate_cache_pattern(f"{table_name}_{myth_id}")
-                        
-                    except Exception as e:
-                        logging.error(f"Error updating myth {myth_id} in {table_name}: {e}")
-        return changes
     
     async def _develop_cultural_elements(self) -> List[Dict[str, Any]]:
         """
@@ -1571,7 +1557,7 @@ class LoreDynamicsSystem(BaseLoreManager):
                         "reflect how the element transforms (formalizes, adapts, spreads, codifies, etc.). "
                         "Return only the new, updated description in a cohesive style."
                     ),
-                    model="gpt-4.1-nano",
+                    model="gpt-4o-mini",
                     model_settings=ModelSettings(temperature=0.8)
                 )
                 
@@ -1665,9 +1651,6 @@ class LoreDynamicsSystem(BaseLoreManager):
         
         return changes
     
-    # ---------------------------------------------------------------------------
-    # (2) _shift_geopolitical_landscape
-    # ---------------------------------------------------------------------------
     async def _shift_geopolitical_landscape(self) -> List[Dict[str, Any]]:
         """
         Evolve geopolitics (alliances, territory, governance) in a matriarchal world.
@@ -1734,7 +1717,7 @@ class LoreDynamicsSystem(BaseLoreManager):
                             "You rewrite faction or region descriptions to reflect changes in alliances, "
                             "territory, or governance. Keep the matriarchal theme strong."
                         ),
-                        model="gpt-4.1-nano",
+                        model="gpt-4o-mini",
                         model_settings=ModelSettings(temperature=0.8)
                     )
                     
@@ -1938,9 +1921,6 @@ class LoreDynamicsSystem(BaseLoreManager):
         
         return changes
     
-    # ---------------------------------------------------------------------------
-    # (3) _evolve_notable_figures
-    # ---------------------------------------------------------------------------
     async def _evolve_notable_figures(self) -> List[Dict[str, Any]]:
         """
         Use an agent to evolve the reputations or stories of notable figures
@@ -1997,7 +1977,7 @@ class LoreDynamicsSystem(BaseLoreManager):
                         "You evolve the reputations or stories of notable figures in a matriarchal setting. "
                         "Given a change_type, rewrite their description to reflect that new condition."
                     ),
-                    model="gpt-4.1-nano",
+                    model="gpt-4o-mini",
                     model_settings=ModelSettings(temperature=0.8)
                 )
                 
@@ -2182,8 +2162,9 @@ class MultiStepPlanner:
             expected outcomes, and potential narrative branches.
             Maintain matriarchal themes throughout the planning process.
             """,
-            model="gpt-4.1-nano",
-            model_settings=ModelSettings(temperature=0.8)
+            model="gpt-4o-mini",
+            model_settings=ModelSettings(temperature=0.8),
+            output_type=NarrativePlan
         )
     
     async def create_evolution_plan(self, initial_prompt: str, context: Dict[str, Any]) -> Dict[str, Any]:
@@ -2213,15 +2194,13 @@ class MultiStepPlanner:
         """
         
         result = await Runner.run(self.planning_agent, prompt, context=run_ctx.context)
+        plan = result.final_output
         
-        try:
-            plan = json.loads(result.final_output)
-            # Store the plan
-            plan_id = await self._store_plan(plan, initial_prompt)
-            plan["id"] = plan_id
-            return plan
-        except json.JSONDecodeError:
-            return {"error": "Failed to parse plan", "raw_output": result.final_output}
+        # Store the plan
+        plan_id = await self._store_plan(plan, initial_prompt)
+        plan_dict = plan.dict()
+        plan_dict["id"] = plan_id
+        return plan_dict
     
     async def execute_plan_step(self, plan_id: str, step_index: int, context: Dict[str, Any]) -> Dict[str, Any]:
         """Execute a specific step in a multi-step plan."""
@@ -2278,17 +2257,18 @@ class MultiStepPlanner:
         except json.JSONDecodeError:
             return {"error": "Failed to parse step outcome", "raw_output": result.final_output}
     
-    async def _store_plan(self, plan: Dict[str, Any], prompt: str) -> str:
+    async def _store_plan(self, plan: NarrativePlan, prompt: str) -> str:
         """Store a narrative plan."""
         # Implementation would depend on database structure
         plan_id = f"plan_{uuid.uuid4()}"
-        plan["id"] = plan_id
-        plan["prompt"] = prompt
-        plan["created_at"] = datetime.now().isoformat()
-        plan["status"] = "created"
+        plan_dict = plan.dict()
+        plan_dict["id"] = plan_id
+        plan_dict["prompt"] = prompt
+        plan_dict["created_at"] = datetime.now().isoformat()
+        plan_dict["status"] = "created"
         
         # Mark all steps as pending
-        for step in plan.get("steps", []):
+        for step in plan_dict.get("steps", []):
             step["status"] = "pending"
             step["outcome"] = None
         
@@ -2338,13 +2318,13 @@ class MultiStepPlanner:
     def _get_executor_agent(self, agent_type: str) -> Agent:
         """Get the appropriate executor agent for a step type."""
         if agent_type == "political":
-            return self.dynamics_system.political_event_agent
+            return self.dynamics_system._get_agent("political_event")
         elif agent_type == "military":
-            return self.dynamics_system.military_event_agent
+            return self.dynamics_system._get_agent("military_event")
         elif agent_type == "cultural":
-            return self.dynamics_system.cultural_event_agent
+            return self.dynamics_system._get_agent("cultural_event")
         else:
-            return self.dynamics_system.event_generation_agent
+            return self.dynamics_system._get_agent("event_generation")
     
     def _get_previous_outcomes(self, plan: Dict[str, Any], current_index: int) -> List[Dict[str, Any]]:
         """Get outcomes of previous steps that this step depends on."""
@@ -2421,8 +2401,9 @@ class NarrativeEvaluator:
             Provide specific, constructive feedback on how to improve future generations.
             Consider themes, character motivations, plot development, and matriarchal elements.
             """,
-            model="gpt-4.1-nano",
-            model_settings=ModelSettings(temperature=0.7)
+            model="gpt-4o-mini",
+            model_settings=ModelSettings(temperature=0.7),
+            output_type=NarrativeEvaluation
         )
         self.feedback_history = []
     
@@ -2451,24 +2432,20 @@ class NarrativeEvaluator:
             """
             
             result = await Runner.run(self.evaluation_agent, prompt, context={})
+            evaluation = result.final_output
             
-            try:
-                evaluation = json.loads(result.final_output)
-                
-                # Store the feedback for learning
-                self.feedback_history.append({
-                    "element_type": element_type,
-                    "evaluation": evaluation,
-                    "timestamp": datetime.now().isoformat()
-                })
-                
-                # If we have collected enough feedback, update generation parameters
-                if len(self.feedback_history) >= 5:
-                    await self._update_generation_parameters()
-                
-                return evaluation
-            except json.JSONDecodeError:
-                return {"error": "Failed to parse evaluation", "raw_output": result.final_output}
+            # Store the feedback for learning
+            self.feedback_history.append({
+                "element_type": element_type,
+                "evaluation": evaluation.dict(),
+                "timestamp": datetime.now().isoformat()
+            })
+            
+            # If we have collected enough feedback, update generation parameters
+            if len(self.feedback_history) >= 5:
+                await self._update_generation_parameters()
+            
+            return evaluation.dict()
     
     def _get_evaluation_criteria(self, element_type: str) -> Dict[str, Any]:
         """Get evaluation criteria based on element type."""
@@ -2539,6 +2516,13 @@ class NarrativeEvaluator:
         """Generate suggestions for improving specific criteria."""
         history_samples = random.sample(self.feedback_history, min(3, len(self.feedback_history)))
         
+        suggestion_agent = Agent(
+            name="ImprovementSuggestionAgent",
+            instructions="Generate specific improvement suggestions for narrative generation based on evaluation feedback.",
+            model="gpt-4o-mini",
+            output_type=ImprovementSuggestions
+        )
+        
         prompt = f"""
         Generate improvement suggestions for these narrative criteria:
         {criteria}
@@ -2554,12 +2538,8 @@ class NarrativeEvaluator:
         Return JSON with actionable suggestions.
         """
         
-        result = await Runner.run(self.evaluation_agent, prompt, context={})
-        
-        try:
-            return json.loads(result.final_output)
-        except json.JSONDecodeError:
-            return {"error": "Failed to parse suggestions"}
+        result = await Runner.run(suggestion_agent, prompt, context={})
+        return result.final_output.dict()
     
     async def _apply_improvement_suggestions(self, suggestions: Dict[str, Any]) -> None:
         """Apply improvement suggestions to generation parameters."""
@@ -2580,8 +2560,9 @@ class NarrativeEvolutionSystem:
             You evaluate and select the most compelling narrative elements from a pool of candidates.
             Select elements that enhance the overall narrative, maintain consistency, and advance matriarchal themes.
             """,
-            model="gpt-4.1-nano",
-            model_settings=ModelSettings(temperature=0.7)
+            model="gpt-4o-mini",
+            model_settings=ModelSettings(temperature=0.7),
+            output_type=EventSelection
         )
         self.mutation_agent = Agent(
             name="NarrativeMutationAgent",
@@ -2589,8 +2570,9 @@ class NarrativeEvolutionSystem:
             You modify narrative elements to improve their quality, interest, and consistency.
             Enhance matriarchal themes and ensure coherent integration with the world.
             """,
-            model="gpt-4.1-nano",
-            model_settings=ModelSettings(temperature=0.9)
+            model="gpt-4o-mini",
+            model_settings=ModelSettings(temperature=0.9),
+            output_type=MutationDirectives
         )
     
     async def generate_candidate_pool(self, element_type: str, context: Dict[str, Any], pool_size: int = 3) -> List[Dict[str, Any]]:
@@ -2599,13 +2581,16 @@ class NarrativeEvolutionSystem:
         
         # Select appropriate agent based on element type
         if element_type == "political_event":
-            generator_agent = self.dynamics_system.political_event_agent
+            generator_agent = self.dynamics_system._get_agent("political_event")
         elif element_type == "military_event":
-            generator_agent = self.dynamics_system.military_event_agent
+            generator_agent = self.dynamics_system._get_agent("military_event")
         elif element_type == "cultural_event":
-            generator_agent = self.dynamics_system.cultural_event_agent
+            generator_agent = self.dynamics_system._get_agent("cultural_event")
         else:
-            generator_agent = self.dynamics_system.event_generation_agent
+            generator_agent = self.dynamics_system._get_agent("event_generation")
+        
+        # Configure agent for structured output
+        generator_agent = generator_agent.clone(output_type=EventCandidate)
         
         # Build base prompt
         base_prompt = f"""
@@ -2635,17 +2620,9 @@ class NarrativeEvolutionSystem:
             """
             
             result = await Runner.run(generator_agent, variation_prompt, context=run_ctx.context)
-            
-            try:
-                candidate = json.loads(result.final_output)
-                candidate["generation_index"] = i
-                candidates.append(candidate)
-            except json.JSONDecodeError:
-                candidates.append({
-                    "error": "Failed to parse candidate",
-                    "raw_output": result.final_output,
-                    "generation_index": i
-                })
+            candidate = result.final_output
+            candidate.generation_index = i
+            candidates.append(candidate.dict())
         
         return candidates
     
@@ -2686,21 +2663,16 @@ class NarrativeEvolutionSystem:
         """
         
         result = await Runner.run(self.selection_agent, prompt, context={})
+        selection = result.final_output
         
-        try:
-            selection = json.loads(result.final_output)
-            selected_index = selection.get("selected_index")
-            
-            if selected_index is not None and 0 <= selected_index < len(candidates):
-                selected = candidates[selected_index]
-                selected["selection_reasoning"] = selection.get("reasoning")
-                selected["evaluation"] = selection.get("evaluation")
-                return selected
-            else:
-                # Default to first valid candidate if selection fails
-                return valid_candidates[0]
-        except json.JSONDecodeError:
-            # Default to first valid candidate if parsing fails
+        selected_index = selection.selected_index
+        if 0 <= selected_index < len(candidates):
+            selected = candidates[selected_index]
+            selected["selection_reasoning"] = selection.reasoning
+            selected["evaluation"] = selection.evaluation
+            return selected
+        else:
+            # Default to first valid candidate if selection fails
             return valid_candidates[0]
     
     async def mutate_element(self, element: Dict[str, Any], mutation_directives: Dict[str, Any]) -> Dict[str, Any]:
@@ -2832,24 +2804,8 @@ class NarrativeEvolutionSystem:
         Return JSON with mutation directives.
         """
         
-        result = await Runner.run(self.selection_agent, prompt, context={})
-        
-        try:
-            return json.loads(result.final_output)
-        except json.JSONDecodeError:
-            # Default directives if parsing fails
-            return {
-                "directives": [
-                    {
-                        "aspect": "general_quality",
-                        "directive": "Enhance overall narrative quality and detail"
-                    },
-                    {
-                        "aspect": "matriarchal_themes",
-                        "directive": "Strengthen matriarchal thematic elements"
-                    }
-                ]
-            }
+        result = await Runner.run(self.mutation_agent, prompt, context={})
+        return result.final_output.dict()
 
 class WorldStateStreamer:
     """
@@ -2865,7 +2821,7 @@ class WorldStateStreamer:
             Narrate how the world evolves, highlighting key developments, reactions,
             and emerging patterns. Focus on matriarchal power dynamics.
             """,
-            model="gpt-4.1-nano",
+            model="gpt-4o-mini",
             model_settings=ModelSettings(temperature=0.8)
         )
     
@@ -2899,58 +2855,36 @@ class WorldStateStreamer:
             """
             
             # Set up the streaming result
-            result = await self.streamer_agent.stream(prompt, context={})
+            # Note: The SDK might not support streaming directly, so we'll simulate it
+            # In a real implementation, you'd use the streaming API if available
             
-            # Process the stream
-            current_phase = None
-            current_content = ""
+            result = await Runner.run(self.streamer_agent, prompt, context={})
+            content = result.final_output
             
-            async for chunk in result:
-                content = chunk.content
-                
+            # Process the content into phases
+            phase_indicators = {
+                "Immediate aftermath": "immediate",
+                "Short-term developments": "short_term",
+                "Medium-term consequences": "medium_term",
+                "Long-term transformations": "long_term"
+            }
+            
+            # Split content into sections and yield progressively
+            sections = content.split('\n\n')
+            current_phase = "immediate"
+            
+            for section in sections:
                 # Check for phase indicators
-                phase_indicators = {
-                    "Immediate aftermath": "immediate",
-                    "Short-term developments": "short_term",
-                    "Medium-term consequences": "medium_term",
-                    "Long-term transformations": "long_term"
-                }
-                
-                # Check if this chunk starts a new phase
-                new_phase = None
                 for indicator, phase in phase_indicators.items():
-                    if indicator in content and (not current_phase or current_phase != phase):
-                        new_phase = phase
+                    if indicator.lower() in section.lower():
+                        current_phase = phase
                         break
                 
-                if new_phase:
-                    # If we had accumulated content, yield it before switching
-                    if current_content:
-                        yield {
-                            "phase": current_phase,
-                            "content": current_content.strip()
-                        }
-                    
-                    current_phase = new_phase
-                    current_content = content
-                else:
-                    # Continue accumulating content
-                    current_content += content
-                
-                # Periodically yield content even within the same phase
-                if len(current_content) > 300:
+                if section.strip():
                     yield {
-                        "phase": current_phase or "unknown",
-                        "content": current_content.strip()
+                        "phase": current_phase,
+                        "content": section.strip()
                     }
-                    current_content = ""
-            
-            # Yield any remaining content
-            if current_content:
-                yield {
-                    "phase": current_phase or "unknown",
-                    "content": current_content.strip()
-                }
     
     async def stream_evolution_scenario(self, initial_state: Dict[str, Any], years: int = 10) -> AsyncGenerator[Dict[str, Any], None]:
         """Stream a progressive evolution scenario over multiple years."""
@@ -2978,50 +2912,25 @@ class WorldStateStreamer:
             - Technological developments
             
             Maintain matriarchal power structures throughout but show complexity and change.
+            
+            Format as:
+            Year 1: [developments]
+            Year 2: [developments]
+            etc.
             """
             
-            # Set up the streaming result
-            result = await self.streamer_agent.stream(prompt, context={})
+            # Get the full result
+            result = await Runner.run(self.streamer_agent, prompt, context={})
+            content = result.final_output
             
-            # Process the stream
-            current_year = 1
-            current_content = ""
+            # Parse and yield year by year
+            year_pattern = re.compile(r"Year (\d+):(.*?)(?=Year \d+:|$)", re.DOTALL)
+            matches = year_pattern.findall(content)
             
-            async for chunk in result:
-                content = chunk.content
-                
-                # Check for year indicators
-                year_match = re.search(r"Year (\d+)", content)
-                if year_match:
-                    potential_year = int(year_match.group(1))
-                    if potential_year != current_year and potential_year <= years:
-                        # If we had accumulated content, yield it before switching
-                        if current_content:
-                            yield {
-                                "year": current_year,
-                                "content": current_content.strip()
-                            }
-                        
-                        current_year = potential_year
-                        current_content = content
-                    else:
-                        # Continue accumulating content
-                        current_content += content
-                else:
-                    # Continue accumulating content
-                    current_content += content
-                
-                # Periodically yield content even within the same year
-                if len(current_content) > 300:
+            for year_str, year_content in matches:
+                year = int(year_str)
+                if year <= years:
                     yield {
-                        "year": current_year,
-                        "content": current_content.strip()
+                        "year": year,
+                        "content": year_content.strip()
                     }
-                    current_content = ""
-            
-            # Yield any remaining content
-            if current_content:
-                yield {
-                    "year": current_year,
-                    "content": current_content.strip()
-                }
