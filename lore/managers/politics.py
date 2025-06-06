@@ -1638,14 +1638,7 @@ class WorldPoliticsManager(BaseLoreManager):
     @function_tool
     async def evolve_all_conflicts(self, ctx, days_passed: int = 30) -> Dict[str, Any]:
         """
-        Evolve all active conflicts after a certain number of days,
-        using an LLM to decide how each conflict changes.
-        
-        Args:
-            days_passed: Number of days to simulate passing
-            
-        Returns:
-            Dictionary with evolution results
+        Evolve all active conflicts with proper state tracking and canon integration.
         """
         with trace(
             "EvolveAllConflicts",
@@ -1656,89 +1649,162 @@ class WorldPoliticsManager(BaseLoreManager):
             active_conflicts = await self.get_active_conflicts(run_ctx)
             all_nations = await self.get_all_nations(run_ctx)
             nations_by_id = {n["id"]: n for n in all_nations}
-    
+            
+            # Get LoreSystem for canonical changes
+            from lore.core.lore_system import LoreSystem
+            lore_system = await LoreSystem.get_instance(ctx.user_id, ctx.conversation_id)
+            
             evolution_agent = Agent(
                 name="ConflictEvolutionAgent",
-                instructions="You evolve international conflicts over time in a matriarchal fantasy world.",
-                model="gpt-4.1-nano",
+                instructions="""You evolve international conflicts over time in a matriarchal fantasy world.
+                Consider realistic progression, diplomatic efforts, and power dynamics.""",
+                model="gpt-4o-mini",
                 model_settings=ModelSettings(temperature=0.8)
             )
-    
+            
             evolution_results = {
                 "days_passed": days_passed,
                 "evolved_conflicts": [],
                 "resolved_conflicts": [],
                 "new_developments": [],
-                "status_changes": []
+                "status_changes": [],
+                "territorial_changes": [],
+                "leadership_changes": []
             }
-    
-            for conflict in active_conflicts:
-                conflict_id = conflict["id"]
-                involved_nation_ids = conflict.get("involved_nations", [])
-                involved_nations = [
-                    nations_by_id.get(nid, {"id": nid, "name": "Unknown"})
-                    for nid in involved_nation_ids
-                ]
-    
-                prompt = f"""
-                Evolve this conflict over {days_passed} days:
-    
-                CONFLICT:
-                {json.dumps(conflict, indent=2)}
-    
-                INVOLVED NATIONS:
-                {json.dumps(involved_nations, indent=2)}
-    
-                Consider:
-                - current status: {conflict.get('status','active')}
-                - severity: {conflict.get('severity',5)}/10
-                - realistic progression and diplomacy
-                - matriarchal power structure
-                - possible resolution
-    
-                Return JSON:
-                - conflict_id: {conflict_id}
-                - new_status (active, escalating, resolved, etc.)
-                - severity_change: int from -3 to +3
-                - new_developments: array
-                - casualties_update
-                - economic_impact_update
-                - diplomatic_consequences_update
-                - resolution_details (if resolved)
-                """
-    
-                run_config = RunConfig(workflow_name="ConflictEvolution")
-                result = await Runner.run(evolution_agent, prompt, context=run_ctx.context, run_config=run_config)
-    
-                try:
-                    evo_data = json.loads(result.final_output)
-                    old_status = conflict.get("status","active")
-                    new_status = evo_data.get("new_status", old_status)
-                    severity_change = evo_data.get("severity_change", 0)
-                    old_sev = conflict.get("severity",5)
-                    new_severity = max(1, min(10, old_sev + severity_change))
-    
-                    was_resolved = new_status.lower() == "resolved"
-    
-                    if old_status != new_status:
-                        evolution_results["status_changes"].append({
-                            "conflict_id": conflict_id,
-                            "conflict_name": conflict.get("name","Unnamed"),
-                            "old_status": old_status,
-                            "new_status": new_status
-                        })
-    
-                    new_devs = evo_data.get("new_developments",[])
-                    if new_devs:
-                        evolution_results["new_developments"].append({
-                            "conflict_id": conflict_id,
-                            "conflict_name": conflict.get("name","Unnamed"),
-                            "developments": new_devs
-                        })
-    
-                    # Update DB
-                    async with self.get_connection_pool() as pool:
-                        async with pool.acquire() as conn:
+            
+            async with self.get_connection_pool() as pool:
+                async with pool.acquire() as conn:
+                    for conflict in active_conflicts:
+                        conflict_id = conflict["id"]
+                        involved_nation_ids = conflict.get("involved_nations", [])
+                        involved_nations = [
+                            nations_by_id.get(nid, {"id": nid, "name": "Unknown"})
+                            for nid in involved_nation_ids
+                        ]
+                        
+                        # Get conflict history
+                        conflict_history = await conn.fetch("""
+                            SELECT * FROM ConflictNews
+                            WHERE conflict_id = $1
+                            ORDER BY publication_date DESC
+                            LIMIT 10
+                        """, conflict_id)
+                        
+                        prompt = f"""
+                        Evolve this conflict over {days_passed} days:
+                        
+                        CONFLICT:
+                        {json.dumps(conflict, indent=2)}
+                        
+                        INVOLVED NATIONS:
+                        {json.dumps(involved_nations, indent=2)}
+                        
+                        RECENT HISTORY:
+                        {json.dumps([dict(h) for h in conflict_history[:5]], indent=2)}
+                        
+                        Consider:
+                        - Current severity: {conflict.get('severity', 5)}/10
+                        - Matriarchal power structures in involved nations
+                        - Realistic progression based on the conflict type
+                        - Possibility of escalation, stalemate, or resolution
+                        - Territorial changes if applicable
+                        - Leadership challenges or changes
+                        - Third-party interventions
+                        
+                        Return JSON with:
+                        - conflict_id: {conflict_id}
+                        - new_status: (active, escalating, de-escalating, stalemate, resolved)
+                        - severity_change: integer from -3 to +3
+                        - new_developments: array of significant events
+                        - casualties_update: description
+                        - economic_impact_update: description
+                        - diplomatic_consequences_update: description
+                        - territorial_changes: array of {from_nation, to_nation, territory}
+                        - leadership_challenges: array of {nation_id, description}
+                        - third_party_involvement: array of {nation_id, role}
+                        - resolution_details: (if resolved)
+                        - peace_terms: (if resolved)
+                        """
+                        
+                        run_config = RunConfig(workflow_name="ConflictEvolution")
+                        result = await Runner.run(evolution_agent, prompt, context=run_ctx.context, run_config=run_config)
+                        
+                        try:
+                            evo_data = json.loads(result.final_output)
+                            old_status = conflict.get("status", "active")
+                            new_status = evo_data.get("new_status", old_status)
+                            severity_change = evo_data.get("severity_change", 0)
+                            old_sev = conflict.get("severity", 5)
+                            new_severity = max(1, min(10, old_sev + severity_change))
+                            
+                            was_resolved = new_status.lower() == "resolved"
+                            
+                            # Track status changes
+                            if old_status != new_status:
+                                evolution_results["status_changes"].append({
+                                    "conflict_id": conflict_id,
+                                    "conflict_name": conflict.get("name", "Unnamed"),
+                                    "old_status": old_status,
+                                    "new_status": new_status
+                                })
+                            
+                            # Process new developments
+                            new_devs = evo_data.get("new_developments", [])
+                            if new_devs:
+                                evolution_results["new_developments"].append({
+                                    "conflict_id": conflict_id,
+                                    "conflict_name": conflict.get("name", "Unnamed"),
+                                    "developments": new_devs
+                                })
+                            
+                            # Handle territorial changes through LoreSystem
+                            territorial_changes = evo_data.get("territorial_changes", [])
+                            for change in territorial_changes:
+                                if all(k in change for k in ["from_nation", "to_nation", "territory"]):
+                                    # Use LoreSystem to handle the territorial change
+                                    change_result = await lore_system.propose_and_enact_change(
+                                        ctx=ctx,
+                                        entity_type="TerritorialControl",
+                                        entity_identifier={
+                                            "territory_name": change["territory"],
+                                            "controlling_nation": change["from_nation"]
+                                        },
+                                        updates={"controlling_nation": change["to_nation"]},
+                                        reason=f"Territory changed hands due to conflict: {conflict.get('name')}"
+                                    )
+                                    
+                                    evolution_results["territorial_changes"].append({
+                                        "conflict_id": conflict_id,
+                                        "change": change,
+                                        "result": change_result
+                                    })
+                            
+                            # Handle leadership challenges
+                            leadership_challenges = evo_data.get("leadership_challenges", [])
+                            for challenge in leadership_challenges:
+                                if "nation_id" in challenge:
+                                    # Log as a potential future event
+                                    await conn.execute("""
+                                        INSERT INTO PotentialEvents (
+                                            event_type, nation_id, description, 
+                                            trigger_conditions, probability, data
+                                        )
+                                        VALUES ($1, $2, $3, $4, $5, $6)
+                                    """,
+                                        "leadership_challenge",
+                                        challenge["nation_id"],
+                                        challenge.get("description", "Leadership under pressure"),
+                                        json.dumps({"conflict_id": conflict_id, "severity": new_severity}),
+                                        min(0.1 * new_severity, 0.9),  # Higher severity = higher probability
+                                        json.dumps(challenge)
+                                    )
+                                    
+                                    evolution_results["leadership_changes"].append(challenge)
+                            
+                            # Update the conflict in database
+                            current_developments = conflict.get("recent_developments", [])
+                            all_developments = current_developments + new_devs
+                            
                             await conn.execute("""
                                 UPDATE NationalConflicts
                                 SET status = $1,
@@ -1746,46 +1812,143 @@ class WorldPoliticsManager(BaseLoreManager):
                                     current_casualties = $3,
                                     economic_impact = $4,
                                     diplomatic_consequences = $5,
-                                    recent_developments = recent_developments || $6,
-                                    end_date = CASE WHEN $7 = TRUE THEN $8 ELSE end_date END
-                                WHERE id = $9
+                                    recent_developments = $6,
+                                    end_date = CASE WHEN $7 = TRUE THEN $8 ELSE end_date END,
+                                    potential_resolution = $9
+                                WHERE id = $10
                             """,
                                 new_status,
                                 new_severity,
                                 evo_data.get("casualties_update", conflict.get("current_casualties")),
                                 evo_data.get("economic_impact_update", conflict.get("economic_impact")),
                                 evo_data.get("diplomatic_consequences_update", conflict.get("diplomatic_consequences")),
-                                new_devs,
+                                all_developments[-20:],  # Keep last 20 developments
                                 was_resolved,
-                                "Recently",  # or an actual date string
+                                datetime.now().strftime("%Y-%m-%d") if was_resolved else None,
+                                evo_data.get("resolution_details", conflict.get("potential_resolution")),
                                 conflict_id
                             )
-    
-                            # Possibly generate a news item from one involved nation's perspective
+                            
+                            # Handle third-party involvement
+                            third_parties = evo_data.get("third_party_involvement", [])
+                            for party in third_parties:
+                                if "nation_id" in party:
+                                    # Add to involved nations if not already there
+                                    if party["nation_id"] not in involved_nation_ids:
+                                        involved_nation_ids.append(party["nation_id"])
+                                        await conn.execute("""
+                                            UPDATE NationalConflicts
+                                            SET involved_nations = $1
+                                            WHERE id = $2
+                                        """, involved_nation_ids, conflict_id)
+                            
+                            # Generate news about major developments
                             if new_devs and involved_nations:
-                                await self._generate_conflict_update_news(
-                                    run_ctx, conflict_id, conflict, evo_data, involved_nations[0]
-                                )
-    
-                    updated_conflict = {**conflict,
-                                        "status": new_status,
-                                        "severity": new_severity,
-                                        "new_developments": new_devs}
-    
-                    if was_resolved:
-                        evolution_results["resolved_conflicts"].append({
-                            "conflict_id": conflict_id,
-                            "conflict_name": conflict.get("name","Unnamed"),
-                            "resolution_details": evo_data.get("resolution_details","The conflict resolved.")
-                        })
-                    else:
-                        evolution_results["evolved_conflicts"].append(updated_conflict)
-    
-                except Exception as e:
-                    logger.error(f"Error evolving conflict {conflict_id}: {e}")
-    
+                                for i, dev in enumerate(new_devs[:3]):  # Limit to 3 news items
+                                    news_nation = involved_nations[i % len(involved_nations)]
+                                    await self._generate_conflict_update_news(
+                                        run_ctx, conflict_id, 
+                                        {**conflict, "new_development": dev},
+                                        evo_data, news_nation
+                                    )
+                            
+                            # Handle resolution
+                            if was_resolved:
+                                evolution_results["resolved_conflicts"].append({
+                                    "conflict_id": conflict_id,
+                                    "conflict_name": conflict.get("name", "Unnamed"),
+                                    "resolution_details": evo_data.get("resolution_details"),
+                                    "peace_terms": evo_data.get("peace_terms", [])
+                                })
+                                
+                                # Update international relations
+                                if len(involved_nation_ids) >= 2:
+                                    for i in range(len(involved_nation_ids)):
+                                        for j in range(i + 1, len(involved_nation_ids)):
+                                            await self._update_post_conflict_relations(
+                                                involved_nation_ids[i],
+                                                involved_nation_ids[j],
+                                                conflict,
+                                                evo_data
+                                            )
+                            else:
+                                evolution_results["evolved_conflicts"].append({
+                                    **conflict,
+                                    "status": new_status,
+                                    "severity": new_severity,
+                                    "new_developments": new_devs
+                                })
+                            
+                        except Exception as e:
+                            logger.error(f"Error evolving conflict {conflict_id}: {e}")
+            
+            # Invalidate caches
             self.invalidate_cache("active_conflicts")
+            for nation_id in set(n["id"] for c in evolution_results["evolved_conflicts"] 
+                               for n in nations_by_id.values() 
+                               if n["id"] in c.get("involved_nations", [])):
+                self.invalidate_cache(f"nation_politics_{nation_id}")
+            
             return evolution_results
+
+    async def _update_post_conflict_relations(
+        self,
+        nation1_id: int,
+        nation2_id: int,
+        conflict: Dict[str, Any],
+        resolution_data: Dict[str, Any]
+    ) -> None:
+        """Update relations between nations after conflict resolution."""
+        async with self.get_connection_pool() as pool:
+            async with pool.acquire() as conn:
+                # Get existing relation
+                relation = await conn.fetchrow("""
+                    SELECT * FROM InternationalRelations
+                    WHERE (nation1_id = $1 AND nation2_id = $2)
+                       OR (nation1_id = $2 AND nation2_id = $1)
+                """, nation1_id, nation2_id)
+                
+                # Calculate relationship change based on resolution
+                base_quality = relation["relationship_quality"] if relation else 5
+                
+                # Determine change based on conflict outcome
+                if resolution_data.get("peace_terms"):
+                    # Negotiated peace
+                    quality_change = 1
+                else:
+                    # One-sided victory
+                    quality_change = -2
+                
+                new_quality = max(1, min(10, base_quality + quality_change))
+                
+                # Update or create relation
+                if relation:
+                    await conn.execute("""
+                        UPDATE InternationalRelations
+                        SET relationship_quality = $1,
+                            notable_conflicts = array_append(notable_conflicts, $2),
+                            description = description || E'\n\n' || $3
+                        WHERE id = $4
+                    """,
+                        new_quality,
+                        conflict.get("name", "Unnamed conflict"),
+                        f"Relationship affected by resolution of {conflict.get('name')}: {resolution_data.get('resolution_details', 'Conflict ended')}",
+                        relation["id"]
+                    )
+                else:
+                    await conn.execute("""
+                        INSERT INTO InternationalRelations (
+                            nation1_id, nation2_id, relationship_type,
+                            relationship_quality, description, notable_conflicts
+                        )
+                        VALUES ($1, $2, $3, $4, $5, $6)
+                    """,
+                        nation1_id, nation2_id,
+                        "post-conflict",
+                        new_quality,
+                        f"Relationship established after {conflict.get('name')}",
+                        [conflict.get("name", "Unnamed conflict")]
+                    )
 
     async def _generate_conflict_update_news(
         self,
