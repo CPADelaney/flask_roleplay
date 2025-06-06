@@ -70,7 +70,7 @@ class QueryConditions(BaseModel):
     """Model for query conditions"""
     # Use specific fields instead of arbitrary dict
     field_name: str
-    field_value: Any
+    field_value: Union[str, int, float, bool, List[Union[str, int, float, bool]]]
     operator: str = "="  # =, >, <, >=, <=, !=, LIKE, IN
 
 class QueryRecordsInput(BaseModel):
@@ -109,7 +109,7 @@ class ValidationResult(BaseModel):
 class BatchUpdateItem(BaseModel):
     """Model for batch update items"""
     column: str
-    value: Any
+    value: Union[str, int, float, bool, None]
     id: int
 
 # ------------------------------------------------------------------------
@@ -690,7 +690,7 @@ class BaseLoreManager:
     # ---------------------------
 
     @staticmethod
-    @function_tool
+    @function_tool(strict_mode=False)
     async def create_record_tool(ctx: RunContextWrapper, input_data: CreateRecordInput) -> int:
         """
         Agent-callable tool to create a record.
@@ -730,7 +730,7 @@ class BaseLoreManager:
         return None
 
     @staticmethod
-    @function_tool
+    @function_tool(strict_mode=False)
     async def update_record_tool(ctx: RunContextWrapper, input_data: UpdateRecordInput) -> bool:
         """
         Agent-callable tool to update a record.
@@ -746,7 +746,7 @@ class BaseLoreManager:
         return await mgr.update_record(input_data)
 
     @staticmethod
-    @function_tool
+    @function_tool(strict_mode=False)
     async def query_records_tool(ctx: RunContextWrapper, input_data: QueryRecordsInput) -> List[Dict[str, Any]]:
         """
         Agent-callable tool to query records.
