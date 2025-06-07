@@ -387,12 +387,12 @@ async def create_all_tables():
                     description TEXT,
                     values TEXT[],
                     goals TEXT[],
-                    hierarchy TEXT DEFAULT 'informal',  -- Can be 'informal', 'democratic', 'strict', etc.
+                    hierarchy TEXT DEFAULT 'informal', 
                     resources TEXT[],
-                    territory TEXT,  -- Can be a location name, not necessarily political territory
-                    meeting_schedule TEXT,  -- For local groups
+                    territory TEXT,  
+                    meeting_schedule TEXT,  
                     membership_requirements TEXT[],
-                    rivals INTEGER[],  -- Can be competing clubs, not just political rivals
+                    rivals INTEGER[],  
                     allies INTEGER[],
                     public_reputation TEXT DEFAULT 'neutral',
                     secret_activities TEXT[],
