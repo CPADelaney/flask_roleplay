@@ -21,6 +21,8 @@ from memory.wrapper import MemorySystem
 from nyx.nyx_governance import AgentType, DirectiveType
 from nyx.governance_helpers import with_governance, with_governance_permission, with_action_reporting
 from db.connection import get_db_connection_context
+from lore.core import canon
+from lore.lore_system import LoreSystem
 
 logger = logging.getLogger(__name__)
 
@@ -117,48 +119,46 @@ class LoreImpactAnalyzer:
         }
         
     async def _get_npc_state(self, npc_id: int) -> Dict[str, Any]:
-        """Get current state of an NPC."""
+        """Get current state of an NPC - READ ONLY operation."""
         try:
             async with get_db_connection_context() as conn:
-                async with conn.cursor() as cursor:
-                    await cursor.execute(
-                        """
-                        SELECT npc_name, dominance, cruelty, personality_traits,
-                               current_location, mask_integrity
-                        FROM NPCStats
-                        WHERE npc_id = %s AND user_id = %s AND conversation_id = %s
-                        """,
-                        (npc_id, self.user_id, self.conversation_id)
-                    )
-                    row = await cursor.fetchone()
-                    
-                    if not row:
-                        return {}
-                    
-                    # Parse personality traits if needed
-                    personality_traits = []
-                    if row[3] and isinstance(row[3], str):
-                        try:
-                            personality_traits = json.loads(row[3])
-                        except json.JSONDecodeError:
-                            pass
-                    elif row[3]:
-                        personality_traits = row[3]
-                    
-                    return {
-                        "npc_name": row[0],
-                        "dominance": row[1],
-                        "cruelty": row[2],
-                        "personality_traits": personality_traits,
-                        "current_location": row[4],
-                        "mask_integrity": row[5] if row[5] is not None else 100
-                    }
+                row = await conn.fetchrow(
+                    """
+                    SELECT npc_name, dominance, cruelty, personality_traits,
+                           current_location, mask_integrity
+                    FROM NPCStats
+                    WHERE npc_id = $1 AND user_id = $2 AND conversation_id = $3
+                    """,
+                    npc_id, self.user_id, self.conversation_id
+                )
+                
+                if not row:
+                    return {}
+                
+                # Parse personality traits if needed
+                personality_traits = []
+                if row['personality_traits'] and isinstance(row['personality_traits'], str):
+                    try:
+                        personality_traits = json.loads(row['personality_traits'])
+                    except json.JSONDecodeError:
+                        pass
+                elif row['personality_traits']:
+                    personality_traits = row['personality_traits']
+                
+                return {
+                    "npc_name": row['npc_name'],
+                    "dominance": row['dominance'],
+                    "cruelty": row['cruelty'],
+                    "personality_traits": personality_traits,
+                    "current_location": row['current_location'],
+                    "mask_integrity": row['mask_integrity'] if row['mask_integrity'] is not None else 100
+                }
         except Exception as e:
             logger.error(f"Error getting NPC state: {e}")
             return {}
         
     async def _get_npc_beliefs(self, npc_id: int) -> Dict[str, Any]:
-        """Get current beliefs of an NPC."""
+        """Get current beliefs of an NPC - READ ONLY operation."""
         try:
             memory_system = await MemorySystem.get_instance(self.user_id, self.conversation_id)
             beliefs = await memory_system.get_beliefs(
@@ -335,6 +335,36 @@ class LoreImpactAnalyzer:
         # Placeholder implementation
         return []
 
+    async def _get_relationship(self, npc1_id: int, npc2_id: int) -> Dict[str, Any]:
+        """Get the relationship between two NPCs - READ ONLY operation."""
+        try:
+            async with get_db_connection_context() as conn:
+                row = await conn.fetchrow("""
+                    SELECT link_type, link_level 
+                    FROM SocialLinks
+                    WHERE user_id = $1 AND conversation_id = $2
+                    AND (
+                        (entity1_type = 'npc' AND entity1_id = $3 AND entity2_type = 'npc' AND entity2_id = $4)
+                        OR
+                        (entity1_type = 'npc' AND entity1_id = $4 AND entity2_type = 'npc' AND entity2_id = $3)
+                    )
+                """, self.user_id, self.conversation_id, npc1_id, npc2_id, npc2_id, npc1_id)
+                
+                if row:
+                    return {
+                        "link_type": row['link_type'],
+                        "trust": row['link_level']
+                    }
+                else:
+                    # Default relationship
+                    return {
+                        "link_type": "neutral",
+                        "trust": 50
+                    }
+        except Exception as e:
+            logger.error(f"Error getting relationship: {e}")
+            return {"link_type": "neutral", "trust": 50}
+
 class LorePropagationSystem:
     """Manages lore propagation through NPC networks."""
     
@@ -421,7 +451,7 @@ class LorePropagationSystem:
             source_id = path[i]
             target_id = path[i + 1]
             
-            # Get relationship between these NPCs
+            # Get relationship between these NPCs - READ ONLY operation
             relationship = await self._get_relationship(source_id, target_id)
             trust_level = relationship.get("trust", 50) / 100.0
             
@@ -436,33 +466,31 @@ class LorePropagationSystem:
         return max(0.1, min(1.0, effectiveness))
         
     async def _get_relationship(self, npc1_id: int, npc2_id: int) -> Dict[str, Any]:
-        """Get the relationship between two NPCs."""
+        """Get the relationship between two NPCs - READ ONLY operation."""
         try:
             async with get_db_connection_context() as conn:
-                async with conn.cursor() as cursor:
-                    await cursor.execute("""
-                        SELECT link_type, link_level 
-                        FROM SocialLinks
-                        WHERE user_id = %s AND conversation_id = %s
-                        AND (
-                            (entity1_type = 'npc' AND entity1_id = %s AND entity2_type = 'npc' AND entity2_id = %s)
-                            OR
-                            (entity1_type = 'npc' AND entity1_id = %s AND entity2_type = 'npc' AND entity2_id = %s)
-                        )
-                    """, (self.user_id, self.conversation_id, npc1_id, npc2_id, npc2_id, npc1_id))
-                    
-                    row = await cursor.fetchone()
-                    if row:
-                        return {
-                            "link_type": row[0],
-                            "trust": row[1]
-                        }
-                    else:
-                        # Default relationship
-                        return {
-                            "link_type": "neutral",
-                            "trust": 50
-                        }
+                row = await conn.fetchrow("""
+                    SELECT link_type, link_level 
+                    FROM SocialLinks
+                    WHERE user_id = $1 AND conversation_id = $2
+                    AND (
+                        (entity1_type = 'npc' AND entity1_id = $3 AND entity2_type = 'npc' AND entity2_id = $4)
+                        OR
+                        (entity1_type = 'npc' AND entity1_id = $4 AND entity2_type = 'npc' AND entity2_id = $3)
+                    )
+                """, self.user_id, self.conversation_id, npc1_id, npc2_id, npc2_id, npc1_id)
+                
+                if row:
+                    return {
+                        "link_type": row['link_type'],
+                        "trust": row['link_level']
+                    }
+                else:
+                    # Default relationship
+                    return {
+                        "link_type": "neutral",
+                        "trust": 50
+                    }
         except Exception as e:
             logger.error(f"Error getting relationship: {e}")
             return {"link_type": "neutral", "trust": 50}
@@ -492,85 +520,79 @@ class LoreContextManager:
         return context
         
     async def _fetch_lore_context(self, npc_id: int, context_type: str) -> Dict[str, Any]:
-        """Fetch lore context from the lore system."""
+        """Fetch lore context from the lore system - READ ONLY operation."""
         try:
             async with get_db_connection_context() as conn:
-                async with conn.cursor() as cursor:
-                    # Get basic NPC info
-                    await cursor.execute("""
-                        SELECT npc_name, dominance, cruelty
-                        FROM NPCStats
-                        WHERE npc_id = %s AND user_id = %s AND conversation_id = %s
-                    """, (npc_id, self.user_id, self.conversation_id))
+                # Get basic NPC info
+                npc_row = await conn.fetchrow("""
+                    SELECT npc_name, dominance, cruelty
+                    FROM NPCStats
+                    WHERE npc_id = $1 AND user_id = $2 AND conversation_id = $3
+                """, npc_id, self.user_id, self.conversation_id)
+                
+                if not npc_row:
+                    return {}
                     
-                    npc_row = await cursor.fetchone()
-                    if not npc_row:
-                        return {}
-                        
-                    npc_name = npc_row[0]
+                npc_name = npc_row['npc_name']
+                
+                # Get lore knowledge for this NPC
+                knowledge_rows = await conn.fetch("""
+                    SELECT lore_type, lore_id, knowledge_level
+                    FROM LoreKnowledge
+                    WHERE entity_type = 'npc' AND entity_id = $1
+                    AND user_id = $2 AND conversation_id = $3
+                """, npc_id, self.user_id, self.conversation_id)
+                
+                # Build context object
+                context = {
+                    "npc_id": npc_id,
+                    "npc_name": npc_name,
+                    "context_type": context_type,
+                    "knowledge": []
+                }
+                
+                # Add knowledge items
+                for row in knowledge_rows:
+                    lore_type, lore_id, knowledge_level = row['lore_type'], row['lore_id'], row['knowledge_level']
                     
-                    # Get lore knowledge for this NPC
-                    await cursor.execute("""
-                        SELECT lore_type, lore_id, knowledge_level
-                        FROM LoreKnowledge
-                        WHERE entity_type = 'npc' AND entity_id = %s
-                        AND user_id = %s AND conversation_id = %s
-                    """, (npc_id, self.user_id, self.conversation_id))
+                    # Get lore details
+                    lore_row = await conn.fetchrow("""
+                        SELECT name, description 
+                        FROM Lore
+                        WHERE lore_type = $1 AND lore_id = $2
+                        AND user_id = $3 AND conversation_id = $4
+                    """, lore_type, lore_id, self.user_id, self.conversation_id)
                     
-                    knowledge_rows = await cursor.fetchall()
+                    if lore_row:
+                        context["knowledge"].append({
+                            "lore_type": lore_type,
+                            "lore_id": lore_id,
+                            "name": lore_row['name'],
+                            "description": lore_row['description'],
+                            "knowledge_level": knowledge_level
+                        })
+                
+                # Add additional context based on context_type
+                if context_type == "change_impact":
+                    # Add relationships
+                    relationship_rows = await conn.fetch("""
+                        SELECT entity2_id, link_type, link_level
+                        FROM SocialLinks
+                        WHERE user_id = $1 AND conversation_id = $2
+                        AND entity1_type = 'npc' AND entity1_id = $3
+                        AND entity2_type = 'npc'
+                    """, self.user_id, self.conversation_id, npc_id)
                     
-                    # Build context object
-                    context = {
-                        "npc_id": npc_id,
-                        "npc_name": npc_name,
-                        "context_type": context_type,
-                        "knowledge": []
-                    }
-                    
-                    # Add knowledge items
-                    for row in knowledge_rows:
-                        lore_type, lore_id, knowledge_level = row
-                        
-                        # Get lore details
-                        await cursor.execute("""
-                            SELECT name, description 
-                            FROM Lore
-                            WHERE lore_type = %s AND lore_id = %s
-                            AND user_id = %s AND conversation_id = %s
-                        """, (lore_type, lore_id, self.user_id, self.conversation_id))
-                        
-                        lore_row = await cursor.fetchone()
-                        if lore_row:
-                            context["knowledge"].append({
-                                "lore_type": lore_type,
-                                "lore_id": lore_id,
-                                "name": lore_row[0],
-                                "description": lore_row[1],
-                                "knowledge_level": knowledge_level
-                            })
-                    
-                    # Add additional context based on context_type
-                    if context_type == "change_impact":
-                        # Add relationships
-                        await cursor.execute("""
-                            SELECT entity2_id, link_type, link_level
-                            FROM SocialLinks
-                            WHERE user_id = %s AND conversation_id = %s
-                            AND entity1_type = 'npc' AND entity1_id = %s
-                            AND entity2_type = 'npc'
-                        """, (self.user_id, self.conversation_id, npc_id))
-                        
-                        relationship_rows = await cursor.fetchall()
-                        context["relationships"] = [
-                            {
-                                "npc_id": row[0],
-                                "link_type": row[1],
-                                "link_level": row[2]
-                            }
-                            for row in relationship_rows
-                        ]
-                    
-                    return context
+                    context["relationships"] = [
+                        {
+                            "npc_id": row['entity2_id'],
+                            "link_type": row['link_type'],
+                            "link_level": row['link_level']
+                        }
+                        for row in relationship_rows
+                    ]
+                
+                return context
         except Exception as e:
             logger.error(f"Error fetching lore context: {e}")
             return {}
