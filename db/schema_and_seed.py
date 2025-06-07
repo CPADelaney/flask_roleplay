@@ -377,6 +377,40 @@ async def create_all_tables():
                     FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
                 );
                 ''',
+                '''
+                CREATE TABLE IF NOT EXISTS Factions (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER NOT NULL,
+                    conversation_id INTEGER NOT NULL,
+                    name TEXT NOT NULL,
+                    type TEXT DEFAULT 'organization',
+                    description TEXT,
+                    values TEXT[],
+                    goals TEXT[],
+                    hierarchy TEXT,
+                    resources TEXT[],
+                    territory TEXT[],
+                    rivals INTEGER[],
+                    allies INTEGER[],
+                    public_reputation TEXT,
+                    secret_activities TEXT[],
+                    power_level INTEGER DEFAULT 5,
+                    influence_scope TEXT DEFAULT 'local',
+                    recruitment_methods TEXT[],
+                    leadership_structure JSONB,
+                    founding_story TEXT,
+                    embedding VECTOR(1536),
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
+                    UNIQUE(user_id, conversation_id, name)
+                );
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_factions_name
+                ON Factions(user_id, conversation_id, lower(name));
+                );
+                ''',
                 # ---------- RESOURCE HISTORY ----------
                 '''
                 CREATE TABLE IF NOT EXISTS ResourceHistoryLog (
