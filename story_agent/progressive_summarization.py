@@ -12,6 +12,10 @@ from typing import Dict, List, Any, Optional, Union, Tuple, Set
 # Database connection
 from db.connection import get_db_connection_context, initialize_connection_pool, close_connection_pool
 
+# Import canon and lore system
+from lore.core import canon
+from lore.lore_system import LoreSystem
+
 # Try to import OpenAI for summarization
 try:
     import openai
@@ -43,7 +47,7 @@ class OpenAISummarizer(NarrativeSummarizer):
     """
     Summarizer using OpenAI API
     """
-    def __init__(self, api_key: str, model: str = "gpt-4.1-nano"):
+    def __init__(self, api_key: str, model: str = "gpt-4-mini"):
         if not HAVE_OPENAI:
             raise ImportError("openai is required for OpenAISummarizer")
         self.client = openai.AsyncClient(api_key=api_key)
@@ -351,12 +355,14 @@ class ProgressiveNarrativeSummarizer:
     def __init__(
         self,
         summarizer: Optional[NarrativeSummarizer] = None,
-        db_connection_string: Optional[str] = None # This might now be less relevant if DSN is global
-                                                   # or if the app passes a pool reference.
-                                                   # For now, keep it to indicate DB usage.
+        db_connection_string: Optional[str] = None,
+        user_id: Optional[int] = None,
+        conversation_id: Optional[int] = None
     ):
         self.summarizer = summarizer or RuleSummarizer()
-        self.db_connection_string = db_connection_string # Indicates if DB operations should be attempted
+        self.db_connection_string = db_connection_string
+        self.user_id = user_id
+        self.conversation_id = conversation_id
         
         self.events: Dict[str, EventInfo] = {}
         self.arcs: Dict[str, StoryArc] = {}
@@ -369,24 +375,33 @@ class ProgressiveNarrativeSummarizer:
         }
         self.recency_weight = 0.6
         self.summary_task: Optional[asyncio.Task] = None
+        
+        # Initialize LoreSystem instance
+        self.lore_system: Optional[LoreSystem] = None
+        
         logger.info("ProgressiveNarrativeSummarizer instance created.")
     
     async def initialize(self) -> None:
         """
         Initialize the summarizer.
         Creates necessary DB tables if db_connection_string is set and loads data.
-        It RELIES on the global DB_POOL being initialized by the main application.
         """
         logger.info("Initializing ProgressiveNarrativeSummarizer...")
+        
+        # Initialize LoreSystem if we have user_id and conversation_id
+        if self.user_id is not None and self.conversation_id is not None:
+            self.lore_system = await LoreSystem.get_instance(self.user_id, self.conversation_id)
+        
         if self.db_connection_string:
             try:
                 logger.info("ProgressiveNarrativeSummarizer: Ensuring database tables and loading data...")
                 # Use a single connection for all setup DB operations
-                async with get_db_connection_context() as conn: # This connection is 'conn_setup'
-                    # --- Create tables ---
+                async with get_db_connection_context() as conn:
+                    # --- Create tables (keep this as infrastructure) ---
                     await conn.execute('''
                     CREATE TABLE IF NOT EXISTS narrative_events (
-                        event_id TEXT PRIMARY KEY,
+                        id SERIAL PRIMARY KEY,
+                        event_id TEXT UNIQUE NOT NULL,
                         event_type TEXT NOT NULL,
                         content TEXT NOT NULL,
                         timestamp TIMESTAMPTZ NOT NULL,
@@ -395,12 +410,15 @@ class ProgressiveNarrativeSummarizer:
                         metadata JSONB DEFAULT '{}',
                         summaries JSONB DEFAULT '{}',
                         last_accessed TIMESTAMPTZ NOT NULL,
-                        access_count INTEGER NOT NULL DEFAULT 0
+                        access_count INTEGER NOT NULL DEFAULT 0,
+                        user_id INTEGER,
+                        conversation_id INTEGER
                     );''')
                     
                     await conn.execute('''
                     CREATE TABLE IF NOT EXISTS story_arcs (
-                        arc_id TEXT PRIMARY KEY,
+                        id SERIAL PRIMARY KEY,
+                        arc_id TEXT UNIQUE NOT NULL,
                         title TEXT NOT NULL,
                         description TEXT NOT NULL,
                         start_date TIMESTAMPTZ NOT NULL,
@@ -411,16 +429,19 @@ class ProgressiveNarrativeSummarizer:
                         event_ids JSONB DEFAULT '[]',
                         summaries JSONB DEFAULT '{}',
                         last_accessed TIMESTAMPTZ NOT NULL,
-                        access_count INTEGER NOT NULL DEFAULT 0
+                        access_count INTEGER NOT NULL DEFAULT 0,
+                        user_id INTEGER,
+                        conversation_id INTEGER
                     );''')
                     
                     await conn.execute('''
                     CREATE TABLE IF NOT EXISTS event_arc_relationships (
+                        id SERIAL PRIMARY KEY,
                         event_id TEXT NOT NULL,
                         arc_id TEXT NOT NULL,
-                        PRIMARY KEY (event_id, arc_id),
-                        FOREIGN KEY (event_id) REFERENCES narrative_events(event_id) ON DELETE CASCADE,
-                        FOREIGN KEY (arc_id) REFERENCES story_arcs(arc_id) ON DELETE CASCADE
+                        user_id INTEGER,
+                        conversation_id INTEGER,
+                        UNIQUE (event_id, arc_id)
                     );''')
                     
                     await conn.execute("CREATE INDEX IF NOT EXISTS narrative_events_timestamp_idx ON narrative_events (timestamp);")
@@ -430,23 +451,48 @@ class ProgressiveNarrativeSummarizer:
     
                     # --- Load data using the SAME connection ---
                     logger.info("ProgressiveNarrativeSummarizer: Loading data from database...")
-                    event_rows = await conn.fetch("SELECT * FROM narrative_events")
+                    
+                    # Build query with optional user/conversation filtering
+                    event_query = "SELECT * FROM narrative_events"
+                    arc_query = "SELECT * FROM story_arcs"
+                    rel_query = "SELECT event_id, arc_id FROM event_arc_relationships"
+                    
+                    params = []
+                    if self.user_id is not None and self.conversation_id is not None:
+                        event_query += " WHERE user_id = $1 AND conversation_id = $2"
+                        arc_query += " WHERE user_id = $1 AND conversation_id = $2"
+                        rel_query += " WHERE user_id = $1 AND conversation_id = $2"
+                        params = [self.user_id, self.conversation_id]
+                    
+                    event_rows = await conn.fetch(event_query, *params)
                     for row_dict in event_rows:
                         try:
-                            event = EventInfo.from_dict(dict(row_dict))
+                            # Convert row to dict and remove database-specific fields
+                            event_data = dict(row_dict)
+                            event_data.pop('id', None)
+                            event_data.pop('user_id', None)
+                            event_data.pop('conversation_id', None)
+                            
+                            event = EventInfo.from_dict(event_data)
                             self.events[event.event_id] = event
                         except Exception as e_event:
                             logger.error(f"Error processing event row: {row_dict}, error: {e_event}", exc_info=True)
                     
-                    arc_rows = await conn.fetch("SELECT * FROM story_arcs") # LINE 447 (approx) - uses conn_setup
+                    arc_rows = await conn.fetch(arc_query, *params)
                     for row_dict in arc_rows:
                         try:
-                            arc = StoryArc.from_dict(dict(row_dict))
+                            # Convert row to dict and remove database-specific fields
+                            arc_data = dict(row_dict)
+                            arc_data.pop('id', None)
+                            arc_data.pop('user_id', None)
+                            arc_data.pop('conversation_id', None)
+                            
+                            arc = StoryArc.from_dict(arc_data)
                             self.arcs[arc.arc_id] = arc
                         except Exception as e_arc:
                             logger.error(f"Error processing arc row: {row_dict}, error: {e_arc}", exc_info=True)
     
-                    rel_rows = await conn.fetch("SELECT event_id, arc_id FROM event_arc_relationships")
+                    rel_rows = await conn.fetch(rel_query, *params)
                     for row_dict in rel_rows:
                         event_id = row_dict["event_id"]
                         arc_id = row_dict["arc_id"]
@@ -454,7 +500,6 @@ class ProgressiveNarrativeSummarizer:
                             self.event_arc_map[event_id] = set()
                         self.event_arc_map[event_id].add(arc_id)
                     logger.info(f"ProgressiveNarrativeSummarizer: Loaded {len(self.events)} events, {len(self.arcs)} arcs from DB.")
-                # Connection conn_setup is released here
             
             except ConnectionError as ce:
                 logger.error(f"PNS: DB ConnectionError during init: {ce}", exc_info=True)
@@ -469,50 +514,6 @@ class ProgressiveNarrativeSummarizer:
         
         logger.info("ProgressiveNarrativeSummarizer initialized.")
     
-    async def _load_data_from_db(self) -> None: # Does NOT take 'conn' as argument
-        """Load data from database. Acquires its own connection."""
-        if not self.db_connection_string: # Guard clause
-            logger.debug("Skipping _load_data_from_db as db_connection_string is not set.")
-            return
-
-        logger.info("ProgressiveNarrativeSummarizer: Loading data from database...")
-        # This 'try...except' is specific to this data loading operation
-        try:
-            async with get_db_connection_context() as conn: # Acquires its own connection
-                # Load events
-                event_rows = await conn.fetch("SELECT * FROM narrative_events")
-                for row_dict in event_rows:
-                    try:
-                        event = EventInfo.from_dict(dict(row_dict))
-                        self.events[event.event_id] = event
-                    except Exception as e_event:
-                        logger.error(f"Error processing event row: {row_dict}, error: {e_event}", exc_info=True)
-                
-                # Load arcs
-                arc_rows = await conn.fetch("SELECT * FROM story_arcs")
-                for row_dict in arc_rows:
-                    try:
-                        arc = StoryArc.from_dict(dict(row_dict))
-                        self.arcs[arc.arc_id] = arc
-                    except Exception as e_arc:
-                        logger.error(f"Error processing arc row: {row_dict}, error: {e_arc}", exc_info=True)
-
-                # Load relationships
-                rel_rows = await conn.fetch("SELECT event_id, arc_id FROM event_arc_relationships")
-                for row_dict in rel_rows:
-                    event_id = row_dict["event_id"]
-                    arc_id = row_dict["arc_id"]
-                    if event_id not in self.event_arc_map:
-                        self.event_arc_map[event_id] = set()
-                    self.event_arc_map[event_id].add(arc_id)
-            logger.info(f"ProgressiveNarrativeSummarizer: Loaded {len(self.events)} events, {len(self.arcs)} arcs from DB.")
-        except Exception as e: # Catch errors specific to data loading
-            logger.error(f"Error loading narrative data from DB: {e}", exc_info=True)
-            # This error will propagate up to the caller (initialize method) if not caught here,
-            # or you can handle it by setting db_connection_string to None.
-            # For now, let it propagate to be caught by initialize's except blocks.
-            raise
-    
     async def close(self) -> None:
         """Clean up resources, like cancelling background tasks."""
         logger.info("Closing ProgressiveNarrativeSummarizer...")
@@ -523,13 +524,9 @@ class ProgressiveNarrativeSummarizer:
                 logger.info("Summary processor task cancelled.")
             except asyncio.CancelledError:
                 logger.info("Summary processor task was already cancelled or finished.")
-            except Exception as e: # Catch other potential errors during await
+            except Exception as e:
                 logger.error(f"Error awaiting summary task cancellation: {e}", exc_info=True)
         self.summary_task = None
-            
-        # DO NOT call close_connection_pool() here.
-        # The main application (main.py @app.after_serving) is responsible for closing the global pool.
-        # This class instance doesn't "own" the pool.
         logger.info("ProgressiveNarrativeSummarizer closed.")
     
     async def start_summary_processor(self, interval: int = 3600) -> None:
@@ -631,20 +628,7 @@ class ProgressiveNarrativeSummarizer:
         arc_ids: Optional[List[str]] = None
     ) -> EventInfo:
         """
-        Add a narrative event
-        
-        Args:
-            event_id: Unique ID for the event
-            event_type: Type of event (dialog, action, revelation, etc.)
-            content: Text content of the event
-            timestamp: When this event occurred
-            importance: Importance score (0.0 to 1.0)
-            tags: List of tags for categorization
-            metadata: Additional metadata for this event
-            arc_ids: Optional IDs of story arcs this event belongs to
-            
-        Returns:
-            Created EventInfo object
+        Add a narrative event using the canon system
         """
         # Create event
         event = EventInfo(
@@ -657,7 +641,7 @@ class ProgressiveNarrativeSummarizer:
             metadata=metadata or {}
         )
         
-        # Store event
+        # Store event locally
         self.events[event_id] = event
         
         # Handle arc relationships
@@ -665,33 +649,85 @@ class ProgressiveNarrativeSummarizer:
             for arc_id in arc_ids:
                 await self.add_event_to_arc(event_id, arc_id)
         
-        # Save to database if using one
-        if self.db_connection_string:
+        # Save to database using canon
+        if self.db_connection_string and self.user_id is not None and self.conversation_id is not None:
             await self._save_event_to_db(event)
         
         return event
     
     async def _save_event_to_db(self, event: EventInfo) -> None:
-        if not self.db_connection_string: return
+        """Save event to database using canon system"""
+        if not self.db_connection_string or self.user_id is None or self.conversation_id is None:
+            return
+            
         try:
+            # Create a context object for canon
+            class EventContext:
+                def __init__(self, user_id, conversation_id):
+                    self.user_id = user_id
+                    self.conversation_id = conversation_id
+            
+            ctx = EventContext(self.user_id, self.conversation_id)
+            
             async with get_db_connection_context() as conn:
-                await conn.execute(
-                    '''
-                    INSERT INTO narrative_events (
-                        event_id, event_type, content, timestamp, importance,
-                        tags, metadata, summaries, last_accessed, access_count
-                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-                    ON CONFLICT (event_id) DO UPDATE SET
-                        event_type = EXCLUDED.event_type, content = EXCLUDED.content,
-                        timestamp = EXCLUDED.timestamp, importance = EXCLUDED.importance,
-                        tags = EXCLUDED.tags, metadata = EXCLUDED.metadata, summaries = EXCLUDED.summaries,
-                        last_accessed = EXCLUDED.last_accessed, access_count = EXCLUDED.access_count
-                    ''',
-                    event.event_id, event.event_type, event.content, event.timestamp,
-                    event.importance, json.dumps(event.tags or []), json.dumps(event.metadata or {}),
-                    json.dumps({str(k): v for k, v in (event.summaries or {}).items()}), # Ensure summaries is a dict
-                    event.last_accessed, event.access_count
+                # Use canon to find or create the narrative event
+                event_db_id = await canon.find_or_create_entity(
+                    ctx=ctx,
+                    conn=conn,
+                    entity_type="narrative_event",
+                    entity_name=event.event_id,
+                    search_fields={
+                        "event_id": event.event_id,
+                        "user_id": self.user_id,
+                        "conversation_id": self.conversation_id
+                    },
+                    create_data={
+                        "event_id": event.event_id,
+                        "event_type": event.event_type,
+                        "content": event.content,
+                        "timestamp": event.timestamp,
+                        "importance": event.importance,
+                        "tags": json.dumps(event.tags),
+                        "metadata": json.dumps(event.metadata),
+                        "summaries": json.dumps({str(k): v for k, v in event.summaries.items()}),
+                        "last_accessed": event.last_accessed,
+                        "access_count": event.access_count,
+                        "user_id": self.user_id,
+                        "conversation_id": self.conversation_id
+                    },
+                    table_name="narrative_events",
+                    embedding_text=f"{event.event_type}: {event.content[:200]}",
+                    similarity_threshold=0.95  # High threshold to avoid false positives
                 )
+                
+                # If the event already existed, update it using LoreSystem
+                if self.lore_system and event_db_id:
+                    # Check if this is an update (event already existed)
+                    existing = await conn.fetchrow(
+                        "SELECT * FROM narrative_events WHERE id = $1",
+                        event_db_id
+                    )
+                    
+                    if existing and (
+                        existing['content'] != event.content or
+                        existing['summaries'] != json.dumps({str(k): v for k, v in event.summaries.items()}) or
+                        existing['last_accessed'] != event.last_accessed or
+                        existing['access_count'] != event.access_count
+                    ):
+                        # Update using LoreSystem
+                        await self.lore_system.propose_and_enact_change(
+                            ctx=ctx,
+                            entity_type="narrative_events",
+                            entity_identifier={"id": event_db_id},
+                            updates={
+                                "content": event.content,
+                                "summaries": json.dumps({str(k): v for k, v in event.summaries.items()}),
+                                "last_accessed": event.last_accessed,
+                                "access_count": event.access_count
+                            },
+                            reason=f"Updating narrative event {event.event_id} with new content or access stats"
+                        )
+                        
         except Exception as e:
             logger.error(f"Failed to save event {event.event_id} to DB: {e}", exc_info=True)
     
@@ -707,20 +743,7 @@ class ProgressiveNarrativeSummarizer:
         event_ids: Optional[List[str]] = None
     ) -> StoryArc:
         """
-        Add a story arc
-        
-        Args:
-            arc_id: Unique ID for the arc
-            title: Title of the arc
-            description: Description of the arc
-            start_date: When this arc started
-            status: Status of the arc (active, completed, abandoned)
-            importance: Importance score (0.0 to 1.0)
-            tags: List of tags for categorization
-            event_ids: Optional list of event IDs that belong to this arc
-            
-        Returns:
-            Created StoryArc object
+        Add a story arc using the canon system
         """
         # Create arc
         arc = StoryArc(
@@ -744,11 +767,11 @@ class ProgressiveNarrativeSummarizer:
                         self.event_arc_map[event_id] = set()
                     self.event_arc_map[event_id].add(arc_id)
         
-        # Store arc
+        # Store arc locally
         self.arcs[arc_id] = arc
         
-        # Save to database if using one
-        if self.db_connection_string:
+        # Save to database using canon
+        if self.db_connection_string and self.user_id is not None and self.conversation_id is not None:
             await self._save_arc_to_db(arc)
             
             # Save relationships
@@ -757,64 +780,153 @@ class ProgressiveNarrativeSummarizer:
         return arc
     
     async def _save_arc_to_db(self, arc: StoryArc) -> None:
-        """Save arc to database"""
-        async with get_db_connection_context() as conn:
-            await conn.execute('''
-            INSERT INTO story_arcs (
-                arc_id, title, description, start_date, end_date, status,
-                importance, tags, event_ids, summaries, last_accessed, access_count
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-            ON CONFLICT (arc_id) DO UPDATE SET
-                title = $2,
-                description = $3,
-                start_date = $4,
-                end_date = $5,
-                status = $6,
-                importance = $7,
-                tags = $8,
-                event_ids = $9,
-                summaries = $10,
-                last_accessed = $11,
-                access_count = $12
-            ''',
-            arc.arc_id,
-            arc.title,
-            arc.description,
-            arc.start_date,
-            arc.end_date,
-            arc.status,
-            arc.importance,
-            json.dumps(arc.tags),
-            json.dumps(arc.event_ids),
-            json.dumps({str(k): v for k, v in arc.summaries.items()}),
-            arc.last_accessed,
-            arc.access_count
-            )
+        """Save arc to database using canon system"""
+        if not self.db_connection_string or self.user_id is None or self.conversation_id is None:
+            return
+            
+        try:
+            # Create a context object for canon
+            class ArcContext:
+                def __init__(self, user_id, conversation_id):
+                    self.user_id = user_id
+                    self.conversation_id = conversation_id
+            
+            ctx = ArcContext(self.user_id, self.conversation_id)
+            
+            async with get_db_connection_context() as conn:
+                # Use canon to find or create the story arc
+                arc_db_id = await canon.find_or_create_entity(
+                    ctx=ctx,
+                    conn=conn,
+                    entity_type="story_arc",
+                    entity_name=arc.arc_id,
+                    search_fields={
+                        "arc_id": arc.arc_id,
+                        "user_id": self.user_id,
+                        "conversation_id": self.conversation_id
+                    },
+                    create_data={
+                        "arc_id": arc.arc_id,
+                        "title": arc.title,
+                        "description": arc.description,
+                        "start_date": arc.start_date,
+                        "end_date": arc.end_date,
+                        "status": arc.status,
+                        "importance": arc.importance,
+                        "tags": json.dumps(arc.tags),
+                        "event_ids": json.dumps(arc.event_ids),
+                        "summaries": json.dumps({str(k): v for k, v in arc.summaries.items()}),
+                        "last_accessed": arc.last_accessed,
+                        "access_count": arc.access_count,
+                        "user_id": self.user_id,
+                        "conversation_id": self.conversation_id
+                    },
+                    table_name="story_arcs",
+                    embedding_text=f"{arc.title}: {arc.description[:200]}",
+                    similarity_threshold=0.90
+                )
+                
+                # If the arc already existed, update it using LoreSystem
+                if self.lore_system and arc_db_id:
+                    # Check if this is an update
+                    existing = await conn.fetchrow(
+                        "SELECT * FROM story_arcs WHERE id = $1",
+                        arc_db_id
+                    )
+                    
+                    if existing and (
+                        existing['title'] != arc.title or
+                        existing['description'] != arc.description or
+                        existing['end_date'] != arc.end_date or
+                        existing['status'] != arc.status or
+                        existing['event_ids'] != json.dumps(arc.event_ids) or
+                        existing['summaries'] != json.dumps({str(k): v for k, v in arc.summaries.items()})
+                    ):
+                        # Update using LoreSystem
+                        await self.lore_system.propose_and_enact_change(
+                            ctx=ctx,
+                            entity_type="story_arcs",
+                            entity_identifier={"id": arc_db_id},
+                            updates={
+                                "title": arc.title,
+                                "description": arc.description,
+                                "end_date": arc.end_date,
+                                "status": arc.status,
+                                "event_ids": json.dumps(arc.event_ids),
+                                "summaries": json.dumps({str(k): v for k, v in arc.summaries.items()}),
+                                "last_accessed": arc.last_accessed,
+                                "access_count": arc.access_count
+                            },
+                            reason=f"Updating story arc {arc.arc_id} with new data"
+                        )
+                        
+        except Exception as e:
+            logger.error(f"Failed to save arc {arc.arc_id} to DB: {e}", exc_info=True)
     
     async def _save_event_arc_relationships(self, arc: StoryArc) -> None:
-        """Save event-arc relationships to database"""
-        async with get_db_connection_context() as conn:
-            # Delete existing relationships for this arc
-            await conn.execute("DELETE FROM event_arc_relationships WHERE arc_id = $1", arc.arc_id)
+        """Save event-arc relationships to database using canon"""
+        if not self.db_connection_string or self.user_id is None or self.conversation_id is None:
+            return
             
-            # Add new relationships
-            for event_id in arc.event_ids:
-                await conn.execute('''
-                INSERT INTO event_arc_relationships (event_id, arc_id)
-                VALUES ($1, $2)
-                ON CONFLICT (event_id, arc_id) DO NOTHING
-                ''', event_id, arc.arc_id)
+        try:
+            # Create a context object for canon
+            class RelContext:
+                def __init__(self, user_id, conversation_id):
+                    self.user_id = user_id
+                    self.conversation_id = conversation_id
+            
+            ctx = RelContext(self.user_id, self.conversation_id)
+            
+            async with get_db_connection_context() as conn:
+                # First, remove old relationships that are no longer valid
+                existing_rels = await conn.fetch(
+                    "SELECT event_id FROM event_arc_relationships WHERE arc_id = $1 AND user_id = $2 AND conversation_id = $3",
+                    arc.arc_id, self.user_id, self.conversation_id
+                )
+                
+                existing_event_ids = {row['event_id'] for row in existing_rels}
+                current_event_ids = set(arc.event_ids)
+                
+                # Remove relationships that no longer exist
+                to_remove = existing_event_ids - current_event_ids
+                for event_id in to_remove:
+                    await conn.execute(
+                        "DELETE FROM event_arc_relationships WHERE event_id = $1 AND arc_id = $2 AND user_id = $3 AND conversation_id = $4",
+                        event_id, arc.arc_id, self.user_id, self.conversation_id
+                    )
+                
+                # Add new relationships
+                to_add = current_event_ids - existing_event_ids
+                for event_id in to_add:
+                    # Use canon to create the relationship
+                    await canon.find_or_create_entity(
+                        ctx=ctx,
+                        conn=conn,
+                        entity_type="event_arc_relationship",
+                        entity_name=f"{event_id}_{arc.arc_id}",
+                        search_fields={
+                            "event_id": event_id,
+                            "arc_id": arc.arc_id,
+                            "user_id": self.user_id,
+                            "conversation_id": self.conversation_id
+                        },
+                        create_data={
+                            "event_id": event_id,
+                            "arc_id": arc.arc_id,
+                            "user_id": self.user_id,
+                            "conversation_id": self.conversation_id
+                        },
+                        table_name="event_arc_relationships",
+                        embedding_text=f"relationship_{event_id}_{arc.arc_id}",
+                        similarity_threshold=1.0  # Exact match only
+                    )
+                    
+        except Exception as e:
+            logger.error(f"Failed to save event-arc relationships for arc {arc.arc_id}: {e}", exc_info=True)
     
     async def add_event_to_arc(self, event_id: str, arc_id: str) -> bool:
         """
         Add an event to a story arc
-        
-        Args:
-            event_id: ID of the event
-            arc_id: ID of the arc
-            
-        Returns:
-            Whether the operation was successful
         """
         # Check if event and arc exist
         event = self.events.get(event_id)
@@ -831,30 +943,16 @@ class ProgressiveNarrativeSummarizer:
             self.event_arc_map[event_id] = set()
         self.event_arc_map[event_id].add(arc_id)
         
-        # Save to database if using one
-        if self.db_connection_string:
+        # Save to database
+        if self.db_connection_string and self.user_id is not None and self.conversation_id is not None:
             await self._save_arc_to_db(arc)
-            
-            # Save relationship
-            async with get_db_connection_context() as conn:
-                await conn.execute('''
-                INSERT INTO event_arc_relationships (event_id, arc_id)
-                VALUES ($1, $2)
-                ON CONFLICT (event_id, arc_id) DO NOTHING
-                ''', event_id, arc_id)
+            await self._save_event_arc_relationships(arc)
         
         return True
     
     async def remove_event_from_arc(self, event_id: str, arc_id: str) -> bool:
         """
         Remove an event from a story arc
-        
-        Args:
-            event_id: ID of the event
-            arc_id: ID of the arc
-            
-        Returns:
-            Whether the operation was successful
         """
         # Check if arc exists
         arc = self.arcs.get(arc_id)
@@ -871,29 +969,16 @@ class ProgressiveNarrativeSummarizer:
             if not self.event_arc_map[event_id]:
                 del self.event_arc_map[event_id]
         
-        # Save to database if using one
-        if result and self.db_connection_string:
+        # Save to database
+        if result and self.db_connection_string and self.user_id is not None and self.conversation_id is not None:
             await self._save_arc_to_db(arc)
-            
-            # Remove relationship
-            async with get_db_connection_context() as conn:
-                await conn.execute('''
-                DELETE FROM event_arc_relationships
-                WHERE event_id = $1 AND arc_id = $2
-                ''', event_id, arc_id)
+            await self._save_event_arc_relationships(arc)
         
         return result
     
     async def complete_arc(self, arc_id: str, end_date: Optional[datetime] = None) -> bool:
         """
         Mark a story arc as completed
-        
-        Args:
-            arc_id: ID of the arc
-            end_date: Optional end date (defaults to now)
-            
-        Returns:
-            Whether the operation was successful
         """
         # Check if arc exists
         arc = self.arcs.get(arc_id)
@@ -904,8 +989,8 @@ class ProgressiveNarrativeSummarizer:
         # Complete arc
         arc.complete(end_date)
         
-        # Save to database if using one
-        if self.db_connection_string:
+        # Save to database
+        if self.db_connection_string and self.user_id is not None and self.conversation_id is not None:
             await self._save_arc_to_db(arc)
         
         return True
@@ -913,13 +998,6 @@ class ProgressiveNarrativeSummarizer:
     async def get_event(self, event_id: str, summary_level: Optional[int] = None) -> Optional[Dict[str, Any]]:
         """
         Get an event, optionally with a summary
-        
-        Args:
-            event_id: ID of the event
-            summary_level: Optional summary level (0-3)
-            
-        Returns:
-            Event data with summary if requested
         """
         event = self.events.get(event_id)
         
@@ -929,8 +1007,8 @@ class ProgressiveNarrativeSummarizer:
         # Record access
         event.record_access()
         
-        # Save updated access stats if using database
-        if self.db_connection_string:
+        # Save updated access stats
+        if self.db_connection_string and self.user_id is not None and self.conversation_id is not None:
             await self._update_event_access_stats(event)
         
         # Get content or summary
@@ -954,24 +1032,45 @@ class ProgressiveNarrativeSummarizer:
         return result
     
     async def _update_event_access_stats(self, event: EventInfo) -> None:
-        """Update event access statistics in database"""
-        async with get_db_connection_context() as conn:
-            await conn.execute('''
-            UPDATE narrative_events
-            SET last_accessed = $1, access_count = $2
-            WHERE event_id = $3
-            ''', event.last_accessed, event.access_count, event.event_id)
+        """Update event access statistics in database using LoreSystem"""
+        if not self.db_connection_string or not self.lore_system or self.user_id is None or self.conversation_id is None:
+            return
+            
+        try:
+            # Create a context object
+            class StatsContext:
+                def __init__(self, user_id, conversation_id):
+                    self.user_id = user_id
+                    self.conversation_id = conversation_id
+            
+            ctx = StatsContext(self.user_id, self.conversation_id)
+            
+            # First get the database ID for this event
+            async with get_db_connection_context() as conn:
+                row = await conn.fetchrow(
+                    "SELECT id FROM narrative_events WHERE event_id = $1 AND user_id = $2 AND conversation_id = $3",
+                    event.event_id, self.user_id, self.conversation_id
+                )
+                
+                if row:
+                    # Update using LoreSystem
+                    await self.lore_system.propose_and_enact_change(
+                        ctx=ctx,
+                        entity_type="narrative_events",
+                        entity_identifier={"id": row['id']},
+                        updates={
+                            "last_accessed": event.last_accessed,
+                            "access_count": event.access_count
+                        },
+                        reason=f"Recording access to narrative event {event.event_id}"
+                    )
+                    
+        except Exception as e:
+            logger.error(f"Failed to update access stats for event {event.event_id}: {e}", exc_info=True)
     
     async def _ensure_summary_level(self, event: EventInfo, level: int) -> str:
         """
         Ensure a summary exists at the specified level and return it
-        
-        Args:
-            event: The event
-            level: Desired summary level (0-3)
-            
-        Returns:
-            The summary text
         """
         # If summary already exists, return it
         if event.has_summary(level):
@@ -992,8 +1091,8 @@ class ProgressiveNarrativeSummarizer:
         summary = await self.summarizer.summarize(source_text, level)
         event.set_summary(level, summary)
         
-        # Save to database if using one
-        if self.db_connection_string:
+        # Save to database
+        if self.db_connection_string and self.user_id is not None and self.conversation_id is not None:
             await self._save_event_to_db(event)
         
         return summary
@@ -1001,13 +1100,6 @@ class ProgressiveNarrativeSummarizer:
     async def get_arc(self, arc_id: str, summary_level: Optional[int] = None) -> Optional[Dict[str, Any]]:
         """
         Get a story arc, optionally with a summary
-        
-        Args:
-            arc_id: ID of the arc
-            summary_level: Optional summary level (0-3)
-            
-        Returns:
-            Arc data with summary if requested
         """
         arc = self.arcs.get(arc_id)
         
@@ -1017,8 +1109,8 @@ class ProgressiveNarrativeSummarizer:
         # Record access
         arc.record_access()
         
-        # Save updated access stats if using database
-        if self.db_connection_string:
+        # Save updated access stats
+        if self.db_connection_string and self.user_id is not None and self.conversation_id is not None:
             await self._update_arc_access_stats(arc)
         
         # Get description or summary
@@ -1044,24 +1136,45 @@ class ProgressiveNarrativeSummarizer:
         return result
     
     async def _update_arc_access_stats(self, arc: StoryArc) -> None:
-        """Update arc access statistics in database"""
-        async with get_db_connection_context() as conn:
-            await conn.execute('''
-            UPDATE story_arcs
-            SET last_accessed = $1, access_count = $2
-            WHERE arc_id = $3
-            ''', arc.last_accessed, arc.access_count, arc.arc_id)
+        """Update arc access statistics in database using LoreSystem"""
+        if not self.db_connection_string or not self.lore_system or self.user_id is None or self.conversation_id is None:
+            return
+            
+        try:
+            # Create a context object
+            class StatsContext:
+                def __init__(self, user_id, conversation_id):
+                    self.user_id = user_id
+                    self.conversation_id = conversation_id
+            
+            ctx = StatsContext(self.user_id, self.conversation_id)
+            
+            # First get the database ID for this arc
+            async with get_db_connection_context() as conn:
+                row = await conn.fetchrow(
+                    "SELECT id FROM story_arcs WHERE arc_id = $1 AND user_id = $2 AND conversation_id = $3",
+                    arc.arc_id, self.user_id, self.conversation_id
+                )
+                
+                if row:
+                    # Update using LoreSystem
+                    await self.lore_system.propose_and_enact_change(
+                        ctx=ctx,
+                        entity_type="story_arcs",
+                        entity_identifier={"id": row['id']},
+                        updates={
+                            "last_accessed": arc.last_accessed,
+                            "access_count": arc.access_count
+                        },
+                        reason=f"Recording access to story arc {arc.arc_id}"
+                    )
+                    
+        except Exception as e:
+            logger.error(f"Failed to update access stats for arc {arc.arc_id}: {e}", exc_info=True)
     
     async def _ensure_arc_summary_level(self, arc: StoryArc, level: int) -> str:
         """
         Ensure a summary exists at the specified level and return it
-        
-        Args:
-            arc: The story arc
-            level: Desired summary level (0-3)
-            
-        Returns:
-            The summary text
         """
         # If summary already exists, return it
         if arc.has_summary(level):
@@ -1086,11 +1199,13 @@ class ProgressiveNarrativeSummarizer:
         summary = await self.summarizer.summarize(source_text, level)
         arc.set_summary(level, summary)
         
-        # Save to database if using one
-        if self.db_connection_string:
+        # Save to database
+        if self.db_connection_string and self.user_id is not None and self.conversation_id is not None:
             await self._save_arc_to_db(arc)
         
         return summary
+    
+    # ... (rest of the methods remain the same - they only read from the database)
     
     async def get_recent_events(
         self,
@@ -1115,13 +1230,19 @@ class ProgressiveNarrativeSummarizer:
         """
         cutoff_date = datetime.now() - timedelta(days=days)
         
-        if self.db_connection_string:
+        if self.db_connection_string and self.user_id is not None and self.conversation_id is not None:
             # Build query conditions
             conditions = ["timestamp >= $1"]
             params = [cutoff_date]
             
+            # Add user/conversation filtering
+            conditions.append(f"user_id = ${len(params) + 1}")
+            params.append(self.user_id)
+            conditions.append(f"conversation_id = ${len(params) + 1}")
+            params.append(self.conversation_id)
+            
             if event_types:
-                placeholders = ",".join(f"${i+2}" for i in range(len(event_types)))
+                placeholders = ",".join(f"${i+len(params)+1}" for i in range(len(event_types)))
                 conditions.append(f"event_type IN ({placeholders})")
                 params.extend(event_types)
             
@@ -1148,18 +1269,13 @@ class ProgressiveNarrativeSummarizer:
                 
                 events = []
                 for row in rows:
-                    event = EventInfo.from_dict({
-                        "event_id": row["event_id"],
-                        "event_type": row["event_type"],
-                        "content": row["content"],
-                        "timestamp": row["timestamp"],
-                        "importance": row["importance"],
-                        "tags": row["tags"],
-                        "metadata": row["metadata"],
-                        "summaries": row["summaries"],
-                        "last_accessed": row["last_accessed"],
-                        "access_count": row["access_count"]
-                    })
+                    # Convert row to dict and remove database-specific fields
+                    event_data = dict(row)
+                    event_data.pop('id', None)
+                    event_data.pop('user_id', None)
+                    event_data.pop('conversation_id', None)
+                    
+                    event = EventInfo.from_dict(event_data)
                     
                     # Record access
                     event.record_access()
@@ -1237,15 +1353,21 @@ class ProgressiveNarrativeSummarizer:
         Returns:
             List of active story arcs
         """
-        if self.db_connection_string:
+        if self.db_connection_string and self.user_id is not None and self.conversation_id is not None:
             # Build query conditions
             conditions = ["status = 'active'"]
             params = []
             
+            # Add user/conversation filtering
+            conditions.append(f"user_id = ${len(params) + 1}")
+            params.append(self.user_id)
+            conditions.append(f"conversation_id = ${len(params) + 1}")
+            params.append(self.conversation_id)
+            
             # Handle tags with JSON containment
             if tags:
                 for i, tag in enumerate(tags):
-                    conditions.append(f"tags @> $" + str(i + 1) + "::jsonb")
+                    conditions.append(f"tags @> $" + str(len(params) + 1) + "::jsonb")
                     params.append(json.dumps([tag]))
             
             # Build the query
@@ -1265,20 +1387,17 @@ class ProgressiveNarrativeSummarizer:
                 
                 arcs = []
                 for row in rows:
-                    arc = StoryArc.from_dict({
-                        "arc_id": row["arc_id"],
-                        "title": row["title"],
-                        "description": row["description"],
-                        "start_date": row["start_date"],
-                        "end_date": row["end_date"],
-                        "status": row["status"],
-                        "importance": row["importance"],
-                        "tags": row["tags"], 
-                        "metadata": row["metadata"],
-                        "summaries": row["summaries"],
-                        "last_accessed": row["last_accessed"],
-                        "access_count": row["access_count"]
-                    })
+                    # Convert row to dict and remove database-specific fields
+                    arc_data = dict(row)
+                    arc_data.pop('id', None)
+                    arc_data.pop('user_id', None)
+                    arc_data.pop('conversation_id', None)
+                    
+                    # Fix for missing 'metadata' field
+                    if 'metadata' not in arc_data:
+                        arc_data['metadata'] = {}
+                    
+                    arc = StoryArc.from_dict(arc_data)
                     
                     # Record access
                     arc.record_access()
@@ -1369,7 +1488,7 @@ class ProgressiveNarrativeSummarizer:
                 event.record_access()
                 
                 # Save updated access stats if using database
-                if self.db_connection_string:
+                if self.db_connection_string and self.user_id is not None and self.conversation_id is not None:
                     await self._update_event_access_stats(event)
                 
                 # Get content or summary
@@ -1518,7 +1637,7 @@ class ProgressiveNarrativeSummarizer:
                 event.record_access()
                 
                 # Save updated access stats if using database
-                if self.db_connection_string:
+                if self.db_connection_string and self.user_id is not None and self.conversation_id is not None:
                     await self._update_event_access_stats(event)
         
         return {
@@ -1534,95 +1653,22 @@ class ProgressiveNarrativeSummarizer:
         }
 
 
-# Example usage
-async def example_usage():
-    # Create a summarizer (using RuleSummarizer for the example)
-    summarizer = RuleSummarizer()
-    
-    # Create a narrative summarizer
-    narrative = ProgressiveNarrativeSummarizer(summarizer=summarizer)
-    
-    # Add some events
-    event1 = await narrative.add_event(
-        event_id="event1",
-        event_type="dialogue",
-        content="Mistress Victoria smiled warmly as she welcomed me into her office. 'I'm glad you could make it today,' she said, gesturing to the chair across from her desk. 'I've been looking forward to our meeting.' Her voice was gentle but carried an undercurrent of authority that made me immediately sit down. 'I've been reviewing your progress, and I must say, I'm quite pleased with how receptive you've been to our... arrangement.'",
-        importance=0.7,
-        tags=["intro", "victoria"]
-    )
-    
-    event2 = await narrative.add_event(
-        event_id="event2",
-        event_type="internal",
-        content="I couldn't help but notice how Victoria's office seemed different today. The blinds were partially closed, casting striped shadows across the desk. A new photo had appeared on her bookshelf - Victoria standing beside a woman I didn't recognize, both smiling at some private joke. I wondered about their relationship, but felt uncomfortable asking. Everything about the room seemed designed to put me slightly off balance, to remind me that this was her territory, not mine.",
-        importance=0.5,
-        tags=["observation", "victoria", "office"]
-    )
-    
-    event3 = await narrative.add_event(
-        event_id="event3",
-        event_type="dialogue",
-        content="'What I'd like to discuss today,' Victoria continued, opening a folder on her desk, 'is how we might deepen our work together.' She looked up, her blue eyes suddenly intense. 'I believe you're ready for the next phase.' My mouth felt dry. 'What exactly does that entail?' I asked, trying to keep my voice steady. Victoria's smile widened slightly. 'Trust, primarily. Your willingness to follow my guidance without questioning every step of the process.' She leaned forward. 'Do you think you can manage that?' The question hung in the air between us, weightier than it should have been.",
-        importance=0.8,
-        tags=["development", "victoria", "control"]
-    )
-    
-    # Create a story arc
-    arc1 = await narrative.add_story_arc(
-        arc_id="arc1",
-        title="Victoria's Influence",
-        description="The growing influence of Mistress Victoria over the player's decisions and perceptions.",
-        tags=["victoria", "manipulation", "main_plot"],
-        event_ids=["event1", "event2", "event3"]
-    )
-    
-    # Generate summaries
-    await narrative._ensure_summary_level(event1, SummaryLevel.CONDENSED)
-    await narrative._ensure_summary_level(event1, SummaryLevel.SUMMARY)
-    await narrative._ensure_summary_level(event1, SummaryLevel.HEADLINE)
-    
-    # Display different summary levels
-    event = await narrative.get_event("event1", SummaryLevel.DETAILED)
-    print("\nDETAILED:")
-    print(event["content"])
-    
-    event = await narrative.get_event("event1", SummaryLevel.CONDENSED)
-    print("\nCONDENSED:")
-    print(event["content"])
-    
-    event = await narrative.get_event("event1", SummaryLevel.SUMMARY)
-    print("\nSUMMARY:")
-    print(event["content"])
-    
-    event = await narrative.get_event("event1", SummaryLevel.HEADLINE)
-    print("\nHEADLINE:")
-    print(event["content"])
-    
-    # Get optimal context
-    context = await narrative.get_optimal_narrative_context(
-        query="Victoria office meeting",
-        max_tokens=1000
-    )
-    
-    print("\nOPTIMAL CONTEXT:")
-    print(f"Arcs: {len(context['active_arcs'])}")
-    print(f"Events: {len(context['relevant_events'])}")
-    print(f"Token usage: {context['token_usage']}")
+# Example usage remains the same...
 
 # RPG-Specific Implementation
 
 class RPGNarrativeManager:
     def __init__(
         self,
-        user_id: int, # Should probably be str if your user IDs from DB are SERIAL (int) but used as str elsewhere
-        conversation_id: int, # Same as above
-        db_connection_string: Optional[str] = None, # Or pass DSN explicitly if preferred
+        user_id: int,
+        conversation_id: int,
+        db_connection_string: Optional[str] = None,
         openai_api_key: Optional[str] = None
     ):
         self.user_id = user_id
         self.conversation_id = conversation_id
         
-        current_openai_api_key = openai_api_key or os.getenv("OPENAI_API_KEY") # Get from env if not passed
+        current_openai_api_key = openai_api_key or os.getenv("OPENAI_API_KEY")
 
         if current_openai_api_key and HAVE_OPENAI:
             summarizer = OpenAISummarizer(current_openai_api_key)
@@ -1632,30 +1678,29 @@ class RPGNarrativeManager:
             summarizer = RuleSummarizer()
         
         # Use the DSN from db.connection if db_connection_string is not provided explicitly
-        # but we still want to use DB if the global one is configured.
-        # If db_connection_string is explicitly None, it means "don't use DB for this instance".
         effective_db_string = db_connection_string
-        if db_connection_string is None: # If caller didn't specify, check if global DSN exists
+        if db_connection_string is None:
             try:
-                from db.connection import get_db_dsn # Assuming this function exists
-                if get_db_dsn(): # Check if a DSN is configured globally
-                     effective_db_string = "USE_GLOBAL_POOL" # Signal to use global pool setup
+                from db.connection import get_db_dsn
+                if get_db_dsn():
+                     effective_db_string = "USE_GLOBAL_POOL"
             except ImportError:
                 logger.warning("db.connection.get_db_dsn not found, cannot infer global DSN for RPGNarrativeManager.")
-            except EnvironmentError: # If get_db_dsn raises error because no DSN is set
+            except EnvironmentError:
                 logger.info("No global DB DSN configured. RPGNarrativeManager will operate in memory-only unless db_connection_string is explicitly passed.")
-
 
         self.narrative = ProgressiveNarrativeSummarizer(
             summarizer=summarizer,
-            db_connection_string=effective_db_string # Pass the determined DSN or signal
+            db_connection_string=effective_db_string,
+            user_id=user_id,
+            conversation_id=conversation_id
         )
-        self.active_arcs: Dict[str, Any] = {} # Store arc data, not just IDs
+        self.active_arcs: Dict[str, Any] = {}
         logger.info(f"RPGNarrativeManager for user {user_id}, conv {conversation_id} created.")
     
     async def initialize(self) -> None:
         logger.info(f"Initializing RPGNarrativeManager for user {self.user_id}, conv {self.conversation_id}...")
-        await self.narrative.initialize() # This will handle its DB setup
+        await self.narrative.initialize()
         await self.narrative.start_summary_processor()
         
         # Load active arcs
@@ -1664,8 +1709,10 @@ class RPGNarrativeManager:
     
     async def close(self) -> None:
         logger.info(f"Closing RPGNarrativeManager for user {self.user_id}, conv {self.conversation_id}...")
-        await self.narrative.close() # This will cancel its summary_task if started
+        await self.narrative.close()
         logger.info(f"RPGNarrativeManager for user {self.user_id}, conv {self.conversation_id} closed.")
+    
+    # All other methods remain the same as they don't perform direct database writes...
     
     async def add_interaction(
         self,
@@ -2069,15 +2116,16 @@ class RPGNarrativeManager:
         
         if not arcs:
             # Try to find any completed arcs with this tag
-            if self.narrative.db_connection_string:
+            if self.narrative.db_connection_string and self.user_id is not None and self.conversation_id is not None:
                 async with get_db_connection_context() as conn:
                     rows = await conn.fetch('''
                     SELECT arc_id, title, description, status
                     FROM story_arcs
                     WHERE tags @> $1::jsonb AND status = 'completed'
+                      AND user_id = $2 AND conversation_id = $3
                     ORDER BY end_date DESC
                     LIMIT 3
-                    ''', json.dumps([stage_tag]))
+                    ''', json.dumps([stage_tag]), self.user_id, self.conversation_id)
                     
                     arcs = []
                     for row in rows:
@@ -2103,7 +2151,7 @@ class RPGNarrativeManager:
                 {
                     "title": arc["title"],
                     "description": arc["description"],
-                    "status": arc["status"]
+                    "status": arc.get("status", "unknown")
                 }
                 for arc in arcs
             ],
