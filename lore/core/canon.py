@@ -1656,3 +1656,117 @@ async def update_current_roleplay(ctx, conn, user_id: int, conversation_id: int,
     )
 
     
+async def find_or_create_social_link(ctx, conn, **kwargs) -> int:
+    """
+    Find or create a social link between two entities.
+    """
+    user_id = kwargs.get('user_id', ctx.user_id)
+    conversation_id = kwargs.get('conversation_id', ctx.conversation_id)
+    entity1_type = kwargs['entity1_type']
+    entity1_id = kwargs['entity1_id']
+    entity2_type = kwargs['entity2_type']
+    entity2_id = kwargs['entity2_id']
+    
+    # Check if link already exists
+    existing = await conn.fetchrow("""
+        SELECT link_id FROM SocialLinks
+        WHERE user_id = $1 AND conversation_id = $2
+        AND entity1_type = $3 AND entity1_id = $4
+        AND entity2_type = $5 AND entity2_id = $6
+    """, user_id, conversation_id, entity1_type, entity1_id, entity2_type, entity2_id)
+    
+    if existing:
+        return existing['link_id']
+    
+    # Create new link
+    link_id = await conn.fetchval("""
+        INSERT INTO SocialLinks (
+            user_id, conversation_id,
+            entity1_type, entity1_id, entity2_type, entity2_id,
+            link_type, link_level, link_history, dynamics,
+            experienced_crossroads, experienced_rituals
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11::jsonb, $12::jsonb)
+        ON CONFLICT (user_id, conversation_id, entity1_type, entity1_id, entity2_type, entity2_id)
+        DO UPDATE SET link_id = EXCLUDED.link_id
+        RETURNING link_id
+    """,
+        user_id, conversation_id,
+        entity1_type, entity1_id, entity2_type, entity2_id,
+        kwargs.get('link_type', 'neutral'),
+        kwargs.get('link_level', 0),
+        json.dumps(kwargs.get('link_history', [])),
+        json.dumps(kwargs.get('dynamics', {})),
+        json.dumps(kwargs.get('experienced_crossroads', [])),
+        json.dumps(kwargs.get('experienced_rituals', []))
+    )
+    
+    # Log canonical event
+    await log_canonical_event(
+        ctx, conn,
+        f"Social link created between {entity1_type} {entity1_id} and {entity2_type} {entity2_id}",
+        tags=['social_link', 'creation'],
+        significance=5
+    )
+    
+    return link_id
+
+async def find_or_create_npc_group(ctx, conn, group_data: Dict[str, Any]) -> int:
+    """
+    Find or create an NPC group.
+    """
+    group_name = group_data['name']
+    
+    # Check if group exists
+    existing = await conn.fetchrow("""
+        SELECT group_id FROM NPCGroups
+        WHERE user_id = $1 AND conversation_id = $2 AND group_name = $3
+    """, ctx.user_id, ctx.conversation_id, group_name)
+    
+    if existing:
+        return existing['group_id']
+    
+    # Create new group
+    group_id = await conn.fetchval("""
+        INSERT INTO NPCGroups (
+            user_id, conversation_id, group_name, group_data, updated_at
+        )
+        VALUES ($1, $2, $3, $4::jsonb, NOW())
+        RETURNING group_id
+    """, ctx.user_id, ctx.conversation_id, group_name, json.dumps(group_data))
+    
+    # Log canonical event
+    await log_canonical_event(
+        ctx, conn,
+        f"NPC group '{group_name}' created with {len(group_data.get('members', []))} members",
+        tags=['npc_group', 'creation'],
+        significance=6
+    )
+    
+    return group_id
+
+async def create_journal_entry(ctx, conn, entry_type: str, entry_text: str, **kwargs) -> int:
+    """
+    Create a journal entry canonically.
+    """
+    entry_id = await conn.fetchval("""
+        INSERT INTO PlayerJournal (
+            user_id, conversation_id, entry_type, entry_text,
+            revelation_types, narrative_moment, fantasy_flag,
+            intensity_level, timestamp, entry_metadata,
+            importance, tags
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, CURRENT_TIMESTAMP, $9::jsonb, $10, $11::jsonb)
+        RETURNING id
+    """,
+        ctx.user_id, ctx.conversation_id, entry_type, entry_text,
+        kwargs.get('revelation_types'),
+        kwargs.get('narrative_moment'),
+        kwargs.get('fantasy_flag', False),
+        kwargs.get('intensity_level', 0),
+        json.dumps(kwargs.get('entry_metadata', {})),
+        kwargs.get('importance', 0.5),
+        json.dumps(kwargs.get('tags', []))
+    )
+    
+    return entry_id
