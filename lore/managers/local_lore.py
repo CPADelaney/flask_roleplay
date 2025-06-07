@@ -624,94 +624,14 @@ class LocalLoreManager(BaseLoreManager):
     )
     @function_tool
     async def add_urban_myth(self, ctx, input: MythCreationInput) -> int:
-        """
-        Add an urban myth to the database with full validation and theming.
-        Uses canon system to ensure consistency.
-        
-        Args:
-            input: MythCreationInput with all myth details
-            
-        Returns:
-            ID of the created urban myth
-        """
-        # Get LoreSystem for canon operations
-        from lore.core.lore_system import LoreSystem
-        lore_system = await LoreSystem.get_instance(self.user_id, self.conversation_id)
-        
-        with trace(
-            "AddUrbanMyth", 
-            group_id=self.trace_group_id,
-            metadata={**self.trace_metadata, "myth_name": input.name}
-        ):
+        """Add an urban myth using canon system."""
+        with trace("AddUrbanMyth", metadata={"myth_name": input.name}):
             await self.ensure_initialized()
-            
-            # Check for semantic duplicates
-            async with self.get_connection_pool() as pool:
-                async with pool.acquire() as conn:
-                    # Generate embedding for the new myth
-                    embedding_text = f"{input.name} {input.description} {input.narrative_style} {' '.join(input.themes)}"
-                    search_vector = await generate_embedding(embedding_text)
-                    
-                    # Search for similar myths
-                    similar_myth = await conn.fetchrow("""
-                        SELECT id, name, description, 1 - (embedding <=> $1) AS similarity
-                        FROM UrbanMyths
-                        WHERE 1 - (embedding <=> $1) > 0.80
-                        ORDER BY embedding <=> $1
-                        LIMIT 1
-                    """, search_vector)
-                    
-                    if similar_myth:
-                        # Use validation to check if it's truly a duplicate
-                        from lore.core.validation import CanonValidationAgent
-                        validation_agent = CanonValidationAgent()
-                        
-                        is_duplicate = await validation_agent.confirm_is_duplicate_myth(
-                            conn,
-                            proposal={
-                                "name": input.name,
-                                "description": input.description,
-                                "themes": input.themes
-                            },
-                            existing_myth_id=similar_myth['id']
-                        )
-                        
-                        if is_duplicate:
-                            logger.warning(f"Urban myth '{input.name}' is a duplicate of existing myth ID {similar_myth['id']}")
-                            
-                            # Update the existing myth with new regions if any
-                            if input.regions_known:
-                                existing_regions = await conn.fetchval(
-                                    "SELECT regions_known FROM UrbanMyths WHERE id = $1",
-                                    similar_myth['id']
-                                )
-                                
-                                new_regions = list(set(existing_regions + input.regions_known))
-                                
-                                await conn.execute("""
-                                    UPDATE UrbanMyths
-                                    SET regions_known = $1,
-                                        spread_rate = GREATEST(spread_rate, $2)
-                                    WHERE id = $3
-                                """, new_regions, input.spread_rate, similar_myth['id'])
-                            
-                            return similar_myth['id']
-            
-            # Canonically establish the origin location if specified
-            if input.origin_location:
-                async with get_db_connection_context() as conn:
-                    from lore.core import canon
-                    location_id = await canon.find_or_create_location(
-                        ctx, conn, input.origin_location
-                    )
             
             # Apply matriarchal theming
             themed_description = MatriarchalThemingUtils.apply_matriarchal_theme(
                 "myth", input.description
             )
-            
-            # Generate embedding
-            embedding = await generate_embedding(embedding_text)
             
             # Ensure regions_known has at least the origin
             if not input.regions_known and input.origin_location:
@@ -719,34 +639,36 @@ class LocalLoreManager(BaseLoreManager):
             elif not input.regions_known:
                 input.regions_known = ["local area"]
             
-            async with self.get_connection_pool() as pool:
-                async with pool.acquire() as conn:
-                    myth_id = await conn.fetchval("""
-                        INSERT INTO UrbanMyths (
-                            name, description, origin_location, origin_event,
-                            believability, spread_rate, regions_known, narrative_style,
-                            themes, matriarchal_elements, embedding
-                        )
-                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-                        RETURNING id
-                    """,
-                    input.name, themed_description, input.origin_location, 
-                    input.origin_event, input.believability, input.spread_rate, 
-                    input.regions_known, input.narrative_style.value, input.themes, 
-                    input.matriarchal_elements, embedding)
-                    
-                    # Log canonical event
-                    from lore.core import canon
-                    await canon.log_canonical_event(
-                        ctx, conn,
-                        f"Urban myth '{input.name}' emerges in {input.origin_location or 'the local area'}",
-                        tags=["myth", "folklore", "canon"],
-                        significance=5
+            # Prepare data for canon
+            myth_data = {
+                "name": input.name,
+                "description": themed_description,
+                "origin_location": input.origin_location,
+                "origin_event": input.origin_event,
+                "believability": input.believability,
+                "spread_rate": input.spread_rate,
+                "regions_known": input.regions_known,
+                "narrative_style": input.narrative_style.value,
+                "themes": input.themes,
+                "matriarchal_elements": input.matriarchal_elements
+            }
+            
+            # Create via canon
+            async with get_db_connection_context() as conn:
+                from lore.core import canon
+                
+                # Establish origin location if specified
+                if input.origin_location:
+                    location_id = await canon.find_or_create_location(
+                        ctx, conn, input.origin_location
                     )
-                    
-                    logger.info(f"Created urban myth '{input.name}' with ID {myth_id}")
-                    return myth_id
-
+                
+                # Create the myth
+                myth_id = await canon.find_or_create_urban_myth(ctx, conn, **myth_data)
+                
+            logger.info(f"Created urban myth '{input.name}' with ID {myth_id}")
+            return myth_id
+        
     # ===== LOCAL HISTORY OPERATIONS =====
     
     @with_governance(
@@ -757,20 +679,8 @@ class LocalLoreManager(BaseLoreManager):
     )
     @function_tool
     async def add_local_history(self, ctx, input: HistoryCreationInput) -> int:
-        """
-        Add a local historical event with narrative connections.
-        
-        Args:
-            input: HistoryCreationInput with all event details
-            
-        Returns:
-            ID of the created historical event
-        """
-        with trace(
-            "AddLocalHistory", 
-            group_id=self.trace_group_id,
-            metadata={**self.trace_metadata, "event_name": input.event_name}
-        ):
+        """Add local history using canon system."""
+        with trace("AddLocalHistory", metadata={"event_name": input.event_name}):
             await self.ensure_initialized()
             
             # Apply matriarchal theming
@@ -778,49 +688,49 @@ class LocalLoreManager(BaseLoreManager):
                 "history", input.description
             )
             
-            # Generate embedding
-            embedding_text = f"{input.event_name} {themed_description} {input.date_description} {input.narrative_category}"
-            embedding = await generate_embedding(embedding_text)
+            # Prepare data for canon
+            history_data = {
+                "location_id": input.location_id,
+                "event_name": input.event_name,
+                "description": themed_description,
+                "date_description": input.date_description,
+                "significance": input.significance,
+                "impact_type": input.impact_type,
+                "notable_figures": input.notable_figures,
+                "current_relevance": input.current_relevance,
+                "commemoration": input.commemoration,
+                "connected_myths": input.connected_myths,
+                "related_landmarks": input.related_landmarks,
+                "narrative_category": input.narrative_category
+            }
             
-            async with self.get_connection_pool() as pool:
-                async with pool.acquire() as conn:
-                    event_id = await conn.fetchval("""
-                        INSERT INTO LocalHistories (
-                            location_id, event_name, description, date_description,
-                            significance, impact_type, notable_figures,
-                            current_relevance, commemoration, connected_myths,
-                            related_landmarks, narrative_category, embedding
-                        )
-                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-                        RETURNING id
-                    """,
-                    input.location_id, input.event_name, themed_description, 
-                    input.date_description, input.significance, input.impact_type, 
-                    input.notable_figures, input.current_relevance, input.commemoration, 
-                    input.connected_myths, input.related_landmarks, input.narrative_category, 
-                    embedding)
-                    
-                    # Create narrative connections
-                    for myth_id in input.connected_myths:
-                        await self._create_narrative_connection(
-                            conn, "myth", myth_id, "history", event_id,
-                            ConnectionType.MYTH_TO_HISTORY, 
-                            "Historical basis for myth", 7
-                        )
-                    
-                    for landmark_id in input.related_landmarks:
-                        await self._create_narrative_connection(
-                            conn, "history", event_id, "landmark", landmark_id,
-                            ConnectionType.HISTORY_TO_LANDMARK,
-                            "Event occurred at landmark", 8
-                        )
-                    
-                    # Invalidate cache
-                    self.invalidate_cache_pattern(f"local_history_{input.location_id}")
-                    
-                    logger.info(f"Created local history '{input.event_name}' with ID {event_id}")
-                    return event_id
-
+            # Create via canon
+            async with get_db_connection_context() as conn:
+                from lore.core import canon
+                
+                event_id = await canon.create_local_history(ctx, conn, **history_data)
+                
+                # Create narrative connections
+                for myth_id in input.connected_myths:
+                    await self._create_narrative_connection(
+                        conn, "myth", myth_id, "history", event_id,
+                        ConnectionType.MYTH_TO_HISTORY, 
+                        "Historical basis for myth", 7
+                    )
+                
+                for landmark_id in input.related_landmarks:
+                    await self._create_narrative_connection(
+                        conn, "history", event_id, "landmark", landmark_id,
+                        ConnectionType.HISTORY_TO_LANDMARK,
+                        "Event occurred at landmark", 8
+                    )
+            
+            # Invalidate cache
+            self.invalidate_cache_pattern(f"local_history_{input.location_id}")
+            
+            logger.info(f"Created local history '{input.event_name}' with ID {event_id}")
+            return event_id
+            
     # ===== LANDMARK OPERATIONS =====
     
     @with_governance(
@@ -831,138 +741,77 @@ class LocalLoreManager(BaseLoreManager):
     )
     @function_tool
     async def add_landmark(self, ctx, input: LandmarkCreationInput) -> int:
-        """
-        Add a landmark with full narrative integration.
-        Uses canon system to ensure consistency.
-        
-        Args:
-            input: LandmarkCreationInput with all landmark details
-            
-        Returns:
-            ID of the created landmark
-        """
-        # Get LoreSystem for canon operations
-        from lore.core.lore_system import LoreSystem
-        lore_system = await LoreSystem.get_instance(self.user_id, self.conversation_id)
-        
-        with trace(
-            "AddLandmark", 
-            group_id=self.trace_group_id,
-            metadata={**self.trace_metadata, "landmark_name": input.name}
-        ):
+        """Add landmark using canon system."""
+        with trace("AddLandmark", metadata={"landmark_name": input.name}):
             await self.ensure_initialized()
             
-            # Verify the location exists canonically
+            # Verify location exists
             async with get_db_connection_context() as conn:
-                location = await conn.fetchrow("""
-                    SELECT * FROM Locations WHERE id = $1
-                """, input.location_id)
-                
+                location = await conn.fetchrow("SELECT * FROM Locations WHERE id = $1", input.location_id)
                 if not location:
                     return {"error": "Location not found"}
-            
-            # Check for semantic duplicates
-            async with self.get_connection_pool() as pool:
-                async with pool.acquire() as conn:
-                    # Generate embedding
-                    embedding_text = f"{input.name} {input.landmark_type} {input.description} at {location['location_name']}"
-                    search_vector = await generate_embedding(embedding_text)
-                    
-                    # Search for similar landmarks at this location
-                    similar_landmark = await conn.fetchrow("""
-                        SELECT id, name, landmark_type, 1 - (embedding <=> $1) AS similarity
-                        FROM Landmarks
-                        WHERE location_id = $2 AND 1 - (embedding <=> $1) > 0.85
-                        ORDER BY embedding <=> $1
-                        LIMIT 1
-                    """, search_vector, input.location_id)
-                    
-                    if similar_landmark:
-                        logger.warning(
-                            f"Landmark '{input.name}' appears similar to existing landmark "
-                            f"'{similar_landmark['name']}' (ID: {similar_landmark['id']})"
-                        )
-                        
-                        # Update existing landmark instead
-                        await lore_system.propose_and_enact_change(
-                            ctx=ctx,
-                            entity_type="Landmarks",
-                            entity_identifier={"id": similar_landmark['id']},
-                            updates={
-                                "description": input.description,
-                                "current_use": input.current_use,
-                                "matriarchal_significance": input.matriarchal_significance
-                            },
-                            reason=f"Updating landmark with new information from duplicate submission"
-                        )
-                        
-                        return similar_landmark['id']
-            
-            # Canonically establish the controlling faction if specified
-            if input.controlled_by:
-                async with get_db_connection_context() as conn:
-                    from lore.core import canon
-                    controller_id = await canon.find_or_create_faction(
-                        ctx, conn, input.controlled_by, faction_type="landmark_controller"
-                    )
             
             # Apply matriarchal theming
             themed_description = MatriarchalThemingUtils.apply_matriarchal_theme(
                 "landmark", input.description
             )
             
-            # Generate embedding
-            embedding = await generate_embedding(embedding_text)
+            # Prepare data for canon
+            landmark_data = {
+                "name": input.name,
+                "location_id": input.location_id,
+                "landmark_type": input.landmark_type,
+                "description": themed_description,
+                "historical_significance": input.historical_significance,
+                "current_use": input.current_use,
+                "controlled_by": input.controlled_by,
+                "legends": input.legends,
+                "connected_histories": input.connected_histories,
+                "architectural_style": input.architectural_style,
+                "symbolic_meaning": input.symbolic_meaning,
+                "matriarchal_significance": input.matriarchal_significance
+            }
             
-            async with self.get_connection_pool() as pool:
-                async with pool.acquire() as conn:
-                    landmark_id = await conn.fetchval("""
-                        INSERT INTO Landmarks (
-                            name, location_id, landmark_type, description,
-                            historical_significance, current_use, controlled_by,
-                            legends, connected_histories, architectural_style,
-                            symbolic_meaning, matriarchal_significance, embedding
-                        )
-                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-                        RETURNING id
-                    """,
-                    input.name, input.location_id, input.landmark_type, themed_description,
-                    input.historical_significance, input.current_use, input.controlled_by,
-                    input.legends, input.connected_histories, input.architectural_style,
-                    input.symbolic_meaning, input.matriarchal_significance, embedding)
-                    
-                    # If this is a significant landmark, update the location
-                    if input.matriarchal_significance == "high":
-                        await lore_system.propose_and_enact_change(
-                            ctx=ctx,
-                            entity_type="Locations",
-                            entity_identifier={"id": input.location_id},
-                            updates={"has_significant_landmarks": True},
-                            reason=f"High significance landmark '{input.name}' established"
-                        )
-                    
-                    # Log canonical event
-                    from lore.core import canon
-                    await canon.log_canonical_event(
-                        ctx, conn,
-                        f"Landmark '{input.name}' established at {location['location_name']} as {input.landmark_type}",
-                        tags=["landmark", "location", "canon"],
-                        significance=6
+            # Create via canon
+            async with get_db_connection_context() as conn:
+                from lore.core import canon
+                
+                # Establish controlling faction if specified
+                if input.controlled_by:
+                    controller_id = await canon.find_or_create_faction(
+                        ctx, conn, input.controlled_by, faction_type="landmark_controller"
                     )
+                
+                # Create the landmark
+                landmark_id = await canon.find_or_create_landmark(ctx, conn, **landmark_data)
+                
+                # Update location if high significance
+                if input.matriarchal_significance == "high":
+                    from lore.core.lore_system import LoreSystem
+                    lore_system = await LoreSystem.get_instance(self.user_id, self.conversation_id)
                     
-                    # Create narrative connections to historical events
-                    for history_id in input.connected_histories:
-                        await self._create_narrative_connection(
-                            conn, "history", history_id, "landmark", landmark_id,
-                            ConnectionType.HISTORY_TO_LANDMARK,
-                            "Historical event at landmark", 8
-                        )
-                    
-                    # Invalidate cache
-                    self.invalidate_cache_pattern(f"landmarks_{input.location_id}")
-                    
-                    logger.info(f"Created landmark '{input.name}' with ID {landmark_id}")
-                    return landmark_id
+                    await lore_system.propose_and_enact_change(
+                        ctx=ctx,
+                        entity_type="Locations",
+                        entity_identifier={"id": input.location_id},
+                        updates={"has_significant_landmarks": True},
+                        reason=f"High significance landmark '{input.name}' established"
+                    )
+                
+                # Create narrative connections
+                for history_id in input.connected_histories:
+                    await self._create_narrative_connection(
+                        conn, "history", history_id, "landmark", landmark_id,
+                        ConnectionType.HISTORY_TO_LANDMARK,
+                        "Historical event at landmark", 8
+                    )
+            
+            # Invalidate cache
+            self.invalidate_cache_pattern(f"landmarks_{input.location_id}")
+            
+            logger.info(f"Created landmark '{input.name}' with ID {landmark_id}")
+            return landmark_id
+        
     # ===== MYTH EVOLUTION =====
     
     @with_governance(
@@ -979,17 +828,7 @@ class LocalLoreManager(BaseLoreManager):
         evolution_type: EvolutionType,
         causal_factors: Optional[List[str]] = None
     ) -> NarrativeEvolution:
-        """
-        Evolve an urban myth using specialized narrative agents.
-        
-        Args:
-            myth_id: ID of the myth to evolve
-            evolution_type: Type of evolution to apply
-            causal_factors: Factors causing the evolution
-            
-        Returns:
-            NarrativeEvolution with transformation details
-        """
+        """Evolve myth using canon system for updates."""
         with trace(
             "EvolveMythWithAgent", 
             group_id=self.trace_group_id,
@@ -1016,25 +855,25 @@ class LocalLoreManager(BaseLoreManager):
             
             # Prepare evolution prompt
             evolution_prompt = f"""
-Evolve this urban myth based on the following context:
-
-MYTH: {myth_data['name']}
-CURRENT DESCRIPTION: {myth_data['description']}
-BELIEVABILITY: {myth_data['believability']}/10
-SPREAD RATE: {myth_data['spread_rate']}/10
-REGIONS KNOWN: {', '.join(myth_data['regions_known'] or [])}
-
-EVOLUTION TYPE: {evolution_type.value}
-CAUSAL FACTORS: {', '.join(causal_factors)}
-
-Transform this myth according to the evolution type while:
-1. Maintaining the core narrative identity
-2. Enhancing matriarchal themes appropriately
-3. Making the changes feel natural and believable
-4. Adjusting believability and spread rate as appropriate
-
-Return only the evolved description.
-"""
+    Evolve this urban myth based on the following context:
+    
+    MYTH: {myth_data['name']}
+    CURRENT DESCRIPTION: {myth_data['description']}
+    BELIEVABILITY: {myth_data['believability']}/10
+    SPREAD RATE: {myth_data['spread_rate']}/10
+    REGIONS KNOWN: {', '.join(myth_data['regions_known'] or [])}
+    
+    EVOLUTION TYPE: {evolution_type.value}
+    CAUSAL FACTORS: {', '.join(causal_factors)}
+    
+    Transform this myth according to the evolution type while:
+    1. Maintaining the core narrative identity
+    2. Enhancing matriarchal themes appropriately
+    3. Making the changes feel natural and believable
+    4. Adjusting believability and spread rate as appropriate
+    
+    Return only the evolved description.
+    """
             
             # Select agent based on evolution type
             agent_map = {
@@ -1073,44 +912,36 @@ Return only the evolved description.
             new_spread_rate = max(1, min(10, 
                 myth_data['spread_rate'] + stat_changes['spread_rate']))
             
-            # Store the evolution
-            async with self.get_connection_pool() as pool:
-                async with pool.acquire() as conn:
-                    # Record the evolution
-                    evo_id = await conn.fetchval("""
-                        INSERT INTO MythEvolutions (
-                            myth_id, previous_version, new_version, evolution_type,
-                            causal_factors, believability_before, believability_after,
-                            spread_rate_before, spread_rate_after, regions_known_before,
-                            regions_known_after, matriarchal_impact
-                        )
-                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-                        RETURNING id
-                    """,
-                    myth_id, myth_data['description'], new_description, evolution_type.value,
-                    causal_factors, myth_data['believability'], new_believability,
-                    myth_data['spread_rate'], new_spread_rate, myth_data['regions_known'],
-                    myth_data['regions_known'], stat_changes.get('matriarchal_impact'))
-                    
-                    # Update the myth
-                    await conn.execute("""
-                        UPDATE UrbanMyths
-                        SET description = $1,
-                            believability = $2,
-                            spread_rate = $3,
-                            narrative_style = $4,
-                            last_evolution = CURRENT_TIMESTAMP
-                        WHERE id = $5
-                    """, new_description, new_believability, new_spread_rate, 
-                        evolution_type.value, myth_id)
-                    
-                    # Update embedding
-                    embedding_text = f"{myth_data['name']} {new_description} {evolution_type.value}"
-                    new_embedding = await generate_embedding(embedding_text)
-                    
-                    await conn.execute("""
-                        UPDATE UrbanMyths SET embedding = $1 WHERE id = $2
-                    """, new_embedding, myth_id)
+            # Store the evolution and update via canon
+            async with get_db_connection_context() as conn:
+                from lore.core import canon
+                
+                # Record the evolution in MythEvolutions table
+                evo_id = await conn.fetchval("""
+                    INSERT INTO MythEvolutions (
+                        myth_id, previous_version, new_version, evolution_type,
+                        causal_factors, believability_before, believability_after,
+                        spread_rate_before, spread_rate_after, regions_known_before,
+                        regions_known_after, matriarchal_impact
+                    )
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                    RETURNING id
+                """,
+                myth_id, myth_data['description'], new_description, evolution_type.value,
+                causal_factors, myth_data['believability'], new_believability,
+                myth_data['spread_rate'], new_spread_rate, myth_data['regions_known'],
+                myth_data['regions_known'], stat_changes.get('matriarchal_impact'))
+                
+                # Update the myth via canon
+                updates = {
+                    "description": new_description,
+                    "believability": new_believability,
+                    "spread_rate": new_spread_rate,
+                    "narrative_style": evolution_type.value,
+                    "last_evolution": datetime.now()
+                }
+                
+                await canon.update_urban_myth(ctx, conn, myth_id, updates)
             
             return NarrativeEvolution(
                 original_element_id=myth_id,
@@ -2712,58 +2543,53 @@ Show specific differences in language, detail, and emphasis.
                 
                 return unique_connections
 
-    async def _apply_consistency_fixes(
-        self, suggested_fixes: List[Dict[str, Any]]
-    ) -> List[Dict[str, Any]]:
-        """Apply suggested consistency fixes."""
+    async def _apply_consistency_fixes(self, suggested_fixes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Apply consistency fixes using canon system."""
         applied_fixes = []
         
-        async with self.get_connection_pool() as pool:
-            async with pool.acquire() as conn:
-                for fix in suggested_fixes:
-                    try:
-                        if 'element_type' in fix and 'element_id' in fix:
-                            # Update element description
-                            table_map = {
-                                'myth': 'UrbanMyths',
-                                'history': 'LocalHistories',
-                                'landmark': 'Landmarks'
-                            }
-                            
-                            table = table_map.get(fix['element_type'])
-                            if table and 'new_description' in fix:
-                                await conn.execute(f"""
-                                    UPDATE {table}
-                                    SET description = $1
-                                    WHERE id = $2
-                                """, fix['new_description'], fix['element_id'])
-                                
-                                applied_fixes.append(fix)
-                                logger.info(
-                                    f"Applied consistency fix to {fix['element_type']} "
-                                    f"#{fix['element_id']}"
-                                )
-                        
-                        elif 'connection_id' in fix and 'new_description' in fix:
-                            # Update connection description
-                            await conn.execute("""
-                                UPDATE NarrativeConnections
-                                SET connection_description = $1,
-                                    validated = TRUE
-                                WHERE id = $2
-                            """, fix['new_description'], fix['connection_id'])
-                            
-                            applied_fixes.append(fix)
-                            logger.info(
-                                f"Applied consistency fix to connection "
-                                f"#{fix['connection_id']}"
+        async with get_db_connection_context() as conn:
+            from lore.core import canon
+            
+            for fix in suggested_fixes:
+                try:
+                    if 'element_type' in fix and 'element_id' in fix:
+                        if fix['element_type'] == 'myth' and 'new_description' in fix:
+                            await canon.update_urban_myth(
+                                self.create_run_context({}), conn, 
+                                fix['element_id'], 
+                                {"description": fix['new_description']}
                             )
-                    
-                    except Exception as e:
-                        logger.error(f"Error applying consistency fix: {e}")
+                            applied_fixes.append(fix)
+                            
+                        elif fix['element_type'] == 'history' and 'new_description' in fix:
+                            # Update history via direct SQL since it's less complex
+                            await conn.execute("""
+                                UPDATE LocalHistories SET description = $1 WHERE id = $2
+                            """, fix['new_description'], fix['element_id'])
+                            applied_fixes.append(fix)
+                            
+                        elif fix['element_type'] == 'landmark' and 'new_description' in fix:
+                            await canon.update_landmark(
+                                self.create_run_context({}), conn,
+                                fix['element_id'],
+                                {"description": fix['new_description']}
+                            )
+                            applied_fixes.append(fix)
+                            
+                    elif 'connection_id' in fix and 'new_description' in fix:
+                        # Update connection
+                        await conn.execute("""
+                            UPDATE NarrativeConnections
+                            SET connection_description = $1, validated = TRUE
+                            WHERE id = $2
+                        """, fix['new_description'], fix['connection_id'])
+                        applied_fixes.append(fix)
+                        
+                except Exception as e:
+                    logger.error(f"Error applying consistency fix: {e}")
         
         return applied_fixes
-
+    
     async def _create_suggested_connections(
         self, suggested_connections: List[NarrativeConnection]
     ) -> List[int]:
@@ -2982,3 +2808,24 @@ Show specific differences in language, detail, and emphasis.
                             f"Regional variant from transmission to {variant_input.origin_location}",
                             6
                         )
+
+    async def _update_myth_versions_json(self, myth_id: int, key: str, data: Any) -> None:
+        """Update versions_json field using canon system."""
+        async with get_db_connection_context() as conn:
+            # Get current versions_json
+            versions_json = await conn.fetchval(
+                "SELECT versions_json FROM UrbanMyths WHERE id = $1", myth_id
+            ) or {}
+            
+            if isinstance(versions_json, str):
+                versions_json = json.loads(versions_json)
+            
+            # Update with new data
+            versions_json[key] = data
+            
+            # Update via canon
+            from lore.core import canon
+            await canon.update_urban_myth(
+                self.create_run_context({}), conn, myth_id,
+                {"versions_json": json.dumps(versions_json)}
+            )
