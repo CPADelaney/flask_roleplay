@@ -4,6 +4,8 @@
 Coordinates multiple NPC agents for group interactions, using OpenAI Agents SDK.
 Refactored from the original agent_coordinator.py.
 """
+from lore.core import canon
+from lore.lore_system import LoreSystem
 
 import logging
 import asyncio
@@ -1152,15 +1154,7 @@ class NPCAgentCoordinator:
     ) -> Dict[str, Any]:
         """
         Update multiple NPCs in a single batch operation for better performance.
-        Thread-safe implementation.
-    
-        Args:
-            npc_ids: List of NPC IDs to update
-            update_type: Type of update (location_change, emotional_update, etc.)
-            update_data: Data for the update
-    
-        Returns:
-            Dictionary with details about successes and errors in the batch update
+        Thread-safe implementation using LoreSystem.
         """
         async with self._batch_update_lock:
             results = {
@@ -1170,6 +1164,17 @@ class NPCAgentCoordinator:
             }
     
             try:
+                # Get LoreSystem instance
+                lore_system = await LoreSystem.get_instance(self.user_id, self.conversation_id)
+                
+                # Create context for operations
+                class BatchContext:
+                    def __init__(self, user_id, conversation_id):
+                        self.user_id = user_id
+                        self.conversation_id = conversation_id
+                
+                ctx = BatchContext(self.user_id, self.conversation_id)
+    
                 # ------------------------------------------------------------------
                 # LOCATION CHANGE
                 # ------------------------------------------------------------------
@@ -1178,56 +1183,59 @@ class NPCAgentCoordinator:
                     if not new_location:
                         return {"error": "No location specified"}
     
-                    try:
-                        async with get_db_connection_context() as conn:
-                            async with conn.cursor() as cursor:
-                                # Begin transaction
-                                await cursor.execute("BEGIN")
+                    # First ensure location exists canonically
+                    async with get_db_connection_context() as conn:
+                        location_name = await canon.find_or_create_location(ctx, conn, new_location)
     
-                                # Update location for each NPC
-                                for npc_id in npc_ids:
-                                    await cursor.execute(
-                                        """
-                                        UPDATE NPCStats
-                                        SET current_location = %s
-                                        WHERE npc_id = %s
-                                          AND user_id = %s
-                                          AND conversation_id = %s
-                                        """,
-                                        (new_location, npc_id, self.user_id, self.conversation_id),
-                                    )
-    
-                                # Confirm updated NPCs
-                                await cursor.execute(
-                                    """
-                                    SELECT npc_id
-                                    FROM NPCStats
-                                    WHERE npc_id = ANY(%s)
-                                      AND user_id = %s
-                                      AND conversation_id = %s
-                                      AND current_location = %s
-                                    """,
-                                    (npc_ids, self.user_id, self.conversation_id, new_location)
-                                )
-                                updated_rows = await cursor.fetchall()
-                                updated_npc_ids = [row[0] for row in updated_rows]
-    
-                                # Commit the transaction
-                                await cursor.execute("COMMIT")
-    
-                                results["success_count"] = len(updated_npc_ids)
-                                results["updated_npcs"] = updated_npc_ids
-    
-                    except Exception as e:
-                        logger.error(f"Error updating NPC locations: {e}")
-                        results["error"] = str(e)
-                        results["error_count"] = len(npc_ids)
+                    # Process each NPC through LoreSystem
+                    for npc_id in npc_ids:
                         try:
-                            async with get_db_connection_context() as conn:
-                                async with conn.cursor() as cursor:
-                                    await cursor.execute("ROLLBACK")
-                        except Exception as rollback_error:
-                            logger.error(f"Error rolling back transaction: {rollback_error}")
+                            result = await lore_system.propose_and_enact_change(
+                                ctx=ctx,
+                                entity_type="NPCStats",
+                                entity_identifier={"npc_id": npc_id},
+                                updates={"current_location": location_name},
+                                reason=f"NPC moved to {location_name}"
+                            )
+                            
+                            if result.get("status") == "committed":
+                                results["success_count"] += 1
+                                results["details"][npc_id] = {"success": True}
+                            else:
+                                results["error_count"] += 1
+                                results["details"][npc_id] = {"error": result.get("message", "Unknown error")}
+                        except Exception as e:
+                            results["error_count"] += 1
+                            results["details"][npc_id] = {"error": str(e)}
+    
+                # ------------------------------------------------------------------
+                # TRAIT UPDATE
+                # ------------------------------------------------------------------
+                elif update_type == "trait_update":
+                    traits = update_data.get("traits", {})
+                    if not traits:
+                        return {"error": "No traits specified for update"}
+    
+                    # Use LoreSystem for each NPC
+                    for npc_id in npc_ids:
+                        try:
+                            result = await lore_system.propose_and_enact_change(
+                                ctx=ctx,
+                                entity_type="NPCStats",
+                                entity_identifier={"npc_id": npc_id},
+                                updates=traits,
+                                reason=f"Batch trait update: {', '.join(traits.keys())}"
+                            )
+                            
+                            if result.get("status") == "committed":
+                                results["success_count"] += 1
+                                results["details"][npc_id] = {"success": True}
+                            else:
+                                results["error_count"] += 1
+                                results["details"][npc_id] = {"error": result.get("message", "Unknown error")}
+                        except Exception as e:
+                            results["error_count"] += 1
+                            results["details"][npc_id] = {"error": str(e)}
     
                 # ------------------------------------------------------------------
                 # EMOTIONAL UPDATE
