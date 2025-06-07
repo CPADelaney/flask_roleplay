@@ -1617,3 +1617,42 @@ async def find_entity_by_name(
     except Exception as e:
         logger.error(f"Error finding {entity_type} by name '{name}': {str(e)}")
         return None
+
+async def create_message(ctx, conn, conversation_id: int, sender: str, content: str) -> int:
+    """
+    Create a message canonically.
+    """
+    message_id = await conn.fetchval("""
+        INSERT INTO messages (conversation_id, sender, content, created_at)
+        VALUES ($1, $2, $3, $4)
+        RETURNING id
+    """, conversation_id, sender, content, datetime.now(timezone.utc))
+    
+    await log_canonical_event(
+        ctx, conn,
+        f"Message created from {sender} in conversation {conversation_id}",
+        tags=["message", "creation"],
+        significance=2
+    )
+    
+    return message_id
+
+async def update_current_roleplay(ctx, conn, user_id: int, conversation_id: int, key: str, value: str) -> None:
+    """
+    Update a CurrentRoleplay value canonically.
+    """
+    await conn.execute("""
+        INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
+        VALUES ($1, $2, $3, $4)
+        ON CONFLICT (user_id, conversation_id, key)
+        DO UPDATE SET value = EXCLUDED.value
+    """, user_id, conversation_id, key, value)
+    
+    await log_canonical_event(
+        ctx, conn,
+        f"CurrentRoleplay updated: {key} = {value}",
+        tags=["roleplay", "update", key.lower()],
+        significance=3
+    )
+
+    
