@@ -20,7 +20,7 @@ import logging
 import json
 import asyncio
 import inspect
-import time  # If not already imported
+import time
 import importlib
 import pkgutil
 import re
@@ -30,10 +30,13 @@ from typing import Dict, List, Any, Optional, Tuple, Union, Callable, Set
 import asyncpg
 
 # The agent trace utility
-from agents import trace
+from agents import trace, RunContextWrapper
 
 # Database connection helper
 from db.connection import get_db_connection_context
+
+# --- MERGE: Import the new LoreSystem ---
+from lore.lore_system import LoreSystem
 
 from nyx.constants import DirectiveType, DirectivePriority, AgentType
 
@@ -106,6 +109,9 @@ class NyxUnifiedGovernor:
     def __init__(self, user_id: int, conversation_id: int):
         self.user_id = user_id
         self.conversation_id = conversation_id
+        
+        # --- MERGE: Add a placeholder for the LoreSystem ---
+        self.lore_system: Optional[LoreSystem] = None
 
         # Core systems and state
         self.memory_system = None
@@ -136,14 +142,34 @@ class NyxUnifiedGovernor:
         # Directive/action reports
         self.directives: Dict[str, Dict[str, Any]] = {}
         self.action_reports: Dict[str, Dict[str, Any]] = {}
+        
+        # Flag to track initialization
+        self._initialized = False
 
-    
+    async def initialize(self) -> "NyxUnifiedGovernor":
+        """
+        Initialize the governance system asynchronously.
+        This must be called after creating a new NyxUnifiedGovernor instance.
+        """
+        if hasattr(self, '_initialized') and self._initialized:
+            return self
+
+        # --- MERGE: Get an instance of the LoreSystem during initialization ---
+        # Nyx needs its primary tool to execute its will.
+        self.lore_system = await LoreSystem.get_instance(self.user_id, self.conversation_id)
+
+        # Initialize other systems
+        await self._initialize_systems()
+        self._initialized = True
+        return self
+
     async def _initialize_systems(self):
         """Initialize memory system, game state, and discover agents."""
         self.memory_system = await get_memory_nyx_bridge(self.user_id, self.conversation_id)
         self.game_state = await self.initialize_game_state()
         await self.discover_and_register_agents()
         await self._load_initial_state()
+
 
     async def _load_initial_state(self):
         """Load goals and agent state from memory."""
@@ -1249,7 +1275,7 @@ class NyxUnifiedGovernor:
             # Look for goal info in memory text or metadata
             if "goal" in memory.get("text", "").lower():
                 # Parse goal information from memory
-                # This is a simple implementation - enhance based on your memory format
+                # This is a placeholder implementation - enhance based on your memory format
                 goals.append({
                     "id": memory.get("id"),
                     "description": memory.get("text"),
@@ -1266,6 +1292,1094 @@ class NyxUnifiedGovernor:
                 })
                 
         return goals
+
+    async def orchestrate_narrative_shift(self, reason: str, shift_type: str = "local", shift_details: Optional[Dict[str, Any]] = None):
+        """
+        Orchestrate a narrative shift at any scale.
+        
+        Args:
+            reason: Why the shift is happening
+            shift_type: Scale of shift ("personal", "local", "regional", "national", "global")
+            shift_details: Optional details to customize the shift, including:
+                - target_entities: Specific entities to affect
+                - change_type: Type of change to make
+                - custom_changes: Specific changes to apply
+        """
+        if not self._initialized:
+            await self.initialize()
+    
+        logger.info(f"NYX: Orchestrating a {shift_type} narrative shift because: {reason}")
+    
+        ctx = RunContextWrapper(context={"user_id": self.user_id, "conversation_id": self.conversation_id})
+        shift_details = shift_details or {}
+        results = []
+    
+        # Different logic based on shift type
+        if shift_type == "personal":
+            # Personal-scale shift: individual character changes
+            # Examples: someone gets a new job, relationship changes, personal growth
+            
+            # Use provided target or select an NPC based on narrative needs
+            if "target_entities" in shift_details:
+                npc_names = shift_details["target_entities"]
+            else:
+                # Example: Select an NPC who needs development
+                npc_names = ["Sarah Chen"]  # In real implementation, this would be dynamic
+            
+            for npc_name in npc_names:
+                npc_id = await self._get_npc_id_by_name(npc_name)
+                if not npc_id:
+                    logger.warning(f"NPC '{npc_name}' not found for personal shift")
+                    continue
+                    
+                # Determine what kind of personal change
+                change_type = shift_details.get("change_type", "growth")
+                
+                if change_type == "growth":
+                    updates = {
+                        "confidence": min(100, await self._get_npc_stat(npc_id, "confidence", 50) + 10),
+                        "personality_traits": await self._add_personality_trait(npc_id, "determined")
+                    }
+                    narrative_reason = f"{reason} {npc_name} has grown more confident."
+                    
+                elif change_type == "location":
+                    new_location = shift_details.get("new_location", "University Library")
+                    updates = {
+                        "current_location": new_location,
+                        "schedule": shift_details.get("new_schedule", {"morning": "studying", "afternoon": "working"})
+                    }
+                    narrative_reason = f"{reason} {npc_name} now spends most of their time at {new_location}."
+                    
+                elif change_type == "relationship":
+                    updates = shift_details.get("custom_changes", {})
+                    narrative_reason = f"{reason} {npc_name}'s relationships have shifted."
+                    
+                else:
+                    updates = shift_details.get("custom_changes", {})
+                    narrative_reason = f"{reason} {npc_name} has experienced a personal change."
+                
+                result = await self.lore_system.propose_and_enact_change(
+                    ctx=ctx,
+                    entity_type="NPCStats",
+                    entity_identifier={"npc_id": npc_id},
+                    updates=updates,
+                    reason=narrative_reason
+                )
+                results.append(result)
+                
+        elif shift_type == "local":
+            # Local-scale shift: community changes, local groups, small businesses
+            # Examples: store closes, new club forms, local election
+            
+            change_type = shift_details.get("change_type", "community_change")
+            
+            if change_type == "business_closure":
+                location_name = shift_details.get("location", "Corner Coffee Shop")
+                # Update location status
+                async with get_db_connection_context() as conn:
+                    await conn.execute("""
+                        UPDATE Locations 
+                        SET description = description || ' (CLOSED)',
+                            open_hours = '{}'::jsonb
+                        WHERE location_name = $1 AND user_id = $2 AND conversation_id = $3
+                    """, location_name, self.user_id, self.conversation_id)
+                
+                # Create a conflict about it
+                conflict_result = await self.create_conflict({
+                    "name": f"{location_name} Closure Controversy",
+                    "conflict_type": "economic",
+                    "scale": "local",
+                    "description": f"Local residents are upset about {location_name} closing down",
+                    "involved_parties": [
+                        {"type": "location", "name": location_name, "stake": "closing"},
+                        {"type": "faction", "name": "Local Business Association", "stance": "concerned"}
+                    ],
+                    "stakes": "community gathering place"
+                }, reason)
+                results.append(conflict_result)
+                
+            elif change_type == "new_group":
+                # Create a new local faction/group
+                group_name = shift_details.get("group_name", "Community Gardeners")
+                group_location = shift_details.get("location", "Riverside Park")
+                
+                faction_id = await self._get_faction_id_by_name(group_name)
+                if not faction_id:
+                    from lore.core import canon
+                    async with get_db_connection_context() as conn:
+                        faction_id = await canon.find_or_create_faction(
+                            ctx, conn, 
+                            faction_name=group_name,
+                            type=shift_details.get("faction_type", "community"),
+                            description=shift_details.get("description", f"A local {shift_details.get('faction_type', 'community')} group"),
+                            influence_scope="local",
+                            power_level=2
+                        )
+                
+                result = await self.lore_system.propose_and_enact_change(
+                    ctx=ctx,
+                    entity_type="Factions",
+                    entity_identifier={"id": faction_id},
+                    updates={
+                        "territory": group_location,
+                        "influence_scope": "neighborhood",
+                        "recruitment_methods": ["word of mouth", "community board"]
+                    },
+                    reason=f"{reason} The {group_name} have established themselves at {group_location}."
+                )
+                results.append(result)
+                
+            elif change_type == "local_development":
+                # Changes to local infrastructure or community
+                location = shift_details.get("location", "Downtown")
+                development = shift_details.get("development", "new community center")
+                
+                # This might affect multiple entities
+                affected_factions = shift_details.get("affected_factions", ["Local Business Association"])
+                for faction_name in affected_factions:
+                    faction_id = await self._get_faction_id_by_name(faction_name)
+                    if faction_id:
+                        result = await self.lore_system.propose_and_enact_change(
+                            ctx=ctx,
+                            entity_type="Factions",
+                            entity_identifier={"id": faction_id},
+                            updates={"resources": [development]},
+                            reason=f"{reason} {faction_name} now has access to {development}."
+                        )
+                        results.append(result)
+                        
+        elif shift_type == "regional":
+            # Regional-scale shift: multiple communities affected
+            # Examples: weather event, economic downturn, cultural movement
+            
+            change_type = shift_details.get("change_type", "cultural_shift")
+            affected_regions = shift_details.get("affected_regions", [])
+            
+            if change_type == "cultural_shift":
+                cultural_change = shift_details.get("cultural_change", {
+                    "new_traits": ["environmentally conscious", "community-oriented"],
+                    "values_shift": "towards sustainability"
+                })
+                
+                for region_name in affected_regions:
+                    # Update regional culture
+                    # Note: This assumes you have a Regions or GeographicRegions table
+                    result = await self.lore_system.propose_and_enact_change(
+                        ctx=ctx,
+                        entity_type="Locations",  # or "GeographicRegions" if you have that
+                        entity_identifier={"location_name": region_name},
+                        updates={
+                            "cultural_significance": cultural_change.get("values_shift", "shifting values"),
+                            "local_customs": cultural_change.get("new_traits", [])
+                        },
+                        reason=f"{reason} {region_name} is experiencing a cultural shift {cultural_change.get('values_shift', '')}."
+                    )
+                    results.append(result)
+                    
+        elif shift_type in ["national", "global"]:
+            # Large-scale shifts: nations, international relations
+            # This uses your original logic
+            
+            if shift_type == "national":
+                # National change affecting one nation
+                nation_name = shift_details.get("nation", "Example Nation")
+                nation_id = await self._get_nation_id_by_name(nation_name)
+                
+                if nation_id:
+                    updates = shift_details.get("custom_changes", {
+                        "government_type": "reformed democracy",
+                        "matriarchy_level": 7
+                    })
+                    
+                    result = await self.lore_system.propose_and_enact_change(
+                        ctx=ctx,
+                        entity_type="nations",
+                        entity_identifier={"id": nation_id},
+                        updates=updates,
+                        reason=f"{reason} {nation_name} has undergone significant political reform."
+                    )
+                    results.append(result)
+                    
+            else:  # global
+                # Global changes affecting multiple nations or the whole world
+                # Example: technological breakthrough, climate event, pandemic
+                
+                change_type = shift_details.get("change_type", "political")
+                
+                if change_type == "political":
+                    # Original example: faction gains territory
+                    faction_name = shift_details.get("faction", "The Matriarchal Council")
+                    new_territory = shift_details.get("territory", "The Sunken City")
+                    
+                    faction_id = await self._get_faction_id_by_name(faction_name)
+                    if not faction_id:
+                        from lore.core import canon
+                        async with get_db_connection_context() as conn:
+                            faction_id = await canon.find_or_create_faction(
+                                ctx, conn, 
+                                faction_name=faction_name,
+                                type="political",
+                                description=f"A powerful faction seeking to control {new_territory}",
+                                influence_scope="global",
+                                power_level=8
+                            )
+                    
+                    result = await self.lore_system.propose_and_enact_change(
+                        ctx=ctx,
+                        entity_type="Factions",
+                        entity_identifier={"id": faction_id},
+                        updates={"territory": new_territory},
+                        reason=f"{reason} {faction_name} has gained control of {new_territory}."
+                    )
+                    results.append(result)
+                    
+                elif change_type == "technological":
+                    # Global tech advancement
+                    advancement = shift_details.get("advancement", "renewable energy breakthrough")
+                    affected_nations = shift_details.get("affected_nations", [])
+                    
+                    for nation_name in affected_nations:
+                        nation_id = await self._get_nation_id_by_name(nation_name)
+                        if nation_id:
+                            result = await self.lore_system.propose_and_enact_change(
+                                ctx=ctx,
+                                entity_type="nations",
+                                entity_identifier={"id": nation_id},
+                                updates={"technology_level": 8},
+                                reason=f"{reason} {nation_name} has adopted {advancement}."
+                            )
+                            results.append(result)
+    
+        # Record the narrative shift as an event
+        significance_map = {
+            "personal": 3,
+            "local": 5,
+            "regional": 7,
+            "national": 9,
+            "global": 10
+        }
+        
+        await self._record_narrative_event(
+            event_type=f"{shift_type}_narrative_shift",
+            details={
+                "shift_type": shift_type,
+                "reason": reason,
+                "changes_made": len(results),
+                "shift_details": shift_details,
+                "results": results
+            }
+        )
+    
+        logger.info(f"NYX: {shift_type} narrative shift completed with {len(results)} changes.")
+        return {
+            "status": "completed",
+            "shift_type": shift_type,
+            "changes_made": len(results),
+            "results": results
+        }
+    
+    # Helper methods used by orchestrate_narrative_shift:
+    
+    async def _get_npc_stat(self, npc_id: int, stat_name: str, default: int = 50) -> int:
+        """Get a specific stat value for an NPC."""
+        try:
+            async with get_db_connection_context() as conn:
+                value = await conn.fetchval(f"""
+                    SELECT {stat_name} FROM NPCStats 
+                    WHERE npc_id = $1
+                """, npc_id)
+                return value if value is not None else default
+        except Exception as e:
+            logger.error(f"Error getting NPC stat {stat_name}: {e}")
+            return default
+    
+    async def _add_personality_trait(self, npc_id: int, new_trait: str) -> List[str]:
+        """Add a personality trait to an NPC if they don't already have it."""
+        try:
+            async with get_db_connection_context() as conn:
+                current_traits = await conn.fetchval("""
+                    SELECT personality_traits FROM NPCStats 
+                    WHERE npc_id = $1
+                """, npc_id)
+                
+                traits = json.loads(current_traits) if current_traits else []
+                if new_trait not in traits:
+                    traits.append(new_trait)
+                
+                return traits
+        except Exception as e:
+            logger.error(f"Error adding personality trait: {e}")
+            return [new_trait]
+    async def _get_faction_id_by_name(self, faction_name: str) -> Optional[int]:
+        """
+        Retrieve a faction ID by name.
+        Note: Your schema doesn't have a dedicated Factions table, 
+        so this assumes you'll add one or use an existing pattern.
+        """
+        try:
+            async with get_db_connection_context() as conn:
+                # If you have a Factions table (not in current schema)
+                result = await conn.fetchval("""
+                    SELECT id FROM Factions 
+                    WHERE name = $1 AND user_id = $2 AND conversation_id = $3
+                """, faction_name, self.user_id, self.conversation_id)
+                return result
+        except Exception as e:
+            logger.error(f"Error retrieving faction ID for '{faction_name}': {e}")
+            return None
+    
+    async def _get_nation_id_by_name(self, nation_name: str) -> Optional[int]:
+        """Retrieve a nation ID by name."""
+        try:
+            async with get_db_connection_context() as conn:
+                result = await conn.fetchval("""
+                    SELECT id FROM nations 
+                    WHERE LOWER(name) = LOWER($1)
+                """, nation_name)
+                return result
+        except Exception as e:
+            logger.error(f"Error retrieving nation ID for '{nation_name}': {e}")
+            return None
+    
+    async def _get_npc_id_by_name(self, npc_name: str) -> Optional[int]:
+        """Retrieve an NPC ID by name."""
+        try:
+            async with get_db_connection_context() as conn:
+                result = await conn.fetchval("""
+                    SELECT npc_id FROM NPCStats 
+                    WHERE npc_name = $1 AND user_id = $2 AND conversation_id = $3
+                """, npc_name, self.user_id, self.conversation_id)
+                return result
+        except Exception as e:
+            logger.error(f"Error retrieving NPC ID for '{npc_name}': {e}")
+            return None
+
+    
+    async def create_local_group(self, group_data: Dict[str, Any], reason: str) -> Dict[str, Any]:
+        """
+        Create a local group or organization (not necessarily political).
+        
+        Args:
+            group_data: Data including:
+                - name: Group name (e.g., "Book Club", "Local Band", "Parent Committee")
+                - type: Type (e.g., "social", "hobby", "community", "educational")
+                - scope: Scope (e.g., "school", "neighborhood", "online")
+                - meeting_place: Where they meet
+                - members: List of member names
+                - activities: What they do
+            reason: Why this group is being created
+        """
+        if not self._initialized:
+            await self.initialize()
+            
+        ctx = RunContextWrapper(context={"user_id": self.user_id, "conversation_id": self.conversation_id})
+        
+        # Create the faction with appropriate type
+        from lore.core import canon
+        async with get_db_connection_context() as conn:
+            faction_id = await canon.find_or_create_faction(
+                ctx, conn,
+                faction_name=group_data["name"],
+                type=group_data.get("type", "social"),
+                description=group_data.get("description", f"A {group_data.get('type', 'social')} group"),
+                values=group_data.get("values", ["community", "shared interests"]),
+                goals=group_data.get("goals", ["meet regularly", "enjoy activities"]),
+                influence_scope=group_data.get("scope", "local"),
+                power_level=2,  # Low power level for local groups
+                territory=[group_data.get("meeting_place", "various locations")]
+            )
+        
+        # Add members as allies/affiliates
+        if "members" in group_data:
+            member_ids = []
+            for member_name in group_data["members"]:
+                npc_id = await self._get_npc_id_by_name(member_name)
+                if npc_id:
+                    member_ids.append(npc_id)
+                    # Update NPC's affiliations
+                    await self.lore_system.propose_and_enact_change(
+                        ctx=ctx,
+                        entity_type="NPCStats", 
+                        entity_identifier={"npc_id": npc_id},
+                        updates={"affiliations": [group_data["name"]]},
+                        reason=f"Joined {group_data['name']}"
+                    )
+        
+        return {"status": "success", "faction_id": faction_id, "type": "local_group"}
+
+    async def enact_political_change(self, nation_name: str, change_type: str, details: Dict[str, Any], reason: str) -> Dict[str, Any]:
+        """
+        Enact a political change in a nation through the LoreSystem.
+        
+        Args:
+            nation_name: Name of the nation (will be looked up)
+            change_type: Type of change (e.g., 'leadership', 'government', 'policy')
+            details: Specific details of the change
+            reason: Narrative reason for the change
+        
+        Returns:
+            Result of the change enactment
+        """
+        if not self._initialized:
+            await self.initialize()
+    
+        logger.info(f"NYX: Enacting political change in nation {nation_name}: {change_type}")
+    
+        ctx = RunContextWrapper(context={"user_id": self.user_id, "conversation_id": self.conversation_id})
+    
+        # Get nation ID
+        nation_id = await self._get_nation_id_by_name(nation_name)
+        if not nation_id:
+            # Create the nation if it doesn't exist
+            from lore.core import canon
+            async with get_db_connection_context() as conn:
+                nation_id = await canon.find_or_create_nation(
+                    ctx, conn,
+                    nation_name=nation_name,
+                    government_type=details.get('government_type', 'Unknown')
+                )
+    
+        # Map change_type to appropriate updates
+        updates = {}
+        if change_type == "leadership":
+            if "new_leader_name" in details:
+                # Get or create the new leader NPC
+                new_leader_id = await self._get_npc_id_by_name(details["new_leader_name"])
+                if not new_leader_id:
+                    from lore.core import canon
+                    async with get_db_connection_context() as conn:
+                        new_leader_id = await canon.find_or_create_npc(
+                            ctx, conn,
+                            npc_name=details["new_leader_name"],
+                            role="Political Leader",
+                            affiliations=[nation_name]
+                        )
+                updates["leader_npc_id"] = new_leader_id
+            if "leadership_structure" in details:
+                updates["leadership_structure"] = details["leadership_structure"]
+        elif change_type == "government":
+            if "government_type" in details:
+                updates["government_type"] = details["government_type"]
+            if "matriarchy_level" in details:
+                updates["matriarchy_level"] = details["matriarchy_level"]
+        elif change_type == "policy":
+            # For policies, we might need to update JSON fields
+            if "diplomatic_stance" in details:
+                updates["diplomatic_stance"] = details["diplomatic_stance"]
+            if "economic_focus" in details:
+                updates["economic_focus"] = details["economic_focus"]
+    
+        # Delegate to LoreSystem
+        result = await self.lore_system.propose_and_enact_change(
+            ctx=ctx,
+            entity_type="nations",  # Use lowercase as per schema
+            entity_identifier={"id": nation_id},
+            updates=updates,
+            reason=f"Political change ({change_type}): {reason}"
+        )
+    
+        # Record this as a major narrative event
+        if result.get("status") == "committed":
+            await self._record_narrative_event(
+                event_type="political_change",
+                details={
+                    "nation_id": nation_id,
+                    "nation_name": nation_name,
+                    "change_type": change_type,
+                    "updates": updates,
+                    "reason": reason
+                }
+            )
+    
+        return result
+
+    async def create_conflict(self, conflict_data: Dict[str, Any], reason: str) -> Dict[str, Any]:
+        """
+        Create a new conflict in the world through the LoreSystem.
+        Conflicts can be any scale: interpersonal disagreements, local issues, or international disputes.
+        
+        Args:
+            conflict_data: Data for the conflict including:
+                - name: Conflict name (e.g., "Library Noise Complaint", "Trade War")
+                - conflict_type: Type (e.g., "interpersonal", "community", "political", "economic")
+                - scale: Scale of conflict ("personal", "local", "regional", "national", "global")
+                - involved_parties: List of involved parties (can be NPCs, factions, nations, locations)
+                - description: Description of the conflict
+                - stakes: What's at stake (e.g., "friendship", "local business", "territory")
+            reason: Narrative reason for the conflict
+        
+        Returns:
+            Result of conflict creation
+        """
+        if not self._initialized:
+            await self.initialize()
+    
+        logger.info(f"NYX: Creating new conflict: {conflict_data.get('name', 'Unnamed')}")
+    
+        ctx = RunContextWrapper(context={"user_id": self.user_id, "conversation_id": self.conversation_id})
+    
+        # Handle different types of involved parties
+        scale = conflict_data.get("scale", "local")
+        involved_parties = conflict_data.get("involved_parties", [])
+        
+        # Process stakeholders based on conflict scale
+        stakeholders = []
+        
+        for party in involved_parties:
+            if isinstance(party, dict):
+                party_type = party.get("type", "npc")
+                party_name = party.get("name")
+                
+                if party_type == "npc":
+                    npc_id = await self._get_npc_id_by_name(party_name)
+                    if npc_id:
+                        stakeholders.append({
+                            "npc_id": npc_id,
+                            "role": party.get("role", "participant"),
+                            "stance": party.get("stance", "neutral")
+                        })
+                elif party_type == "faction":
+                    # Could be student club, local group, etc.
+                    stakeholders.append({
+                        "faction_name": party_name,
+                        "faction_type": party.get("faction_type", "community"),
+                        "stance": party.get("stance", "neutral")
+                    })
+                elif party_type == "location":
+                    # For conflicts about places (e.g., "coffee shop closing")
+                    stakeholders.append({
+                        "location_name": party_name,
+                        "stake": party.get("stake", "affected")
+                    })
+            elif isinstance(party, str):
+                # Assume it's an NPC name
+                npc_id = await self._get_npc_id_by_name(party)
+                if npc_id:
+                    stakeholders.append({"npc_id": npc_id})
+    
+        # Create the conflict with appropriate scale
+        async with get_db_connection_context() as conn:
+            conflict_id = await conn.fetchval("""
+                INSERT INTO Conflicts (
+                    user_id, conversation_id, conflict_name, conflict_type,
+                    description, phase, is_active, 
+                    progress, estimated_duration
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                RETURNING conflict_id
+            """, 
+            self.user_id, self.conversation_id, 
+            conflict_data.get("name", "Unknown Conflict"),
+            conflict_data.get("conflict_type", "interpersonal"),
+            conflict_data.get("description", ""),
+            conflict_data.get("phase", "brewing"),
+            True,
+            0.0,
+            conflict_data.get("estimated_duration", 1) if scale == "personal" else 30)
+    
+            # Add stakeholders with scale-appropriate details
+            for stakeholder in stakeholders:
+                if "npc_id" in stakeholder:
+                    await conn.execute("""
+                        INSERT INTO ConflictStakeholders (
+                            conflict_id, npc_id, faction_name, 
+                            public_motivation, private_motivation,
+                            involvement_level
+                        )
+                        VALUES ($1, $2, $3, $4, $5, $6)
+                    """, 
+                    conflict_id, 
+                    stakeholder["npc_id"],
+                    stakeholder.get("faction_name"),
+                    stakeholder.get("public_motivation", "Personal reasons"),
+                    stakeholder.get("private_motivation", "Unknown"),
+                    stakeholder.get("involvement_level", 5 if scale == "personal" else 3))
+    
+        # Log appropriate event based on scale
+        significance = {
+            "personal": 3,
+            "local": 5,
+            "regional": 7,
+            "national": 9,
+            "global": 10
+        }.get(scale, 5)
+        
+        await self._record_narrative_event(
+            event_type=f"{scale}_conflict",
+            details={
+                "conflict_id": conflict_id,
+                "name": conflict_data.get("name"),
+                "type": conflict_data.get("conflict_type"),
+                "scale": scale,
+                "stakes": conflict_data.get("stakes", "unspecified")
+            }
+        )
+        
+        return {"status": "committed", "conflict_id": conflict_id}
+
+    async def modify_npc_behavior(self, npc_name: str, behavior_changes: Dict[str, Any], reason: str) -> Dict[str, Any]:
+        """
+        Modify an NPC's behavior through the LoreSystem.
+        
+        Args:
+            npc_name: Name of the NPC (will be looked up)
+            behavior_changes: Changes to apply to the NPC
+            reason: Narrative reason for the change
+        
+        Returns:
+            Result of the modification
+        """
+        if not self._initialized:
+            await self.initialize()
+    
+        logger.info(f"NYX: Modifying behavior for NPC {npc_name}")
+    
+        ctx = RunContextWrapper(context={"user_id": self.user_id, "conversation_id": self.conversation_id})
+    
+        # Get NPC ID
+        npc_id = await self._get_npc_id_by_name(npc_name)
+        if not npc_id:
+            logger.error(f"NPC '{npc_name}' not found. Cannot modify behavior.")
+            return {"status": "error", "message": f"NPC '{npc_name}' not found"}
+    
+        # Delegate to LoreSystem
+        result = await self.lore_system.propose_and_enact_change(
+            ctx=ctx,
+            entity_type="NPCStats",
+            entity_identifier={"npc_id": npc_id},
+            updates=behavior_changes,
+            reason=f"NPC behavior modification: {reason}"
+        )
+    
+        return result
+
+
+    async def update_faction_relations(self, faction_name: str, relation_updates: Dict[str, Any], reason: str) -> Dict[str, Any]:
+        """
+        Update faction relations through the LoreSystem.
+        
+        Args:
+            faction_name: Name of the faction
+            relation_updates: Updates to faction relations including:
+                - ally_names: List of ally faction names
+                - rival_names: List of rival faction names  
+                - public_reputation: New reputation value
+            reason: Narrative reason for the change
+        
+        Returns:
+            Result of the update
+        """
+        if not self._initialized:
+            await self.initialize()
+    
+        logger.info(f"NYX: Updating relations for faction {faction_name}")
+    
+        ctx = RunContextWrapper(context={"user_id": self.user_id, "conversation_id": self.conversation_id})
+    
+        # Get faction ID
+        faction_id = await self._get_faction_id_by_name(faction_name)
+        if not faction_id:
+            logger.error(f"Faction '{faction_name}' not found.")
+            return {"status": "error", "message": f"Faction '{faction_name}' not found"}
+    
+        # Convert faction names to IDs in relation updates
+        updates = {}
+        
+        if "ally_names" in relation_updates:
+            ally_ids = []
+            for ally_name in relation_updates["ally_names"]:
+                ally_id = await self._get_faction_id_by_name(ally_name)
+                if ally_id:
+                    ally_ids.append(ally_id)
+            updates["allies"] = ally_ids
+            
+        if "rival_names" in relation_updates:
+            rival_ids = []
+            for rival_name in relation_updates["rival_names"]:
+                rival_id = await self._get_faction_id_by_name(rival_name)
+                if rival_id:
+                    rival_ids.append(rival_id)
+            updates["rivals"] = rival_ids
+            
+        if "public_reputation" in relation_updates:
+            updates["public_reputation"] = relation_updates["public_reputation"]
+    
+        # Delegate to LoreSystem
+        result = await self.lore_system.propose_and_enact_change(
+            ctx=ctx,
+            entity_type="Factions",
+            entity_identifier={"id": faction_id},
+            updates=updates,
+            reason=f"Faction relations update: {reason}"
+        )
+    
+        return result
+
+    async def assign_npc_to_location(self, npc_name: str, location_name: str, reason: str) -> Dict[str, Any]:
+        """
+        Assign an NPC to a new location through the LoreSystem.
+        
+        Args:
+            npc_name: Name of the NPC
+            location_name: Name of the location
+            reason: Narrative reason for the move
+            
+        Returns:
+            Result of the assignment
+        """
+        if not self._initialized:
+            await self.initialize()
+    
+        logger.info(f"NYX: Assigning {npc_name} to location {location_name}")
+    
+        ctx = RunContextWrapper(context={"user_id": self.user_id, "conversation_id": self.conversation_id})
+    
+        # Get NPC ID
+        npc_id = await self._get_npc_id_by_name(npc_name)
+        if not npc_id:
+            # Create the NPC if needed
+            from lore.core import canon
+            async with get_db_connection_context() as conn:
+                npc_id = await canon.find_or_create_npc(
+                    ctx, conn,
+                    npc_name=npc_name,
+                    role="Citizen"
+                )
+    
+        # Ensure location exists
+        from lore.core import canon
+        async with get_db_connection_context() as conn:
+            await canon.find_or_create_location(ctx, conn, location_name)
+    
+        # Update NPC's current location
+        result = await self.lore_system.propose_and_enact_change(
+            ctx=ctx,
+            entity_type="NPCStats",
+            entity_identifier={"npc_id": npc_id},
+            updates={"current_location": location_name},
+            reason=f"Location assignment: {reason}"
+        )
+    
+        return result
+
+    async def create_npc_relationship(self, npc1_name: str, npc2_name: str, 
+                                    relationship_type: str, details: Dict[str, Any], 
+                                    reason: str) -> Dict[str, Any]:
+        """
+        Create or update a relationship between two NPCs.
+        
+        Args:
+            npc1_name: Name of first NPC
+            npc2_name: Name of second NPC
+            relationship_type: Type of relationship
+            details: Relationship details
+            reason: Narrative reason
+            
+        Returns:
+            Result of the operation
+        """
+        if not self._initialized:
+            await self.initialize()
+    
+        logger.info(f"NYX: Creating relationship between {npc1_name} and {npc2_name}")
+    
+        ctx = RunContextWrapper(context={"user_id": self.user_id, "conversation_id": self.conversation_id})
+    
+        # Get NPC IDs
+        npc1_id = await self._get_npc_id_by_name(npc1_name)
+        npc2_id = await self._get_npc_id_by_name(npc2_name)
+    
+        if not npc1_id or not npc2_id:
+            missing = []
+            if not npc1_id:
+                missing.append(npc1_name)
+            if not npc2_id:
+                missing.append(npc2_name)
+            return {"status": "error", "message": f"NPCs not found: {', '.join(missing)}"}
+    
+        # Create or update the social link
+        async with get_db_connection_context() as conn:
+            await conn.execute("""...""", ...)
+            
+            # Update NPC relationships field
+            for npc_id, other_name in [(npc1_id, npc2_name), (npc2_id, npc1_name)]:
+                # Get current relationships
+                current_rels = await conn.fetchval("""
+                    SELECT relationships FROM NPCStats WHERE npc_id = $1
+                """, npc_id)
+                
+                relationships = json.loads(current_rels) if current_rels else {}
+                relationships[other_name] = {
+                    "type": relationship_type,
+                    "level": details.get("link_level", 50),
+                    "details": details
+                }
+        
+        # Now update through LoreSystem (outside the connection context)
+        for npc_id, other_name in [(npc1_id, npc2_name), (npc2_id, npc1_name)]:
+            # Update through LoreSystem
+            await self.lore_system.propose_and_enact_change(
+                ctx=ctx,
+                entity_type="NPCStats",
+                entity_identifier={"npc_id": npc_id},
+                updates={"relationships": json.dumps(relationships)},
+                reason=f"Relationship update: {reason}"
+            )
+    
+        return {"status": "committed", "relationship_created": True}
+
+    async def evolve_world_state(self, evolution_type: str, parameters: Dict[str, Any], reason: str) -> Dict[str, Any]:
+        """
+        Evolve the world state in a specific way through the LoreSystem.
+        
+        Args:
+            evolution_type: Type of evolution (e.g., 'cultural_shift', 'technological_advance')
+            parameters: Parameters for the evolution
+            reason: Narrative reason for the evolution
+        
+        Returns:
+            Result of the evolution
+        """
+        if not self._initialized:
+            await self.initialize()
+
+        logger.info(f"NYX: Evolving world state: {evolution_type}")
+
+        ctx = RunContextWrapper(context={"user_id": self.user_id, "conversation_id": self.conversation_id})
+        
+        results = []
+
+        if evolution_type == "cultural_shift":
+            # Cultural shifts might affect multiple entities
+            affected_regions = parameters.get("affected_regions", [])
+            cultural_changes = parameters.get("changes", {})
+            
+            for region_id in affected_regions:
+                result = await self.lore_system.propose_and_enact_change(
+                    ctx=ctx,
+                    entity_type="GeographicRegions",
+                    entity_identifier={"id": region_id},
+                    updates={"cultural_traits": cultural_changes.get("new_traits", [])},
+                    reason=f"Cultural shift in region: {reason}"
+                )
+                results.append(result)
+                
+        elif evolution_type == "technological_advance":
+            # Technological advances might update multiple nations
+            affected_nations = parameters.get("affected_nations", [])
+            tech_level = parameters.get("technology_level", 5)
+            
+            for nation_id in affected_nations:
+                result = await self.lore_system.propose_and_enact_change(
+                    ctx=ctx,
+                    entity_type="Nations",
+                    entity_identifier={"id": nation_id},
+                    updates={"technology_level": tech_level},
+                    reason=f"Technological advancement: {reason}"
+                )
+                results.append(result)
+                
+        elif evolution_type == "economic_shift":
+            # Economic shifts affect resources and trade
+            affected_entities = parameters.get("affected_entities", [])
+            economic_changes = parameters.get("changes", {})
+            
+            for entity in affected_entities:
+                result = await self.lore_system.propose_and_enact_change(
+                    ctx=ctx,
+                    entity_type=entity["type"],
+                    entity_identifier={"id": entity["id"]},
+                    updates=economic_changes,
+                    reason=f"Economic shift: {reason}"
+                )
+                results.append(result)
+
+        return {
+            "status": "completed",
+            "evolution_type": evolution_type,
+            "results": results,
+            "reason": reason
+        }
+
+    async def _record_narrative_event(self, event_type: str, details: Dict[str, Any]):
+        """
+        Record a narrative event in the memory system.
+        
+        Args:
+            event_type: Type of event
+            details: Event details
+        """
+        memory_text = f"Narrative event ({event_type}): {json.dumps(details, indent=2)}"
+        
+        await self.memory_system.remember(
+            entity_type="nyx",
+            entity_id=self.conversation_id,
+            memory_text=memory_text,
+            importance="high",
+            emotional=False,
+            tags=["narrative", event_type, "governance"]
+        )
+
+    async def handle_agent_conflict(self, agent1_type: str, agent1_id: str, 
+                                  agent2_type: str, agent2_id: str,
+                                  conflict_details: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Handle conflicts between agents by making a governance decision.
+        
+        Args:
+            agent1_type: Type of first agent
+            agent1_id: ID of first agent
+            agent2_type: Type of second agent
+            agent2_id: ID of second agent
+            conflict_details: Details of the conflict
+            
+        Returns:
+            Resolution decision
+        """
+        if not self._initialized:
+            await self.initialize()
+
+        logger.info(f"NYX: Resolving conflict between {agent1_type}/{agent1_id} and {agent2_type}/{agent2_id}")
+
+        # Analyze the conflict
+        conflict_analysis = await self._analyze_agent_conflict(
+            agent1_type, agent1_id, agent2_type, agent2_id, conflict_details
+        )
+
+        # Make a decision based on priorities and impact
+        decision = await self._make_conflict_decision(conflict_analysis)
+
+        # If the conflict involves world state changes, use LoreSystem
+        if decision.get("requires_world_change"):
+            ctx = RunContextWrapper(context={"user_id": self.user_id, "conversation_id": self.conversation_id})
+            
+            for change in decision.get("world_changes", []):
+                await self.lore_system.propose_and_enact_change(
+                    ctx=ctx,
+                    entity_type=change["entity_type"],
+                    entity_identifier=change["identifier"],
+                    updates=change["updates"],
+                    reason=f"Conflict resolution: {decision.get('reasoning', 'Agent conflict')}"
+                )
+
+        # Issue directives to the agents based on the decision
+        if decision.get("agent1_directive"):
+            await self.issue_directive(
+                agent_type=agent1_type,
+                agent_id=agent1_id,
+                directive_type=DirectiveType.OVERRIDE,
+                directive_data=decision["agent1_directive"],
+                priority=DirectivePriority.HIGH
+            )
+
+        if decision.get("agent2_directive"):
+            await self.issue_directive(
+                agent_type=agent2_type,
+                agent_id=agent2_id,
+                directive_type=DirectiveType.OVERRIDE,
+                directive_data=decision["agent2_directive"],
+                priority=DirectivePriority.HIGH
+            )
+
+        return {
+            "conflict_id": f"{agent1_type}_{agent1_id}_vs_{agent2_type}_{agent2_id}_{int(time.time())}",
+            "decision": decision,
+            "analysis": conflict_analysis,
+            "timestamp": datetime.now().isoformat()
+        }
+
+    async def _analyze_agent_conflict(self, agent1_type: str, agent1_id: str,
+                                    agent2_type: str, agent2_id: str,
+                                    conflict_details: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Analyze a conflict between agents.
+        
+        Returns:
+            Analysis results including impact assessment
+        """
+        analysis = {
+            "agents": [
+                {"type": agent1_type, "id": agent1_id},
+                {"type": agent2_type, "id": agent2_id}
+            ],
+            "conflict_type": conflict_details.get("type", "unknown"),
+            "severity": conflict_details.get("severity", 5),
+            "narrative_impact": 0.0,
+            "world_consistency_impact": 0.0,
+            "player_experience_impact": 0.0
+        }
+
+        # Calculate impacts based on conflict type and agent types
+        if conflict_details.get("type") == "narrative_contradiction":
+            analysis["narrative_impact"] = 0.8
+            analysis["world_consistency_impact"] = 0.6
+        elif conflict_details.get("type") == "resource_competition":
+            analysis["narrative_impact"] = 0.3
+            analysis["world_consistency_impact"] = 0.2
+        elif conflict_details.get("type") == "goal_conflict":
+            analysis["narrative_impact"] = 0.5
+            analysis["player_experience_impact"] = 0.4
+
+        # Adjust based on agent types
+        if AgentType.STORY_DIRECTOR in [agent1_type, agent2_type]:
+            analysis["narrative_impact"] *= 1.5
+        if AgentType.UNIVERSAL_UPDATER in [agent1_type, agent2_type]:
+            analysis["world_consistency_impact"] *= 1.5
+
+        return analysis
+
+    async def _make_conflict_decision(self, conflict_analysis: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Make a decision on how to resolve an agent conflict.
+        
+        Returns:
+            Decision including directives and potential world changes
+        """
+        decision = {
+            "resolution_type": "mediate",
+            "reasoning": "",
+            "requires_world_change": False,
+            "world_changes": [],
+            "agent1_directive": None,
+            "agent2_directive": None
+        }
+
+        # High narrative impact - favor story consistency
+        if conflict_analysis["narrative_impact"] > 0.7:
+            decision["resolution_type"] = "narrative_priority"
+            decision["reasoning"] = "Prioritizing narrative consistency and story flow"
+            decision["agent1_directive"] = {
+                "action": "defer",
+                "instruction": "Defer to narrative requirements"
+            }
+            decision["agent2_directive"] = {
+                "action": "proceed",
+                "instruction": "Proceed with narrative-aligned action"
+            }
+
+        # High world consistency impact - enforce rules
+        elif conflict_analysis["world_consistency_impact"] > 0.7:
+            decision["resolution_type"] = "consistency_enforcement"
+            decision["reasoning"] = "Enforcing world consistency rules"
+            decision["requires_world_change"] = True
+            # Will be filled based on specific conflict
+
+        # Moderate impacts - find compromise
+        else:
+            decision["resolution_type"] = "compromise"
+            decision["reasoning"] = "Finding balanced solution between competing goals"
+            decision["agent1_directive"] = {
+                "action": "modify",
+                "instruction": "Modify approach to accommodate other agent"
+            }
+            decision["agent2_directive"] = {
+                "action": "modify",
+                "instruction": "Modify approach to accommodate other agent"
+            }
+
+        return decision
+
+
     
     async def _record_coordination(
         self,
