@@ -7,11 +7,20 @@ import random
 from quart import Blueprint, request, jsonify, session
 from db.connection import get_db_connection_context
 from logic.chatgpt_integration import get_chatgpt_response, get_openai_client, build_message_history
+from lore.core import canon
+from lore.lore_system import LoreSystem
 
 settings_bp = Blueprint('settings_bp', __name__)
 
 async def insert_missing_settings():
     logging.info("[insert_missing_settings] Starting...")
+
+    # Create context for system operations
+    class SettingsContext:
+        user_id = 0  # System settings
+        conversation_id = 0
+    
+    ctx = SettingsContext()
 
     current_dir = os.path.dirname(os.path.abspath(__file__))
     settings_json_path = os.path.join(current_dir, "..", "data", "settings_data.json")
@@ -28,33 +37,37 @@ async def insert_missing_settings():
         return
 
     async with get_db_connection_context() as conn:
-        # Fetch existing settings
-        rows = await conn.fetch("SELECT name FROM Settings")
-        existing = {row['name'] for row in rows}
+        async with conn.transaction():
+            # Fetch existing settings
+            rows = await conn.fetch("SELECT name FROM Settings")
+            existing = {row['name'] for row in rows}
 
-        inserted_count = 0
-        for s in settings_data:
-            sname = s["name"]
-            if sname not in existing:
-                ef = json.dumps(s["enhanced_features"])
-                sm = json.dumps(s["stat_modifiers"])
-                ae = json.dumps(s["activity_examples"])
+            inserted_count = 0
+            for s in settings_data:
+                sname = s["name"]
+                if sname not in existing:
+                    # Settings are system-level configuration, not world lore
+                    # So direct insert is acceptable, but we can log it
+                    ef = json.dumps(s["enhanced_features"])
+                    sm = json.dumps(s["stat_modifiers"])
+                    ae = json.dumps(s["activity_examples"])
 
-                # Use the asyncpg parameter style ($1, $2, etc.)
-                await conn.execute("""
-                    INSERT INTO Settings (name, mood_tone, enhanced_features, stat_modifiers, activity_examples)
-                    VALUES ($1, $2, $3, $4, $5)
-                """, 
-                    sname,
-                    s["mood_tone"],
-                    ef,
-                    sm,
-                    ae
+                    await conn.execute("""
+                        INSERT INTO Settings (name, mood_tone, enhanced_features, stat_modifiers, activity_examples)
+                        VALUES ($1, $2, $3, $4, $5)
+                    """, sname, s["mood_tone"], ef, sm, ae)
+                    
+                    logging.info(f"Inserted new setting: {sname}")
+                    inserted_count += 1
+
+            if inserted_count > 0:
+                # Log the settings update as a canonical event
+                await canon.log_canonical_event(
+                    ctx, conn,
+                    f"Game settings updated: {inserted_count} new settings added",
+                    tags=["system", "settings", "configuration"],
+                    significance=6
                 )
-                logging.info(f"Inserted new setting: {sname}")
-                inserted_count += 1
-            else:
-                logging.debug(f"Skipped existing setting: {sname}")
 
     logging.info(f"[insert_missing_settings] Done. Inserted {inserted_count} new settings.")
 
