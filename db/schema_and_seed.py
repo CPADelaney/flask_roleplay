@@ -383,19 +383,21 @@ async def create_all_tables():
                     user_id INTEGER NOT NULL,
                     conversation_id INTEGER NOT NULL,
                     name TEXT NOT NULL,
-                    type TEXT DEFAULT 'organization',
+                    type TEXT DEFAULT 'community' CHECK (type IN ('political', 'community', 'social', 'hobby', 'educational', 'professional', 'religious', 'criminal')),
                     description TEXT,
                     values TEXT[],
                     goals TEXT[],
-                    hierarchy TEXT,
+                    hierarchy TEXT DEFAULT 'informal',  -- Can be 'informal', 'democratic', 'strict', etc.
                     resources TEXT[],
-                    territory TEXT[],
-                    rivals INTEGER[],
+                    territory TEXT,  -- Can be a location name, not necessarily political territory
+                    meeting_schedule TEXT,  -- For local groups
+                    membership_requirements TEXT[],
+                    rivals INTEGER[],  -- Can be competing clubs, not just political rivals
                     allies INTEGER[],
-                    public_reputation TEXT,
+                    public_reputation TEXT DEFAULT 'neutral',
                     secret_activities TEXT[],
-                    power_level INTEGER DEFAULT 5,
-                    influence_scope TEXT DEFAULT 'local',
+                    power_level INTEGER DEFAULT 3 CHECK (power_level BETWEEN 1 AND 10),
+                    influence_scope TEXT DEFAULT 'local' CHECK (influence_scope IN ('personal', 'local', 'regional', 'national', 'global')),
                     recruitment_methods TEXT[],
                     leadership_structure JSONB,
                     founding_story TEXT,
