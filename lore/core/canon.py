@@ -2,12 +2,15 @@
 
 import logging
 import json
-from typing import Dict, Any, Optional
 
 from db.connection import get_db_connection_context
 from nyx.nyx_governance import AgentType
 from nyx.governance_helpers import with_governance
 from embedding.vector_store import generate_embedding # Assuming you have this
+
+from typing import List, Dict, Any, Union, Optional
+from datetime import datetime
+from agents import Runner
 
 # Import the new validation agent
 from lore.core.validation import CanonValidationAgent
@@ -710,3 +713,376 @@ async def create_cultural_exchange(ctx, conn, **kwargs) -> int:
         kwargs['exchange_details'],
         kwargs['timestamp']
     )
+
+async def find_or_create_geographic_region(
+    ctx, conn,
+    name: str,
+    region_type: str,
+    description: str,
+    **kwargs
+) -> int:
+    """Find or create a geographic region with semantic matching."""
+    # Check exact match
+    existing = await conn.fetchrow("""
+        SELECT id FROM GeographicRegions
+        WHERE LOWER(name) = LOWER($1) AND region_type = $2
+    """, name, region_type)
+    
+    if existing:
+        return existing['id']
+    
+    # Semantic similarity check
+    climate = kwargs.get('climate', '')
+    embedding_text = f"{name} {region_type} {description} {climate}"
+    search_vector = await generate_embedding(embedding_text)
+    
+    similar = await conn.fetchrow("""
+        SELECT id, name, 1 - (embedding <=> $1) AS similarity
+        FROM GeographicRegions
+        WHERE 1 - (embedding <=> $1) > 0.85
+        ORDER BY embedding <=> $1
+        LIMIT 1
+    """, search_vector)
+    
+    if similar:
+        validation_agent = CanonValidationAgent()
+        is_duplicate = await validation_agent.confirm_is_duplicate_region(
+            conn,
+            proposal={"name": name, "region_type": region_type, "description": description},
+            existing_region_id=similar['id']
+        )
+        
+        if is_duplicate:
+            logger.info(f"Region '{name}' matched to existing ID {similar['id']}")
+            return similar['id']
+    
+    # Create new region
+    region_id = await conn.fetchval("""
+        INSERT INTO GeographicRegions (
+            name, region_type, description, climate, resources,
+            governing_faction, population_density, major_settlements,
+            cultural_traits, dangers, terrain_features,
+            defensive_characteristics, strategic_value,
+            matriarchal_influence, embedding
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+        RETURNING id
+    """,
+    name, region_type, description, kwargs.get('climate'),
+    kwargs.get('resources', []), kwargs.get('governing_faction'),
+    kwargs.get('population_density'), kwargs.get('major_settlements', []),
+    kwargs.get('cultural_traits', []), kwargs.get('dangers', []),
+    kwargs.get('terrain_features', []), kwargs.get('defensive_characteristics'),
+    kwargs.get('strategic_value', 5), kwargs.get('matriarchal_influence', 5),
+    search_vector)
+    
+    await log_canonical_event(
+        ctx, conn,
+        f"Geographic region '{name}' established as {region_type} with strategic value {kwargs.get('strategic_value', 5)}",
+        tags=["geography", "region", "canon"],
+        significance=8
+    )
+    
+    return region_id
+
+async def create_political_entity(ctx, conn, **kwargs) -> int:
+    """Create a political entity."""
+    embedding_text = f"{kwargs['name']} {kwargs['entity_type']} {kwargs['description']}"
+    embedding = await generate_embedding(embedding_text)
+    
+    entity_id = await conn.fetchval("""
+        INSERT INTO PoliticalEntities (
+            name, entity_type, description, region_id,
+            governance_style, leadership_structure, population_scale,
+            cultural_identity, economic_focus, political_values,
+            matriarchy_level, relations, military_strength,
+            diplomatic_stance, internal_conflicts, power_centers, embedding
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+        RETURNING id
+    """,
+    kwargs['name'], kwargs['entity_type'], kwargs['description'],
+    kwargs.get('region_id'), kwargs['governance_style'],
+    kwargs['leadership_structure'], kwargs['population_scale'],
+    kwargs['cultural_identity'], kwargs['economic_focus'],
+    kwargs['political_values'], kwargs['matriarchy_level'],
+    json.dumps(kwargs.get('relations', {})), kwargs.get('military_strength', 5),
+    kwargs['diplomatic_stance'], kwargs.get('internal_conflicts', []),
+    json.dumps(kwargs.get('power_centers', [])), embedding)
+    
+    return entity_id
+
+async def create_conflict_simulation(ctx, conn, **kwargs) -> int:
+    """Create a conflict simulation record."""
+    # Create embedding from primary actors
+    actor_names = [a.get('name', '') for a in kwargs.get('primary_actors', [])]
+    embed_text = f"{kwargs['conflict_type']} involving {', '.join(actor_names)}"
+    embedding = await generate_embedding(embed_text)
+    
+    sim_id = await conn.fetchval("""
+        INSERT INTO ConflictSimulations (
+            conflict_type, primary_actors, timeline, intensity_progression,
+            diplomatic_events, military_events, civilian_impact,
+            resolution_scenarios, most_likely_outcome, duration_months,
+            confidence_level, simulation_basis, embedding
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+        RETURNING id
+    """,
+    kwargs['conflict_type'], json.dumps(kwargs['primary_actors']),
+    json.dumps(kwargs['timeline']), kwargs['intensity_progression'],
+    json.dumps(kwargs.get('diplomatic_events', [])),
+    json.dumps(kwargs.get('military_events', [])),
+    json.dumps(kwargs.get('civilian_impact', {})),
+    json.dumps(kwargs.get('resolution_scenarios', [])),
+    json.dumps(kwargs['most_likely_outcome']),
+    kwargs['duration_months'], kwargs['confidence_level'],
+    kwargs['simulation_basis'], embedding)
+    
+    return sim_id
+
+async def create_border_dispute(ctx, conn, **kwargs) -> int:
+    """Create a border dispute record."""
+    embed_text = f"{kwargs['dispute_type']} {kwargs['description']} {kwargs['strategic_implications']}"
+    embedding = await generate_embedding(embed_text)
+    
+    dispute_id = await conn.fetchval("""
+        INSERT INTO BorderDisputes (
+            region1_id, region2_id, dispute_type, description,
+            severity, duration, causal_factors, status,
+            resolution_attempts, strategic_implications,
+            female_leaders_involved, gender_dynamics, embedding
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+        RETURNING id
+    """,
+    kwargs['region1_id'], kwargs['region2_id'], kwargs['dispute_type'],
+    kwargs['description'], kwargs['severity'], kwargs['duration'],
+    kwargs['causal_factors'], kwargs['status'],
+    json.dumps(kwargs.get('resolution_attempts', [])),
+    kwargs['strategic_implications'], kwargs.get('female_leaders_involved', []),
+    kwargs['gender_dynamics'], embedding)
+    
+    return dispute_id
+
+async def update_border_dispute_resolution(ctx, conn, dispute_id: int, **kwargs) -> None:
+    """Update a border dispute with resolution information."""
+    await conn.execute("""
+        UPDATE BorderDisputes
+        SET status = $1,
+            resolution_attempts = $2,
+            strategic_implications = COALESCE($3, strategic_implications)
+        WHERE id = $4
+    """, kwargs['status'], json.dumps(kwargs['resolution_attempts']),
+    kwargs.get('strategic_implications'), dispute_id)
+
+async def find_or_create_urban_myth(
+    ctx, conn,
+    name: str,
+    description: str,
+    **kwargs
+) -> int:
+    """Find or create an urban myth with semantic matching."""
+    # Check exact match
+    existing = await conn.fetchrow("""
+        SELECT id FROM UrbanMyths
+        WHERE name = $1
+    """, name)
+    
+    if existing:
+        return existing['id']
+    
+    # Semantic similarity check
+    narrative_style = kwargs.get('narrative_style', 'folklore')
+    themes = kwargs.get('themes', [])
+    embedding_text = f"{name} {description} {narrative_style} {' '.join(themes)}"
+    search_vector = await generate_embedding(embedding_text)
+    
+    similar = await conn.fetchrow("""
+        SELECT id, name, description, 1 - (embedding <=> $1) AS similarity
+        FROM UrbanMyths
+        WHERE 1 - (embedding <=> $1) > 0.80
+        ORDER BY embedding <=> $1
+        LIMIT 1
+    """, search_vector)
+    
+    if similar:
+        validation_agent = CanonValidationAgent()
+        is_duplicate = await validation_agent.confirm_is_duplicate_myth(
+            conn,
+            proposal={"name": name, "description": description, "themes": themes},
+            existing_myth_id=similar['id']
+        )
+        
+        if is_duplicate:
+            logger.info(f"Urban myth '{name}' matched to existing ID {similar['id']}")
+            
+            # Update regions if new ones provided
+            regions_known = kwargs.get('regions_known', [])
+            if regions_known:
+                existing_regions = await conn.fetchval(
+                    "SELECT regions_known FROM UrbanMyths WHERE id = $1",
+                    similar['id']
+                )
+                new_regions = list(set(existing_regions + regions_known))
+                
+                await conn.execute("""
+                    UPDATE UrbanMyths
+                    SET regions_known = $1,
+                        spread_rate = GREATEST(spread_rate, $2)
+                    WHERE id = $3
+                """, new_regions, kwargs.get('spread_rate', 5), similar['id'])
+            
+            return similar['id']
+    
+    # Create new myth
+    myth_id = await conn.fetchval("""
+        INSERT INTO UrbanMyths (
+            name, description, origin_location, origin_event,
+            believability, spread_rate, regions_known, narrative_style,
+            themes, matriarchal_elements, embedding
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        RETURNING id
+    """,
+    name, description, kwargs.get('origin_location'),
+    kwargs.get('origin_event'), kwargs.get('believability', 6),
+    kwargs.get('spread_rate', 5), kwargs.get('regions_known', []),
+    narrative_style, themes, kwargs.get('matriarchal_elements', []),
+    search_vector)
+    
+    await log_canonical_event(
+        ctx, conn,
+        f"Urban myth '{name}' emerges in {kwargs.get('origin_location', 'the local area')}",
+        tags=["myth", "folklore", "canon"],
+        significance=5
+    )
+    
+    return myth_id
+
+async def create_local_history(ctx, conn, **kwargs) -> int:
+    """Create a local historical event."""
+    embedding_text = f"{kwargs['event_name']} {kwargs['description']} {kwargs['date_description']} {kwargs['narrative_category']}"
+    embedding = await generate_embedding(embedding_text)
+    
+    event_id = await conn.fetchval("""
+        INSERT INTO LocalHistories (
+            location_id, event_name, description, date_description,
+            significance, impact_type, notable_figures,
+            current_relevance, commemoration, connected_myths,
+            related_landmarks, narrative_category, embedding
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+        RETURNING id
+    """,
+    kwargs['location_id'], kwargs['event_name'], kwargs['description'],
+    kwargs['date_description'], kwargs['significance'], kwargs['impact_type'],
+    kwargs.get('notable_figures', []), kwargs.get('current_relevance'),
+    kwargs.get('commemoration'), kwargs.get('connected_myths', []),
+    kwargs.get('related_landmarks', []), kwargs['narrative_category'], embedding)
+    
+    return event_id
+
+async def find_or_create_landmark(ctx, conn, **kwargs) -> int:
+    """Find or create a landmark with semantic matching."""
+    location_id = kwargs['location_id']
+    name = kwargs['name']
+    landmark_type = kwargs['landmark_type']
+    
+    # Get location name for embedding
+    location = await conn.fetchrow("SELECT location_name FROM Locations WHERE id = $1", location_id)
+    if not location:
+        raise ValueError(f"Location {location_id} not found")
+    
+    # Check exact match at location
+    existing = await conn.fetchrow("""
+        SELECT id FROM Landmarks
+        WHERE name = $1 AND location_id = $2
+    """, name, location_id)
+    
+    if existing:
+        return existing['id']
+    
+    # Semantic similarity check
+    embedding_text = f"{name} {landmark_type} {kwargs['description']} at {location['location_name']}"
+    search_vector = await generate_embedding(embedding_text)
+    
+    similar = await conn.fetchrow("""
+        SELECT id, name, landmark_type, 1 - (embedding <=> $1) AS similarity
+        FROM Landmarks
+        WHERE location_id = $2 AND 1 - (embedding <=> $1) > 0.85
+        ORDER BY embedding <=> $1
+        LIMIT 1
+    """, search_vector, location_id)
+    
+    if similar:
+        logger.info(f"Landmark '{name}' appears similar to existing '{similar['name']}' (ID: {similar['id']})")
+        return similar['id']
+    
+    # Create new landmark
+    landmark_id = await conn.fetchval("""
+        INSERT INTO Landmarks (
+            name, location_id, landmark_type, description,
+            historical_significance, current_use, controlled_by,
+            legends, connected_histories, architectural_style,
+            symbolic_meaning, matriarchal_significance, embedding
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+        RETURNING id
+    """,
+    name, location_id, landmark_type, kwargs['description'],
+    kwargs.get('historical_significance'), kwargs.get('current_use'),
+    kwargs.get('controlled_by'), kwargs.get('legends', []),
+    kwargs.get('connected_histories', []), kwargs.get('architectural_style'),
+    kwargs.get('symbolic_meaning'), kwargs.get('matriarchal_significance', 'moderate'),
+    search_vector)
+    
+    await log_canonical_event(
+        ctx, conn,
+        f"Landmark '{name}' established at {location['location_name']} as {landmark_type}",
+        tags=["landmark", "location", "canon"],
+        significance=6
+    )
+    
+    return landmark_id
+
+async def update_urban_myth(ctx, conn, myth_id: int, updates: Dict[str, Any]) -> None:
+    """Update an urban myth."""
+    # Build update query dynamically
+    set_clauses = []
+    values = []
+    for i, (key, value) in enumerate(updates.items()):
+        set_clauses.append(f"{key} = ${i+1}")
+        values.append(value)
+    
+    if not set_clauses:
+        return
+    
+    values.append(myth_id)
+    query = f"UPDATE UrbanMyths SET {', '.join(set_clauses)} WHERE id = ${len(values)}"
+    
+    await conn.execute(query, *values)
+    
+    # Update embedding if description changed
+    if 'description' in updates:
+        myth = await conn.fetchrow("SELECT name FROM UrbanMyths WHERE id = $1", myth_id)
+        if myth:
+            embedding_text = f"{myth['name']} {updates['description']}"
+            embedding = await generate_embedding(embedding_text)
+            await conn.execute("UPDATE UrbanMyths SET embedding = $1 WHERE id = $2", embedding, myth_id)
+
+async def update_landmark(ctx, conn, landmark_id: int, updates: Dict[str, Any]) -> None:
+    """Update a landmark."""
+    set_clauses = []
+    values = []
+    for i, (key, value) in enumerate(updates.items()):
+        set_clauses.append(f"{key} = ${i+1}")
+        values.append(value)
+    
+    if not set_clauses:
+        return
+    
+    values.append(landmark_id)
+    query = f"UPDATE Landmarks SET {', '.join(set_clauses)} WHERE id = ${len(values)}"
+    
+    await conn.execute(query, *values)
