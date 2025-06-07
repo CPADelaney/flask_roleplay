@@ -1411,27 +1411,32 @@ class StorytellerAgent:
             
             # If time advanced and confirmed, update the database
             if time_result.time_advanced and confirm_advance:
-                # Use the new async context manager for the database connection
-                async with get_db_connection_context() as conn:
-                    new_time = time_result.new_time
-                    new_year = new_time.get("year", year)
-                    new_month = new_time.get("month", month)
-                    new_day = new_time.get("day", day)
-                    new_time_of_day = new_time.get("time_of_day", time_of_day)
-                    
-                    # Update CurrentRoleplay with new time
-                    for key, value in [
-                        ("CurrentYear", str(new_year)),
-                        ("CurrentMonth", str(new_month)),
-                        ("CurrentDay", str(new_day)),
-                        ("TimeOfDay", new_time_of_day)
-                    ]:
-                        await conn.execute("""
-                            INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
-                            VALUES ($1, $2, $3, $4)
-                            ON CONFLICT (user_id, conversation_id, key)
-                            DO UPDATE SET value = EXCLUDED.value
-                        """, user_id, conversation_id, key, value)
+                # NEW: Use LoreSystem instead of direct database writes
+                from lore.lore_system import LoreSystem
+                lore_system = await LoreSystem.get_instance(user_id, conversation_id)
+                
+                new_time = time_result.new_time
+                new_year = new_time.get("year", year)
+                new_month = new_time.get("month", month)
+                new_day = new_time.get("day", day)
+                new_time_of_day = new_time.get("time_of_day", time_of_day)
+                
+                # Update CurrentRoleplay with new time using LoreSystem
+                time_updates = {
+                    "CurrentYear": str(new_year),
+                    "CurrentMonth": str(new_month),
+                    "CurrentDay": str(new_day),
+                    "TimeOfDay": new_time_of_day
+                }
+                
+                for key, value in time_updates.items():
+                    await lore_system.propose_and_enact_change(
+                        ctx=ctx,
+                        entity_type="CurrentRoleplay",
+                        entity_identifier={"user_id": user_id, "conversation_id": conversation_id, "key": key},
+                        updates={"value": value},
+                        reason=f"Time advancement: {activity_type} activity progressed time"
+                    )
                     
                     # Create a memory about time advancement
                     await self.create_memory_for_nyx(
@@ -1796,30 +1801,31 @@ class StorytellerAgent:
             
             update_data = result.final_output
             
-            # Apply the updates using the new async context manager
-            async with get_db_connection_context() as conn:
-                # Add required fields to update_data
-                update_data.user_id = user_id
-                update_data.conversation_id = conversation_id
+            # NEW: Use LoreSystem for updates instead of direct database operations
+            from lore.lore_system import LoreSystem
+            lore_system = await LoreSystem.get_instance(user_id, conversation_id)
+            
+            # Process each type of update through LoreSystem
+            update_results = {}
+            
+            # Character stat updates
+            if update_data.character_stat_updates:
+                for stat_name, new_value in update_data.character_stat_updates.items():
+                    result = await lore_system.propose_and_enact_change(
+                        ctx=ctx,
+                        entity_type="PlayerStats",
+                        entity_identifier={"user_id": user_id, "conversation_id": conversation_id, "player_name": "Chase"},
+                        updates={stat_name: new_value},
+                        reason=f"Narrative development: {narrative_response.message[:100]}..."
+                    )
+                    update_results[f"stat_{stat_name}"] = result
                 
-                # Call apply_universal_updates_async
-                update_result = await apply_universal_updates_async(
-                    user_id,
-                    conversation_id,
-                    update_data.dict(),
-                    conn
-                )
                 
                 # Create a memory for these updates
                 update_summary = []
-                if update_result.get("stat_updates"):
-                    update_summary.append(f"Updated {len(update_result['stat_updates'])} stats")
-                if update_result.get("npc_updates"):
-                    update_summary.append(f"Updated {len(update_result['npc_updates'])} NPCs")
-                if update_result.get("location_updates"):
-                    update_summary.append(f"Updated {len(update_result['location_updates'])} locations")
-                if update_result.get("relationship_updates"):
-                    update_summary.append(f"Updated {len(update_result['relationship_updates'])} relationships")
+                successful_updates = [k for k, v in update_results.items() if v.get("status") == "committed"]
+                if successful_updates:
+                    update_summary.append(f"Applied {len(successful_updates)} updates successfully")
                 
                 summary_text = ", ".join(update_summary)
                 await self.create_memory_for_nyx(
@@ -1926,25 +1932,30 @@ class StorytellerAgent:
     async def store_message(self, ctx, sender, content):
         """
         Store a message in the database.
-        
-        Args:
-            sender: Message sender
-            content: Message content
-            
-        Returns:
-            Status of the operation
         """
         user_id = ctx.context["user_id"]
         conversation_id = ctx.context["conversation_id"]
         
-        # Use the new async context manager for database connection
+        # NEW: Use canon module for creating messages
+        from lore.core import canon
+        
         async with get_db_connection_context() as conn:
-            await conn.execute("""
+            # Create message through canon
+            message_id = await conn.fetchval("""
                 INSERT INTO messages (conversation_id, sender, content)
                 VALUES($1, $2, $3)
+                RETURNING id
             """, conversation_id, sender, content)
             
-            return {"status": "stored"}
+            # Log this as a canonical event
+            await canon.log_canonical_event(
+                ctx, conn,
+                f"Message #{message_id} stored from {sender}",
+                tags=["message", "conversation"],
+                significance=2
+            )
+        
+        return {"status": "stored", "message_id": message_id}
     
     @with_governance(
         agent_type=AgentType.STORY_DIRECTOR,
