@@ -1,10 +1,16 @@
 # logic/addiction_emergence.py
 
-from logic.addiction_system_sdk import AddictionContext
+"""
+REFACTORED: Now properly delegates all database writes to the addiction_system_sdk
+which in turn uses canon/LoreSystem
+"""
+
+from logic.addiction_system_sdk import AddictionContext, update_addiction_level
 from agents import RunContextWrapper
 from pydantic import BaseModel, Field
 import os, json
 from typing import List, Dict, Any, Optional
+from db.connection import get_db_connection_context
 
 ################################################################################
 # Model for emergent suggestion
@@ -43,7 +49,7 @@ emergent_addiction_agent = Agent(
 )
 
 ################################################################################
-# Emergent suggestion function (core workflow)
+# Emergent suggestion function (core workflow) - REFACTORED
 ################################################################################
 
 @function_tool
@@ -56,6 +62,8 @@ async def suggest_addictions_from_events(
     """
     Analyze recent events for emergent/addiction discovery.
     If new addictions detected, creates them dynamically, applies effects, etc.
+    
+    REFACTORED: Now properly uses connection from context and delegates writes
     """
     # Prepare prompt from narrative/logs/events
     prompt = f"""
@@ -101,18 +109,22 @@ async def suggest_addictions_from_events(
             print(f"Warning: Could not save updated themes dynamically: {e}")
 
     # 2. For each suggestion, apply/add the addiction using update_addiction_level
+    # REFACTORED: Get connection and pass it through
     applied = []
-    for suggestion in suggestions:
-        upd = await update_addiction_level(
-            ctx,
-            player_name,
-            suggestion.addiction_type,
-            progression_multiplier=1.0,
-            target_npc_id=suggestion.target_npc_id if suggestion.is_npc_specific else None
-        )
-        applied.append(upd)
+    async with get_db_connection_context() as conn:
+        for suggestion in suggestions:
+            upd = await update_addiction_level(
+                ctx,
+                conn,  # Pass connection
+                player_name,
+                suggestion.addiction_type,
+                progression_multiplier=1.0,
+                target_npc_id=suggestion.target_npc_id if suggestion.is_npc_specific else None
+            )
+            applied.append(upd)
 
     # Optionally, retrieve and return summary status after all changes
+    from logic.addiction_system_sdk import get_addiction_status
     full_status = await get_addiction_status(
         ctx.context.user_id, ctx.context.conversation_id, player_name
     )
