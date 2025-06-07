@@ -12,12 +12,14 @@ import asyncio
 from typing import Dict, List, Any, Optional, Union, Tuple
 from datetime import datetime
 
-import asyncpg  # Explicitly import for error types
+import asyncpg
 
 from db.connection import get_db_connection_context
 from logic.fully_integrated_npc_system import IntegratedNPCSystem
+from lore.core import canon
+from lore.lore_system import LoreSystem
 
-logger = logging.getLogger(__name__)  # Added logger definition
+logger = logging.getLogger(__name__)
 
 class RelationshipIntegration:
     """
@@ -36,6 +38,7 @@ class RelationshipIntegration:
         self.user_id = user_id
         self.conversation_id = conversation_id
         self.npc_system = IntegratedNPCSystem(user_id, conversation_id)
+        self.ctx = type('Context', (), {'user_id': user_id, 'conversation_id': conversation_id})()
     
     async def create_relationship(self, entity1_type: str, entity1_id: int,
                                 entity2_type: str, entity2_id: int,
@@ -75,7 +78,6 @@ class RelationshipIntegration:
         Returns:
             Dictionary with relationship data or None if not found
         """
-        # Use the integrated system's get_relationship function
         return await self.npc_system.get_relationship(
             entity1_type, entity1_id,
             entity2_type, entity2_id
@@ -258,16 +260,14 @@ class RelationshipIntegration:
                     logger.warning(f"Group {group_id} not found for user {self.user_id}, convo {self.conversation_id}.")
                     return False
 
-                # Assuming group_data might be stored as JSON text or JSONB
-                group_data = group_row['group_data'] # Access by column name
-                # asyncpg might return dict directly for JSONB, check if load needed
+                group_data = group_row['group_data']
                 if isinstance(group_data, str):
                     try:
                         group_data = json.loads(group_data)
                     except json.JSONDecodeError:
                         logger.error(f"Invalid JSON in group_data for group {group_id}.", exc_info=True)
                         return False
-                elif group_data is None: # Handle case where data is NULL
+                elif group_data is None:
                     group_data = {}
 
                 # Get NPC data
@@ -284,12 +284,12 @@ class RelationshipIntegration:
                 npc_name, dominance = npc_row['npc_name'], npc_row['dominance']
 
                 # Add NPC to group data structure
-                members = group_data.setdefault("members", []) # Use setdefault for safety
+                members = group_data.setdefault("members", [])
 
                 # Check if NPC is already in group
                 if any(member.get("npc_id") == npc_id for member in members):
                      logger.info(f"NPC {npc_id} already in group {group_id}. Skipping add.")
-                     return True # Considered successful if already present
+                     return True
 
                 # Add new member
                 members.append({
@@ -301,18 +301,22 @@ class RelationshipIntegration:
                     "role": role
                 })
 
-                # Update group data in DB - Use json.dumps if column is TEXT/VARCHAR
-                # If column is JSON/JSONB, asyncpg might handle the dict directly
-                await conn.execute("""
-                    UPDATE NPCGroups
-                    SET group_data=$1
-                    WHERE group_id=$2 AND user_id=$3 AND conversation_id=$4
-                """, json.dumps(group_data), group_id, self.user_id, self.conversation_id)
-                # Alternative if column is JSON/JSONB:
-                # await conn.execute(..., group_data, group_id, ...)
+                # REFACTORED: Use LoreSystem to update group data
+                lore_system = await LoreSystem.get_instance(self.user_id, self.conversation_id)
+                result = await lore_system.propose_and_enact_change(
+                    ctx=self.ctx,
+                    entity_type="NPCGroups",
+                    entity_identifier={"group_id": group_id, "user_id": self.user_id, "conversation_id": self.conversation_id},
+                    updates={"group_data": json.dumps(group_data)},
+                    reason=f"Added NPC {npc_name} to group as {role}"
+                )
 
-                logger.info(f"Successfully added NPC {npc_id} to group {group_id}.")
-                return True
+                if result.get("status") == "committed":
+                    logger.info(f"Successfully added NPC {npc_id} to group {group_id}.")
+                    return True
+                else:
+                    logger.error(f"Failed to add NPC {npc_id} to group {group_id}: {result}")
+                    return False
 
         except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as db_err:
             logger.error(f"Database error adding NPC {npc_id} to group {group_id}: {db_err}", exc_info=True)
@@ -368,10 +372,10 @@ class RelationshipIntegration:
                         npc1_id = member_ids[i]
                         npc2_id = member_ids[j]
 
-                        # Check existing relationship (using updated internal method)
+                        # Check existing relationship
                         rel = await self.get_relationship("npc", npc1_id, "npc", npc2_id)
                         if not rel:
-                            # Create relationship (using updated internal method)
+                            # Create relationship
                             rel_type = random.choice(["neutral", "alliance", "rivalry", "dominant", "submission"])
                             rel = await self.create_relationship("npc", npc1_id, "npc", npc2_id, rel_type)
 
@@ -379,7 +383,7 @@ class RelationshipIntegration:
 
                 # Generate random group events
                 events = []
-                if members: # Avoid sampling from empty list
+                if members:
                     for _ in range(3):
                         event_type = random.choice(["meeting", "conflict", "collaboration", "celebration", "crisis"])
                                 
@@ -410,21 +414,28 @@ class RelationshipIntegration:
                 group_data["dynamics"] = dynamics
                 group_data["shared_history"] = group_data.get("shared_history", []) + events
                 
-                # Update group data in DB
-                await conn.execute("""
-                    UPDATE NPCGroups
-                    SET group_data=$1
-                    WHERE group_id=$2 AND user_id=$3 AND conversation_id=$4
-                """, json.dumps(group_data), group_id, self.user_id, self.conversation_id)
+                # REFACTORED: Use LoreSystem to update group data
+                lore_system = await LoreSystem.get_instance(self.user_id, self.conversation_id)
+                result = await lore_system.propose_and_enact_change(
+                    ctx=self.ctx,
+                    entity_type="NPCGroups",
+                    entity_identifier={"group_id": group_id, "user_id": self.user_id, "conversation_id": self.conversation_id},
+                    updates={"group_data": json.dumps(group_data)},
+                    reason=f"Generated dynamics and events for group {group_name}"
+                )
                 
-                logger.info(f"Generated dynamics for group {group_id} ('{group_name}').")
-                return {
-                    "group_id": group_id,
-                    "group_name": group_name,
-                    "dynamics": dynamics,
-                    "events": events,
-                    "relationships": relationships
-                }
+                if result.get("status") == "committed":
+                    logger.info(f"Generated dynamics for group {group_id} ('{group_name}').")
+                    return {
+                        "group_id": group_id,
+                        "group_name": group_name,
+                        "dynamics": dynamics,
+                        "events": events,
+                        "relationships": relationships
+                    }
+                else:
+                    logger.error(f"Failed to update group dynamics: {result}")
+                    return {"error": "Failed to update group dynamics"}
 
         except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as db_err:
             logger.error(f"Database error generating dynamics for group {group_id}: {db_err}", exc_info=True)
@@ -462,28 +473,27 @@ class RelationshipIntegration:
                 link_type, link_level = row['link_type'], row['link_level']
                 history_json, dynamics_json = row['link_history'], row['dynamics']
             
-                # Get entity names (using updated internal method)
-                # Run concurrently for potential speedup
+                # Get entity names
                 e1_name_task = asyncio.create_task(self.get_entity_name(e1_type, e1_id))
                 e2_name_task = asyncio.create_task(self.get_entity_name(e2_type, e2_id))
                 e1_name, e2_name = await e1_name_task, await e2_name_task
 
                 # Parse dynamics
                 dynamics = {}
-                if dynamics_json: # Check if not None first
+                if dynamics_json:
                     if isinstance(dynamics_json, str):
                          try: dynamics = json.loads(dynamics_json)
-                         except json.JSONDecodeError: pass # Keep dynamics empty on error
-                    else: # Assume it's already a dict (e.g., from JSONB)
+                         except json.JSONDecodeError: pass
+                    else:
                          dynamics = dynamics_json
 
                 # Parse history
                 history_events = []
-                if history_json: # Check if not None first
+                if history_json:
                     if isinstance(history_json, str):
                          try: history_events = json.loads(history_json)
-                         except json.JSONDecodeError: pass # Keep history empty on error
-                    else: # Assume it's already a list
+                         except json.JSONDecodeError: pass
+                    else:
                          history_events = history_json
 
             
@@ -585,13 +595,11 @@ class RelationshipIntegration:
         """
         # Handle player name directly
         if entity_type == "player":
-            # Consider making player name configurable if needed
-            return "Player" # Assuming "Chase" was player-specific, use generic "Player"
+            return "Player"
 
         # Fetch NPC name from DB
         try:
             async with get_db_connection_context() as conn:
-                # Use fetchval to get a single value directly (npc_name or None)
                 npc_name = await conn.fetchval("""
                     SELECT npc_name
                     FROM NPCStats
@@ -602,11 +610,10 @@ class RelationshipIntegration:
 
         except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as db_err:
             logger.error(f"Database error fetching name for {entity_type} {entity_id}: {db_err}", exc_info=True)
-            return f"DB Error ({entity_type} {entity_id})" # Return specific error string
+            return f"DB Error ({entity_type} {entity_id})"
         except Exception as e:
             logger.exception(f"Unexpected error fetching name for {entity_type} {entity_id}: {e}")
             return f"Error ({entity_type} {entity_id})"
-
 
     async def get_player_relationships(self) -> List[Dict[str, Any]]:
         """
@@ -617,11 +624,9 @@ class RelationshipIntegration:
         """
         relationships = []
         try:
-            # Assuming player ID is the same as user ID for simplicity here
             player_id = self.user_id
 
             async with get_db_connection_context() as conn:
-                # Use fetch to get multiple rows
                 rows = await conn.fetch("""
                     SELECT link_id, entity1_type, entity1_id, entity2_type, entity2_id,
                            link_type, link_level
@@ -631,7 +636,7 @@ class RelationshipIntegration:
                          (entity2_type='player' AND entity2_id=$3))
                 """, self.user_id, self.conversation_id, player_id)
 
-                # Process rows concurrently if getting names is slow
+                # Process rows concurrently
                 tasks = []
                 for row in rows:
                     link_id = row['link_id']
@@ -664,7 +669,7 @@ class RelationshipIntegration:
 
         except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as db_err:
             logger.error(f"Database error fetching player relationships for user {self.user_id}: {db_err}", exc_info=True)
-            return [] # Return empty list on error
+            return []
         except Exception as e:
             logger.exception(f"Unexpected error fetching player relationships for user {self.user_id}: {e}")
-            return [] # Return empty list on error
+            return []
