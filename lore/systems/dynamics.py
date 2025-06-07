@@ -810,13 +810,9 @@ class LoreDynamicsSystem(BaseLoreManager):
             
             return processed
     
-    async def _save_new_lore_element(
-        self, 
-        element: LoreElement, 
-        event_description: str
-    ) -> None:
+    async def _save_new_lore_element(self, element: LoreElement, event_description: str) -> None:
         """
-        Persist newly generated lore elements to the appropriate table in DB.
+        Persist newly generated lore elements through the canon system.
         """
         lore_type = element.lore_type
         name = element.name
@@ -826,37 +822,70 @@ class LoreDynamicsSystem(BaseLoreManager):
         async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 try:
+                    # Create context for canon operations
+                    from agents import RunContextWrapper
+                    ctx = RunContextWrapper(context={
+                        "user_id": self.user_id,
+                        "conversation_id": self.conversation_id
+                    })
+                    
                     if lore_type == "WorldLore":
+                        # WorldLore uses direct insert as it's a catch-all category
                         await conn.execute("""
-                            INSERT INTO WorldLore (name, category, description, significance, tags)
-                            VALUES ($1, $2, $3, $4, $5)
-                        """, name, 'event_consequence', description, significance, ['event_consequence', 'new_lore'])
+                            INSERT INTO WorldLore (user_id, conversation_id, name, category, description, significance, tags, embedding)
+                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                        """, self.user_id, self.conversation_id, name, 'event_consequence', description, 
+                            significance, ['event_consequence', 'new_lore'], 
+                            await generate_embedding(f"{name} {description}"))
+                        
                     elif lore_type == "Factions":
-                        await conn.execute("""
-                            INSERT INTO Factions
-                            (name, type, description, values, goals, founding_story)
-                            VALUES ($1, $2, $3, $4, $5, $6)
-                        """, name, 'event_consequence', description, ['power','authority'],
-                             ['stability','influence'], f"Founded due to: {event_description}")
+                        await canon.find_or_create_faction(
+                            ctx, conn, name,
+                            type='event_consequence',
+                            description=description,
+                            values=['power', 'authority'],
+                            goals=['stability', 'influence'],
+                            founding_story=f"Founded due to: {event_description}"
+                        )
+                        
                     elif lore_type == "CulturalElements":
-                        await conn.execute("""
-                            INSERT INTO CulturalElements
-                            (name, element_type, description, practiced_by, significance, historical_origin)
-                            VALUES ($1, $2, $3, $4, $5, $6)
-                        """, name, 'tradition', description, ['society'], significance, f"From {event_description}")
+                        await canon.find_or_create_cultural_element(
+                            ctx, conn, name,
+                            element_type='tradition',
+                            description=description,
+                            practiced_by=['society'],
+                            significance=significance,
+                            historical_origin=f"From {event_description}"
+                        )
+                        
                     elif lore_type == "HistoricalEvents":
-                        await conn.execute("""
-                            INSERT INTO HistoricalEvents
-                            (name, description, date_description, significance, consequences)
-                            VALUES ($1, $2, 'Recently', $3, $4)
-                        """, name, description, significance, ['Still unfolding'])
+                        await canon.find_or_create_historical_event(
+                            ctx, conn, name,
+                            description=description,
+                            date_description='Recently',
+                            significance=significance,
+                            consequences=['Still unfolding'],
+                            event_type='emergent'
+                        )
+                        
+                    elif lore_type == "GeographicRegions":
+                        await canon.find_or_create_geographic_region(
+                            ctx, conn, name,
+                            region_type='discovered',
+                            description=description,
+                            climate='varied',
+                            strategic_value=significance
+                        )
+                        
                     else:
-                        # Fallback
+                        # Fallback to WorldLore for unknown types
                         await conn.execute("""
-                            INSERT INTO WorldLore 
-                            (name, category, description, significance, tags)
-                            VALUES ($1, $2, $3, $4, $5)
-                        """, name, lore_type.lower(), description, significance, [lore_type.lower(), 'event_consequence'])
+                            INSERT INTO WorldLore (user_id, conversation_id, name, category, description, significance, tags, embedding)
+                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                        """, self.user_id, self.conversation_id, name, lore_type.lower(), description, 
+                            significance, [lore_type.lower(), 'event_consequence'],
+                            await generate_embedding(f"{name} {description}"))
+                            
                 except Exception as e:
                     logging.error(f"Error saving new {lore_type} '{name}': {e}")
     
@@ -1348,10 +1377,16 @@ class LoreDynamicsSystem(BaseLoreManager):
     #===========================================================================
     
     async def _evolve_urban_myths(self) -> List[Dict[str, Any]]:
-        """Evolve urban myths over time"""
+        """Evolve urban myths over time using canon system"""
         changes = []
         
-        # Choose a random sample of urban myths to evolve
+        # Create context for canon operations
+        from agents import RunContextWrapper
+        ctx = RunContextWrapper(context={
+            "user_id": self.user_id,
+            "conversation_id": self.conversation_id
+        })
+        
         async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 # Check if we have a dedicated urban myths table
@@ -1367,18 +1402,20 @@ class LoreDynamicsSystem(BaseLoreManager):
                     rows = await conn.fetch("""
                         SELECT id, name, description, believability, spread_rate
                         FROM UrbanMyths
+                        WHERE user_id = $1 AND conversation_id = $2
                         ORDER BY RANDOM()
                         LIMIT 3
-                    """)
+                    """, self.user_id, self.conversation_id)
                 else:
                     # Fall back to world lore with urban_myth category
                     rows = await conn.fetch("""
                         SELECT id, name, description
                         FROM WorldLore
-                        WHERE category = 'urban_myth'
+                        WHERE user_id = $1 AND conversation_id = $2 
+                        AND category = 'urban_myth'
                         ORDER BY RANDOM()
                         LIMIT 3
-                    """)
+                    """, self.user_id, self.conversation_id)
                 
                 for row in rows:
                     myth_id = row['id']
@@ -1426,7 +1463,6 @@ class LoreDynamicsSystem(BaseLoreManager):
                         """
                         
                         change_description = "Myth has evolved with new variations or interpretations."
-                        # Keep same values for believability and spread rate
                         new_believability = row.get('believability', 5)
                         new_spread = row.get('spread_rate', 5)
                         
@@ -1475,56 +1511,56 @@ class LoreDynamicsSystem(BaseLoreManager):
                     # Apply matriarchal theming to the new description
                     new_description = MatriarchalThemingUtils.apply_matriarchal_theme("myth", new_description, emphasis_level=1)
                     
-                    # Apply the update to the database
-                    try:
-                        if has_urban_myths_table:
-                            # Update in dedicated table
-                            await conn.execute("""
-                                UPDATE UrbanMyths
-                                SET description = $1,
-                                    believability = $2,
-                                    spread_rate = $3
-                                WHERE id = $4
-                            """, new_description, new_believability, new_spread, myth_id)
-                        else:
-                            # Update in WorldLore
-                            # Generate new embedding
-                            embedding_text = f"{myth_name} {new_description}"
-                            new_embedding = await generate_embedding(embedding_text)
-                            
-                            await conn.execute("""
-                                UPDATE WorldLore
-                                SET description = $1, embedding = $2
-                                WHERE id = $3
-                            """, new_description, new_embedding, myth_id)
-                        
-                        # Record the change
-                        changes.append({
-                            "myth_id": myth_id,
-                            "name": myth_name,
-                            "change_type": change_type,
-                            "old_description": old_description,
-                            "new_description": new_description,
-                            "change_description": change_description
-                        })
-                        
-                        # Clear cache
-                        if has_urban_myths_table:
-                            self.invalidate_cache_pattern(f"UrbanMyths_{myth_id}")
-                        else:
-                            self.invalidate_cache_pattern(f"WorldLore_{myth_id}")
-                    except Exception as e:
-                        logging.error(f"Error updating myth {myth_id}: {e}")
+                    # Update through canon system
+                    if has_urban_myths_table:
+                        await canon.update_entity_canonically(
+                            ctx, conn, "UrbanMyths", myth_id,
+                            {
+                                'description': new_description,
+                                'believability': new_believability,
+                                'spread_rate': new_spread
+                            },
+                            f"Urban myth '{myth_name}' {change_type}ing naturally over time"
+                        )
+                    else:
+                        # For WorldLore, update directly as it's less structured
+                        await conn.execute("""
+                            UPDATE WorldLore
+                            SET description = $1, embedding = $2
+                            WHERE id = $3 AND user_id = $4 AND conversation_id = $5
+                        """, new_description, await generate_embedding(f"{myth_name} {new_description}"), 
+                            myth_id, self.user_id, self.conversation_id)
+                    
+                    # Record the change
+                    changes.append({
+                        "myth_id": myth_id,
+                        "name": myth_name,
+                        "change_type": change_type,
+                        "old_description": old_description,
+                        "new_description": new_description,
+                        "change_description": change_description
+                    })
+                    
+                    # Clear cache
+                    if has_urban_myths_table:
+                        self.invalidate_cache_pattern(f"UrbanMyths_{myth_id}")
+                    else:
+                        self.invalidate_cache_pattern(f"WorldLore_{myth_id}")
         
         return changes
     
     async def _develop_cultural_elements(self) -> List[Dict[str, Any]]:
         """
-        Evolve or adapt cultural elements over time using an agent-based approach.
-        We fetch random cultural elements, choose a 'change_type' for each,
-        and let an agent rewrite the description to reflect that change.
+        Evolve or adapt cultural elements over time using canon system.
         """
         changes = []
+        
+        # Create context for canon operations
+        from agents import RunContextWrapper
+        ctx = RunContextWrapper(context={
+            "user_id": self.user_id,
+            "conversation_id": self.conversation_id
+        })
         
         async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
@@ -1542,9 +1578,11 @@ class LoreDynamicsSystem(BaseLoreManager):
                 rows = await conn.fetch("""
                     SELECT id, name, element_type, description, practiced_by, significance
                     FROM CulturalElements
+                    WHERE user_id = $1 AND conversation_id = $2
                     ORDER BY RANDOM()
                     LIMIT 3
-                """)
+                """, self.user_id, self.conversation_id)
+                
                 if not rows:
                     return changes
                 
@@ -1602,62 +1640,62 @@ class LoreDynamicsSystem(BaseLoreManager):
                         "culture", new_description, emphasis_level=1
                     )
                     
-                    # Decide how significance changes (example: formalize => +1, spread => +1, etc.)
+                    # Decide how significance changes
                     new_significance = significance
                     if change_type == "formalize":
                         new_significance = min(10, significance + 1)
                     elif change_type == "spread":
                         new_significance = min(10, significance + 1)
-                    # 'adapt' or 'codify' might remain the same or shift by 1
                     elif change_type == "codify":
                         new_significance = min(10, significance + 2)
                     
-                    # For 'spread', maybe we also add a new group to practiced_by
+                    # For 'spread', add new practitioners
+                    new_practiced_by = practiced_by.copy()
                     if change_type == "spread":
-                        possible_new_groups = ["border tribes", "urban elite", "remote villages"]
+                        possible_new_groups = ["border tribes", "urban elite", "remote villages", "merchant guilds", "warrior societies"]
                         addition = random.choice(possible_new_groups)
-                        if addition not in practiced_by:
-                            practiced_by.append(addition)
+                        if addition not in new_practiced_by:
+                            new_practiced_by.append(addition)
                     
-                    # Generate an embedding
-                    embedding_text = f"{element_name} {new_description}"
-                    new_embedding = await generate_embedding(embedding_text)
+                    # Update through canon system
+                    await canon.update_entity_canonically(
+                        ctx, conn, "CulturalElements", element_id,
+                        {
+                            'description': new_description,
+                            'significance': new_significance,
+                            'practiced_by': new_practiced_by,
+                            'embedding': await generate_embedding(f"{element_name} {new_description}")
+                        },
+                        f"Cultural element '{element_name}' {change_type}d naturally over time"
+                    )
                     
-                    # Update the DB
-                    try:
-                        await conn.execute("""
-                            UPDATE CulturalElements
-                            SET description = $1,
-                                significance = $2,
-                                practiced_by = $3,
-                                embedding = $4
-                            WHERE id = $5
-                        """, new_description, new_significance, practiced_by, new_embedding, element_id)
-                        
-                        changes.append({
-                            "element_id": element_id,
-                            "name": element_name,
-                            "type": element_type,
-                            "change_type": change_type,
-                            "old_description": old_description,
-                            "new_description": new_description,
-                            "significance_before": significance,
-                            "significance_after": new_significance
-                        })
-                        
-                        self.invalidate_cache_pattern(f"CulturalElements_{element_id}")
-                    except Exception as e:
-                        logging.error(f"Error updating cultural element {element_id}: {e}")
+                    changes.append({
+                        "element_id": element_id,
+                        "name": element_name,
+                        "element_type": element_type,
+                        "change_type": change_type,
+                        "old_description": old_description,
+                        "new_description": new_description,
+                        "significance_before": significance,
+                        "significance_after": new_significance
+                    })
+                    
+                    self.invalidate_cache_pattern(f"CulturalElements_{element_id}")
         
         return changes
     
     async def _shift_geopolitical_landscape(self) -> List[Dict[str, Any]]:
         """
-        Evolve geopolitics (alliances, territory, governance) in a matriarchal world.
-        We fetch random factions or regions, choose a 'shift_type', then rely on
-        an LLM agent to rewrite the relevant descriptions.
+        Evolve geopolitics using canon system for all updates.
         """
         changes = []
+        
+        # Create context for canon operations
+        from agents import RunContextWrapper
+        ctx = RunContextWrapper(context={
+            "user_id": self.user_id,
+            "conversation_id": self.conversation_id
+        })
         
         async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
@@ -1675,9 +1713,11 @@ class LoreDynamicsSystem(BaseLoreManager):
                 factions = await conn.fetch("""
                     SELECT id, name, type, description, territory, rivals, allies
                     FROM Factions
+                    WHERE user_id = $1 AND conversation_id = $2
                     ORDER BY RANDOM()
                     LIMIT 3
-                """)
+                """, self.user_id, self.conversation_id)
+                
                 if not factions:
                     return changes
                 
@@ -1688,14 +1728,16 @@ class LoreDynamicsSystem(BaseLoreManager):
                         WHERE table_name = 'geographicregions'
                     );
                 """)
+                
                 region = None
                 if regions_exist:
                     region_row = await conn.fetch("""
                         SELECT id, name, description, governing_faction
                         FROM GeographicRegions
+                        WHERE user_id = $1 AND conversation_id = $2
                         ORDER BY RANDOM()
                         LIMIT 1
-                    """)
+                    """, self.user_id, self.conversation_id)
                     region = dict(region_row[0]) if region_row else None
                 
                 # Potential shift types
@@ -1703,35 +1745,33 @@ class LoreDynamicsSystem(BaseLoreManager):
                 if region:
                     shift_types.append("regional_governance")
                 
-                # We'll do 1 or 2 shifts randomly
+                # Create agent
+                geo_agent = Agent(
+                    name="GeopoliticsEvolutionAgent",
+                    instructions=(
+                        "You rewrite faction or region descriptions to reflect changes in alliances, "
+                        "territory, or governance. Keep the matriarchal theme strong."
+                    ),
+                    model="gpt-4o-mini",
+                    model_settings=ModelSettings(temperature=0.8)
+                )
+                
+                # Do 1 or 2 shifts randomly
                 num_shifts = random.randint(1, 2)
                 for _ in range(num_shifts):
                     if not factions:
                         break
+                        
                     shift_type = random.choice(shift_types)
-                    
-                    # Create agent
-                    geo_agent = Agent(
-                        name="GeopoliticsEvolutionAgent",
-                        instructions=(
-                            "You rewrite faction or region descriptions to reflect changes in alliances, "
-                            "territory, or governance. Keep the matriarchal theme strong."
-                        ),
-                        model="gpt-4o-mini",
-                        model_settings=ModelSettings(temperature=0.8)
-                    )
-                    
-                    # We'll pick at least one random faction
                     faction = dict(random.choice(factions))
                     
                     if shift_type == "alliance_change" and len(factions) > 1:
-                        # Identify another faction
+                        # Alliance change between factions
                         others = [f for f in factions if f["id"] != faction["id"]]
                         if not others:
                             continue
+                            
                         other_faction = dict(random.choice(others))
-                        
-                        # Decide if they become allies or rivals
                         new_relationship = random.choice(["alliance", "rivalry"])
                         
                         prompt = f"""
@@ -1750,52 +1790,47 @@ class LoreDynamicsSystem(BaseLoreManager):
                         new_description = result.final_output
                         new_description = MatriarchalThemingUtils.apply_matriarchal_theme("faction", new_description)
                         
-                        # Update DB
-                        try:
-                            embedding_text = f"{faction['name']} {new_description}"
-                            new_embedding = await generate_embedding(embedding_text)
-                            
-                            # Update faction1
-                            allies = faction['allies'] if faction['allies'] else []
-                            rivals = faction['rivals'] if faction['rivals'] else []
-                            if new_relationship == "alliance":
-                                if other_faction['name'] in rivals:
-                                    rivals.remove(other_faction['name'])
-                                if other_faction['name'] not in allies:
-                                    allies.append(other_faction['name'])
-                            else:  # rivalry
-                                if other_faction['name'] in allies:
-                                    allies.remove(other_faction['name'])
-                                if other_faction['name'] not in rivals:
-                                    rivals.append(other_faction['name'])
-                            
-                            await conn.execute("""
-                                UPDATE Factions
-                                SET description = $1,
-                                    allies = $2,
-                                    rivals = $3,
-                                    embedding = $4
-                                WHERE id = $5
-                            """, new_description, allies, rivals, new_embedding, faction["id"])
-                            
-                            # Also reflect changes in the other faction if needed
-                            # (You can do a symmetrical update if you want.)
-                            
-                            changes.append({
-                                "change_type": "alliance_change",
-                                "new_relationship": new_relationship,
-                                "faction1_id": faction["id"],
-                                "faction2_id": other_faction["id"],
-                                "old_description": faction["description"],
-                                "new_description": new_description
-                            })
-                            self.invalidate_cache_pattern(f"Factions_{faction['id']}")
-                        except Exception as e:
-                            logging.error(f"Error updating faction {faction['id']} for alliance_change: {e}")
-                    
+                        # Update relationships
+                        allies = faction['allies'] if faction['allies'] else []
+                        rivals = faction['rivals'] if faction['rivals'] else []
+                        
+                        if new_relationship == "alliance":
+                            if other_faction['name'] in rivals:
+                                rivals.remove(other_faction['name'])
+                            if other_faction['name'] not in allies:
+                                allies.append(other_faction['name'])
+                        else:  # rivalry
+                            if other_faction['name'] in allies:
+                                allies.remove(other_faction['name'])
+                            if other_faction['name'] not in rivals:
+                                rivals.append(other_faction['name'])
+                        
+                        # Update through canon system
+                        await canon.update_entity_canonically(
+                            ctx, conn, "Factions", faction["id"],
+                            {
+                                'description': new_description,
+                                'allies': allies,
+                                'rivals': rivals,
+                                'embedding': await generate_embedding(f"{faction['name']} {new_description}")
+                            },
+                            f"Faction '{faction['name']}' formed {new_relationship} with {other_faction['name']}"
+                        )
+                        
+                        changes.append({
+                            "change_type": "alliance_change",
+                            "faction_id": faction["id"],
+                            "faction_name": faction['name'],
+                            "new_relationship": new_relationship,
+                            "other_faction": other_faction['name'],
+                            "old_description": faction["description"],
+                            "new_description": new_description
+                        })
+                        
                     elif shift_type == "territory_dispute":
-                        # The faction expands or disputes territory
+                        # Territory expansion/dispute
                         territory = faction["territory"] if faction["territory"] else []
+                        
                         prompt = f"""
                         FACTION: {faction['name']} (type: {faction['type']})
                         CURRENT DESCRIPTION: {faction['description']}
@@ -1811,39 +1846,37 @@ class LoreDynamicsSystem(BaseLoreManager):
                         new_description = result.final_output
                         new_description = MatriarchalThemingUtils.apply_matriarchal_theme("faction", new_description)
                         
-                        new_embedding = await generate_embedding(f"{faction['name']} {new_description}")
-                        
-                        # Possibly append new territory
-                        new_areas = ["borderlands", "resource-rich hills", "disputed farmland"]
+                        # Add new territory
+                        new_areas = ["borderlands", "resource-rich hills", "disputed farmland", "coastal regions", "mountain passes"]
                         chosen_area = random.choice(new_areas)
-                        if isinstance(territory, list):
-                            territory.append(chosen_area)
-                        else:
-                            territory = [territory, chosen_area]
                         
-                        try:
-                            await conn.execute("""
-                                UPDATE Factions
-                                SET description = $1,
-                                    territory = $2,
-                                    embedding = $3
-                                WHERE id = $4
-                            """, new_description, territory, new_embedding, faction["id"])
-                            
-                            changes.append({
-                                "change_type": "territory_dispute",
-                                "faction_id": faction["id"],
-                                "old_description": faction["description"],
-                                "new_description": new_description,
-                                "added_territory": chosen_area
-                            })
-                            
-                            self.invalidate_cache_pattern(f"Factions_{faction['id']}")
-                        except Exception as e:
-                            logging.error(f"Error updating territory for faction {faction['id']}: {e}")
-                    
+                        if isinstance(territory, list):
+                            new_territory = territory + [chosen_area]
+                        else:
+                            new_territory = [territory, chosen_area]
+                        
+                        # Update through canon system
+                        await canon.update_entity_canonically(
+                            ctx, conn, "Factions", faction["id"],
+                            {
+                                'description': new_description,
+                                'territory': new_territory,
+                                'embedding': await generate_embedding(f"{faction['name']} {new_description}")
+                            },
+                            f"Faction '{faction['name']}' engaged in territorial dispute over {chosen_area}"
+                        )
+                        
+                        changes.append({
+                            "change_type": "territory_dispute",
+                            "faction_id": faction["id"],
+                            "faction_name": faction['name'],
+                            "old_description": faction["description"],
+                            "new_description": new_description,
+                            "added_territory": chosen_area
+                        })
+                        
                     elif shift_type == "regional_governance" and region:
-                        # The region changes governing_faction to or from the current one
+                        # Change regional governance
                         prompt = f"""
                         REGION: {region['name']}
                         CURRENT DESCRIPTION: {region['description']}
@@ -1861,30 +1894,28 @@ class LoreDynamicsSystem(BaseLoreManager):
                         new_description = result.final_output
                         new_description = MatriarchalThemingUtils.apply_matriarchal_theme("region", new_description)
                         
-                        try:
-                            region_embedding = await generate_embedding(f"{region['name']} {new_description}")
-                            await conn.execute("""
-                                UPDATE GeographicRegions
-                                SET description = $1,
-                                    governing_faction = $2,
-                                    embedding = $3
-                                WHERE id = $4
-                            """, new_description, faction["name"], region_embedding, region["id"])
-                            
-                            changes.append({
-                                "change_type": "regional_governance",
-                                "region_id": region["id"],
-                                "old_governing_faction": region["governing_faction"],
-                                "new_governing_faction": faction["name"],
-                                "old_description": region["description"],
-                                "new_description": new_description
-                            })
-                            
-                            self.invalidate_cache_pattern(f"GeographicRegions_{region['id']}")
-                        except Exception as e:
-                            logging.error(f"Error updating region {region['id']}: {e}")
-                    
-                    else:  # "influence_growth"
+                        # Update through canon system
+                        await canon.update_entity_canonically(
+                            ctx, conn, "GeographicRegions", region["id"],
+                            {
+                                'description': new_description,
+                                'governing_faction': faction["name"],
+                                'embedding': await generate_embedding(f"{region['name']} {new_description}")
+                            },
+                            f"Region '{region['name']}' governance shifted to faction '{faction['name']}'"
+                        )
+                        
+                        changes.append({
+                            "change_type": "regional_governance",
+                            "region_id": region["id"],
+                            "region_name": region['name'],
+                            "old_governing_faction": region["governing_faction"],
+                            "new_governing_faction": faction["name"],
+                            "old_description": region["description"],
+                            "new_description": new_description
+                        })
+                        
+                    else:  # influence_growth
                         prompt = f"""
                         FACTION: {faction['name']} (type: {faction['type']})
                         CURRENT DESCRIPTION: {faction['description']}
@@ -1899,36 +1930,40 @@ class LoreDynamicsSystem(BaseLoreManager):
                         new_description = result.final_output
                         new_description = MatriarchalThemingUtils.apply_matriarchal_theme("faction", new_description)
                         
-                        new_embedding = await generate_embedding(f"{faction['name']} {new_description}")
+                        # Update through canon system
+                        await canon.update_entity_canonically(
+                            ctx, conn, "Factions", faction["id"],
+                            {
+                                'description': new_description,
+                                'embedding': await generate_embedding(f"{faction['name']} {new_description}")
+                            },
+                            f"Faction '{faction['name']}' expanded its influence and power"
+                        )
                         
-                        try:
-                            await conn.execute("""
-                                UPDATE Factions
-                                SET description = $1,
-                                    embedding = $2
-                                WHERE id = $3
-                            """, new_description, new_embedding, faction["id"])
-                            
-                            changes.append({
-                                "change_type": "influence_growth",
-                                "faction_id": faction["id"],
-                                "old_description": faction["description"],
-                                "new_description": new_description
-                            })
-                            self.invalidate_cache_pattern(f"Factions_{faction['id']}")
-                        except Exception as e:
-                            logging.error(f"Error updating faction influence: {e}")
+                        changes.append({
+                            "change_type": "influence_growth",
+                            "faction_id": faction["id"],
+                            "faction_name": faction['name'],
+                            "old_description": faction["description"],
+                            "new_description": new_description
+                        })
+                    
+                    self.invalidate_cache_pattern(f"Factions_{faction['id']}")
         
         return changes
     
     async def _evolve_notable_figures(self) -> List[Dict[str, Any]]:
         """
-        Use an agent to evolve the reputations or stories of notable figures
-        in a matriarchal setting. We fetch random figures (NotableFigures table or
-        fallback from WorldLore), pick a 'change_type', and ask the agent for a 
-        new description that matches the transformation.
+        Use canon system to evolve notable figures' reputations and stories.
         """
         changes = []
+        
+        # Create context for canon operations
+        from agents import RunContextWrapper
+        ctx = RunContextWrapper(context={
+            "user_id": self.user_id,
+            "conversation_id": self.conversation_id
+        })
         
         async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
@@ -1943,30 +1978,22 @@ class LoreDynamicsSystem(BaseLoreManager):
                     rows = await conn.fetch("""
                         SELECT id, name, description, significance, reputation
                         FROM NotableFigures
+                        WHERE user_id = $1 AND conversation_id = $2
                         ORDER BY RANDOM()
                         LIMIT 2
-                    """)
+                    """, self.user_id, self.conversation_id)
                     table_name = "NotableFigures"
-                    field_map = {
-                        "id": "id",
-                        "desc_field": "description",
-                        "rep_field": "reputation"
-                    }
                 else:
                     # fallback to world lore with category='notable_figure'
                     rows = await conn.fetch("""
                         SELECT id, name, description, significance
                         FROM WorldLore
-                        WHERE category = 'notable_figure'
+                        WHERE user_id = $1 AND conversation_id = $2
+                        AND category = 'notable_figure'
                         ORDER BY RANDOM()
                         LIMIT 2
-                    """)
+                    """, self.user_id, self.conversation_id)
                     table_name = "WorldLore"
-                    field_map = {
-                        "id": "id",
-                        "desc_field": "description",
-                        "rep_field": None  # no direct reputation field
-                    }
                 
                 if not rows:
                     return changes
@@ -1985,21 +2012,18 @@ class LoreDynamicsSystem(BaseLoreManager):
                 options = ["reputation_rise", "reputation_fall", "scandal", "achievement", "reform"]
                 
                 for row in rows:
-                    figure_id = row[field_map["id"]]
-                    figure_name = row["name"]
-                    old_description = row[field_map["desc_field"]]
+                    figure_id = row['id']
+                    figure_name = row['name']
+                    old_description = row['description']
                     
-                    significance = row.get("significance", 5)
-                    if field_map["rep_field"]:
-                        reputation = row.get(field_map["rep_field"], 5)
-                    else:
-                        reputation = 5  # fallback
+                    significance = row.get('significance', 5)
+                    reputation = row.get('reputation', 50) if table_name == "NotableFigures" else 50
                     
                     change_type = random.choice(options)
                     prompt = f"""
                     FIGURE: {figure_name}
                     CURRENT DESCRIPTION: {old_description}
-                    CURRENT REPUTATION: {reputation} (1-10)
+                    CURRENT REPUTATION: {reputation} (1-100)
                     SIGNIFICANCE: {significance}
     
                     CHANGE TYPE: {change_type}
@@ -2022,53 +2046,48 @@ class LoreDynamicsSystem(BaseLoreManager):
                     # Adjust reputation
                     new_rep = reputation
                     if change_type == "reputation_rise":
-                        new_rep = min(10, new_rep + random.randint(1, 2))
+                        new_rep = min(100, new_rep + random.randint(5, 15))
                     elif change_type == "reputation_fall":
-                        new_rep = max(1, new_rep - random.randint(1, 2))
+                        new_rep = max(0, new_rep - random.randint(5, 15))
                     elif change_type == "scandal":
-                        new_rep = max(1, new_rep - random.randint(2, 3))
+                        new_rep = max(0, new_rep - random.randint(10, 25))
                     elif change_type == "achievement":
-                        new_rep = min(10, new_rep + random.randint(2, 3))
+                        new_rep = min(100, new_rep + random.randint(10, 20))
                     elif change_type == "reform":
                         direction = random.choice([-1, 1])
-                        new_rep = max(1, min(10, new_rep + direction * random.randint(1, 2)))
+                        new_rep = max(0, min(100, new_rep + direction * random.randint(5, 15)))
                     
-                    # Generate embedding
-                    embedding_text = f"{figure_name} {new_description}"
-                    new_embedding = await generate_embedding(embedding_text)
+                    # Update through canon system
+                    if table_name == "NotableFigures":
+                        await canon.update_entity_canonically(
+                            ctx, conn, "NotableFigures", figure_id,
+                            {
+                                'description': new_description,
+                                'reputation': new_rep,
+                                'embedding': await generate_embedding(f"{figure_name} {new_description}")
+                            },
+                            f"Notable figure '{figure_name}' experienced {change_type}"
+                        )
+                    else:
+                        # WorldLore update
+                        await conn.execute("""
+                            UPDATE WorldLore
+                            SET description = $1, embedding = $2
+                            WHERE id = $3 AND user_id = $4 AND conversation_id = $5
+                        """, new_description, await generate_embedding(f"{figure_name} {new_description}"),
+                            figure_id, self.user_id, self.conversation_id)
                     
-                    # Apply DB updates
-                    try:
-                        if table_name == "NotableFigures":
-                            await conn.execute(f"""
-                                UPDATE NotableFigures
-                                SET description = $1,
-                                    reputation = $2,
-                                    embedding = $3
-                                WHERE id = $4
-                            """, new_description, new_rep, new_embedding, figure_id)
-                        else:
-                            # WorldLore fallback
-                            await conn.execute("""
-                                UPDATE WorldLore
-                                SET description = $1,
-                                    embedding = $2
-                                WHERE id = $3
-                            """, new_description, new_embedding, figure_id)
-                        
-                        changes.append({
-                            "figure_id": figure_id,
-                            "name": figure_name,
-                            "old_description": old_description,
-                            "new_description": new_description,
-                            "change_type": change_type,
-                            "old_reputation": reputation,
-                            "new_reputation": new_rep
-                        })
-                        
-                        self.invalidate_cache_pattern(f"{table_name}_{figure_id}")
-                    except Exception as e:
-                        logging.error(f"Error updating notable figure {figure_id}: {e}")
+                    changes.append({
+                        "figure_id": figure_id,
+                        "name": figure_name,
+                        "change_type": change_type,
+                        "old_description": old_description,
+                        "new_description": new_description,
+                        "old_reputation": reputation,
+                        "new_reputation": new_rep
+                    })
+                    
+                    self.invalidate_cache_pattern(f"{table_name}_{figure_id}")
         
         return changes
     
