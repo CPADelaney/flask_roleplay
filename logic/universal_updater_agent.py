@@ -6,6 +6,8 @@ Universal Updater SDK using OpenAI's Agents SDK with Nyx Governance integration.
 This module is responsible for analyzing narrative text and extracting appropriate 
 game state updates. It replaces the previous class-based approach in universal_updater_agent.py
 with a more agentic system that integrates with Nyx governance.
+
+REFACTORED: All direct database writes now go through canon or LoreSystem
 """
 
 import logging
@@ -31,6 +33,10 @@ from pydantic import BaseModel, Field
 # DB connection
 from db.connection import get_db_connection_context
 import asyncpg
+
+# Import canon and lore system
+from lore.core import canon
+from lore.lore_system import LoreSystem
 
 # Nyx governance integration
 from nyx.nyx_governance import (
@@ -230,10 +236,12 @@ class UniversalUpdaterContext:
         self.user_id = user_id
         self.conversation_id = conversation_id
         self.governor = None
+        self.lore_system = None
         
     async def initialize(self):
         """Initialize context with governance integration"""
         self.governor = await get_central_governance(self.user_id, self.conversation_id)
+        self.lore_system = await LoreSystem.get_instance(self.user_id, self.conversation_id)
 
 # -------------------------------------------------------------------------------
 # Function Tools
@@ -537,22 +545,23 @@ async def extract_relationship_changes(ctx, narrative: str) -> List[Dict[str, An
         logging.error(f"Error extracting relationship changes: {e}")
         return []
 
-# Add this function to universal_updater_agent.py, before the apply_universal_updates function
-
+# REFACTORED: Now uses canon and LoreSystem instead of direct database operations
 async def apply_universal_updates_async(
+    ctx: UniversalUpdaterContext,
     user_id: int,
     conversation_id: int,
     updates: Dict[str, Any],
     conn: asyncpg.Connection
 ) -> Dict[str, Any]:
     """
-    Apply universal updates to the database.
+    Apply universal updates using canon and LoreSystem.
     
     Args:
+        ctx: UniversalUpdaterContext with lore_system
         user_id: User ID
         conversation_id: Conversation ID
         updates: Dictionary containing all the updates to apply
-        conn: Database connection
+        conn: Database connection (passed by LoreSystem)
         
     Returns:
         Dictionary with update results
@@ -567,40 +576,40 @@ async def apply_universal_updates_async(
         
         # Process NPC creations
         if "npc_creations" in updates and updates["npc_creations"]:
-            npc_creation_count = await process_npc_creations(
-                user_id, conversation_id, updates["npc_creations"], conn
+            npc_creation_count = await process_npc_creations_canonical(
+                ctx, user_id, conversation_id, updates["npc_creations"], conn
             )
             results["details"]["npc_creations"] = npc_creation_count
             results["updates_applied"] += npc_creation_count
         
         # Process NPC updates
         if "npc_updates" in updates and updates["npc_updates"]:
-            npc_update_count = await process_npc_updates(
-                user_id, conversation_id, updates["npc_updates"], conn
+            npc_update_count = await process_npc_updates_canonical(
+                ctx, user_id, conversation_id, updates["npc_updates"], conn
             )
             results["details"]["npc_updates"] = npc_update_count
             results["updates_applied"] += npc_update_count
         
         # Process character stat updates
         if "character_stat_updates" in updates and updates["character_stat_updates"]:
-            stat_update_count = await process_character_stats(
-                user_id, conversation_id, updates["character_stat_updates"], conn
+            stat_update_count = await process_character_stats_canonical(
+                ctx, user_id, conversation_id, updates["character_stat_updates"], conn
             )
             results["details"]["stat_updates"] = stat_update_count
             results["updates_applied"] += stat_update_count
         
         # Process social links
         if "social_links" in updates and updates["social_links"]:
-            social_link_count = await process_social_links(
-                user_id, conversation_id, updates["social_links"], conn
+            social_link_count = await process_social_links_canonical(
+                ctx, user_id, conversation_id, updates["social_links"], conn
             )
             results["details"]["social_links"] = social_link_count
             results["updates_applied"] += social_link_count
         
         # Process roleplay updates
         if "roleplay_updates" in updates and updates["roleplay_updates"]:
-            roleplay_update_count = await process_roleplay_updates(
-                user_id, conversation_id, updates["roleplay_updates"], conn
+            roleplay_update_count = await process_roleplay_updates_canonical(
+                ctx, user_id, conversation_id, updates["roleplay_updates"], conn
             )
             results["details"]["roleplay_updates"] = roleplay_update_count
             results["updates_applied"] += roleplay_update_count
@@ -611,112 +620,120 @@ async def apply_universal_updates_async(
         logger.error(f"Error applying universal updates: {e}")
         return {"success": False, "error": str(e)}
 
-# Helper functions for specific update types
+# REFACTORED: Helper functions now use canon
 
-async def process_npc_creations(
+async def process_npc_creations_canonical(
+    ctx: UniversalUpdaterContext,
     user_id: int,
     conversation_id: int,
     npc_creations: List[Dict[str, Any]],
     conn: asyncpg.Connection
 ) -> int:
-    """Process NPC creations and return count of NPCs created."""
+    """Process NPC creations using canon."""
     count = 0
+    canon_ctx = type('obj', (object,), {'user_id': user_id, 'conversation_id': conversation_id})
+    
     for npc in npc_creations:
-        # Convert any list/dict fields to JSON strings
-        for field in ["archetypes", "hobbies", "personality_traits", "likes", 
-                      "dislikes", "affiliations", "schedule", "memory"]:
-            if field in npc and npc[field] is not None:
-                if isinstance(npc[field], (list, dict)):
-                    npc[field] = json.dumps(npc[field])
+        # Prepare NPC data package
+        npc_data = {
+            'npc_name': npc['npc_name'],
+            'introduced': npc.get('introduced', False),
+            'sex': npc.get('sex', 'female'),
+            'dominance': npc.get('dominance'),
+            'cruelty': npc.get('cruelty'),
+            'closeness': npc.get('closeness'),
+            'trust': npc.get('trust'),
+            'respect': npc.get('respect'),
+            'intensity': npc.get('intensity'),
+            'archetypes': json.dumps(npc.get('archetypes', [])) if npc.get('archetypes') else None,
+            'archetype_summary': npc.get('archetype_summary'),
+            'archetype_extras_summary': npc.get('archetype_extras_summary'),
+            'physical_description': npc.get('physical_description'),
+            'hobbies': json.dumps(npc.get('hobbies', [])) if npc.get('hobbies') else None,
+            'personality_traits': json.dumps(npc.get('personality_traits', [])) if npc.get('personality_traits') else None,
+            'likes': json.dumps(npc.get('likes', [])) if npc.get('likes') else None,
+            'dislikes': json.dumps(npc.get('dislikes', [])) if npc.get('dislikes') else None,
+            'affiliations': json.dumps(npc.get('affiliations', [])) if npc.get('affiliations') else None,
+            'schedule': json.dumps(npc.get('schedule', {})) if npc.get('schedule') else None,
+            'memory': json.dumps(npc.get('memory')) if npc.get('memory') else None,
+            'monica_level': npc.get('monica_level'),
+            'age': npc.get('age'),
+            'birthdate': npc.get('birthdate')
+        }
         
-        # Insert NPC record
-        await conn.execute("""
-            INSERT INTO NPCStats (
-                user_id, conversation_id, npc_name, introduced, sex,
-                dominance, cruelty, closeness, trust, respect, intensity,
-                archetypes, archetype_summary, archetype_extras_summary,
-                physical_description, hobbies, personality_traits,
-                likes, dislikes, affiliations, schedule, memory,
-                monica_level, age, birthdate
-            ) VALUES (
-                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
-                $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25
-            )
-        """, user_id, conversation_id, npc["npc_name"], npc.get("introduced", False),
-        npc.get("sex", "female"), npc.get("dominance"), npc.get("cruelty"),
-        npc.get("closeness"), npc.get("trust"), npc.get("respect"),
-        npc.get("intensity"), npc.get("archetypes"), npc.get("archetype_summary"),
-        npc.get("archetype_extras_summary"), npc.get("physical_description"),
-        npc.get("hobbies"), npc.get("personality_traits"), npc.get("likes"),
-        npc.get("dislikes"), npc.get("affiliations"), npc.get("schedule"),
-        npc.get("memory"), npc.get("monica_level"), npc.get("age"),
-        npc.get("birthdate"))
+        # Remove None values
+        npc_data = {k: v for k, v in npc_data.items() if v is not None}
         
-        count += 1
+        # Use canon to create NPC
+        npc_id = await canon.find_or_create_npc(canon_ctx, conn, **npc_data)
+        if npc_id:
+            count += 1
     
     return count
 
-async def process_npc_updates(
+async def process_npc_updates_canonical(
+    ctx: UniversalUpdaterContext,
     user_id: int,
     conversation_id: int,
     npc_updates: List[Dict[str, Any]],
     conn: asyncpg.Connection
 ) -> int:
-    """Process NPC updates and return count of NPCs updated."""
+    """Process NPC updates using LoreSystem."""
     count = 0
+    
     for npc in npc_updates:
         # Skip if no npc_id
         if "npc_id" not in npc:
             continue
         
-        # Build update statement dynamically based on provided fields
-        fields = []
-        values = [user_id, conversation_id, npc["npc_id"]]
-        param_index = 4  # Starting after the first 3 parameters
+        # Build update dictionary
+        updates = {}
         
-        update_fields = [
+        # Simple fields
+        simple_fields = [
             "npc_name", "introduced", "archetype_summary", "archetype_extras_summary",
             "physical_description", "dominance", "cruelty", "closeness", "trust",
             "respect", "intensity", "sex", "current_location"
         ]
         
-        for field in update_fields:
+        for field in simple_fields:
             if field in npc and npc[field] is not None:
-                fields.append(f"{field} = ${param_index}")
-                values.append(npc[field])
-                param_index += 1
+                updates[field] = npc[field]
         
-        # Handle JSON fields separately
+        # JSON fields
         json_fields = ["hobbies", "personality_traits", "likes", "dislikes", 
                        "affiliations", "memory", "schedule"]
         
         for field in json_fields:
             if field in npc and npc[field] is not None:
-                fields.append(f"{field} = ${param_index}")
-                values.append(json.dumps(npc[field]) if isinstance(npc[field], (list, dict)) else npc[field])
-                param_index += 1
+                updates[field] = json.dumps(npc[field]) if isinstance(npc[field], (list, dict)) else npc[field]
         
         # Skip if no fields to update
-        if not fields:
+        if not updates:
             continue
         
-        # Execute update
-        query = f"""
-            UPDATE NPCStats SET {', '.join(fields)}
-            WHERE user_id = $1 AND conversation_id = $2 AND npc_id = $3
-        """
-        await conn.execute(query, *values)
-        count += 1
+        # Use LoreSystem to update
+        result = await ctx.lore_system.propose_and_enact_change(
+            ctx=ctx,
+            entity_type="NPCStats",
+            entity_identifier={"npc_id": npc["npc_id"], "user_id": user_id, "conversation_id": conversation_id},
+            updates=updates,
+            reason=f"Narrative update for NPC {npc.get('npc_name', npc['npc_id'])}"
+        )
+        
+        if result.get("status") in ["committed", "conflict_generated"]:
+            count += 1
     
     return count
 
-async def process_character_stats(
+async def process_character_stats_canonical(
+    ctx: UniversalUpdaterContext,
     user_id: int,
     conversation_id: int,
     stat_updates: Dict[str, Any],
     conn: asyncpg.Connection
 ) -> int:
-    """Process character stat updates and return count of updates."""
+    """Process character stat updates using canon and LoreSystem."""
     if not stat_updates or "stats" not in stat_updates:
         return 0
     
@@ -734,16 +751,13 @@ async def process_character_stats(
     """, user_id, conversation_id, player_name)
     
     if not player_exists:
-        # Insert new player stats record with defaults
-        await conn.execute("""
-            INSERT INTO PlayerStats (
-                user_id, conversation_id, player_name,
-                corruption, confidence, willpower, obedience,
-                dependency, lust, mental_resilience, physical_endurance
-            ) VALUES (
-                $1, $2, $3, 0, 0, 0, 0, 0, 0, 0, 0
-            )
-        """, user_id, conversation_id, player_name)
+        # Create player using canon
+        canon_ctx = type('obj', (object,), {'user_id': user_id, 'conversation_id': conversation_id})
+        await canon.find_or_create_player_stats(
+            canon_ctx, conn, player_name,
+            corruption=0, confidence=0, willpower=0, obedience=0,
+            dependency=0, lust=0, mental_resilience=0, physical_endurance=0
+        )
     
     # Count updates actually made
     update_count = 0
@@ -761,129 +775,115 @@ async def process_character_stats(
                 # Calculate new value (ensuring it stays within 0-100 range)
                 new_value = max(0, min(100, current_value + value))
                 
-                # Update the stat
-                await conn.execute(f"""
-                    UPDATE PlayerStats SET {stat} = $4
-                    WHERE user_id = $1 AND conversation_id = $2 AND player_name = $3
-                """, user_id, conversation_id, player_name, new_value)
+                # Use LoreSystem to update
+                result = await ctx.lore_system.propose_and_enact_change(
+                    ctx=ctx,
+                    entity_type="PlayerStats",
+                    entity_identifier={
+                        "user_id": user_id,
+                        "conversation_id": conversation_id,
+                        "player_name": player_name
+                    },
+                    updates={stat: new_value},
+                    reason=f"Narrative update: {stat} changed by {value}"
+                )
                 
-                # Log stat change in history
-                await conn.execute("""
-                    INSERT INTO StatsHistory (
-                        user_id, conversation_id, player_name, stat_name,
-                        old_value, new_value, cause
-                    ) VALUES ($1, $2, $3, $4, $5, $6, $7)
-                """, user_id, conversation_id, player_name, stat,
-                current_value, new_value, "Narrative update")
-                
-                update_count += 1
+                if result.get("status") in ["committed", "conflict_generated"]:
+                    # Log stat change in history using canon
+                    canon_ctx = type('obj', (object,), {'user_id': user_id, 'conversation_id': conversation_id})
+                    await canon.log_stat_change(
+                        canon_ctx, conn, player_name, stat,
+                        current_value, new_value, "Narrative update"
+                    )
+                    update_count += 1
     
     return update_count
 
-async def process_social_links(
+async def process_social_links_canonical(
+    ctx: UniversalUpdaterContext,
     user_id: int,
     conversation_id: int,
     social_links: List[Dict[str, Any]],
     conn: asyncpg.Connection
 ) -> int:
-    """Process social link updates and return count of links updated."""
+    """Process social link updates using canon."""
     count = 0
+    canon_ctx = type('obj', (object,), {'user_id': user_id, 'conversation_id': conversation_id})
+    
     for link in social_links:
-        # Check if link exists
-        existing_link = await conn.fetchrow("""
-            SELECT link_id, link_level FROM SocialLinks
-            WHERE user_id = $1 AND conversation_id = $2 
-            AND entity1_type = $3 AND entity1_id = $4
-            AND entity2_type = $5 AND entity2_id = $6
-        """, user_id, conversation_id, link["entity1_type"], link["entity1_id"],
-        link["entity2_type"], link["entity2_id"])
+        # Use canon to find or create social link
+        link_data = {
+            'user_id': user_id,
+            'conversation_id': conversation_id,
+            'entity1_type': link['entity1_type'],
+            'entity1_id': link['entity1_id'],
+            'entity2_type': link['entity2_type'],
+            'entity2_id': link['entity2_id'],
+            'link_type': link.get('link_type'),
+            'link_level': link.get('level_change', 0),
+            'link_history': [],
+            'dynamics': {},
+            'experienced_crossroads': [],
+            'experienced_rituals': []
+        }
         
-        if existing_link:
-            # Update existing link
-            if "level_change" in link and link["level_change"] is not None:
-                current_level = existing_link["link_level"] or 0
-                new_level = current_level + link["level_change"]
+        # Add new event if provided
+        if "new_event" in link and link["new_event"]:
+            link_data['link_history'] = [{
+                "event": link["new_event"],
+                "timestamp": datetime.now().isoformat()
+            }]
+        
+        # Create or update link
+        link_id = await canon.find_or_create_social_link(canon_ctx, conn, **link_data)
+        
+        # If link already existed and we have updates, use LoreSystem
+        if link_id and ("level_change" in link or "new_event" in link):
+            updates = {}
+            
+            if "level_change" in link:
+                # Get current level
+                current_level = await conn.fetchval("""
+                    SELECT link_level FROM SocialLinks WHERE link_id = $1
+                """, link_id)
                 
-                await conn.execute("""
-                    UPDATE SocialLinks SET link_level = $7
-                    WHERE link_id = $8
-                """, new_level, existing_link["link_id"])
+                updates['link_level'] = (current_level or 0) + link['level_change']
             
-            # Add new event if provided
-            if "new_event" in link and link["new_event"]:
-                # Get current history
-                current_history = await conn.fetchval("""
-                    SELECT link_history FROM SocialLinks
-                    WHERE link_id = $1
-                """, existing_link["link_id"])
+            if updates:
+                result = await ctx.lore_system.propose_and_enact_change(
+                    ctx=ctx,
+                    entity_type="SocialLinks",
+                    entity_identifier={"link_id": link_id},
+                    updates=updates,
+                    reason=f"Social link update: {link.get('new_event', 'Relationship change')}"
+                )
                 
-                # Append new event
-                history = json.loads(current_history or '[]')
-                history.append({
-                    "event": link["new_event"],
-                    "timestamp": str(conn.get_server_timestamp())
-                })
-                
-                await conn.execute("""
-                    UPDATE SocialLinks SET link_history = $1
-                    WHERE link_id = $2
-                """, json.dumps(history), existing_link["link_id"])
-            
-            count += 1
-        else:
-            # Create new link
-            initial_level = link.get("level_change", 0)
-            history = []
-            
-            if "new_event" in link and link["new_event"]:
-                history.append({
-                    "event": link["new_event"],
-                    "timestamp": str(conn.get_server_timestamp())
-                })
-            
-            await conn.execute("""
-                INSERT INTO SocialLinks (
-                    user_id, conversation_id, entity1_type, entity1_id,
-                    entity2_type, entity2_id, link_type, link_level,
-                    link_history, group_interaction
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-            """, user_id, conversation_id, link["entity1_type"], link["entity1_id"],
-            link["entity2_type"], link["entity2_id"], link.get("link_type"),
-            initial_level, json.dumps(history), link.get("group_context"))
-            
+                if result.get("status") in ["committed", "conflict_generated"]:
+                    count += 1
+            else:
+                count += 1
+        elif link_id:
             count += 1
     
     return count
 
-async def process_roleplay_updates(
+async def process_roleplay_updates_canonical(
+    ctx: UniversalUpdaterContext,
     user_id: int,
     conversation_id: int,
     roleplay_updates: Dict[str, Any],
     conn: asyncpg.Connection
 ) -> int:
-    """Process roleplay updates and return count of updates."""
+    """Process roleplay updates using canon."""
     count = 0
+    canon_ctx = type('obj', (object,), {'user_id': user_id, 'conversation_id': conversation_id})
+    
     for key, value in roleplay_updates.items():
         if value is not None:
-            # Check if key exists
-            existing = await conn.fetchval("""
-                SELECT COUNT(*) FROM CurrentRoleplay
-                WHERE user_id = $1 AND conversation_id = $2 AND key = $3
-            """, user_id, conversation_id, key)
-            
-            if existing:
-                # Update existing key
-                await conn.execute("""
-                    UPDATE CurrentRoleplay SET value = $4
-                    WHERE user_id = $1 AND conversation_id = $2 AND key = $3
-                """, user_id, conversation_id, key, str(value))
-            else:
-                # Insert new key
-                await conn.execute("""
-                    INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
-                    VALUES ($1, $2, $3, $4)
-                """, user_id, conversation_id, key, str(value))
-            
+            # Use canon to update current roleplay
+            await canon.update_current_roleplay(
+                canon_ctx, conn, user_id, conversation_id, key, str(value)
+            )
             count += 1
     
     return count
@@ -920,8 +920,9 @@ async def apply_universal_updates(ctx, updates: Dict[str, Any]) -> Dict[str, Any
         updates["conversation_id"] = conversation_id
         
         async with get_db_connection_context() as conn:
-            # Apply updates using the function defined in this same file
+            # Apply updates using the canonical function
             result = await apply_universal_updates_async(
+                ctx.context,
                 user_id,
                 conversation_id,
                 updates,
@@ -1245,3 +1246,29 @@ class UniversalUpdaterAgent:
             "patterns": {},
             "adaptations": []
         }
+
+# Add these helper functions that were missing from canon
+async def find_or_create_player_stats(ctx, conn, player_name: str, **kwargs) -> None:
+    """Helper function to create player stats if they don't exist."""
+    await conn.execute("""
+        INSERT INTO PlayerStats (
+            user_id, conversation_id, player_name,
+            corruption, confidence, willpower, obedience,
+            dependency, lust, mental_resilience, physical_endurance
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        ON CONFLICT (user_id, conversation_id, player_name) DO NOTHING
+    """, ctx.user_id, ctx.conversation_id, player_name,
+    kwargs.get('corruption', 0), kwargs.get('confidence', 0),
+    kwargs.get('willpower', 0), kwargs.get('obedience', 0),
+    kwargs.get('dependency', 0), kwargs.get('lust', 0),
+    kwargs.get('mental_resilience', 0), kwargs.get('physical_endurance', 0))
+
+async def log_stat_change(ctx, conn, player_name: str, stat_name: str, old_value: int, new_value: int, cause: str) -> None:
+    """Helper function to log stat changes."""
+    await conn.execute("""
+        INSERT INTO StatsHistory (
+            user_id, conversation_id, player_name, stat_name,
+            old_value, new_value, cause
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+    """, ctx.user_id, ctx.conversation_id, player_name, stat_name,
+    old_value, new_value, cause)
