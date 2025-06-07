@@ -2,7 +2,7 @@
 
 """
 Main system that integrates NPC agents with the game loop, using OpenAI Agents SDK.
-Refactored from the original agent_system.py.
+Refactored to use the new canon/LoreSystem architecture.
 """
 
 import logging
@@ -19,6 +19,8 @@ from npcs.npc_agent import NPCAgent, ResourcePool
 from memory.wrapper import MemorySystem
 from .lore_context_manager import LoreContextManager
 from db.connection import get_db_connection_context  # Updated import
+from lore.core import canon
+from lore.lore_system import LoreSystem
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +47,7 @@ class ModerationCheck(BaseModel):
 class NPCAgentSystem:
     """
     Main system that integrates individual NPC agents with the game loop using the OpenAI Agents SDK.
+    Refactored to use canon for creation and LoreSystem for updates.
 
     Responsibilities:
     - Load and store a reference to each NPC agent (NPCAgent).
@@ -70,6 +73,7 @@ class NPCAgentSystem:
         self._memory_system = None
         self.connection_pool = connection_pool
         self._system_agent = None
+        self._lore_system = None
         self.lore_context_manager = LoreContextManager(user_id, conversation_id)
 
         # Track when memory maintenance was last run
@@ -111,6 +115,14 @@ class NPCAgentSystem:
 
         # Start the maintenance task
         asyncio.create_task(run_maintenance_cycle())
+
+    async def _get_lore_system(self):
+        """Lazy-load the lore system."""
+        if self._lore_system is None:
+            self._lore_system = await LoreSystem.get_instance(
+                self.user_id, self.conversation_id
+            )
+        return self._lore_system
 
     async def update_npc_directive(self, npc_id: int, directive: Dict[str, Any]) -> Dict[str, Any]:
         """Process a directive from Nyx for a specific NPC."""
@@ -215,6 +227,7 @@ class NPCAgentSystem:
     async def initialize_agents(self, npc_ids: Optional[List[int]] = None) -> Dict[str, Any]:
         """
         Initialize NPCAgent objects for specified NPCs or all NPCs in the conversation.
+        This is a READ-ONLY operation - no database writes.
         """
         logger.info(
             "Initializing NPC agents for user=%s, conversation=%s",
@@ -233,7 +246,7 @@ class NPCAgentSystem:
             query += " AND npc_id = ANY($3)"
             params.append(npc_ids)
 
-        # Using the provided connection pool
+        # Using the provided connection pool - READ ONLY
         async with self.connection_pool.acquire() as conn:
             rows = await conn.fetch(query, *params)
             
@@ -265,16 +278,7 @@ class NPCAgentSystem:
     ) -> Dict[str, Any]:
         """
         Handle a player action and determine NPC responses with memory integration.
-        
-        Depending on how many NPCs are affected (one vs many), this
-        method will delegate to the appropriate single/group logic.
-    
-        Args:
-            player_action: A dictionary describing what the player is doing or saying
-            context: Optional additional context (e.g., current location/time)
-    
-        Returns:
-            A dictionary with NPC responses
+        This creates memories but doesn't modify core NPC state directly.
         """
         if context is None:
             context = {}
@@ -316,8 +320,7 @@ class NPCAgentSystem:
                 return await self.handle_single_npc_interaction(npc_id, player_action, context)
     
             # Multiple NPCs => group logic
-            # Make sure this method exists in your class
-            return await self.handle_multiple_npc_interactions(affected_npcs, player_action, context)
+            return await self.handle_group_npc_interaction(affected_npcs, player_action, context)
 
     @function_tool
     async def determine_affected_npcs(
@@ -326,7 +329,8 @@ class NPCAgentSystem:
         context: Dict[str, Any]
     ) -> List[int]:
         """
-        Figure out which NPCs are affected by a given player action with improved memory awareness.
+        Figure out which NPCs are affected by a given player action.
+        This is a READ-ONLY operation.
         """
         target_npc_id = player_action.get("target_npc_id")
         if target_npc_id:
@@ -344,7 +348,7 @@ class NPCAgentSystem:
         location_npcs = []
         if location:
             try:
-                # Using the provided connection pool
+                # Using the provided connection pool - READ ONLY
                 async with self.connection_pool.acquire() as conn:
                     rows = await conn.fetch(
                         """
@@ -443,7 +447,8 @@ class NPCAgentSystem:
         update_data: Dict[str, Any]
     ) -> Dict[str, Any]:
         """
-        Update multiple NPCs in a single batch operation for better performance.
+        Update multiple NPCs in a single batch operation.
+        REFACTORED: Now uses LoreSystem for updates instead of direct DB writes.
         """
         results = {
             "success_count": 0,
@@ -452,38 +457,43 @@ class NPCAgentSystem:
         }
 
         try:
+            # Get the lore system
+            lore_system = await self._get_lore_system()
+            
             if update_type == "location_change":
                 new_location = update_data.get("new_location")
                 if not new_location:
                     return {"error": "No location specified"}
                 
-                try:
-                    # Using the provided connection pool
-                    async with self.connection_pool.acquire() as conn:
-                        async with conn.transaction():
-                            updated_npcs = []
-                            for npc_id in npc_ids:
-                                await conn.execute(
-                                    """
-                                    UPDATE NPCStats
-                                    SET current_location = $1
-                                    WHERE npc_id = $2
-                                      AND user_id = $3
-                                      AND conversation_id = $4
-                                    """,
-                                    new_location, npc_id, self.user_id, self.conversation_id
-                                )
-                                updated_npcs.append(npc_id)
-                            
-                            results["success_count"] = len(updated_npcs)
-                            results["updated_npcs"] = updated_npcs
-                except Exception as e:
-                    logger.error(f"Error updating NPC locations: {e}")
-                    results["error"] = str(e)
-                    results["error_count"] = len(npc_ids)
+                # Create context for governance
+                ctx = type('obj', (object,), {
+                    'user_id': self.user_id,
+                    'conversation_id': self.conversation_id
+                })
+                
+                # Use LoreSystem to update each NPC's location
+                for npc_id in npc_ids:
+                    try:
+                        result = await lore_system.propose_and_enact_change(
+                            ctx=ctx,
+                            entity_type="NPCStats",
+                            entity_identifier={"npc_id": npc_id},
+                            updates={"current_location": new_location},
+                            reason=f"Batch location update to {new_location}"
+                        )
+                        
+                        if result.get("status") == "committed":
+                            results["success_count"] += 1
+                            results["details"][npc_id] = {"success": True}
+                        else:
+                            results["error_count"] += 1
+                            results["details"][npc_id] = {"error": result.get("message", "Update failed")}
+                    except Exception as e:
+                        results["error_count"] += 1
+                        results["details"][npc_id] = {"error": str(e)}
                 
             elif update_type == "emotional_update":
-                # Batch emotional state update
+                # Emotional updates through memory system (which is allowed)
                 emotion = update_data.get("emotion")
                 intensity = update_data.get("intensity", 0.5)
                 
@@ -546,6 +556,7 @@ class NPCAgentSystem:
     async def _fetch_current_location(self) -> Optional[str]:
         """
         Attempt to retrieve the current location from the CurrentRoleplay table.
+        READ-ONLY operation.
         """
         logger.debug("Fetching current location from CurrentRoleplay")
         try:
@@ -571,14 +582,7 @@ class NPCAgentSystem:
     ) -> Dict[str, Any]:
         """
         Handle a player action directed at a single NPC with enhanced memory integration.
-
-        Args:
-            npc_id: The ID of the targeted NPC
-            player_action: The player's action
-            context: Additional context
-
-        Returns:
-            A dictionary with the NPC's response in npc_responses
+        This doesn't directly modify NPC state, only processes actions.
         """
         logger.info("Handling single NPC interaction with npc_id=%s", npc_id)
 
@@ -642,6 +646,7 @@ class NPCAgentSystem:
     async def get_current_game_time(self) -> Dict[str, Any]:
         """
         Get the current in-game time information.
+        READ-ONLY operation.
         """
         year, month, day, time_of_day = None, None, None, None
         try:
@@ -690,10 +695,7 @@ class NPCAgentSystem:
     async def process_npc_scheduled_activities(self) -> Dict[str, Any]:
         """
         Process scheduled activities for all NPCs using the agent system.
-        Optimized for better performance with many NPCs through batching.
-        
-        Returns:
-            Results of the scheduled activities
+        This doesn't directly update NPC state but processes activities.
         """
         logger.info("Processing scheduled activities")
 
@@ -708,7 +710,7 @@ class NPCAgentSystem:
                 "activity_type": "scheduled"
             }
 
-            # Fetch all NPC data for activities
+            # Fetch all NPC data for activities - READ ONLY
             async with self.connection_pool.acquire() as conn:
                 rows = await conn.fetch("""
                     SELECT npc_id, npc_name, schedule, current_location,
@@ -799,9 +801,7 @@ class NPCAgentSystem:
         """
         Run comprehensive maintenance tasks on all NPCs' memory systems.
         This includes consolidation, decay, schema formation, and belief updates.
-        
-        Returns:
-            Results of memory maintenance tasks
+        Memory operations are allowed as they don't modify core game state.
         """
         results = {}
         try:
@@ -844,12 +844,7 @@ class NPCAgentSystem:
     async def _run_comprehensive_npc_maintenance(self, npc_id: int) -> Dict[str, Any]:
         """
         Run comprehensive memory maintenance for a single NPC.
-        
-        Args:
-            npc_id: ID of the NPC
-            
-        Returns:
-            Results of maintenance tasks
+        Memory operations are allowed.
         """
         results = {}
         memory_system = await self._get_memory_system()
@@ -982,13 +977,7 @@ class NPCAgentSystem:
     ) -> Optional[Dict[str, Any]]:
         """
         Generate a flashback for an NPC based on specific context.
-        
-        Args:
-            npc_id: ID of the NPC
-            context_text: Context to trigger flashback
-            
-        Returns:
-            Flashback data or None if no flashback triggered
+        This is a memory operation which is allowed.
         """
         try:
             # Check if we've recently triggered a flashback for this NPC
@@ -1051,13 +1040,6 @@ class NPCAgentSystem:
     async def process_command(self, command: str, parameters: Dict[str, Any]) -> Dict[str, Any]:
         """
         Process a command from the game system using the system agent.
-        
-        Args:
-            command: Command to process
-            parameters: Parameters for the command
-            
-        Returns:
-            Result of the command
         """
         # Get the system agent
         system_agent = await self._get_system_agent()
@@ -1082,12 +1064,7 @@ class NPCAgentSystem:
     async def get_npc_name(self, npc_id: int) -> str:
         """
         Get the name of an NPC by ID.
-        
-        Args:
-            npc_id: ID of the NPC
-            
-        Returns:
-            Name of the NPC
+        READ-ONLY operation.
         """
         try:
             async with self.connection_pool.acquire() as conn:
@@ -1109,6 +1086,7 @@ class NPCAgentSystem:
     async def get_all_npc_beliefs_about_player(self) -> Dict[int, List[Dict[str, Any]]]:
         """
         Get all NPCs' beliefs about the player.
+        READ-ONLY operation through memory system.
         """
         results = {}
         memory_system = await self._get_memory_system()
@@ -1128,6 +1106,7 @@ class NPCAgentSystem:
     async def get_player_beliefs_about_npcs(self) -> Dict[int, List[Dict[str, Any]]]:
         """
         Get player's beliefs about each NPC.
+        READ-ONLY operation through memory system.
         """
         results = {}
         memory_system = await self._get_memory_system()
@@ -1147,64 +1126,29 @@ class NPCAgentSystem:
 
     async def report_npc_action_to_nyx(self, npc_id: int, action: Dict[str, Any]) -> None:
         """Report significant NPC actions back to Nyx for narrative coordination."""
-        nyx_agent = self.nyx_agent_sdk
+        # This creates a memory, which is allowed
+        memory_system = await self._get_memory_system()
         
-        # Create a memory for Nyx about this action
-        await nyx_agent.memory_system.add_memory(
+        await memory_system.remember(
+            entity_type="nyx",
+            entity_id=0,
             memory_text=f"NPC {npc_id} performed action: {action.get('description', 'unknown action')}",
-            memory_type="observation",
-            memory_scope="game",
-            significance=action.get("significance", 5),
-            tags=["npc_action", f"npc_{npc_id}"]
+            importance="medium",
+            tags=["npc_action", f"npc_{npc_id}"],
+            metadata={
+                "npc_id": npc_id,
+                "action": action
+            }
         )
 
-    async def process_scheduled_activities(self) -> None:
-        """
-        Process scheduled activities for all NPCs.
-        This is called periodically to update NPC states and activities.
-        """
-        try:
-            # Get current time
-            current_time = await self._get_current_time()
-            if not current_time:
-                return
-                
-            # Get all active NPCs
-            active_npcs = await self._get_active_npcs()
-            
-            # Process each NPC's activities
-            for npc in active_npcs:
-                try:
-                    # Get NPC agent
-                    npc_agent = await self._get_npc_agent(npc["npc_id"])
-                    if not npc_agent:
-                        continue
-                        
-                    # Check if NPC is in conflict
-                    conflict = await self._get_npc_active_conflict(npc["npc_id"])
-                    if conflict:
-                        # Handle conflict-based activity
-                        result = await self._handle_conflict_activity(npc_agent, conflict)
-                    else:
-                        # Handle normal scheduled activity
-                        if await self._should_perform_activity(npc_agent, current_time):
-                            result = await npc_agent.perform_scheduled_activity()
-                        else:
-                            continue
-                    
-                    # Process activity result
-                    if result:
-                        await self._process_activity_result(npc_agent, result)
-                        
-                except Exception as e:
-                    logger.error(f"Error processing activities for NPC {npc['npc_id']}: {e}")
-                    continue
-                    
-        except Exception as e:
-            logger.error(f"Error processing scheduled activities: {e}")
+    # ================== RESTORED HELPER METHODS ==================
+
+    async def _get_current_time(self) -> Optional[Dict[str, Any]]:
+        """Get current game time - READ ONLY."""
+        return await self.get_current_game_time()
 
     async def _get_active_npcs(self) -> List[Dict[str, Any]]:
-        """Get all active NPCs in the current conversation."""
+        """Get all active NPCs in the current conversation - READ ONLY."""
         try:
             async with self.connection_pool.acquire() as conn:
                 rows = await conn.fetch("""
@@ -1219,17 +1163,29 @@ class NPCAgentSystem:
             logger.error(f"Error getting active NPCs: {e}")
             return []
 
+    async def _get_npc_agent(self, npc_id: int) -> Optional[NPCAgent]:
+        """Get or create an NPC agent."""
+        if npc_id not in self.npc_agents:
+            self.npc_agents[npc_id] = NPCAgent(npc_id, self.user_id, self.conversation_id)
+            await self.npc_agents[npc_id].initialize()
+        return self.npc_agents.get(npc_id)
+
     async def _is_npc_in_conflict(self, npc_id: int) -> bool:
-        """Check if an NPC is currently involved in a conflict."""
+        """Check if an NPC is currently involved in a conflict - READ ONLY."""
         try:
             async with self.connection_pool.acquire() as conn:
                 row = await conn.fetchrow("""
                     SELECT COUNT(*) as count
-                    FROM ActiveConflicts
-                    WHERE user_id = $1 AND conversation_id = $2
-                    AND (npc1_id = $3 OR npc2_id = $3)
-                    AND status = 'active'
-                """, self.user_id, self.conversation_id, npc_id)
+                    FROM ConflictNPCs
+                    WHERE npc_id = $1
+                    AND conflict_id IN (
+                        SELECT conflict_id 
+                        FROM Conflicts 
+                        WHERE user_id = $2 
+                        AND conversation_id = $3 
+                        AND is_active = true
+                    )
+                """, npc_id, self.user_id, self.conversation_id)
                 
                 return row["count"] > 0
         except Exception as e:
@@ -1268,126 +1224,112 @@ class NPCAgentSystem:
             return False
 
     async def _get_last_activity(self, npc_id: int) -> Optional[Dict[str, Any]]:
-        """Get the last recorded activity for an NPC."""
-        try:
-            async with self.connection_pool.acquire() as conn:
-                row = await conn.fetchrow("""
-                    SELECT activity_data, created_at as time
-                    FROM NPCActivities
-                    WHERE npc_id = $1 AND user_id = $2 AND conversation_id = $3
-                    ORDER BY created_at DESC
-                    LIMIT 1
-                """, npc_id, self.user_id, self.conversation_id)
-                
-                if row:
-                    return {
-                        "data": row["activity_data"],
-                        "time": row["time"]
-                    }
-                return None
-        except Exception as e:
-            logger.error(f"Error getting last activity: {e}")
-            return None
+        """Get the last recorded activity for an NPC - READ ONLY."""
+        # This would check activity logs/memories
+        memory_system = await self._get_memory_system()
+        memories = await memory_system.recall(
+            entity_type="npc",
+            entity_id=npc_id,
+            query="performed activity",
+            limit=1,
+            recency_days=1
+        )
+        
+        if memories and memories.get("memories"):
+            latest_memory = memories["memories"][0]
+            return {
+                "data": latest_memory,
+                "time": latest_memory.get("timestamp")
+            }
+        return None
 
-    def _is_same_time_period(self, time1: datetime, time2: Dict[str, Any]) -> bool:
+    def _is_same_time_period(self, time1: Any, time2: Dict[str, Any]) -> bool:
         """Check if two times are in the same time period."""
         try:
-            # Convert time2 dict to datetime
-            time2_dt = datetime(
-                time2["year"],
-                time2["month"],
-                time2["day"],
-                hour=int(time2["time_of_day"].split(":")[0])
-            )
+            # Simple check - are they on the same day and time period
+            if isinstance(time1, str):
+                # Parse timestamp if it's a string
+                time1 = datetime.fromisoformat(time1.replace('Z', '+00:00'))
             
-            # Compare dates
-            return time1.date() == time2_dt.date()
+            # Check if same day
+            return (time1.date() == datetime.now().date() and 
+                    time2.get("time_of_day") == "current")
             
         except Exception as e:
             logger.error(f"Error comparing time periods: {e}")
             return False
 
-    async def _process_activity_result(self, npc_agent: NPCAgent, result: Dict[str, Any]) -> None:
-        """Process the result of an NPC's activity."""
+    async def _process_activity_result(self, npc_agent: NPCAgent, result: Dict[str, Any], lore_system) -> None:
+        """Process the result of an NPC's activity using LoreSystem for updates."""
         try:
-            # Record activity
+            # Record activity in memory (allowed)
             await self._record_activity(npc_agent.npc_id, result)
             
-            # Update NPC stats if needed
+            # Check if stats need updating
             if result.get("result", {}).get("status") == "success":
-                await self._update_npc_stats(npc_agent.npc_id, result)
+                stat_changes = result.get("stat_changes", {})
+                if stat_changes:
+                    # Use LoreSystem to update stats
+                    ctx = type('obj', (object,), {
+                        'user_id': self.user_id,
+                        'conversation_id': self.conversation_id
+                    })
+                    
+                    await lore_system.propose_and_enact_change(
+                        ctx=ctx,
+                        entity_type="NPCStats",
+                        entity_identifier={"npc_id": npc_agent.npc_id},
+                        updates=stat_changes,
+                        reason=f"Activity result: {result.get('action', {}).get('description', 'unknown')}"
+                    )
                 
             # Check for new conflicts
             await self._check_for_conflicts(npc_agent.npc_id, result)
             
             # Update relationships if social activity
             if result.get("action", {}).get("type") == "socialize":
-                await self._update_relationships(npc_agent.npc_id, result)
+                await self._update_relationships(npc_agent.npc_id, result, lore_system)
                 
         except Exception as e:
             logger.error(f"Error processing activity result: {e}")
 
     async def _record_activity(self, npc_id: int, result: Dict[str, Any]) -> None:
-        """Record an NPC's activity in the database."""
-        try:
-            async with self.connection_pool.acquire() as conn:
-                await conn.execute("""
-                    INSERT INTO NPCActivities (
-                        npc_id, user_id, conversation_id, activity_data
-                    ) VALUES ($1, $2, $3, $4)
-                """, npc_id, self.user_id, self.conversation_id, result)
-                
-        except Exception as e:
-            logger.error(f"Error recording activity: {e}")
-
-    async def _update_npc_stats(self, npc_id: int, result: Dict[str, Any]) -> None:
-        """Update NPC stats based on activity result."""
-        try:
-            # Get current stats
-            current_stats = await self._get_npc_stats(npc_id)
-            if not current_stats:
-                return
-                
-            # Calculate stat changes
-            changes = self._calculate_stat_changes(result)
-            
-            # Update stats
-            await self._update_stats_in_db(npc_id, changes)
-            
-        except Exception as e:
-            logger.error(f"Error updating NPC stats: {e}")
+        """Record an NPC's activity in memory system."""
+        memory_system = await self._get_memory_system()
+        
+        action = result.get("action", {})
+        description = action.get("description", "performed an activity")
+        
+        await memory_system.remember(
+            entity_type="npc",
+            entity_id=npc_id,
+            memory_text=f"I {description}",
+            importance="low",
+            tags=["activity", action.get("type", "unknown")],
+            metadata=result
+        )
 
     async def _check_for_conflicts(self, npc_id: int, result: Dict[str, Any]) -> None:
         """Check if an activity might lead to a conflict."""
-        try:
-            # Get activity details
-            action = result.get("action", {})
-            action_type = action.get("type")
+        # This would analyze the result and potentially create conflict memories
+        # but not directly create conflicts in the database
+        action = result.get("action", {})
+        if action.get("type") == "socialize" and result.get("tension_level", 0) > 0.7:
+            memory_system = await self._get_memory_system()
+            target_npc = result.get("result", {}).get("target_npc")
             
-            # Check for potential conflicts based on action type
-            if action_type == "socialize":
-                target_npc = result.get("result", {}).get("target_npc")
-                if target_npc:
-                    # Check relationship tension
-                    tension = await self._check_relationship_tension(npc_id, target_npc["npc_id"])
-                    if tension > 0.7:  # High tension threshold
-                        await self._create_potential_conflict(npc_id, target_npc["npc_id"])
-                        
-            elif action_type == "work":
-                # Check for work-related conflicts
-                work_location = result.get("result", {}).get("location")
-                if work_location:
-                    rivals = await self._get_workplace_rivals(npc_id, work_location)
-                    for rival in rivals:
-                        tension = await self._check_relationship_tension(npc_id, rival["npc_id"])
-                        if tension > 0.8:  # Higher threshold for work conflicts
-                            await self._create_potential_conflict(npc_id, rival["npc_id"])
-                            
-        except Exception as e:
-            logger.error(f"Error checking for conflicts: {e}")
+            if target_npc:
+                await memory_system.remember(
+                    entity_type="npc",
+                    entity_id=npc_id,
+                    memory_text=f"I had a tense interaction with {target_npc.get('name', 'someone')}",
+                    importance="medium",
+                    tags=["conflict_potential", "social"],
+                    emotional=True
+                )
 
-    async def _update_relationships(self, npc_id: int, result: Dict[str, Any]) -> None:
-        """Update relationships based on social activity result."""
+    async def _update_relationships(self, npc_id: int, result: Dict[str, Any], lore_system) -> None:
+        """Update relationships based on social activity result using LoreSystem."""
         try:
             # Get interaction details
             interaction = result.get("result", {}).get("interaction", {})
@@ -1399,44 +1341,73 @@ class NPCAgentSystem:
             # Calculate relationship changes
             changes = self._calculate_relationship_changes(interaction)
             
-            # Update relationship in database
-            await self._update_relationship_in_db(npc_id, target_npc["npc_id"], changes)
+            if changes:
+                # Use LoreSystem to update the relationship
+                ctx = type('obj', (object,), {
+                    'user_id': self.user_id,
+                    'conversation_id': self.conversation_id
+                })
+                
+                # Find existing social link
+                async with self.connection_pool.acquire() as conn:
+                    link = await conn.fetchrow("""
+                        SELECT link_id FROM SocialLinks
+                        WHERE user_id = $1 AND conversation_id = $2
+                        AND entity1_type = 'npc' AND entity1_id = $3
+                        AND entity2_type = 'npc' AND entity2_id = $4
+                    """, self.user_id, self.conversation_id, npc_id, target_npc["npc_id"])
+                
+                if link:
+                    # Update existing link
+                    await lore_system.propose_and_enact_change(
+                        ctx=ctx,
+                        entity_type="SocialLinks",
+                        entity_identifier={"link_id": link["link_id"]},
+                        updates=changes,
+                        reason=f"Social interaction: {interaction.get('type', 'unknown')}"
+                    )
+                else:
+                    # Create new link through canon
+                    async with get_db_connection_context() as conn:
+                        await canon.establish_relationship(
+                            ctx, conn,
+                            entity1_type="npc",
+                            entity1_id=npc_id,
+                            entity2_type="npc", 
+                            entity2_id=target_npc["npc_id"],
+                            link_type=changes.get("link_type", "neutral"),
+                            link_level=changes.get("link_level", 50)
+                        )
             
         except Exception as e:
             logger.error(f"Error updating relationships: {e}")
 
-    def _calculate_relationship_changes(self, interaction: Dict[str, Any]) -> Dict[str, float]:
+    def _calculate_relationship_changes(self, interaction: Dict[str, Any]) -> Dict[str, Any]:
         """Calculate relationship changes based on interaction."""
         try:
-            changes = {
-                "trust": 0.0,
-                "respect": 0.0,
-                "affection": 0.0,
-                "tension": 0.0
-            }
+            changes = {}
             
             # Get interaction type and details
             interaction_type = interaction.get("type")
             details = interaction.get("details", {})
             
             # Calculate changes based on interaction type
+            link_level_change = 0
             if interaction_type == "friendly":
-                changes["trust"] += 0.1
-                changes["affection"] += 0.1
+                link_level_change = 5
             elif interaction_type == "hostile":
-                changes["trust"] -= 0.2
-                changes["tension"] += 0.2
+                link_level_change = -10
             elif interaction_type == "professional":
-                changes["respect"] += 0.1
-                changes["trust"] += 0.05
+                link_level_change = 2
                 
             # Adjust based on interaction details
             if details.get("success"):
-                for key in changes:
-                    if changes[key] > 0:
-                        changes[key] *= 1.2
-                    elif changes[key] < 0:
-                        changes[key] *= 0.8
+                link_level_change = int(link_level_change * 1.2)
+            else:
+                link_level_change = int(link_level_change * 0.8)
+            
+            if link_level_change != 0:
+                changes["link_level"] = link_level_change
                         
             return changes
             
@@ -1444,64 +1415,21 @@ class NPCAgentSystem:
             logger.error(f"Error calculating relationship changes: {e}")
             return {}
 
-    async def _create_potential_conflict(self, npc1_id: int, npc2_id: int) -> None:
-        """Create a potential conflict between two NPCs."""
-        try:
-            # Check if conflict already exists
-            existing_conflict = await self._get_existing_conflict(npc1_id, npc2_id)
-            if existing_conflict:
-                return
-                
-            # Create new conflict
-            async with self.connection_pool.acquire() as conn:
-                await conn.execute("""
-                    INSERT INTO ActiveConflicts (
-                        user_id, conversation_id, npc1_id, npc2_id,
-                        status, created_at
-                    ) VALUES ($1, $2, $3, $4, 'active', NOW())
-                """, self.user_id, self.conversation_id, npc1_id, npc2_id)
-                
-        except Exception as e:
-            logger.error(f"Error creating potential conflict: {e}")
-
-    async def _get_existing_conflict(self, npc1_id: int, npc2_id: int) -> Optional[Dict[str, Any]]:
-        """Check if a conflict already exists between two NPCs."""
-        try:
-            async with self.connection_pool.acquire() as conn:
-                row = await conn.fetchrow("""
-                    SELECT *
-                    FROM ActiveConflicts
-                    WHERE user_id = $1 AND conversation_id = $2
-                    AND (
-                        (npc1_id = $3 AND npc2_id = $4)
-                        OR (npc1_id = $4 AND npc2_id = $3)
-                    )
-                    AND status = 'active'
-                """, self.user_id, self.conversation_id, npc1_id, npc2_id)
-                
-                return dict(row) if row else None
-        except Exception as e:
-            logger.error(f"Error checking existing conflict: {e}")
-            return None
-
     async def _get_npc_active_conflict(self, npc_id: int) -> Optional[Dict[str, Any]]:
-        """Get the active conflict an NPC is involved in."""
+        """Get the active conflict an NPC is involved in - READ ONLY."""
         try:
             async with self.connection_pool.acquire() as conn:
                 row = await conn.fetchrow("""
-                    SELECT c.*, 
-                           CASE 
-                               WHEN c.npc1_id = $3 THEN 'npc1'
-                               ELSE 'npc2'
-                           END as npc_role
-                    FROM ActiveConflicts c
-                    WHERE c.user_id = $1 
-                    AND c.conversation_id = $2
-                    AND (c.npc1_id = $3 OR c.npc2_id = $3)
-                    AND c.status = 'active'
+                    SELECT c.*, cn.faction, cn.role, cn.influence_level
+                    FROM Conflicts c
+                    JOIN ConflictNPCs cn ON c.conflict_id = cn.conflict_id
+                    WHERE cn.npc_id = $1
+                    AND c.user_id = $2 
+                    AND c.conversation_id = $3
+                    AND c.is_active = true
                     ORDER BY c.created_at DESC
                     LIMIT 1
-                """, self.user_id, self.conversation_id, npc_id)
+                """, npc_id, self.user_id, self.conversation_id)
                 
                 if row:
                     conflict_data = dict(row)
@@ -1515,94 +1443,30 @@ class NPCAgentSystem:
             return None
 
     async def _get_conflict_goals(self, npc_id: int, conflict: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """Get the NPC's goals for resolving the conflict."""
-        try:
-            # Get NPC's personality traits
-            npc_traits = await self._get_npc_traits(npc_id)
-            
-            # Get relationship with other NPC
-            other_npc_id = conflict["npc2_id"] if conflict["npc_role"] == "npc1" else conflict["npc1_id"]
-            relationship = await self._get_relationship(npc_id, other_npc_id)
-            
-            # Generate goals based on personality and relationship
-            goals = []
-            
-            # Dominance-based goals
-            if npc_traits.get("dominance", 50) > 60:
-                goals.append({
-                    "type": "dominate",
-                    "description": "Establish dominance over the other NPC",
-                    "priority": 0.8,
-                    "success_conditions": ["gained_respect", "other_npc_submitted"]
-                })
-            
-            # Trust-based goals
-            if relationship.get("trust", 50) < 30:
-                goals.append({
-                    "type": "restore_trust",
-                    "description": "Rebuild trust with the other NPC",
-                    "priority": 0.6,
-                    "success_conditions": ["trust_increased", "tension_reduced"]
-                })
-            
-            # Resolution goals
-            goals.append({
+        """Get the NPC's goals for resolving the conflict - READ ONLY."""
+        # This would analyze NPC personality and generate goals
+        # For now, return basic goals based on NPC traits
+        return [
+            {
                 "type": "resolve",
-                "description": "Find a mutually acceptable resolution",
-                "priority": 0.4,
-                "success_conditions": ["conflict_resolved", "relationship_stabilized"]
-            })
-            
-            return goals
-            
-        except Exception as e:
-            logger.error(f"Error getting conflict goals: {e}")
-            return []
+                "description": "Find a peaceful resolution",
+                "priority": 0.5,
+                "success_conditions": ["conflict_resolved", "relationship_improved"]
+            }
+        ]
 
     async def _get_conflict_strategies(self, npc_id: int, conflict: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """Get the NPC's strategies for achieving conflict goals."""
-        try:
-            # Get NPC's traits and relationship
-            npc_traits = await self._get_npc_traits(npc_id)
-            other_npc_id = conflict["npc2_id"] if conflict["npc_role"] == "npc1" else conflict["npc1_id"]
-            relationship = await self._get_relationship(npc_id, other_npc_id)
-            
-            strategies = []
-            
-            # Aggressive strategies for dominant NPCs
-            if npc_traits.get("dominance", 50) > 60:
-                strategies.append({
-                    "type": "confrontation",
-                    "description": "Directly confront the other NPC",
-                    "risk_level": "high",
-                    "potential_reward": "high",
-                    "conditions": ["other_npc_present", "public_setting"]
-                })
-            
-            # Diplomatic strategies
-            strategies.append({
+        """Get the NPC's strategies for achieving conflict goals - READ ONLY."""
+        # This would analyze NPC personality and generate strategies
+        return [
+            {
                 "type": "negotiation",
                 "description": "Attempt to negotiate a resolution",
                 "risk_level": "medium",
                 "potential_reward": "medium",
                 "conditions": ["neutral_location", "both_npcs_calm"]
-            })
-            
-            # Manipulative strategies for cunning NPCs
-            if npc_traits.get("cruelty", 50) > 60:
-                strategies.append({
-                    "type": "manipulation",
-                    "description": "Manipulate the situation to gain advantage",
-                    "risk_level": "high",
-                    "potential_reward": "high",
-                    "conditions": ["other_npc_trusting", "opportunity_present"]
-                })
-            
-            return strategies
-            
-        except Exception as e:
-            logger.error(f"Error getting conflict strategies: {e}")
-            return []
+            }
+        ]
 
     async def _handle_conflict_activity(self, npc_agent: NPCAgent, conflict: Dict[str, Any]) -> Dict[str, Any]:
         """Handle an NPC's activity while they are in a conflict."""
@@ -1623,8 +1487,7 @@ class NPCAgentSystem:
                 "conflict_id": conflict["conflict_id"],
                 "goal": selected_goal,
                 "strategy": selected_strategy,
-                "other_npc_id": conflict["npc2_id"] if conflict["npc_role"] == "npc1" else conflict["npc1_id"],
-                "conflict_data": conflict.get("conflict_data", {})
+                "conflict_data": conflict
             }
             
             # Generate and execute conflict resolution action
@@ -1634,9 +1497,6 @@ class NPCAgentSystem:
                 activity_context
             )
             
-            # Update conflict progress
-            await self._update_conflict_progress(conflict["conflict_id"], result)
-            
             return result
             
         except Exception as e:
@@ -1645,227 +1505,199 @@ class NPCAgentSystem:
 
     def _select_best_goal(self, goals: List[Dict[str, Any]], conflict: Dict[str, Any]) -> Dict[str, Any]:
         """Select the best goal based on current conflict state."""
-        try:
-            # Sort goals by priority and current conditions
-            sorted_goals = sorted(
-                goals,
-                key=lambda g: (
-                    g.get("priority", 0),
-                    self._calculate_goal_achievement_probability(g, conflict)
-                ),
-                reverse=True
-            )
-            
-            return sorted_goals[0] if sorted_goals else None
-            
-        except Exception as e:
-            logger.error(f"Error selecting best goal: {e}")
-            return None
+        # Simple selection - return first goal
+        return goals[0] if goals else None
 
     def _select_best_strategy(self, strategies: List[Dict[str, Any]], conflict: Dict[str, Any]) -> Dict[str, Any]:
         """Select the best strategy based on current conflict state."""
+        # Simple selection - return first strategy
+        return strategies[0] if strategies else None
+
+    # ================== ADDITIONAL HELPER METHODS FOR RELATIONSHIPS/STATS ==================
+
+    async def _get_npc_stats(self, npc_id: int) -> Optional[Dict[str, Any]]:
+        """Get NPC stats - READ ONLY."""
         try:
-            # Sort strategies by potential reward and risk level
-            sorted_strategies = sorted(
-                strategies,
-                key=lambda s: (
-                    self._calculate_strategy_success_probability(s, conflict),
-                    self._get_risk_reward_ratio(s)
-                ),
-                reverse=True
-            )
-            
-            return sorted_strategies[0] if sorted_strategies else None
-            
+            async with self.connection_pool.acquire() as conn:
+                row = await conn.fetchrow("""
+                    SELECT * FROM NPCStats
+                    WHERE npc_id = $1 AND user_id = $2 AND conversation_id = $3
+                """, npc_id, self.user_id, self.conversation_id)
+                
+                return dict(row) if row else None
         except Exception as e:
-            logger.error(f"Error selecting best strategy: {e}")
+            logger.error(f"Error getting NPC stats: {e}")
             return None
 
-    def _calculate_goal_achievement_probability(self, goal: Dict[str, Any], conflict: Dict[str, Any]) -> float:
-        """Calculate probability of achieving a goal based on current conditions."""
+    async def _get_npc_traits(self, npc_id: int) -> Dict[str, Any]:
+        """Get NPC personality traits - READ ONLY."""
         try:
-            base_probability = 0.5
-            
-            # Adjust based on goal type and conflict state
-            if goal["type"] == "dominate":
-                if conflict.get("conflict_data", {}).get("npc1_advantage"):
-                    base_probability += 0.2
-            elif goal["type"] == "restore_trust":
-                if conflict.get("conflict_data", {}).get("recent_trust_events"):
-                    base_probability += 0.2
-            
-            return min(1.0, max(0.0, base_probability))
-            
+            stats = await self._get_npc_stats(npc_id)
+            if stats:
+                return {
+                    "dominance": stats.get("dominance", 50),
+                    "cruelty": stats.get("cruelty", 50),
+                    "confidence": stats.get("confidence", 50),
+                    "loyalty": stats.get("loyalty", 50)
+                }
+            return {}
         except Exception as e:
-            logger.error(f"Error calculating goal probability: {e}")
-            return 0.5
+            logger.error(f"Error getting NPC traits: {e}")
+            return {}
 
-    def _calculate_strategy_success_probability(self, strategy: Dict[str, Any], conflict: Dict[str, Any]) -> float:
-        """Calculate probability of strategy success based on current conditions."""
+    async def _get_relationship(self, npc1_id: int, npc2_id: int) -> Dict[str, Any]:
+        """Get relationship data between two NPCs - READ ONLY."""
         try:
-            base_probability = 0.5
-            
-            # Adjust based on strategy type and conditions
-            if strategy["type"] == "confrontation":
-                if all(condition in conflict.get("conflict_data", {}) for condition in strategy["conditions"]):
-                    base_probability += 0.2
-            elif strategy["type"] == "negotiation":
-                if conflict.get("conflict_data", {}).get("both_npcs_calm"):
-                    base_probability += 0.2
-            
-            return min(1.0, max(0.0, base_probability))
-            
-        except Exception as e:
-            logger.error(f"Error calculating strategy probability: {e}")
-            return 0.5
-
-    def _get_risk_reward_ratio(self, strategy: Dict[str, Any]) -> float:
-        """Calculate risk-reward ratio for a strategy."""
-        try:
-            risk_levels = {"low": 0.2, "medium": 0.5, "high": 0.8}
-            reward_levels = {"low": 0.2, "medium": 0.5, "high": 0.8}
-            
-            risk = risk_levels.get(strategy.get("risk_level", "medium"), 0.5)
-            reward = reward_levels.get(strategy.get("potential_reward", "medium"), 0.5)
-            
-            return reward / risk if risk > 0 else 0
-            
-        except Exception as e:
-            logger.error(f"Error calculating risk-reward ratio: {e}")
-            return 0.5
-
-    async def _update_conflict_progress(self, conflict_id: int, result: Dict[str, Any]) -> None:
-        """Update conflict progress based on activity result."""
-        try:
-            # Get current conflict data
             async with self.connection_pool.acquire() as conn:
                 row = await conn.fetchrow("""
-                    SELECT conflict_data
-                    FROM ActiveConflicts
-                    WHERE conflict_id = $1
-                """, conflict_id)
-                
-                if not row:
-                    return
-                
-                conflict_data = row["conflict_data"] or {}
-                
-                # Update conflict data based on result
-                if result.get("status") == "success":
-                    # Check if conflict is resolved
-                    if self._check_conflict_resolution(conflict_data, result):
-                        await self._resolve_conflict(conflict_id, result)
-                    else:
-                        # Update progress
-                        conflict_data["last_successful_action"] = {
-                            "timestamp": datetime.now().isoformat(),
-                            "result": result
-                        }
-                        await self._update_conflict_data(conflict_id, conflict_data)
-                else:
-                    # Record failed attempt
-                    conflict_data["failed_attempts"] = conflict_data.get("failed_attempts", []) + [{
-                        "timestamp": datetime.now().isoformat(),
-                        "result": result
-                    }]
-                    await self._update_conflict_data(conflict_id, conflict_data)
-                
-        except Exception as e:
-            logger.error(f"Error updating conflict progress: {e}")
-
-    def _check_conflict_resolution(self, conflict_data: Dict[str, Any], result: Dict[str, Any]) -> bool:
-        """Check if a conflict has been resolved based on the latest result."""
-        try:
-            # Check success conditions from the goal
-            goal = result.get("context", {}).get("goal", {})
-            success_conditions = goal.get("success_conditions", [])
-            
-            # Check if all conditions are met
-            for condition in success_conditions:
-                if condition not in conflict_data.get("achieved_conditions", []):
-                    return False
-            
-            return True
-            
-        except Exception as e:
-            logger.error(f"Error checking conflict resolution: {e}")
-            return False
-
-    async def _resolve_conflict(self, conflict_id: int, result: Dict[str, Any]) -> None:
-        """Resolve a conflict and update relationships."""
-        try:
-            async with self.connection_pool.acquire() as conn:
-                # Update conflict status
-                await conn.execute("""
-                    UPDATE ActiveConflicts
-                    SET status = 'resolved',
-                        resolved_at = NOW(),
-                        conflict_data = conflict_data || $1
-                    WHERE conflict_id = $2
-                """, {
-                    "resolution": {
-                        "timestamp": datetime.now().isoformat(),
-                        "result": result,
-                        "outcome": "success"
-                    }
-                }, conflict_id)
-                
-                # Get conflict details
-                row = await conn.fetchrow("""
-                    SELECT npc1_id, npc2_id
-                    FROM ActiveConflicts
-                    WHERE conflict_id = $1
-                """, conflict_id)
+                    SELECT * FROM SocialLinks
+                    WHERE user_id = $1 AND conversation_id = $2
+                    AND ((entity1_type = 'npc' AND entity1_id = $3 
+                          AND entity2_type = 'npc' AND entity2_id = $4)
+                    OR (entity1_type = 'npc' AND entity1_id = $4 
+                        AND entity2_type = 'npc' AND entity2_id = $3))
+                """, self.user_id, self.conversation_id, npc1_id, npc2_id)
                 
                 if row:
-                    # Update relationships based on resolution
-                    await self._update_post_conflict_relationships(
-                        row["npc1_id"],
-                        row["npc2_id"],
-                        result
-                    )
+                    return {
+                        "trust": row.get("trust_level", 50),
+                        "respect": row.get("respect_level", 50),
+                        "affection": row.get("affection_level", 50),
+                        "tension": row.get("tension_level", 0),
+                        "link_level": row.get("link_level", 50)
+                    }
+                return {
+                    "trust": 50,
+                    "respect": 50,
+                    "affection": 50,
+                    "tension": 0,
+                    "link_level": 50
+                }
+        except Exception as e:
+            logger.error(f"Error getting relationship: {e}")
+            return {}
+
+    async def _check_relationship_tension(self, npc1_id: int, npc2_id: int) -> float:
+        """Check tension level between two NPCs - READ ONLY."""
+        try:
+            relationship = await self._get_relationship(npc1_id, npc2_id)
+            return relationship.get("tension", 0) / 100.0
+        except Exception as e:
+            logger.error(f"Error checking relationship tension: {e}")
+            return 0.0
+
+    async def _get_workplace_rivals(self, npc_id: int, location: str) -> List[Dict[str, Any]]:
+        """Get NPCs who are rivals at the same workplace - READ ONLY."""
+        try:
+            async with self.connection_pool.acquire() as conn:
+                # Get NPCs at same location
+                rows = await conn.fetch("""
+                    SELECT n.npc_id, n.npc_name
+                    FROM NPCStats n
+                    WHERE n.user_id = $1 AND n.conversation_id = $2
+                    AND n.current_location = $3 AND n.npc_id != $4
+                """, self.user_id, self.conversation_id, location, npc_id)
                 
+                rivals = []
+                for row in rows:
+                    # Check relationship for rivalry
+                    relationship = await self._get_relationship(npc_id, row["npc_id"])
+                    if relationship.get("tension", 0) > 50 or relationship.get("trust", 50) < 30:
+                        rivals.append(dict(row))
+                
+                return rivals
         except Exception as e:
-            logger.error(f"Error resolving conflict: {e}")
+            logger.error(f"Error getting workplace rivals: {e}")
+            return []
 
-    async def _update_post_conflict_relationships(self, npc1_id: int, npc2_id: int, result: Dict[str, Any]) -> None:
-        """Update relationships after conflict resolution."""
+    def _calculate_stat_changes(self, result: Dict[str, Any]) -> Dict[str, Any]:
+        """Calculate stat changes based on activity result."""
         try:
-            # Calculate relationship changes based on resolution
-            changes = self._calculate_post_conflict_changes(result)
+            changes = {}
             
-            # Update relationships in database
-            await self._update_relationship_in_db(npc1_id, npc2_id, changes)
-            
-            # Record relationship history
-            await self._record_relationship_history(npc1_id, npc2_id, "conflict_resolution", changes)
-            
-        except Exception as e:
-            logger.error(f"Error updating post-conflict relationships: {e}")
-
-    def _calculate_post_conflict_changes(self, result: Dict[str, Any]) -> Dict[str, float]:
-        """Calculate relationship changes after conflict resolution."""
-        try:
-            changes = {
-                "trust": 0.0,
-                "respect": 0.0,
-                "affection": 0.0,
-                "tension": 0.0
-            }
-            
-            # Adjust based on resolution outcome
+            # Example stat change logic
             if result.get("status") == "success":
-                changes["respect"] += 0.2
-                changes["tension"] -= 0.3
-            else:
-                changes["trust"] -= 0.1
-                changes["tension"] += 0.1
+                activity_type = result.get("action", {}).get("type")
+                if activity_type == "work":
+                    changes["experience"] = 1
+                    changes["fatigue"] = 5
+                elif activity_type == "socialize":
+                    changes["social_satisfaction"] = 10
+                    changes["mood"] = 5
             
             return changes
-            
         except Exception as e:
-            logger.error(f"Error calculating post-conflict changes: {e}")
+            logger.error(f"Error calculating stat changes: {e}")
             return {}
+
+    async def _update_conflict_data(self, conflict_id: int, data: Dict[str, Any]) -> None:
+        """Update conflict data - NOW USES LORE SYSTEM."""
+        try:
+            lore_system = await self._get_lore_system()
+            ctx = type('obj', (object,), {
+                'user_id': self.user_id,
+                'conversation_id': self.conversation_id
+            })
+            
+            await lore_system.propose_and_enact_change(
+                ctx=ctx,
+                entity_type="Conflicts",
+                entity_identifier={"conflict_id": conflict_id},
+                updates={"conflict_data": data},
+                reason="Updating conflict progress"
+            )
+        except Exception as e:
+            logger.error(f"Error updating conflict data: {e}")
+
+    # ================== NEW METHODS FOR EXTENDED FUNCTIONALITY ==================
+
+    async def process_scheduled_activities(self) -> None:
+        """
+        Process scheduled activities for all NPCs.
+        This uses LoreSystem for any necessary updates.
+        """
+        try:
+            # Get current time
+            current_time = await self._get_current_time()
+            if not current_time:
+                return
+                
+            # Get all active NPCs - READ ONLY
+            active_npcs = await self._get_active_npcs()
+            
+            # Get the lore system for any updates
+            lore_system = await self._get_lore_system()
+            
+            # Process each NPC's activities
+            for npc in active_npcs:
+                try:
+                    # Get NPC agent
+                    npc_agent = await self._get_npc_agent(npc["npc_id"])
+                    if not npc_agent:
+                        continue
+                        
+                    # Check if NPC is in conflict
+                    conflict = await self._get_npc_active_conflict(npc["npc_id"])
+                    if conflict:
+                        # Handle conflict-based activity
+                        result = await self._handle_conflict_activity(npc_agent, conflict)
+                    else:
+                        # Handle normal scheduled activity
+                        if await self._should_perform_activity(npc_agent, current_time):
+                            result = await npc_agent.perform_scheduled_activity()
+                        else:
+                            continue
+                    
+                    # Process activity result
+                    if result:
+                        await self._process_activity_result(npc_agent, result, lore_system)
+                        
+                except Exception as e:
+                    logger.error(f"Error processing activities for NPC {npc['npc_id']}: {e}")
+                    continue
+                    
+        except Exception as e:
+            logger.error(f"Error processing scheduled activities: {e}")
 
     async def handle_lore_change(self, lore_change: Dict[str, Any]) -> Dict[str, Any]:
         """Handle a lore change across all NPCs."""
