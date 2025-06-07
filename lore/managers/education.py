@@ -627,18 +627,8 @@ async def add_educational_system(
     censorship_level: int = 5,
     censorship_enforcement: Optional[str] = None
 ) -> Dict[str, Any]:
-    """
-    Add an educational system to the database with matriarchal elements and censorship controls.
-    Uses canon system to ensure consistency.
-    
-    Returns:
-        Dictionary with system ID or error
-    """
+    """Add an educational system using canon system."""
     manager = await get_education_manager(ctx.context.user_id, ctx.context.conversation_id)
-    
-    # Get LoreSystem instance for canon operations
-    from lore.core.lore_system import LoreSystem
-    lore_system = await LoreSystem.get_instance(ctx.context.user_id, ctx.context.conversation_id)
     
     # Check governance permission
     approved, reasoning = await manager._check_governance_permission(
@@ -649,16 +639,10 @@ async def add_educational_system(
         return {"error": reasoning}
     
     with trace("AddEducationalSystem", metadata={"system_name": name}):
-        # First, ensure the controlling faction exists canonically
-        if controlled_by:
-            async with get_db_connection_context() as conn:
-                from lore.core import canon
-                # This will find or create the faction canonically
-                faction_id = await canon.find_or_create_faction(
-                    ctx, conn, controlled_by, faction_type="educational_authority"
-                )
+        # Apply matriarchal theming
+        description = MatriarchalThemingUtils.apply_matriarchal_theme("education", description)
         
-        # Set defaults for optional matriarchal elements
+        # Set defaults for matriarchal elements
         female_leadership_roles = female_leadership_roles or ["Headmistress", "Teacher", "Mentor"]
         male_roles = male_roles or ["Assistant", "Aide", "Custodian"]
         gender_specific_teachings = gender_specific_teachings or {
@@ -668,70 +652,43 @@ async def add_educational_system(
         taboo_subjects = taboo_subjects or ["Challenging feminine authority", "Male independence"]
         censorship_enforcement = censorship_enforcement or "Monitored by female leadership"
         
-        # Create system object
-        system = EducationalSystem(
-            name=name,
-            system_type=system_type,
-            description=description,
-            target_demographics=target_demographics,
-            controlled_by=controlled_by,
-            core_teachings=core_teachings,
-            teaching_methods=teaching_methods,
-            coming_of_age_rituals=coming_of_age_rituals,
-            knowledge_restrictions=knowledge_restrictions,
-            female_leadership_roles=female_leadership_roles,
-            male_roles=male_roles,
-            gender_specific_teachings=gender_specific_teachings,
-            taboo_subjects=taboo_subjects,
-            censorship_level=censorship_level,
-            censorship_enforcement=censorship_enforcement
-        )
+        # Prepare data package for canon
+        system_data = {
+            "name": name,
+            "system_type": system_type,
+            "description": description,
+            "target_demographics": target_demographics,
+            "controlled_by": controlled_by,
+            "core_teachings": core_teachings,
+            "teaching_methods": teaching_methods,
+            "coming_of_age_rituals": coming_of_age_rituals,
+            "knowledge_restrictions": knowledge_restrictions,
+            "female_leadership_roles": female_leadership_roles,
+            "male_roles": male_roles,
+            "gender_specific_teachings": gender_specific_teachings,
+            "taboo_subjects": taboo_subjects,
+            "censorship_level": censorship_level,
+            "censorship_enforcement": censorship_enforcement
+        }
         
-        # Check for semantic duplicates using embedding similarity
+        # Use canon to create the system
         async with get_db_connection_context() as conn:
-            # Generate embedding for the new system
-            embedding_text = f"{name} {system_type} {description} {' '.join(core_teachings)}"
-            search_vector = await generate_embedding(embedding_text)
+            from lore.core import canon
             
-            # Search for similar systems
-            similar_system = await conn.fetchrow("""
-                SELECT id, name, system_type, 1 - (embedding <=> $1) AS similarity
-                FROM EducationalSystems
-                WHERE user_id = $2 AND conversation_id = $3
-                ORDER BY embedding <=> $1
-                LIMIT 1
-            """, search_vector, ctx.context.user_id, ctx.context.conversation_id)
-            
-            if similar_system and similar_system['similarity'] > 0.85:
-                # Potential duplicate found - use validation agent
-                from lore.core.validation import CanonValidationAgent
-                validation_agent = CanonValidationAgent()
-                
-                existing_system = await conn.fetchrow("""
-                    SELECT * FROM EducationalSystems WHERE id = $1
-                """, similar_system['id'])
-                
-                is_duplicate = await validation_agent.confirm_is_duplicate_educational_system(
-                    conn,
-                    proposal=system.dict(),
-                    existing_system=dict(existing_system)
+            # First establish controlling faction if specified
+            if controlled_by:
+                faction_id = await canon.find_or_create_faction(
+                    ctx, conn, controlled_by, faction_type="educational_authority"
                 )
-                
-                if is_duplicate:
-                    logger.warning(f"Educational system '{name}' is a duplicate of existing system ID {similar_system['id']}")
-                    return {"id": similar_system['id'], "status": "existing", "message": "Found existing similar system"}
-        
-        # Save to database using the manager's internal method
-        system_id = await manager._save_educational_system_impl(system)
-        
-        # Log canonical event
-        async with get_db_connection_context() as conn:
-            await canon.log_canonical_event(
-                ctx, conn,
-                f"Educational system '{name}' established with {system_type} approach",
-                tags=["education", "institution", "canon"],
-                significance=7
+            
+            # Create the educational system
+            system_id = await canon.find_or_create_educational_system(
+                ctx, conn, **system_data
             )
+        
+        # Cache the system
+        cache_key = f"edu_system_{system_id}"
+        manager.set_cache(cache_key, system_data)
         
         return {"id": system_id, "status": "created"}
 
@@ -750,12 +707,7 @@ async def add_knowledge_tradition(
     gendered_access: Optional[Dict[str, str]] = None,
     matriarchal_reinforcement: Optional[str] = None
 ) -> Dict[str, Any]:
-    """
-    Add a knowledge tradition to the database.
-    
-    Returns:
-        Dictionary with tradition ID or error
-    """
+    """Add a knowledge tradition using canon system."""
     manager = await get_education_manager(ctx.context.user_id, ctx.context.conversation_id)
     
     # Check governance permission
@@ -767,6 +719,9 @@ async def add_knowledge_tradition(
         return {"error": reasoning}
     
     with trace("AddKnowledgeTradition", metadata={"tradition_name": name}):
+        # Apply theming
+        description = MatriarchalThemingUtils.apply_matriarchal_theme("tradition", description)
+        
         # Set defaults
         examples = examples or []
         gendered_access = gendered_access or {
@@ -775,26 +730,32 @@ async def add_knowledge_tradition(
         }
         matriarchal_reinforcement = matriarchal_reinforcement or "Emphasizes female wisdom and authority"
         
-        # Create tradition object
-        tradition = KnowledgeTradition(
-            name=name,
-            tradition_type=tradition_type,
-            description=description,
-            knowledge_domain=knowledge_domain,
-            preservation_method=preservation_method,
-            access_requirements=access_requirements,
-            associated_group=associated_group,
-            examples=examples,
-            female_gatekeepers=female_gatekeepers,
-            gendered_access=gendered_access,
-            matriarchal_reinforcement=matriarchal_reinforcement
-        )
+        # Prepare data for canon
+        tradition_data = {
+            "name": name,
+            "tradition_type": tradition_type,
+            "description": description,
+            "knowledge_domain": knowledge_domain,
+            "preservation_method": preservation_method,
+            "access_requirements": access_requirements,
+            "associated_group": associated_group,
+            "examples": examples,
+            "female_gatekeepers": female_gatekeepers,
+            "gendered_access": gendered_access,
+            "matriarchal_reinforcement": matriarchal_reinforcement
+        }
         
-        # Save to database
-        tradition_id = await manager._save_knowledge_tradition_impl(tradition)
+        # Use canon to create
+        async with get_db_connection_context() as conn:
+            from lore.core import canon
+            tradition_id = await canon.create_knowledge_tradition(ctx, conn, **tradition_data)
+        
+        # Cache
+        cache_key = f"knowledge_tradition_{tradition_id}"
+        manager.set_cache(cache_key, tradition_data)
         
         return {"id": tradition_id, "status": "created"}
-
+        
 @function_tool(strict_mode=False)
 async def add_teaching_content(
     ctx: RunContextWrapper[EducationContext],
@@ -810,13 +771,7 @@ async def add_teaching_content(
     restricted: bool = False,
     restriction_reason: Optional[str] = None
 ) -> Dict[str, Any]:
-    """
-    Add teaching content to an educational system.
-    Uses canon system to ensure consistency with world state.
-    
-    Returns:
-        Dictionary with content ID or error
-    """
+    """Add teaching content using canon system."""
     manager = await get_education_manager(ctx.context.user_id, ctx.context.conversation_id)
     
     # Check governance permission
@@ -828,8 +783,8 @@ async def add_teaching_content(
         return {"error": reasoning}
     
     with trace("AddTeachingContent", metadata={"system_id": system_id, "title": title}):
-        # Verify the educational system exists
         async with get_db_connection_context() as conn:
+            # Verify system exists
             system = await conn.fetchrow("""
                 SELECT * FROM EducationalSystems 
                 WHERE id = $1 AND user_id = $2 AND conversation_id = $3
@@ -838,14 +793,14 @@ async def add_teaching_content(
             if not system:
                 return {"error": "Educational system not found"}
             
-            # Check if content contradicts taboo subjects
+            # Check against taboo subjects
             if system['taboo_subjects']:
                 for taboo in system['taboo_subjects']:
                     if taboo.lower() in description.lower() or any(taboo.lower() in kp.lower() for kp in key_points):
                         restricted = True
                         restriction_reason = f"Contains taboo subject: {taboo}"
                         
-                        # Log this as a canonical event
+                        # Log this as canonical event
                         from lore.core import canon
                         await canon.log_canonical_event(
                             ctx, conn,
@@ -853,40 +808,49 @@ async def add_teaching_content(
                             tags=["education", "censorship", "canon"],
                             significance=4
                         )
-        
-        # Create content object
-        content = TeachingContent(
-            title=title,
-            content_type=content_type,
-            subject_area=subject_area,
-            description=description,
-            target_age_group=target_age_group,
-            key_points=key_points,
-            examples=examples or [],
-            exercises=exercises or [],
-            restricted=restricted,
-            restriction_reason=restriction_reason
-        )
-        
-        # Save to database
-        content_id = await manager._save_teaching_content_impl(system_id, content)
-        
-        # If this is significant content, update the educational system's state
-        if len(key_points) > 5 or subject_area in ["leadership", "governance", "authority"]:
-            from lore.core.lore_system import LoreSystem
-            lore_system = await LoreSystem.get_instance(ctx.context.user_id, ctx.context.conversation_id)
             
-            # Use the generic change system to record this update
-            await lore_system.propose_and_enact_change(
-                ctx=ctx,
-                entity_type="EducationalSystems",
-                entity_identifier={"id": system_id},
-                updates={"last_content_update": "CURRENT_TIMESTAMP"},
-                reason=f"Added significant teaching content: {title}"
-            )
+            # Check content with guardrail
+            guardrail_result = await manager.censorship_guardrail(None, None, description)
+            if guardrail_result.tripwire_triggered:
+                restricted = True
+                restriction_reason = str(guardrail_result.output_info.get("forbidden_words", []))
+            
+            # Apply theming
+            description = MatriarchalThemingUtils.apply_matriarchal_theme("content", description)
+            
+            # Prepare data for canon
+            content_data = {
+                "title": title,
+                "content_type": content_type,
+                "subject_area": subject_area,
+                "description": description,
+                "target_age_group": target_age_group,
+                "key_points": key_points,
+                "examples": examples or [],
+                "exercises": exercises or [],
+                "restricted": restricted,
+                "restriction_reason": restriction_reason
+            }
+            
+            # Use canon to create
+            from lore.core import canon
+            content_id = await canon.create_teaching_content(ctx, conn, system_id, **content_data)
+            
+            # Update system if significant
+            if len(key_points) > 5 or subject_area in ["leadership", "governance", "authority"]:
+                from lore.core.lore_system import LoreSystem
+                lore_system = await LoreSystem.get_instance(ctx.context.user_id, ctx.context.conversation_id)
+                
+                await lore_system.propose_and_enact_change(
+                    ctx=ctx,
+                    entity_type="EducationalSystems",
+                    entity_identifier={"id": system_id},
+                    updates={"last_content_update": "CURRENT_TIMESTAMP"},
+                    reason=f"Added significant teaching content: {title}"
+                )
         
-        return {"id": content_id, "status": "created", "restricted": content.restricted}
-
+        return {"id": content_id, "status": "created", "restricted": restricted}
+        
 @function_tool
 async def stream_educational_development(
     ctx: RunContextWrapper[EducationContext],
@@ -1291,12 +1255,7 @@ async def exchange_knowledge_between_systems(
 async def generate_educational_systems(
     ctx: RunContextWrapper[EducationContext]
 ) -> List[Dict[str, Any]]:
-    """
-    Use AI agents to generate a set of educational systems for the matriarchal setting.
-    
-    Returns:
-        List of generated educational systems with IDs
-    """
+    """Generate educational systems using canon system."""
     manager = await get_education_manager(ctx.context.user_id, ctx.context.conversation_id)
     
     # Check governance permission
@@ -1308,47 +1267,50 @@ async def generate_educational_systems(
         return [{"error": reasoning}]
     
     with trace("GenerateEducationalSystems", metadata={"user_id": ctx.context.user_id}):
-        # Let an agent decide how many systems to generate
-        distribution_prompt = (
-            "We want to create some educational systems for a matriarchal society. "
-            "Propose how many we should generate (1-6) and any notes about them in JSON. "
-            "Example:\n"
-            "{\n"
-            '  "count": 4,\n'
-            '  "notes": "Focus on different classes..."'
-            "\n}"
-        )
-        
-        dist_config = RunConfig(workflow_name="EduSystemCount")
+        # Determine count
         dist_result = await Runner.run(
             manager.distribution_agent, 
-            distribution_prompt, 
-            context={"manager": manager}, 
-            run_config=dist_config
+            "How many educational systems should we generate? Return JSON with 'count'.",
+            context={"manager": manager}
         )
         
         try:
-            dist_data = json.loads(dist_result.final_output)
-            count = dist_data.get("count", 3)
-        except json.JSONDecodeError:
+            count = json.loads(dist_result.final_output).get("count", 3)
+        except:
             count = 3
         
-        # Generate the systems
+        # Generate systems
         systems = await manager._generate_educational_systems_impl(count)
         
-        # Save all systems
+        # Save all systems using canon
         saved_systems = []
-        for system in systems:
-            try:
-                system_id = await manager._save_educational_system_impl(system)
-                
-                # Add to results
-                system_dict = system.dict()
-                system_dict["id"] = system_id
-                saved_systems.append(system_dict)
-                
-            except Exception as e:
-                logger.error(f"Error saving educational system '{system.name}': {e}")
+        async with get_db_connection_context() as conn:
+            from lore.core import canon
+            
+            for system in systems:
+                try:
+                    # First establish controlling faction
+                    if system.controlled_by:
+                        faction_id = await canon.find_or_create_faction(
+                            ctx, conn, system.controlled_by, faction_type="educational_authority"
+                        )
+                    
+                    # Apply theming
+                    system.description = MatriarchalThemingUtils.apply_matriarchal_theme(
+                        "education", system.description
+                    )
+                    
+                    # Create via canon
+                    system_id = await canon.find_or_create_educational_system(
+                        ctx, conn, **system.dict()
+                    )
+                    
+                    system_dict = system.dict()
+                    system_dict["id"] = system_id
+                    saved_systems.append(system_dict)
+                    
+                except Exception as e:
+                    logger.error(f"Error saving educational system '{system.name}': {e}")
         
         return saved_systems
 
@@ -1356,13 +1318,7 @@ async def generate_educational_systems(
 async def generate_knowledge_traditions(
     ctx: RunContextWrapper[EducationContext]
 ) -> List[Dict[str, Any]]:
-    """
-    Generate knowledge traditions that represent how knowledge is
-    passed down across generations in informal ways.
-    
-    Returns:
-        List of generated knowledge traditions with IDs
-    """
+    """Generate knowledge traditions using canon system."""
     manager = await get_education_manager(ctx.context.user_id, ctx.context.conversation_id)
     
     # Check governance permission
@@ -1454,28 +1410,32 @@ async def generate_knowledge_traditions(
         )
         
         run_config = RunConfig(workflow_name="KnowledgeTraditionGeneration")
-        result = await Runner.run(
-            tradition_agent, 
-            prompt, 
-            context={"manager": manager}, 
-            run_config=run_config
-        )
-        
+        result = await Runner.run(tradition_agent, prompt, context={"manager": manager})
         traditions = result.final_output
         
-        # Save all traditions
+        # Save all traditions using canon
         saved_traditions = []
-        for tradition in traditions:
-            try:
-                tradition_id = await manager._save_knowledge_tradition_impl(tradition)
-                
-                # Add to results
-                tradition_dict = tradition.dict()
-                tradition_dict["id"] = tradition_id
-                saved_traditions.append(tradition_dict)
-                
-            except Exception as e:
-                logger.error(f"Error saving knowledge tradition '{tradition.name}': {e}")
+        async with get_db_connection_context() as conn:
+            from lore.core import canon
+            
+            for tradition in traditions:
+                try:
+                    # Apply theming
+                    tradition.description = MatriarchalThemingUtils.apply_matriarchal_theme(
+                        "tradition", tradition.description
+                    )
+                    
+                    # Create via canon
+                    tradition_id = await canon.create_knowledge_tradition(
+                        ctx, conn, **tradition.dict()
+                    )
+                    
+                    tradition_dict = tradition.dict()
+                    tradition_dict["id"] = tradition_id
+                    saved_traditions.append(tradition_dict)
+                    
+                except Exception as e:
+                    logger.error(f"Error saving knowledge tradition '{tradition.name}': {e}")
         
         return saved_traditions
 
