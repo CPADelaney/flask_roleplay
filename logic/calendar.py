@@ -1,11 +1,16 @@
 # logic/calendar.py
 
+"""
+REFACTORED: All database writes now go through canon
+"""
+
 import json
 import logging
 import asyncio
 import asyncpg
 from db.connection import get_db_connection_context
 from logic.chatgpt_integration import get_openai_client, build_message_history, safe_json_loads
+from lore.core import canon
 
 # Configure logging as needed.
 logging.basicConfig(level=logging.INFO)
@@ -84,60 +89,42 @@ async def generate_calendar_names(environment_desc, conversation_id):
     
     return calendar_names
 
-async def store_calendar_names(user_id: int, conversation_id: int, calendar_names: dict):
+async def store_calendar_names(user_id: int, conversation_id: int, calendar_names: dict, conn: asyncpg.Connection):
     """
-    Asynchronously stores the generated calendar names in the CurrentRoleplay table
-    under the key 'CalendarNames'. This ensures consistency throughout your game.
+    REFACTORED: Uses canon to store calendar names in CurrentRoleplay
+    Connection is passed from calling function.
     """
     try:
-        # Convert data to JSON string *before* the DB operation
-        # Note: asyncpg can often handle Python objects directly if the column type is JSON/JSONB
+        # Convert data to JSON string
         value_json = json.dumps(calendar_names)
-
-        # Use async context manager for database connection
-        async with get_db_connection_context() as conn:
-            # Execute with asyncpg connection
-            await conn.execute("""
-                INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
-                VALUES ($1, $2, 'CalendarNames', $3)
-                ON CONFLICT (user_id, conversation_id, key)
-                DO UPDATE SET value = EXCLUDED.value
-            """, user_id, conversation_id, value_json)
-
-            logging.info(f"Stored CalendarNames successfully for user {user_id}, convo {conversation_id}.")
-
-    # --- Updated Error Handling ---
-    except asyncpg.PostgresError as db_err:
-        # Log specific database errors
-        logging.error(
-            f"Database error storing CalendarNames for user {user_id}, convo {conversation_id}: {db_err}",
-            exc_info=True
+        
+        # Create a context object for canon
+        ctx = type('obj', (object,), {'user_id': user_id, 'conversation_id': conversation_id})
+        
+        # Use canon to update CurrentRoleplay
+        await canon.update_current_roleplay(
+            ctx, conn, user_id, conversation_id, 
+            'CalendarNames', value_json
         )
-    except ConnectionError as pool_err:
-        # Log errors acquiring connection from pool
-        logging.error(
-            f"DB Pool error storing CalendarNames for user {user_id}, convo {conversation_id}: {pool_err}",
-            exc_info=True
-        )
-    except asyncio.TimeoutError:
-        # Log errors if acquiring a connection times out
-        logging.error(
-            f"Timeout acquiring DB connection storing CalendarNames for user {user_id}, convo {conversation_id}.",
-            exc_info=True
-        )
+
+        logging.info(f"Stored CalendarNames successfully for user {user_id}, convo {conversation_id}.")
+
     except Exception as e:
-        # Catch any other unexpected errors (like JSON serialization issues)
         logging.exception(
             f"Unexpected error storing calendar names for user {user_id}, convo {conversation_id}: {e}"
         )
 
 async def update_calendar_names(user_id, conversation_id, environment_desc) -> dict:
     """
-    Generates immersive calendar names based on the provided environment description,
-    stores them, and returns the resulting dictionary.
+    REFACTORED: Generates immersive calendar names based on the provided environment description,
+    stores them using canon, and returns the resulting dictionary.
     """
     calendar_names = await generate_calendar_names(environment_desc, conversation_id)
-    await store_calendar_names(user_id, conversation_id, calendar_names)
+    
+    # Get connection from context manager and pass it to store function
+    async with get_db_connection_context() as conn:
+        await store_calendar_names(user_id, conversation_id, calendar_names, conn)
+    
     return calendar_names
 
 async def load_calendar_names(user_id, conversation_id):
