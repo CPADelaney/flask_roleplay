@@ -15,6 +15,7 @@ from quart import Blueprint, request, jsonify, session, current_app
 from logic.addiction_system_sdk import check_addiction_status
 from logic.chatgpt_integration import get_openai_client, safe_json_loads
 from dotenv import load_dotenv
+from lore.lore_system import LoreSystem
 
 # Load environment variables
 load_dotenv()
@@ -312,8 +313,17 @@ async def process_gpt_scene_data(gpt_response, user_id, conversation_id):
 # ======================================================
 async def update_npc_visual_attributes(user_id, conversation_id, npc_id, prompt_data, image_path=None):
     """Use gpt-4.1-nano to extract and update visual attributes from the image prompt."""
+    
+    # Create context
+    class ImageContext:
+        def __init__(self, user_id, conversation_id):
+            self.user_id = user_id
+            self.conversation_id = conversation_id
+    
+    ctx = ImageContext(user_id, conversation_id)
+    
     async with get_db_connection_context() as conn:
-        # Fetch current attributes
+        # Fetch current attributes (read is fine)
         async with conn.cursor() as cursor:
             await cursor.execute("""
                 SELECT hair_color, hair_style, eye_color, skin_tone, body_type, 
@@ -361,45 +371,37 @@ Return a JSON object with these keys, using 'unknown' if not specified."""
             temperature=0.5,
             response_format={"type": "json_object"}
         )
-        new_attrs = safe_json_loads(response.choices[0].message.content) or {
-            "hair_color": "unknown",
-            "hair_style": "unknown",
-            "eye_color": "unknown",
-            "skin_tone": "unknown",
-            "body_type": "unknown",
-            "height": "unknown",
-            "age_appearance": "unknown",
-            "default_outfit": "unknown",
-            "makeup_style": "unknown",
-            "accessories": []
-        }
 
-        # Update or insert
-        async with conn.cursor() as cursor:
-            if current_attrs:
-                await cursor.execute("""
-                    UPDATE NPCVisualAttributes
-                    SET hair_color=%s, hair_style=%s, eye_color=%s, skin_tone=%s, body_type=%s,
-                        height=%s, age_appearance=%s, default_outfit=%s, makeup_style=%s, 
-                        accessories=%s, last_generated_image=%s, updated_at=CURRENT_TIMESTAMP
-                    WHERE npc_id=%s AND user_id=%s AND conversation_id=%s
-                """, (
-                    new_attrs["hair_color"],
-                    new_attrs["hair_style"],
-                    new_attrs["eye_color"],
-                    new_attrs["skin_tone"],
-                    new_attrs["body_type"],
-                    new_attrs["height"],
-                    new_attrs["age_appearance"],
-                    new_attrs["default_outfit"],
-                    new_attrs["makeup_style"],
-                    json.dumps(new_attrs["accessories"]),
-                    image_path,
-                    npc_id,
-                    user_id,
-                    conversation_id
-                ))
-            else:
+        lore_system = await LoreSystem.get_instance(user_id, conversation_id)
+
+        # Update visual attributes through LoreSystem
+        if current_attrs:
+            # Update existing
+            result = await lore_system.propose_and_enact_change(
+                ctx=ctx,
+                entity_type="NPCVisualAttributes",
+                entity_identifier={"npc_id": npc_id},
+                updates={
+                    "hair_color": new_attrs["hair_color"],
+                    "hair_style": new_attrs["hair_style"],
+                    "eye_color": new_attrs["eye_color"],
+                    "skin_tone": new_attrs["skin_tone"],
+                    "body_type": new_attrs["body_type"],
+                    "height": new_attrs["height"],
+                    "age_appearance": new_attrs["age_appearance"],
+                    "default_outfit": new_attrs["default_outfit"],
+                    "makeup_style": new_attrs["makeup_style"],
+                    "accessories": json.dumps(new_attrs["accessories"]),
+                    "last_generated_image": image_path,
+                    "updated_at": "CURRENT_TIMESTAMP"
+                },
+                reason=f"Visual attributes updated from generated image"
+            )
+        else:
+            # For new records, we might need a canon function or direct insert
+            # Since NPCVisualAttributes might not be a "core" lore table
+            # Keep the insert for now or create a canon function
+            async with conn.cursor() as cursor:
                 await cursor.execute("""
                     INSERT INTO NPCVisualAttributes
                     (npc_id, user_id, conversation_id, hair_color, hair_style, eye_color, 
@@ -407,25 +409,15 @@ Return a JSON object with these keys, using 'unknown' if not specified."""
                      accessories, visual_seed, last_generated_image)
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """, (
-                    npc_id,
-                    user_id,
-                    conversation_id,
-                    new_attrs["hair_color"],
-                    new_attrs["hair_style"],
-                    new_attrs["eye_color"],
-                    new_attrs["skin_tone"],
-                    new_attrs["body_type"],
-                    new_attrs["height"],
-                    new_attrs["age_appearance"],
-                    new_attrs["default_outfit"],
-                    new_attrs["makeup_style"],
+                    npc_id, user_id, conversation_id,
+                    new_attrs["hair_color"], new_attrs["hair_style"], new_attrs["eye_color"],
+                    new_attrs["skin_tone"], new_attrs["body_type"], new_attrs["height"],
+                    new_attrs["age_appearance"], new_attrs["default_outfit"], new_attrs["makeup_style"],
                     json.dumps(new_attrs["accessories"]),
                     hashlib.md5(f"{npc_id}".encode()).hexdigest(),
                     image_path
                 ))
-        
-        await conn.commit()
-        
+    
     return new_attrs, current_state
 
 
@@ -526,7 +518,24 @@ Return JSON with 'image_prompt' and 'negative_prompt' (e.g., 'low quality, blurr
 # 5️⃣ TRACK VISUAL EVOLUTION
 # ======================================================
 async def track_visual_evolution(npc_id, user_id, conversation_id, event_type, description, previous, current, scene, image_path):
+    # Create context
+    class EvolutionContext:
+        def __init__(self, user_id, conversation_id):
+            self.user_id = user_id
+            self.conversation_id = conversation_id
+    
+    ctx = EvolutionContext(user_id, conversation_id)
+    
     async with get_db_connection_context() as conn:
+        # Log this as a canonical event
+        await canon.log_canonical_event(
+            ctx, conn,
+            f"NPC {npc_id} visual evolution: {event_type} - {description}",
+            tags=["visual", "evolution", event_type],
+            significance=5
+        )
+        
+        # The actual NPCVisualEvolution table insert can remain if it's not a core table
         async with conn.cursor() as cursor:
             await cursor.execute("""
                 INSERT INTO NPCVisualEvolution
@@ -534,17 +543,10 @@ async def track_visual_evolution(npc_id, user_id, conversation_id, event_type, d
                  previous_state, current_state, scene_context, image_generated)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             """, (
-                npc_id,
-                user_id,
-                conversation_id,
-                event_type,
-                description,
-                json.dumps(previous),
-                json.dumps(current),
-                scene,
-                image_path
+                npc_id, user_id, conversation_id, event_type, description,
+                json.dumps(previous), json.dumps(current), scene, image_path
             ))
-        await conn.commit()
+    
     return True
 
 
