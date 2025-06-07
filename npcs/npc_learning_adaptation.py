@@ -7,9 +7,7 @@ This module provides functionality for NPCs to continuously learn and adapt base
 their experiences with the player. A key feature is the evolution of NPC intensity,
 which represents how aggressively each NPC attempts to dominate the player.
 
-Unlike the previous global intensity approach, this system treats intensity as an
-NPC-specific attribute that evolves based on player interactions, NPC personality,
-and game events.
+REFACTORED: Now uses LoreSystem for all database updates.
 """
 
 import logging
@@ -24,6 +22,8 @@ from memory.wrapper import MemorySystem
 from nyx.nyx_governance import AgentType, DirectiveType, NyxUnifiedGovernor
 from nyx.governance_helpers import with_governance, with_governance_permission, with_action_reporting
 from npcs.npc_relationship import NPCRelationshipManager
+from lore.lore_system import LoreSystem
+from lore.core import canon
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -32,6 +32,7 @@ logger = logging.getLogger(__name__)
 class NPCLearningAdaptation:
     """
     System for NPCs to continuously learn and adapt based on their experiences.
+    REFACTORED: Uses LoreSystem for all stat updates.
     
     Key features:
     1. Intensity Adaptation: NPCs adjust their domination intensity based on player responses
@@ -56,6 +57,7 @@ class NPCLearningAdaptation:
         self.memory_system = None
         self.nyx_governance = None
         self.relationship_manager = None
+        self._lore_system = None
         
     async def initialize(self):
         """Initialize the system and set up components."""
@@ -64,6 +66,7 @@ class NPCLearningAdaptation:
         self.relationship_manager = NPCRelationshipManager(
             self.npc_id, self.user_id, self.conversation_id
         )
+        self._lore_system = await LoreSystem.get_instance(self.user_id, self.conversation_id)
         
     @with_governance(
         agent_type=AgentType.NPC,
@@ -80,6 +83,7 @@ class NPCLearningAdaptation:
     ) -> Dict[str, Any]:
         """
         Record a player interaction to drive NPC learning and adaptation.
+        REFACTORED: Uses LoreSystem for any stat updates.
         
         Args:
             interaction_type: Type of interaction (e.g., 'command', 'conversation', 'dominance_display')
@@ -89,7 +93,7 @@ class NPCLearningAdaptation:
         Returns:
             Learning outcomes and adaptation results
         """
-        # Get current NPC stats
+        # Get current NPC stats - READ ONLY
         npc_data = await NPCDataAccess.get_npc_details(self.npc_id, self.user_id, self.conversation_id)
         if not npc_data:
             return {"error": "NPC not found"}
@@ -100,7 +104,7 @@ class NPCLearningAdaptation:
         cruelty = npc_data.get("cruelty", 50)
         intelligence = npc_data.get("intelligence", 50) if "intelligence" in npc_data else 50
         
-        # Create learning record in memory
+        # Create learning record in memory (allowed)
         await self.memory_system.remember(
             entity_type="npc",
             entity_id=self.npc_id,
@@ -162,6 +166,7 @@ class NPCLearningAdaptation:
     async def process_recent_memories_for_learning(self, ctx, days: int = 7) -> Dict[str, Any]:
         """
         Process recent memories to drive NPC learning, especially for intensity adaptation.
+        REFACTORED: Uses LoreSystem for updates.
         
         Args:
             days: Number of days of memories to process
@@ -180,7 +185,7 @@ class NPCLearningAdaptation:
         if not memories or "memories" not in memories or not memories["memories"]:
             return {"processed": False, "reason": "No recent memories found"}
         
-        # Get current NPC stats  
+        # Get current NPC stats - READ ONLY
         npc_data = await NPCDataAccess.get_npc_details(self.npc_id, self.user_id, self.conversation_id)
         
         # Initialize counters for memory-based triggers
@@ -275,16 +280,17 @@ class NPCLearningAdaptation:
     async def adapt_to_relationship_changes(self, ctx) -> Dict[str, Any]:
         """
         Adapt NPC intensity based on relationship changes with the player.
+        REFACTORED: Uses LoreSystem for updates.
         
         Returns:
             Adaptation results
         """
-        # Get current relationship
+        # Get current relationship - READ ONLY
         relationship = await self.relationship_manager.get_relationship_with_player()
         if not relationship:
             return {"adapted": False, "reason": "No relationship data found"}
         
-        # Get current NPC stats
+        # Get current NPC stats - READ ONLY
         npc_data = await NPCDataAccess.get_npc_details(self.npc_id, self.user_id, self.conversation_id)
         
         # Initialize adaptation variables
@@ -354,6 +360,7 @@ class NPCLearningAdaptation:
     ) -> Dict[str, Any]:
         """
         Respond to a specific learning trigger that should cause immediate adaptation.
+        REFACTORED: Uses LoreSystem for updates.
         
         Args:
             trigger_type: Type of trigger (e.g., 'extreme_submission', 'direct_challenge')
@@ -362,7 +369,7 @@ class NPCLearningAdaptation:
         Returns:
             Response and adaptation results
         """
-        # Get current NPC stats
+        # Get current NPC stats - READ ONLY
         npc_data = await NPCDataAccess.get_npc_details(self.npc_id, self.user_id, self.conversation_id)
         
         # Initialize response variables
@@ -422,7 +429,7 @@ class NPCLearningAdaptation:
         for stat, change in other_stat_changes.items():
             await self._update_npc_stat(stat, npc_data.get(stat, 50), change)
             
-        # Create a memory of this significant event
+        # Create a memory of this significant event (allowed)
         await self.memory_system.remember(
             entity_type="npc",
             entity_id=self.npc_id,
@@ -537,7 +544,7 @@ class NPCLearningAdaptation:
         return adaptation_results
     
     async def _update_npc_intensity(self, current_intensity: int, change: int, reason: str) -> bool:
-        """Update the NPC's intensity level."""
+        """Update the NPC's intensity level using LoreSystem."""
         try:
             # Calculate new intensity, keeping within bounds
             new_intensity = max(10, min(100, current_intensity + change))
@@ -546,39 +553,44 @@ class NPCLearningAdaptation:
             if new_intensity == current_intensity:
                 return False
             
-            # Update the database - using the new async connection pattern
-            async with get_db_connection_context() as conn:
-                # Update the intensity value
-                await conn.execute(
-                    """
-                    UPDATE NPCStats
-                    SET intensity = $1
-                    WHERE npc_id = $2 AND user_id = $3 AND conversation_id = $4
-                    """,
-                    new_intensity, self.npc_id, self.user_id, self.conversation_id
-                )
-            
-            # Log the change
-            logger.info(f"NPC {self.npc_id} intensity updated: {current_intensity} -> {new_intensity} ({reason})")
-            
-            # Create a memory of this change
-            await self.memory_system.remember(
-                entity_type="npc",
-                entity_id=self.npc_id,
-                memory_text=f"I adjusted my dominance intensity from {current_intensity} to {new_intensity}. {reason}",
-                importance="medium",
-                tags=["adaptation", "intensity_change"],
-                emotional=True
+            # Use LoreSystem to update the intensity value
+            result = await self._lore_system.propose_and_enact_change(
+                ctx=type('obj', (object,), {
+                    'user_id': self.user_id,
+                    'conversation_id': self.conversation_id,
+                    'npc_id': self.npc_id
+                }),
+                entity_type="NPCStats",
+                entity_identifier={"npc_id": self.npc_id},
+                updates={"intensity": new_intensity},
+                reason=reason
             )
             
-            return True
+            if result.get("status") == "committed":
+                # Log the change
+                logger.info(f"NPC {self.npc_id} intensity updated: {current_intensity} -> {new_intensity} ({reason})")
+                
+                # Create a memory of this change (allowed)
+                await self.memory_system.remember(
+                    entity_type="npc",
+                    entity_id=self.npc_id,
+                    memory_text=f"I adjusted my dominance intensity from {current_intensity} to {new_intensity}. {reason}",
+                    importance="medium",
+                    tags=["adaptation", "intensity_change"],
+                    emotional=True
+                )
+                
+                return True
+            else:
+                logger.warning(f"Failed to update NPC intensity: {result}")
+                return False
             
         except Exception as e:
             logger.error(f"Error updating NPC intensity: {e}")
             return False
     
     async def _update_npc_stat(self, stat_name: str, current_value: int, change: int) -> bool:
-        """Update any NPC stat."""
+        """Update any NPC stat using LoreSystem."""
         try:
             # Calculate new value, keeping within bounds
             new_value = max(0, min(100, current_value + change))
@@ -587,28 +599,33 @@ class NPCLearningAdaptation:
             if new_value == current_value:
                 return False
             
-            # Update the database - using the new async connection pattern
-            async with get_db_connection_context() as conn:
-                # Update the stat value
-                await conn.execute(
-                    f"""
-                    UPDATE NPCStats
-                    SET {stat_name} = $1
-                    WHERE npc_id = $2 AND user_id = $3 AND conversation_id = $4
-                    """,
-                    new_value, self.npc_id, self.user_id, self.conversation_id
-                )
+            # Use LoreSystem to update the stat value
+            result = await self._lore_system.propose_and_enact_change(
+                ctx=type('obj', (object,), {
+                    'user_id': self.user_id,
+                    'conversation_id': self.conversation_id,
+                    'npc_id': self.npc_id
+                }),
+                entity_type="NPCStats",
+                entity_identifier={"npc_id": self.npc_id},
+                updates={stat_name: new_value},
+                reason=f"Learning adaptation: {stat_name} changed from {current_value} to {new_value}"
+            )
             
-            # Log the change
-            logger.info(f"NPC {self.npc_id} {stat_name} updated: {current_value} -> {new_value}")
-            return True
+            if result.get("status") == "committed":
+                # Log the change
+                logger.info(f"NPC {self.npc_id} {stat_name} updated: {current_value} -> {new_value}")
+                return True
+            else:
+                logger.warning(f"Failed to update NPC stat {stat_name}: {result}")
+                return False
             
         except Exception as e:
             logger.error(f"Error updating NPC stat {stat_name}: {e}")
             return False
     
     async def _record_learning_event(self, adaptation_results: Dict[str, Any]) -> None:
-        """Record a significant learning/adaptation event."""
+        """Record a significant learning/adaptation event in memory (allowed)."""
         # Create a memory about the adaptation
         intensity_change = adaptation_results.get("intensity_change", 0)
         direction = "increased" if intensity_change > 0 else "decreased"
@@ -626,13 +643,13 @@ class NPCLearningAdaptation:
             )
 
 
-# Define the NPCDataAccess class with async DB methods
+# Define the NPCDataAccess class with async DB methods - READ ONLY
 class NPCDataAccess:
-    """Data access methods for NPC data"""
+    """Data access methods for NPC data - READ ONLY operations"""
     
     @staticmethod
     async def get_npc_details(npc_id: int, user_id: int, conversation_id: int) -> Dict[str, Any]:
-        """Get NPC details from the database."""
+        """Get NPC details from the database - READ ONLY."""
         try:
             async with get_db_connection_context() as conn:
                 row = await conn.fetchrow(
@@ -672,30 +689,6 @@ class NPCDataAccess:
         except Exception as e:
             logger.error(f"Error getting NPC details: {e}")
             return None
-    
-    @staticmethod
-    async def update_npc_stat(
-        npc_id: int, 
-        stat_name: str, 
-        new_value: float, 
-        user_id: int, 
-        conversation_id: int
-    ) -> bool:
-        """Update a specific NPC stat in the database."""
-        try:
-            async with get_db_connection_context() as conn:
-                await conn.execute(
-                    f"""
-                    UPDATE NPCStats
-                    SET {stat_name} = $1
-                    WHERE npc_id = $2 AND user_id = $3 AND conversation_id = $4
-                    """,
-                    new_value, npc_id, user_id, conversation_id
-                )
-                return True
-        except Exception as e:
-            logger.error(f"Error updating NPC stat {stat_name}: {e}")
-            return False
 
 
 class NPCLearningManager:
@@ -767,10 +760,19 @@ class NPCLearningManager:
             "npc_learning": {}
         }
         
+        # Create context for governance
+        ctx = type('obj', (object,), {
+            'user_id': self.user_id,
+            'conversation_id': self.conversation_id
+        })
+        
         # Process the event for each NPC
         for npc_id in npc_ids:
             learning_system = self.get_learning_system_for_npc(npc_id)
             await learning_system.initialize()
+            
+            # Update context for this NPC
+            ctx.npc_id = npc_id
             
             try:
                 interaction_details = {
@@ -779,6 +781,7 @@ class NPCLearningManager:
                 }
                 
                 learning_result = await learning_system.record_player_interaction(
+                    ctx=ctx,
                     interaction_type=event_type,
                     interaction_details=interaction_details,
                     player_response=player_response
@@ -807,16 +810,25 @@ class NPCLearningManager:
             "npc_adaptations": {}
         }
         
+        # Create context for governance
+        ctx = type('obj', (object,), {
+            'user_id': self.user_id,
+            'conversation_id': self.conversation_id
+        })
+        
         for npc_id in npc_ids:
             learning_system = self.get_learning_system_for_npc(npc_id)
             await learning_system.initialize()
             
+            # Update context for this NPC
+            ctx.npc_id = npc_id
+            
             try:
                 # Process recent memories for learning
-                memory_learning = await learning_system.process_recent_memories_for_learning(days=7)
+                memory_learning = await learning_system.process_recent_memories_for_learning(ctx, days=7)
                 
                 # Adapt to relationship changes
-                relationship_adaptation = await learning_system.adapt_to_relationship_changes()
+                relationship_adaptation = await learning_system.adapt_to_relationship_changes(ctx)
                 
                 results["npc_adaptations"][npc_id] = {
                     "memory_learning": memory_learning,
