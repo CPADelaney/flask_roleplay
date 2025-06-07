@@ -3,6 +3,7 @@
 """
 Manages individual NPC relationships with other entities.
 Enhanced with memory-informed relationship management.
+REFACTORED: Now uses LoreSystem for all database updates.
 """
 
 import json
@@ -13,6 +14,8 @@ from datetime import datetime
 
 from db.connection import get_db_connection_context
 from memory.wrapper import MemorySystem
+from lore.core import canon
+from lore.lore_system import LoreSystem
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +51,7 @@ class NPCRelationshipManager:
     """
     Manages an individual NPC's relationships with other entities
     (other NPCs or the player).
+    REFACTORED: Uses LoreSystem for all updates.
     """
 
     def __init__(self, npc_id: int, user_id: int, conversation_id: int):
@@ -63,6 +67,7 @@ class NPCRelationshipManager:
         self.user_id = user_id
         self.conversation_id = conversation_id
         self._memory_system: Optional[MemorySystem] = None
+        self._lore_system: Optional[LoreSystem] = None
         
         # Cache for relationship data
         self._relationship_cache = {}
@@ -77,10 +82,19 @@ class NPCRelationshipManager:
             )
         return self._memory_system
 
+    async def _get_lore_system(self) -> LoreSystem:
+        """Lazy-load the lore system."""
+        if self._lore_system is None:
+            self._lore_system = await LoreSystem.get_instance(
+                self.user_id, self.conversation_id
+            )
+        return self._lore_system
+
     async def _fetch_npc_name(self, npc_id: int) -> str:
         """
         Fetch the name of an NPC from the DB.
         Returns 'Unknown' if not found.
+        READ-ONLY operation.
         """
         try:
             async with get_db_connection_context() as conn:
@@ -103,6 +117,7 @@ class NPCRelationshipManager:
         """
         Retrieve and update the NPC's known relationships, returning a dict of them,
         enhanced with memory-based context.
+        READ-ONLY operation - just retrieves and enhances data.
 
         The returned dictionary might look like:
         {
@@ -132,7 +147,7 @@ class NPCRelationshipManager:
 
         try:
             async with get_db_connection_context() as conn:
-                # Query all links from NPC -> other entity
+                # Query all links from NPC -> other entity - READ ONLY
                 rows = await conn.fetch(
                     """
                     SELECT entity2_type, entity2_id, link_type, link_level
@@ -226,6 +241,7 @@ class NPCRelationshipManager:
     async def apply_relationship_decay(self, days_since_interaction: int = 1) -> Dict[str, Any]:
         """
         Apply natural decay to relationships based on time without interaction.
+        REFACTORED: Uses LoreSystem for updates.
 
         Args:
             days_since_interaction: The number of days since the last interaction
@@ -237,8 +253,18 @@ class NPCRelationshipManager:
         results = {"decayed_count": 0, "links_processed": 0}
 
         try:
+            # Get lore system for updates
+            lore_system = await self._get_lore_system()
+            
+            # Create context for governance
+            ctx = type('obj', (object,), {
+                'user_id': self.user_id,
+                'conversation_id': self.conversation_id,
+                'npc_id': self.npc_id
+            })
+
             async with get_db_connection_context() as conn:
-                # Fetch links to process
+                # Fetch links to process - READ ONLY
                 rows = await conn.fetch(
                     """
                     SELECT link_id, link_type, link_level, entity2_type, entity2_id, last_interaction
@@ -285,19 +311,7 @@ class NPCRelationshipManager:
 
                     # Update only if there's a significant change
                     if abs(new_level - link_level) >= 0.5:
-                        # Update link_level
-                        await conn.execute(
-                            """
-                            UPDATE SocialLinks
-                            SET link_level = $1
-                            WHERE link_id = $2
-                        """,
-                            new_level, link_id
-                        )
-
-                        decayed_count += 1
-
-                        # Check if link_type needs to change
+                        # Determine new link type
                         new_type = link_type
                         if new_level > RELATIONSHIP_CLOSE:
                             new_type = "close"
@@ -308,15 +322,22 @@ class NPCRelationshipManager:
                         else:
                             new_type = "neutral"
 
+                        # Build updates
+                        updates = {"link_level": new_level}
                         if new_type != link_type:
-                            await conn.execute(
-                                """
-                                UPDATE SocialLinks
-                                SET link_type = $1
-                                WHERE link_id = $2
-                            """,
-                                new_type, link_id
-                            )
+                            updates["link_type"] = new_type
+
+                        # Use LoreSystem to update
+                        result = await lore_system.propose_and_enact_change(
+                            ctx=ctx,
+                            entity_type="SocialLinks",
+                            entity_identifier={"link_id": link_id},
+                            updates=updates,
+                            reason=f"Natural relationship decay after {days_since_interaction} days without interaction"
+                        )
+
+                        if result.get("status") == "committed":
+                            decayed_count += 1
             
             # Invalidate cache after decay
             self._relationship_cache = {}
@@ -341,6 +362,7 @@ class NPCRelationshipManager:
         """
         Update the relationship based on an interaction with enhanced
         error handling and memory integration.
+        REFACTORED: Uses canon and LoreSystem for updates.
 
         Args:
             entity_type: "npc" or "player"
@@ -470,6 +492,7 @@ class NPCRelationshipManager:
     ) -> Dict[str, Any]:
         """
         Process relationship updates in the database.
+        REFACTORED: Uses canon for creation and LoreSystem for updates.
         
         Args:
             entity_type: "npc" or "player"
@@ -491,8 +514,18 @@ class NPCRelationshipManager:
         }
         
         try:
+            # Get lore system
+            lore_system = await self._get_lore_system()
+            
+            # Create context for governance
+            ctx = type('obj', (object,), {
+                'user_id': self.user_id,
+                'conversation_id': self.conversation_id,
+                'npc_id': self.npc_id
+            })
+
             async with get_db_connection_context() as conn:
-                # 1) Check if a social link record already exists
+                # 1) Check if a social link record already exists - READ ONLY
                 row = await conn.fetchrow(
                     """
                     SELECT link_id, link_type, link_level
@@ -512,32 +545,36 @@ class NPCRelationshipManager:
                     link_type = row["link_type"]
                     link_level = row["link_level"]
                 else:
-                    # Create a new relationship if none exists
+                    # Create a new relationship if none exists using canon
+                    await canon.establish_relationship(
+                        ctx, conn,
+                        entity1_type="npc",
+                        entity1_id=self.npc_id,
+                        entity2_type=entity_type,
+                        entity2_id=entity_id,
+                        link_type="neutral",
+                        link_level=0
+                    )
+                    
+                    # Fetch the newly created link
                     row = await conn.fetchrow(
                         """
-                        INSERT INTO SocialLinks (
-                            entity1_type, entity1_id,
-                            entity2_type, entity2_id,
-                            link_type, link_level,
-                            user_id, conversation_id,
-                            last_interaction
-                        )
-                        VALUES (
-                            'npc', $1,
-                            $2, $3,
-                            'neutral', 0,
-                            $4, $5,
-                            $6
-                        )
-                        RETURNING link_id
+                        SELECT link_id, link_type, link_level
+                        FROM SocialLinks
+                        WHERE entity1_type = 'npc'
+                          AND entity1_id = $1
+                          AND entity2_type = $2
+                          AND entity2_id = $3
+                          AND user_id = $4
+                          AND conversation_id = $5
                         """,
-                        self.npc_id,
-                        entity_type,
-                        entity_id,
-                        self.user_id,
-                        self.conversation_id,
-                        datetime.now()
+                        self.npc_id, entity_type, entity_id, self.user_id, self.conversation_id
                     )
+                    
+                    if not row:
+                        logger.error("Failed to create social link")
+                        return result
+                        
                     link_id = row["link_id"]
                     link_type = "neutral"
                     link_level = 0
@@ -578,14 +615,6 @@ class NPCRelationshipManager:
                 new_level = link_level
                 if final_level_change != 0:
                     new_level = max(0, min(100, link_level + final_level_change))
-                    await conn.execute(
-                        """
-                        UPDATE SocialLinks
-                        SET link_level = $1
-                        WHERE link_id = $2
-                    """,
-                        new_level, link_id
-                    )
 
                 # Determine new link type based on level
                 new_link_type = link_type
@@ -598,25 +627,13 @@ class NPCRelationshipManager:
                 else:
                     new_link_type = "neutral"
 
+                # Build update dictionary
+                updates = {}
+                if new_level != link_level:
+                    updates["link_level"] = new_level
                 if new_link_type != link_type:
-                    await conn.execute(
-                        """
-                        UPDATE SocialLinks
-                        SET link_type = $1
-                        WHERE link_id = $2
-                    """,
-                        new_link_type, link_id
-                    )
-
-                # Update last_interaction to "now"
-                await conn.execute(
-                    """
-                    UPDATE SocialLinks
-                    SET last_interaction = $1
-                    WHERE link_id = $2
-                    """,
-                    datetime.now(), link_id
-                )
+                    updates["link_type"] = new_link_type
+                updates["last_interaction"] = datetime.now()
 
                 # 4) Add event to the link history
                 change_description = []
@@ -636,23 +653,51 @@ class NPCRelationshipManager:
                     f"({final_level_change:+d}) [Factors: {change_str}]"
                 )
 
-                await conn.execute(
-                    """
-                    UPDATE SocialLinks
-                    SET link_history = COALESCE(link_history, '[]'::jsonb) || $1::jsonb
-                    WHERE link_id = $2
-                """,
-                    json.dumps([event_text]), link_id
+                # Get current history
+                current_history = await conn.fetchval(
+                    "SELECT link_history FROM SocialLinks WHERE link_id = $1",
+                    link_id
                 )
                 
-                return {
-                    "success": True,
-                    "link_id": link_id,
-                    "old_level": link_level,
-                    "new_level": new_level,
-                    "old_type": link_type,
-                    "new_type": new_link_type
-                }
+                if current_history:
+                    if isinstance(current_history, str):
+                        try:
+                            history_list = json.loads(current_history)
+                        except json.JSONDecodeError:
+                            history_list = []
+                    else:
+                        history_list = current_history
+                else:
+                    history_list = []
+                
+                history_list.append(event_text)
+                updates["link_history"] = json.dumps(history_list)
+
+                # Use LoreSystem to update
+                if updates:
+                    update_result = await lore_system.propose_and_enact_change(
+                        ctx=ctx,
+                        entity_type="SocialLinks",
+                        entity_identifier={"link_id": link_id},
+                        updates=updates,
+                        reason=f"Relationship updated from interaction: {event_text}"
+                    )
+                    
+                    if update_result.get("status") == "committed":
+                        return {
+                            "success": True,
+                            "link_id": link_id,
+                            "old_level": link_level,
+                            "new_level": new_level,
+                            "old_type": link_type,
+                            "new_type": new_link_type
+                        }
+                    else:
+                        logger.error(f"Failed to update relationship: {update_result}")
+                        return {
+                            "success": False,
+                            "error": update_result.get("message", "Update failed")
+                        }
                 
         except Exception as e:
             logger.error(f"Database error updating relationship: {e}")
@@ -671,6 +716,7 @@ class NPCRelationshipManager:
     ) -> None:
         """
         Create a memory of a significant relationship change.
+        Memory operations are allowed.
         
         Args:
             entity_type: Type of entity ("npc" or "player")
@@ -727,6 +773,7 @@ class NPCRelationshipManager:
     ) -> None:
         """
         Update beliefs based on relationship changes.
+        Memory/belief operations are allowed.
 
         Args:
             entity_type: Type of entity ("npc" or "player")
@@ -818,6 +865,7 @@ class NPCRelationshipManager:
     ) -> List[Dict[str, Any]]:
         """
         Get the history of relationship changes with a specific entity.
+        READ-ONLY operation.
 
         Args:
             entity_type: "npc" or "player"
@@ -876,6 +924,7 @@ class NPCRelationshipManager:
     ) -> List[Dict[str, Any]]:
         """
         Get memories related to interactions with a specific entity.
+        Memory operations are allowed.
 
         Args:
             entity_type: "npc" or "player"
@@ -910,6 +959,7 @@ class NPCRelationshipManager:
     async def get_all_relationships(self) -> Dict[str, Dict[str, Any]]:
         """
         Get all relationships for this NPC.
+        READ-ONLY operation.
         
         Returns:
             Dictionary mapping entity IDs to relationship data
@@ -959,6 +1009,7 @@ class NPCRelationshipManager:
     async def get_relationship_with_player(self) -> Dict[str, Any]:
         """
         Get the NPC's relationship with the player.
+        READ-ONLY operation.
         
         Returns:
             Dictionary with relationship details
@@ -1008,6 +1059,7 @@ class NPCRelationshipManager:
         Periodically run this to detect alliances (co-conspirators) or rivalry blocks
         among NPCs who share strong negative relationships with a common target 
         (often the player) or with each other.
+        REFACTORED: Uses LoreSystem for updates.
 
         - Any pair of NPCs with link_level >= ALLY_THRESHOLD => "ally"
         - If link_level >= CO_CONSPIRATOR_THRESHOLD => "co_conspirator"
@@ -1032,6 +1084,15 @@ class NPCRelationshipManager:
         }
         
         try:
+            # Get lore system
+            lore_system = await self._get_lore_system()
+            
+            # Create context for governance
+            ctx = type('obj', (object,), {
+                'user_id': self.user_id,
+                'conversation_id': self.conversation_id
+            })
+
             async with get_db_connection_context() as conn:
                 rows = await conn.fetch(
                     """
@@ -1070,24 +1131,25 @@ class NPCRelationshipManager:
                         new_type = "rival"
                     else:
                         # If it doesn't meet thresholds, keep whatever it was
-                        # or revert to neutral if you prefer
                         pass
 
                     if new_type != old_type:
-                        await conn.execute(
-                            """
-                            UPDATE SocialLinks
-                            SET link_type = $1
-                            WHERE link_id = $2
-                            """,
-                            new_type, link_id
+                        # Use LoreSystem to update
+                        result = await lore_system.propose_and_enact_change(
+                            ctx=ctx,
+                            entity_type="SocialLinks",
+                            entity_identifier={"link_id": link_id},
+                            updates={"link_type": new_type},
+                            reason=f"Relationship evaluation: link level {link_level} qualifies as {new_type}"
                         )
-                        if new_type == "ally":
-                            alliance_changes.append((e1_id, e2_id, old_type, new_type))
-                        elif new_type == "co_conspirator":
-                            conspirator_changes.append((e1_id, e2_id, old_type, new_type))
-                        elif new_type == "rival":
-                            rivalry_changes.append((e1_id, e2_id, old_type, new_type))
+                        
+                        if result.get("status") == "committed":
+                            if new_type == "ally":
+                                alliance_changes.append((e1_id, e2_id, old_type, new_type))
+                            elif new_type == "co_conspirator":
+                                conspirator_changes.append((e1_id, e2_id, old_type, new_type))
+                            elif new_type == "rival":
+                                rivalry_changes.append((e1_id, e2_id, old_type, new_type))
             
             results["alliances"] = alliance_changes
             results["rivalries"] = rivalry_changes
