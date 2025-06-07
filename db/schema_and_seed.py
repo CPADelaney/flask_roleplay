@@ -1239,6 +1239,19 @@ async def create_all_tables():
                 );
                 ''',
                 '''
+                CREATE TABLE IF NOT EXISTS NPCGroups (
+                    group_id SERIAL PRIMARY KEY,
+                    user_id INTEGER NOT NULL,
+                    conversation_id INTEGER NOT NULL,
+                    group_name TEXT NOT NULL,
+                    group_data JSONB NOT NULL,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
+                    UNIQUE(user_id, conversation_id, group_name)
+                );
+                ''',
+                '''
                 CREATE INDEX IF NOT EXISTS idx_scenario_states_user_conv
                 ON scenario_states(user_id, conversation_id);
                 ''',
