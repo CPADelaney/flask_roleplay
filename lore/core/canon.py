@@ -1770,3 +1770,309 @@ async def create_journal_entry(ctx, conn, entry_type: str, entry_text: str, **kw
     )
     
     return entry_id
+
+async def ensure_addiction_table_exists(ctx, conn):
+    """Ensure the PlayerAddictions table exists."""
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS PlayerAddictions (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            conversation_id INTEGER NOT NULL,
+            player_name VARCHAR(255) NOT NULL,
+            addiction_type VARCHAR(50) NOT NULL,
+            level INTEGER NOT NULL DEFAULT 0,
+            target_npc_id INTEGER NULL,
+            last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(user_id, conversation_id, player_name, addiction_type, target_npc_id),
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+        )
+    """)
+    
+    # Create index for faster lookups
+    await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_player_addictions_lookup
+        ON PlayerAddictions(user_id, conversation_id, player_name)
+    """)
+
+async def find_or_create_addiction(
+    ctx, conn, 
+    player_name: str, 
+    addiction_type: str, 
+    level: int, 
+    target_npc_id: Optional[int] = None
+) -> int:
+    """
+    Find or create an addiction entry.
+    Updates the level if the addiction already exists.
+    """
+    # Ensure table exists
+    await ensure_addiction_table_exists(ctx, conn)
+    
+    # Use UPSERT pattern
+    addiction_id = await conn.fetchval("""
+        INSERT INTO PlayerAddictions
+        (user_id, conversation_id, player_name, addiction_type, level, target_npc_id, last_updated)
+        VALUES ($1, $2, $3, $4, $5, $6, NOW())
+        ON CONFLICT (user_id, conversation_id, player_name, addiction_type, target_npc_id)
+        DO UPDATE SET 
+            level = EXCLUDED.level, 
+            last_updated = NOW()
+        RETURNING id
+    """,
+        ctx.user_id, ctx.conversation_id, player_name, addiction_type,
+        level, target_npc_id
+    )
+    
+    # Log canonical event if it's a new addiction or significant change
+    if level >= 3:
+        npc_clause = f" to NPC {target_npc_id}" if target_npc_id else ""
+        await log_canonical_event(
+            ctx, conn,
+            f"Player {player_name} developed {ADDICTION_LEVELS[level]} addiction to {addiction_type}{npc_clause}",
+            tags=['addiction', 'player_state', addiction_type],
+            significance=6 if level == 3 else 8 if level == 4 else 4
+        )
+    
+    return addiction_id
+
+async def find_or_create_player_stats(
+    ctx, conn, 
+    player_name: str, 
+    **initial_stats
+) -> None:
+    """
+    Find or create player stats entry with initial values.
+    Does not update existing stats, only creates if missing.
+    """
+    # Check if player stats exist
+    exists = await conn.fetchval("""
+        SELECT COUNT(*) FROM PlayerStats
+        WHERE user_id = $1 AND conversation_id = $2 AND player_name = $3
+    """, ctx.user_id, ctx.conversation_id, player_name)
+    
+    if not exists:
+        # Set defaults for any missing stats
+        stats = {
+            'corruption': 0,
+            'confidence': 0,
+            'willpower': 0,
+            'obedience': 0,
+            'dependency': 0,
+            'lust': 0,
+            'mental_resilience': 0,
+            'physical_endurance': 0
+        }
+        stats.update(initial_stats)
+        
+        # Create player stats
+        await conn.execute("""
+            INSERT INTO PlayerStats (
+                user_id, conversation_id, player_name,
+                corruption, confidence, willpower, obedience,
+                dependency, lust, mental_resilience, physical_endurance
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        """, 
+            ctx.user_id, ctx.conversation_id, player_name,
+            stats['corruption'], stats['confidence'], stats['willpower'], 
+            stats['obedience'], stats['dependency'], stats['lust'],
+            stats['mental_resilience'], stats['physical_endurance']
+        )
+        
+        # Log canonical event
+        await log_canonical_event(
+            ctx, conn,
+            f"Player character '{player_name}' initialized with stats",
+            tags=['player', 'initialization', 'stats'],
+            significance=5
+        )
+
+async def log_stat_change(
+    ctx, conn, 
+    player_name: str, 
+    stat_name: str, 
+    old_value: int, 
+    new_value: int, 
+    cause: str
+) -> None:
+    """
+    Log a player stat change to the history table.
+    """
+    # Insert into stats history
+    await conn.execute("""
+        INSERT INTO StatsHistory (
+            user_id, conversation_id, player_name, stat_name,
+            old_value, new_value, cause, timestamp
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP)
+    """, 
+        ctx.user_id, ctx.conversation_id, player_name, stat_name,
+        old_value, new_value, cause
+    )
+    
+    # Log significant changes as canonical events
+    change = new_value - old_value
+    if abs(change) >= 10 or new_value in [0, 100]:
+        event_text = f"Player {player_name}'s {stat_name} "
+        if change > 0:
+            event_text += f"increased by {change} to {new_value}"
+        else:
+            event_text += f"decreased by {abs(change)} to {new_value}"
+        event_text += f" ({cause})"
+        
+        significance = 5
+        if new_value == 0 or new_value == 100:
+            significance = 7  # Maxed out or depleted stats are more significant
+        elif abs(change) >= 20:
+            significance = 6
+            
+        await log_canonical_event(
+            ctx, conn,
+            event_text,
+            tags=['player_stats', stat_name, 'change'],
+            significance=significance
+        )
+
+async def find_or_create_inventory_item(
+    ctx, conn,
+    item_name: str,
+    player_name: str = "Chase",
+    **item_data
+) -> int:
+    """
+    Find or create an inventory item for a player.
+    """
+    # Check if item already exists
+    existing = await conn.fetchrow("""
+        SELECT item_id, quantity FROM PlayerInventory
+        WHERE user_id = $1 AND conversation_id = $2 
+        AND player_name = $3 AND item_name = $4
+    """, ctx.user_id, ctx.conversation_id, player_name, item_name)
+    
+    if existing:
+        # Update quantity if provided
+        if 'quantity' in item_data:
+            new_quantity = existing['quantity'] + item_data['quantity']
+            await conn.execute("""
+                UPDATE PlayerInventory 
+                SET quantity = $1, date_acquired = CURRENT_TIMESTAMP
+                WHERE item_id = $2
+            """, new_quantity, existing['item_id'])
+        return existing['item_id']
+    
+    # Create new item
+    item_id = await conn.fetchval("""
+        INSERT INTO PlayerInventory (
+            user_id, conversation_id, player_name, item_name,
+            item_description, item_category, item_properties,
+            quantity, equipped, date_acquired
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, CURRENT_TIMESTAMP)
+        RETURNING item_id
+    """,
+        ctx.user_id, ctx.conversation_id, player_name, item_name,
+        item_data.get('item_description', ''),
+        item_data.get('item_category', 'misc'),
+        json.dumps(item_data.get('item_properties', {})),
+        item_data.get('quantity', 1),
+        item_data.get('equipped', False)
+    )
+    
+    await log_canonical_event(
+        ctx, conn,
+        f"Player {player_name} acquired new item: {item_name}",
+        tags=['inventory', 'item_acquisition', item_data.get('item_category', 'misc')],
+        significance=4
+    )
+    
+    return item_id
+
+async def find_or_create_currency(
+    ctx, conn,
+    currency_name: str,
+    **currency_data
+) -> int:
+    """
+    Find or create a currency system.
+    """
+    # Check if currency exists
+    existing = await conn.fetchrow("""
+        SELECT id FROM CurrencySystem
+        WHERE user_id = $1 AND conversation_id = $2
+    """, ctx.user_id, ctx.conversation_id)
+    
+    if existing:
+        return existing['id']
+    
+    # Create new currency
+    currency_id = await conn.fetchval("""
+        INSERT INTO CurrencySystem (
+            user_id, conversation_id, currency_name, currency_plural,
+            minor_currency_name, minor_currency_plural, exchange_rate,
+            currency_symbol, format_template, description, setting_context,
+            created_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, CURRENT_TIMESTAMP)
+        RETURNING id
+    """,
+        ctx.user_id, ctx.conversation_id, currency_name,
+        currency_data.get('currency_plural', currency_name + 's'),
+        currency_data.get('minor_currency_name'),
+        currency_data.get('minor_currency_plural'),
+        currency_data.get('exchange_rate', 100),
+        currency_data.get('currency_symbol', '$'),
+        currency_data.get('format_template', '{{amount}} {{currency}}'),
+        currency_data.get('description', ''),
+        currency_data.get('setting_context', '')
+    )
+    
+    await log_canonical_event(
+        ctx, conn,
+        f"Currency system established: {currency_name}",
+        tags=['currency', 'economic_system', 'creation'],
+        significance=6
+    )
+    
+    return currency_id
+
+async def log_event_creation(
+    ctx, conn,
+    event_name: str,
+    event_type: str = "general",
+    **event_data
+) -> int:
+    """
+    Create and log an event in the Events table.
+    """
+    event_id = await conn.fetchval("""
+        INSERT INTO Events (
+            user_id, conversation_id, event_name, description,
+            start_time, end_time, location, year, month, day, time_of_day
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        RETURNING id
+    """,
+        ctx.user_id, ctx.conversation_id, event_name,
+        event_data.get('description', ''),
+        event_data.get('start_time', 'TBD'),
+        event_data.get('end_time', 'TBD'),
+        event_data.get('location', 'TBD'),
+        event_data.get('year', 1),
+        event_data.get('month', 1),
+        event_data.get('day', 1),
+        event_data.get('time_of_day', 'Morning')
+    )
+    
+    await log_canonical_event(
+        ctx, conn,
+        f"Event scheduled: {event_name} at {event_data.get('location', 'TBD')}",
+        tags=['event', event_type, 'scheduled'],
+        significance=5
+    )
+    
+    return event_id
+
+# Constants needed by the addiction functions
+ADDICTION_LEVELS = {
+    0: "None",
+    1: "Mild",
+    2: "Moderate", 
+    3: "Heavy",
+    4: "Extreme"
+}
