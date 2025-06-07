@@ -1086,3 +1086,373 @@ async def update_landmark(ctx, conn, landmark_id: int, updates: Dict[str, Any]) 
     query = f"UPDATE Landmarks SET {', '.join(set_clauses)} WHERE id = ${len(values)}"
     
     await conn.execute(query, *values)
+
+# Add these functions to canon.py
+
+async def find_or_create_location(ctx, conn, location_name: str, **kwargs) -> str:
+    """
+    Find or create a location canonically.
+    Returns the location name (locations use name as primary identifier).
+    """
+    # Check exact match
+    existing = await conn.fetchrow("""
+        SELECT id, location_name, description
+        FROM Locations
+        WHERE LOWER(location_name) = LOWER($1)
+        AND user_id = $2 AND conversation_id = $3
+    """, location_name, ctx.user_id, ctx.conversation_id)
+    
+    if existing:
+        logger.info(f"Location '{location_name}' found via exact match")
+        return existing['location_name']
+    
+    # Semantic similarity check
+    description = kwargs.get('description', f"The area known as {location_name}")
+    embedding_text = f"{location_name} {description}"
+    search_vector = await generate_embedding(embedding_text)
+    
+    similar = await conn.fetchrow("""
+        SELECT id, location_name, description, 1 - (embedding <=> $1) AS similarity
+        FROM Locations
+        WHERE user_id = $2 AND conversation_id = $3
+        AND embedding IS NOT NULL
+        AND 1 - (embedding <=> $1) > 0.85
+        ORDER BY embedding <=> $1
+        LIMIT 1
+    """, search_vector, ctx.user_id, ctx.conversation_id)
+    
+    if similar:
+        validation_agent = CanonValidationAgent()
+        prompt = f"""
+        Are these the same location?
+        
+        Proposed: {location_name}
+        Description: {description}
+        
+        Existing: {similar['location_name']}
+        Description: {similar['description']}
+        Similarity: {similar['similarity']:.2f}
+        
+        Answer only 'true' or 'false'.
+        """
+        
+        result = await Runner.run(validation_agent.agent, prompt)
+        if result.final_output.strip().lower() == 'true':
+            logger.info(f"Location '{location_name}' matched to existing '{similar['location_name']}'")
+            return similar['location_name']
+    
+    # Create new location
+    location_id = await conn.fetchval("""
+        INSERT INTO Locations (
+            user_id, conversation_id, location_name, description,
+            location_type, parent_location, cultural_significance,
+            economic_importance, strategic_value, population_density,
+            notable_features, hidden_aspects, access_restrictions,
+            local_customs, embedding
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+        RETURNING id
+    """,
+        ctx.user_id, ctx.conversation_id, location_name, description,
+        kwargs.get('location_type', 'settlement'),
+        kwargs.get('parent_location'),
+        kwargs.get('cultural_significance', 'moderate'),
+        kwargs.get('economic_importance', 'moderate'),
+        kwargs.get('strategic_value', 5),
+        kwargs.get('population_density', 'moderate'),
+        kwargs.get('notable_features', []),
+        kwargs.get('hidden_aspects', []),
+        kwargs.get('access_restrictions', []),
+        kwargs.get('local_customs', []),
+        search_vector
+    )
+    
+    await log_canonical_event(
+        ctx, conn,
+        f"Location '{location_name}' established in the world",
+        tags=['location', 'creation', 'canon'],
+        significance=6
+    )
+    
+    return location_name
+
+async def find_or_create_faction(ctx, conn, faction_name: str, **kwargs) -> int:
+    """
+    Find or create a faction with semantic matching.
+    """
+    # Check exact match
+    existing = await conn.fetchrow("""
+        SELECT id FROM Factions
+        WHERE LOWER(name) = LOWER($1)
+        AND user_id = $2 AND conversation_id = $3
+    """, faction_name, ctx.user_id, ctx.conversation_id)
+    
+    if existing:
+        return existing['id']
+    
+    # Semantic similarity check
+    faction_type = kwargs.get('type', 'organization')
+    description = kwargs.get('description', '')
+    embedding_text = f"{faction_name} {faction_type} {description}"
+    search_vector = await generate_embedding(embedding_text)
+    
+    similar = await conn.fetchrow("""
+        SELECT id, name, type, description, 1 - (embedding <=> $1) AS similarity
+        FROM Factions
+        WHERE user_id = $2 AND conversation_id = $3
+        AND embedding IS NOT NULL
+        AND 1 - (embedding <=> $1) > 0.85
+        ORDER BY embedding <=> $1
+        LIMIT 1
+    """, search_vector, ctx.user_id, ctx.conversation_id)
+    
+    if similar:
+        validation_agent = CanonValidationAgent()
+        prompt = f"""
+        Are these the same faction?
+        
+        Proposed: {faction_name} ({faction_type})
+        Description: {description[:200]}
+        
+        Existing: {similar['name']} ({similar['type']})
+        Description: {similar['description'][:200]}
+        
+        Answer only 'true' or 'false'.
+        """
+        
+        result = await Runner.run(validation_agent.agent, prompt)
+        if result.final_output.strip().lower() == 'true':
+            return similar['id']
+    
+    # Create new faction
+    faction_id = await conn.fetchval("""
+        INSERT INTO Factions (
+            user_id, conversation_id, name, type, description,
+            values, goals, hierarchy, resources, territory,
+            rivals, allies, public_reputation, secret_activities,
+            power_level, influence_scope, recruitment_methods,
+            leadership_structure, founding_story, embedding
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+        RETURNING id
+    """,
+        ctx.user_id, ctx.conversation_id, faction_name, faction_type, description,
+        kwargs.get('values', ['power', 'control']),
+        kwargs.get('goals', ['expansion', 'influence']),
+        kwargs.get('hierarchy', 'strict'),
+        kwargs.get('resources', []),
+        kwargs.get('territory', []),
+        kwargs.get('rivals', []),
+        kwargs.get('allies', []),
+        kwargs.get('public_reputation', 'neutral'),
+        kwargs.get('secret_activities', []),
+        kwargs.get('power_level', 5),
+        kwargs.get('influence_scope', 'local'),
+        kwargs.get('recruitment_methods', []),
+        kwargs.get('leadership_structure', {}),
+        kwargs.get('founding_story', ''),
+        search_vector
+    )
+    
+    await log_canonical_event(
+        ctx, conn,
+        f"Faction '{faction_name}' established as {faction_type}",
+        tags=['faction', 'creation', 'canon'],
+        significance=7
+    )
+    
+    return faction_id
+
+async def find_or_create_historical_event(ctx, conn, event_name: str, **kwargs) -> int:
+    """
+    Find or create a historical event with semantic matching.
+    """
+    # Check exact match
+    existing = await conn.fetchrow("""
+        SELECT id FROM HistoricalEvents
+        WHERE LOWER(name) = LOWER($1)
+        AND user_id = $2 AND conversation_id = $3
+    """, event_name, ctx.user_id, ctx.conversation_id)
+    
+    if existing:
+        return existing['id']
+    
+    # Semantic similarity check  
+    description = kwargs.get('description', '')
+    date_description = kwargs.get('date_description', 'Unknown time')
+    embedding_text = f"{event_name} {description} {date_description}"
+    search_vector = await generate_embedding(embedding_text)
+    
+    similar = await conn.fetchrow("""
+        SELECT id, name, description, date_description,
+               1 - (embedding <=> $1) AS similarity
+        FROM HistoricalEvents
+        WHERE user_id = $2 AND conversation_id = $3
+        AND embedding IS NOT NULL
+        AND 1 - (embedding <=> $1) > 0.85
+        ORDER BY embedding <=> $1
+        LIMIT 1
+    """, search_vector, ctx.user_id, ctx.conversation_id)
+    
+    if similar:
+        validation_agent = CanonValidationAgent()
+        prompt = f"""
+        Are these the same historical event?
+        
+        Proposed: {event_name}
+        When: {date_description}
+        Description: {description[:200]}
+        
+        Existing: {similar['name']}
+        When: {similar['date_description']}
+        Description: {similar['description'][:200]}
+        
+        Answer only 'true' or 'false'.
+        """
+        
+        result = await Runner.run(validation_agent.agent, prompt)
+        if result.final_output.strip().lower() == 'true':
+            return similar['id']
+    
+    # Create new event
+    event_id = await conn.fetchval("""
+        INSERT INTO HistoricalEvents (
+            user_id, conversation_id, name, description,
+            date_description, event_type, significance,
+            involved_entities, location, consequences,
+            cultural_impact, disputed_facts, commemorations,
+            primary_sources, embedding
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+        RETURNING id
+    """,
+        ctx.user_id, ctx.conversation_id, event_name, description,
+        date_description,
+        kwargs.get('event_type', 'political'),
+        kwargs.get('significance', 5),
+        kwargs.get('involved_entities', []),
+        kwargs.get('location'),
+        kwargs.get('consequences', []),
+        kwargs.get('cultural_impact', 'moderate'),
+        kwargs.get('disputed_facts', []),
+        kwargs.get('commemorations', []),
+        kwargs.get('primary_sources', []),
+        search_vector
+    )
+    
+    await log_canonical_event(
+        ctx, conn,
+        f"Historical event '{event_name}' recorded for {date_description}",
+        tags=['history', 'event', 'canon'],
+        significance=kwargs.get('significance', 5)
+    )
+    
+    return event_id
+
+async def find_or_create_notable_figure(ctx, conn, figure_name: str, **kwargs) -> int:
+    """
+    Find or create a notable figure with semantic matching.
+    """
+    # Check exact match
+    existing = await conn.fetchrow("""
+        SELECT id FROM NotableFigures
+        WHERE LOWER(name) = LOWER($1)
+        AND user_id = $2 AND conversation_id = $3
+    """, figure_name, ctx.user_id, ctx.conversation_id)
+    
+    if existing:
+        return existing['id']
+    
+    # Semantic similarity check
+    description = kwargs.get('description', '')
+    title = kwargs.get('title', '')
+    embedding_text = f"{figure_name} {title} {description}"
+    search_vector = await generate_embedding(embedding_text)
+    
+    similar = await conn.fetchrow("""
+        SELECT id, name, title, description,
+               1 - (embedding <=> $1) AS similarity
+        FROM NotableFigures
+        WHERE user_id = $2 AND conversation_id = $3
+        AND embedding IS NOT NULL
+        AND 1 - (embedding <=> $1) > 0.85
+        ORDER BY embedding <=> $1
+        LIMIT 1
+    """, search_vector, ctx.user_id, ctx.conversation_id)
+    
+    if similar:
+        validation_agent = CanonValidationAgent()
+        prompt = f"""
+        Are these the same person?
+        
+        Proposed: {figure_name} ({title})
+        Description: {description[:200]}
+        
+        Existing: {similar['name']} ({similar['title'] or 'no title'})
+        Description: {similar['description'][:200]}
+        
+        Answer only 'true' or 'false'.
+        """
+        
+        result = await Runner.run(validation_agent.agent, prompt)
+        if result.final_output.strip().lower() == 'true':
+            return similar['id']
+    
+    # Create new figure
+    figure_id = await conn.fetchval("""
+        INSERT INTO NotableFigures (
+            user_id, conversation_id, name, title, description,
+            birth_date, death_date, faction_affiliations,
+            achievements, failures, personality_traits,
+            public_image, hidden_aspects, influence_areas,
+            legacy, controversial_actions, relationships,
+            current_status, reputation, significance, embedding
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
+        RETURNING id
+    """,
+        ctx.user_id, ctx.conversation_id, figure_name, title, description,
+        kwargs.get('birth_date'),
+        kwargs.get('death_date'),
+        kwargs.get('faction_affiliations', []),
+        kwargs.get('achievements', []),
+        kwargs.get('failures', []),
+        kwargs.get('personality_traits', []),
+        kwargs.get('public_image', 'neutral'),
+        kwargs.get('hidden_aspects', []),
+        kwargs.get('influence_areas', []),
+        kwargs.get('legacy', ''),
+        kwargs.get('controversial_actions', []),
+        kwargs.get('relationships', []),
+        kwargs.get('current_status', 'active'),
+        kwargs.get('reputation', 50),
+        kwargs.get('significance', 5),
+        search_vector
+    )
+    
+    await log_canonical_event(
+        ctx, conn,
+        f"Notable figure '{figure_name}' ({title}) entered historical record",
+        tags=['figure', 'notable', 'canon'],
+        significance=kwargs.get('significance', 5)
+    )
+    
+    return figure_id
+
+async def update_entity_canonically(ctx, conn, entity_type: str, entity_id: int, updates: Dict[str, Any], reason: str):
+    """
+    Update any entity through the lore system for canonical consistency.
+    """
+    from lore.core.lore_system import LoreSystem
+    
+    lore_system = await LoreSystem.get_instance(ctx.user_id, ctx.conversation_id)
+    
+    result = await lore_system.propose_and_enact_change(
+        ctx,
+        entity_type=entity_type,
+        entity_identifier={"id": entity_id},
+        updates=updates,
+        reason=reason
+    )
+    
+    return result
