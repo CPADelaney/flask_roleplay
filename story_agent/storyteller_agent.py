@@ -1367,11 +1367,6 @@ class StorytellerAgent:
         timer_id = None
         if self.performance_monitor:
             timer_id = self.performance_monitor.start_timer("process_time_advancement")
-        
-        try:
-            # If there's an override action from a directive, apply it
-            if hasattr(self, "current_overrides"):
-                for directive_id, override in self.current_overrides.items():
                     if "time_advancement" in override:
                         logging.info(f"Applying time advancement override from directive {directive_id}")
                         return override["time_advancement"]
@@ -1430,21 +1425,22 @@ class StorytellerAgent:
                 }
                 
                 for key, value in time_updates.items():
+                    # Use LoreSystem to update each time component
                     await lore_system.propose_and_enact_change(
                         ctx=ctx,
                         entity_type="CurrentRoleplay",
                         entity_identifier={"user_id": user_id, "conversation_id": conversation_id, "key": key},
                         updates={"value": value},
-                        reason=f"Time advancement: {activity_type} activity progressed time"
+                        reason=f"Time advancement: {activity_type} activity advanced time from {time_of_day} to {new_time_of_day}"
                     )
-                    
-                    # Create a memory about time advancement
-                    await self.create_memory_for_nyx(
-                        ctx,
-                        f"Time advanced from {time_of_day} on Day {day} to {new_time_of_day} on Day {new_day}",
-                        "observation",
-                        5
-                    )
+                
+                # Create a memory about time advancement
+                await self.create_memory_for_nyx(
+                    ctx,
+                    f"Time advanced from {time_of_day} on Day {day} to {new_time_of_day} on Day {new_day}",
+                    "observation",
+                    5
+                )
                     
                     # Invalidate context cache since time changed
                     self.context_cache = {}
@@ -1932,6 +1928,13 @@ class StorytellerAgent:
     async def store_message(self, ctx, sender, content):
         """
         Store a message in the database.
+        
+        Args:
+            sender: Message sender
+            content: Message content
+            
+        Returns:
+            Status of the operation
         """
         user_id = ctx.context["user_id"]
         conversation_id = ctx.context["conversation_id"]
@@ -1940,22 +1943,30 @@ class StorytellerAgent:
         from lore.core import canon
         
         async with get_db_connection_context() as conn:
-            # Create message through canon
-            message_id = await conn.fetchval("""
+            # Create a canon function for messages if it doesn't exist
+            # For now, we'll create the message directly through canon
+            message_data = {
+                "conversation_id": conversation_id,
+                "sender": sender,
+                "content": content,
+                "created_at": datetime.now(timezone.utc)
+            }
+            
+            # If there's no specific canon function for messages, create one or use generic
+            await conn.execute("""
                 INSERT INTO messages (conversation_id, sender, content)
                 VALUES($1, $2, $3)
-                RETURNING id
             """, conversation_id, sender, content)
             
             # Log this as a canonical event
             await canon.log_canonical_event(
                 ctx, conn,
-                f"Message #{message_id} stored from {sender}",
+                f"Message stored from {sender}: {content[:50]}...",
                 tags=["message", "conversation"],
-                significance=2
+                significance=3
             )
         
-        return {"status": "stored", "message_id": message_id}
+        return {"status": "stored"}
     
     @with_governance(
         agent_type=AgentType.STORY_DIRECTOR,
