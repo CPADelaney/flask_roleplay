@@ -9,9 +9,12 @@ from datetime import datetime
 from typing import Dict, List, Any, Optional, AsyncGenerator, Union, Tuple
 from pydantic import BaseModel, Field
 
+from db.connection import get_db_connection_context
+
+logger = logging.getLogger(__name__)
 # OpenAI Agents SDK imports
 from agents import (
-    Agent, function_tool, Runner, trace, RunResultStreaming,
+    Agent, function_tool, Runner, trace, RunConfig, ModelSettings, RunResultStreaming,
     GuardrailFunctionOutput, InputGuardrail, handoff, ModelSettings
 )
 from agents.run_context import RunContextWrapper
@@ -478,55 +481,56 @@ class GeopoliticalSystemManager(BaseLoreManager):
         strategic_value: int = 5,
         matriarchal_influence: int = 5
     ) -> int:
-        """
-        Actual business logic and DB insert for a geographic region.
-        """
-        with trace(
-            "AddGeographicRegion", 
-            group_id=self.trace_group_id,
-            metadata={**self.trace_metadata, "region_name": name}
-        ):
+        """Internal implementation using canon system."""
+        with trace("AddGeographicRegion", metadata={"region_name": name}):
             await self.ensure_initialized()
-    
-            resources = resources or []
-            major_settlements = major_settlements or []
-            cultural_traits = cultural_traits or []
-            dangers = dangers or []
-            terrain_features = terrain_features or []
-    
-            # Apply matriarchal theming if utility available
+            
+            # Apply matriarchal theming
             try:
                 from lore.utils.theming import MatriarchalThemingUtils
                 description = MatriarchalThemingUtils.apply_matriarchal_theme("region", description)
             except ImportError:
-                # If theming utils not available, continue without theming
                 pass
-    
-            # Generate embedding
-            embedding_text = f"{name} {region_type} {description} {climate or ''}"
-            embedding = await generate_embedding(embedding_text)
-    
-            async with self.get_connection_pool() as pool:
-                async with pool.acquire() as conn:
-                    region_id = await conn.fetchval("""
-                        INSERT INTO GeographicRegions (
-                            name, region_type, description, climate, resources,
-                            governing_faction, population_density, major_settlements,
-                            cultural_traits, dangers, terrain_features,
-                            defensive_characteristics, strategic_value,
-                            matriarchal_influence, embedding
-                        )
-                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
-                        RETURNING id
-                    """,
-                    name, region_type, description, climate, resources,
-                    governing_faction, population_density, major_settlements,
-                    cultural_traits, dangers, terrain_features,
-                    defensive_characteristics, strategic_value,
-                    matriarchal_influence, embedding)
-                    
-                    return region_id
-
+            
+            # Prepare data for canon
+            region_data = {
+                "name": name,
+                "region_type": region_type,
+                "description": description,
+                "climate": climate,
+                "resources": resources or [],
+                "governing_faction": governing_faction,
+                "population_density": population_density,
+                "major_settlements": major_settlements or [],
+                "cultural_traits": cultural_traits or [],
+                "dangers": dangers or [],
+                "terrain_features": terrain_features or [],
+                "defensive_characteristics": defensive_characteristics,
+                "strategic_value": strategic_value,
+                "matriarchal_influence": matriarchal_influence
+            }
+            
+            # Create via canon
+            async with get_db_connection_context() as conn:
+                from lore.core import canon
+                
+                # Establish controlling faction if specified
+                if governing_faction:
+                    faction_id = await canon.find_or_create_faction(
+                        ctx, conn, governing_faction, faction_type="regional_authority"
+                    )
+                
+                # Establish major settlements
+                if major_settlements:
+                    for settlement in major_settlements:
+                        await canon.find_or_create_location(ctx, conn, settlement)
+                
+                # Create the region
+                region_id = await canon.find_or_create_geographic_region(
+                    ctx, conn, **region_data
+                )
+            
+            return region_id
 
     @staticmethod
     @function_tool
@@ -547,19 +551,7 @@ class GeopoliticalSystemManager(BaseLoreManager):
         strategic_value: int = 5,
         matriarchal_influence: int = 5
     ) -> int:
-        """
-        Add a geographic region to the database using canon system.
-        
-        Args:
-            ctx: Context object
-            name: Name of the region
-            region_type: Type of region (mountains, coast, desert, etc.)
-            description: Description of the region
-            [other args...]
-            
-        Returns:
-            ID of the created region
-        """
+        """Add a geographic region using canon system."""
         manager = ctx.context.get("manager")
         if not manager:
             from lore.managers.geopolitical import GeopoliticalSystemManager
@@ -569,14 +561,7 @@ class GeopoliticalSystemManager(BaseLoreManager):
             )
             await manager.ensure_initialized()
         
-        # Get LoreSystem for canon operations
-        from lore.core.lore_system import LoreSystem
-        lore_system = await LoreSystem.get_instance(
-            ctx.context.get("user_id"), 
-            ctx.context.get("conversation_id")
-        )
-        
-        # Apply governance if available
+        # Apply governance
         try:
             from nyx.nyx_governance import NyxUnifiedGovernor, AgentType
             governor = await NyxUnifiedGovernor(
@@ -592,145 +577,33 @@ class GeopoliticalSystemManager(BaseLoreManager):
             
             if not permission.get("approved", True):
                 return {"error": permission.get("reasoning", "Action not permitted by governance")}
-        except (ImportError, Exception):
+        except:
             pass
         
-        with trace(
-            "AddGeographicRegion", 
-            group_id=manager.trace_group_id,
-            metadata={**manager.trace_metadata, "region_name": name}
-        ):
-            await manager.ensure_initialized()
-            
-            # Check for semantic duplicates
-            async with get_db_connection_context() as conn:
-                # Generate embedding for the new region
-                embedding_text = f"{name} {region_type} {description} {climate or ''}"
-                search_vector = await generate_embedding(embedding_text)
-                
-                # Search for similar regions
-                similar_region = await conn.fetchrow("""
-                    SELECT id, name, region_type, 1 - (embedding <=> $1) AS similarity
-                    FROM GeographicRegions
-                    WHERE 1 - (embedding <=> $1) > 0.85
-                    ORDER BY embedding <=> $1
-                    LIMIT 1
-                """, search_vector)
-                
-                if similar_region:
-                    # Use validation to check if it's truly a duplicate
-                    from lore.core.validation import CanonValidationAgent
-                    validation_agent = CanonValidationAgent()
-                    
-                    existing_region = await conn.fetchrow("""
-                        SELECT * FROM GeographicRegions WHERE id = $1
-                    """, similar_region['id'])
-                    
-                    is_duplicate = await validation_agent.confirm_is_duplicate_region(
-                        conn,
-                        proposal={
-                            "name": name,
-                            "region_type": region_type,
-                            "description": description
-                        },
-                        existing_region=dict(existing_region)
-                    )
-                    
-                    if is_duplicate:
-                        logger.warning(f"Region '{name}' is a duplicate of existing region ID {similar_region['id']}")
-                        # Update the existing region with any new information
-                        await lore_system.propose_and_enact_change(
-                            ctx=ctx,
-                            entity_type="GeographicRegions",
-                            entity_identifier={"id": similar_region['id']},
-                            updates={
-                                "resources": resources,
-                                "strategic_value": strategic_value,
-                                "matriarchal_influence": matriarchal_influence
-                            },
-                            reason=f"Updating existing region with new information from duplicate submission"
-                        )
-                        return similar_region['id']
-            
-            # Canonically establish governing faction if specified
-            if governing_faction:
-                async with get_db_connection_context() as conn:
-                    from lore.core import canon
-                    faction_id = await canon.find_or_create_faction(
-                        ctx, conn, governing_faction, faction_type="regional_authority"
-                    )
-            
-            # Canonically establish major settlements
-            settlement_ids = []
-            if major_settlements:
-                async with get_db_connection_context() as conn:
-                    from lore.core import canon
-                    for settlement in major_settlements:
-                        location_id = await canon.find_or_create_location(ctx, conn, settlement)
-                        settlement_ids.append(location_id)
-            
-            resources = resources or []
-            cultural_traits = cultural_traits or []
-            dangers = dangers or []
-            terrain_features = terrain_features or []
-            
-            # Apply matriarchal theming
-            try:
-                from lore.utils.theming import MatriarchalThemingUtils
-                description = MatriarchalThemingUtils.apply_matriarchal_theme("region", description)
-            except ImportError:
-                pass
-            
-            # Generate embedding
-            embedding = await generate_embedding(embedding_text)
-            
-            # Create the region
-            async with manager.get_connection_pool() as pool:
-                async with pool.acquire() as conn:
-                    region_id = await conn.fetchval("""
-                        INSERT INTO GeographicRegions (
-                            name, region_type, description, climate, resources,
-                            governing_faction, population_density, major_settlements,
-                            cultural_traits, dangers, terrain_features,
-                            defensive_characteristics, strategic_value,
-                            matriarchal_influence, embedding
-                        )
-                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
-                        RETURNING id
-                    """,
-                    name, region_type, description, climate, resources,
-                    governing_faction, population_density, major_settlements,
-                    cultural_traits, dangers, terrain_features,
-                    defensive_characteristics, strategic_value,
-                    matriarchal_influence, embedding)
-                    
-                    # Log canonical event
-                    from lore.core import canon
-                    await canon.log_canonical_event(
-                        ctx, conn,
-                        f"Geographic region '{name}' established as {region_type} with strategic value {strategic_value}",
-                        tags=["geography", "region", "canon"],
-                        significance=8
-                    )
-                    
-                    return region_id
-    
+        return await manager._add_geographic_region_impl(
+            ctx, name, region_type, description, climate, resources,
+            governing_faction, population_density, major_settlements,
+            cultural_traits, dangers, terrain_features, defensive_characteristics,
+            strategic_value, matriarchal_influence
+        )
+
+        
     # ------------------------------------------------------------------------
     # 2) Generate world nations with agent-based distribution
     # ------------------------------------------------------------------------
     @staticmethod
     @function_tool
     async def generate_world_nations(ctx: RunContextWrapper, count: int = 5) -> List[Dict[str, Any]]:
-        """
-        Generate a set of nations for the world with political simulation capabilities.
+        """Generate world nations using canon system."""
+        manager = ctx.context.get("manager")
+        if not manager:
+            from lore.managers.geopolitical import GeopoliticalSystemManager
+            manager = GeopoliticalSystemManager(
+                ctx.context.get("user_id"), 
+                ctx.context.get("conversation_id")
+            )
+            await manager.ensure_initialized()
         
-        Args:
-            ctx: Context object
-            count: Number of nations to generate
-            
-        Returns:
-            List of generated nations
-        """
         # Apply governance if available
         try:
             from nyx.nyx_governance import NyxUnifiedGovernor
@@ -745,38 +618,33 @@ class GeopoliticalSystemManager(BaseLoreManager):
             if not permission.get("approved", True):
                 return [{"error": permission.get("reasoning", "Action not permitted by governance")}]
         except (ImportError, Exception):
-            # Governance optional - continue if not available
             pass
-            
-        with trace(
-            "GenerateWorldNations", 
-            group_id=self.trace_group_id,
-            metadata={**self.trace_metadata, "count": count}
-        ):
-            run_ctx = self.create_run_context(ctx)
-
-            # (Optional) Let an agent decide how many nations to generate
+        
+        with trace("GenerateWorldNations", metadata={"count": count}):
+            run_ctx = manager.create_run_context(ctx)
+    
+            # Let an agent decide how many nations to generate
             dist_prompt = (
                 f"We want to create some matriarchal nations. We proposed a default of {count}, but you can override. "
                 "Return JSON with a 'count' field. e.g. {\"count\": 5}"
             )
-
+    
             dist_config = RunConfig(workflow_name="NationDistribution")
             dist_result = await Runner.run(
-                self.distribution_agent, 
+                manager.distribution_agent, 
                 dist_prompt, 
                 context=run_ctx.context, 
                 run_config=dist_config
             )
-
+    
             try:
                 dist_data = json.loads(dist_result.final_output)
                 count = dist_data.get("count", count)
             except json.JSONDecodeError:
                 pass  # fallback to the existing 'count'
-
+    
             # Gather context from DB
-            async with self.get_connection_pool() as pool:
+            async with manager.get_connection_pool() as pool:
                 async with pool.acquire() as conn:
                     regions = await conn.fetch("""
                         SELECT id, name, region_type, climate, resources,
@@ -785,7 +653,7 @@ class GeopoliticalSystemManager(BaseLoreManager):
                         LIMIT 10
                     """)
                     region_data = [dict(r) for r in regions]
-
+    
                     # Some cultural elements - try to fetch if table exists
                     try:
                         cultures = await conn.fetch("""
@@ -802,7 +670,7 @@ class GeopoliticalSystemManager(BaseLoreManager):
                             {"name": "Women's Councils", "element_type": "governance",
                              "description": "Councils of elder women make important decisions"}
                         ]
-
+    
             # Create agent for nation generation with structured output
             nation_agent = Agent(
                 name="NationGenerationAgent",
@@ -811,17 +679,17 @@ class GeopoliticalSystemManager(BaseLoreManager):
                 model_settings=ModelSettings(temperature=0.9),
                 output_type=List[PoliticalEntity]
             )
-
+    
             # Build prompt
             prompt = f"""
             Generate {count} detailed nations for a fantasy world with predominantly matriarchal societies.
-
+    
             GEOGRAPHIC CONTEXT (sample):
             {json.dumps(region_data[:3], indent=2)}
-
+    
             CULTURAL CONTEXT (sample):
             {json.dumps(culture_data[:2], indent=2)}
-
+    
             Create nations with:
             1. Varied matriarchy levels (higher = more female-dominated)
             2. Distinct governance styles and leadership structures
@@ -831,86 +699,54 @@ class GeopoliticalSystemManager(BaseLoreManager):
             
             Return {count} PoliticalEntity objects with all required fields.
             """
-
+    
             run_config = RunConfig(workflow_name="NationGen")
             result = await Runner.run(nation_agent, prompt, context=run_ctx.context, run_config=run_config)
             
             nations = result.final_output
             generated_nations = []
             
-            # Insert nations into database
-            for nation in nations:
-                try:
-                    # Assign to a region if possible
-                    region_id = None
-                    if regions:
-                        region = random.choice(regions)
-                        region_id = region["id"]
-                        nation.region_id = region_id
-                    
-                    # Apply matriarchal theming to description if utility available
+            # Insert nations using canon
+            async with get_db_connection_context() as conn:
+                from lore.core import canon
+                
+                for nation in nations:
                     try:
-                        from lore.utils.theming import MatriarchalThemingUtils
-                        emphasis = nation.matriarchy_level // 3
-                        nation.description = MatriarchalThemingUtils.apply_matriarchal_theme(
-                            "nation", nation.description, emphasis_level=emphasis
-                        )
-                    except ImportError:
-                        # If theming utils not available, continue without theming
-                        pass
-                    
-                    # Insert into DB
-                    embed_text = f"{nation.name} {nation.entity_type} {nation.description}"
-                    embedding = await generate_embedding(embed_text)
-                    
-                    async with self.get_connection_pool() as pool:
-                        async with pool.acquire() as conn:
-                            nation_id = await conn.fetchval("""
-                                INSERT INTO PoliticalEntities (
-                                    name, entity_type, description, region_id,
-                                    governance_style, leadership_structure, population_scale,
-                                    cultural_identity, economic_focus, political_values,
-                                    matriarchy_level, relations, military_strength,
-                                    diplomatic_stance, internal_conflicts, power_centers,
-                                    embedding
-                                )
-                                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
-                                RETURNING id
-                            """,
-                            nation.name,
-                            nation.entity_type,
-                            nation.description,
-                            nation.region_id,
-                            nation.governance_style,
-                            nation.leadership_structure,
-                            nation.population_scale,
-                            nation.cultural_identity,
-                            nation.economic_focus,
-                            nation.political_values,
-                            nation.matriarchy_level,
-                            json.dumps(nation.relations),
-                            nation.military_strength,
-                            nation.diplomatic_stance,
-                            nation.internal_conflicts,
-                            json.dumps(nation.power_centers),
-                            embedding
+                        # Assign to a region if possible
+                        region_id = None
+                        if regions:
+                            region = random.choice(regions)
+                            region_id = region["id"]
+                            nation.region_id = region_id
+                        
+                        # Apply matriarchal theming to description if utility available
+                        try:
+                            from lore.utils.theming import MatriarchalThemingUtils
+                            emphasis = nation.matriarchy_level // 3
+                            nation.description = MatriarchalThemingUtils.apply_matriarchal_theme(
+                                "nation", nation.description, emphasis_level=emphasis
                             )
-                            
-                            # Add to result
-                            nation_dict = nation.dict()
-                            nation_dict["id"] = nation_id
-                            generated_nations.append(nation_dict)
-                            
-                except Exception as e:
-                    logger.error(f"Error generating nation: {e}")
-
+                        except ImportError:
+                            pass
+                        
+                        # Create via canon
+                        nation_id = await canon.create_political_entity(ctx, conn, **nation.dict())
+                        
+                        # Add to results
+                        nation_dict = nation.dict()
+                        nation_dict["id"] = nation_id
+                        generated_nations.append(nation_dict)
+                        
+                    except Exception as e:
+                        logger.error(f"Error generating nation: {e}")
+    
             return generated_nations
 
     # ------------------------------------------------------------------------
     # 3) Conflict simulation between nations/regions
     # ------------------------------------------------------------------------
     @staticmethod
-    @function_tool(strict=False)  # Disable strict schema to allow flexible alliance structure
+    @function_tool(strict=False)
     async def simulate_conflict(
         ctx: RunContextWrapper,
         entity_ids: List[int],
@@ -918,21 +754,7 @@ class GeopoliticalSystemManager(BaseLoreManager):
         alliances: Optional[Dict[str, List[int]]] = None,
         duration_months: int = 12
     ) -> Dict[str, Any]:
-        """
-        Simulate a conflict between multiple political entities or regions.
-        Uses canon system to ensure consistency.
-        
-        Args:
-            ctx: Context object
-            entity_ids: List of entity IDs involved in the conflict
-            conflict_type: Type of conflict (war, border_dispute, trade_war, civil_war, proxy_war, etc.)
-            alliances: Optional dict mapping alliance names to lists of entity IDs
-                      e.g., {"Northern Alliance": [1, 3], "Southern Pact": [2, 4, 5]}
-            duration_months: Duration to simulate in months
-            
-        Returns:
-            A ConflictSimulation object with detailed simulation results
-        """
+        """Simulate conflict using canon system."""
         if len(entity_ids) < 2:
             return {"error": "Conflict requires at least 2 entities"}
         
@@ -974,7 +796,7 @@ class GeopoliticalSystemManager(BaseLoreManager):
                 return {"error": permission.get("reasoning", "Action not permitted by governance")}
         except (ImportError, Exception):
             pass
-            
+        
         with trace(
             "SimulateMultiPartyConflict", 
             group_id=manager.trace_group_id,
@@ -1114,86 +936,72 @@ class GeopoliticalSystemManager(BaseLoreManager):
             
             simulation = result.final_output
             
-            # Store the simulation
+            # Store simulation using canon
             try:
-                # Create embedding text from all entity names
-                entity_names = [entities_data[eid]['name'] for eid in entity_ids]
-                embed_text = f"{conflict_type} involving {', '.join(entity_names)} - {simulation.most_likely_outcome.get('description', '')}"
-                embedding = await generate_embedding(embed_text)
-                
-                async with manager.get_connection_pool() as pool:
-                    async with pool.acquire() as conn:
-                        sim_id = await conn.fetchval("""
-                            INSERT INTO ConflictSimulations (
-                                conflict_type, primary_actors, timeline, intensity_progression,
-                                diplomatic_events, military_events, civilian_impact,
-                                resolution_scenarios, most_likely_outcome, duration_months,
-                                confidence_level, simulation_basis, embedding
-                            )
-                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-                            RETURNING id
-                        """,
-                        conflict_type + f" (Multi-party: {len(entity_ids)} entities)",
-                        json.dumps(simulation.primary_actors),
-                        json.dumps(simulation.timeline),
-                        simulation.intensity_progression,
-                        json.dumps(simulation.diplomatic_events),
-                        json.dumps(simulation.military_events),
-                        json.dumps(simulation.civilian_impact),
-                        json.dumps(simulation.resolution_scenarios),
-                        json.dumps(simulation.most_likely_outcome),
-                        simulation.duration_months,
-                        simulation.confidence_level,
-                        simulation.simulation_basis,
-                        embedding)
-                
-                # Apply canonical changes based on outcome
-                if simulation and simulation.most_likely_outcome:
-                    outcome = simulation.most_likely_outcome
+                async with get_db_connection_context() as conn:
+                    from lore.core import canon
                     
-                    # Apply territorial changes
-                    if outcome.get("territorial_changes"):
-                        for change in outcome["territorial_changes"]:
-                            if change.get("region_id") and change.get("new_controller"):
-                                # Verify the region exists
-                                async with manager.get_connection_pool() as pool:
-                                    async with pool.acquire() as conn:
-                                        region_exists = await conn.fetchval("""
-                                            SELECT EXISTS(SELECT 1 FROM GeographicRegions WHERE id = $1)
-                                        """, change["region_id"])
+                    # Prepare simulation data
+                    sim_data = {
+                        "conflict_type": conflict_type + f" (Multi-party: {len(entity_ids)} entities)",
+                        "primary_actors": simulation.primary_actors,
+                        "timeline": simulation.timeline,
+                        "intensity_progression": simulation.intensity_progression,
+                        "diplomatic_events": simulation.diplomatic_events,
+                        "military_events": simulation.military_events,
+                        "civilian_impact": simulation.civilian_impact,
+                        "resolution_scenarios": simulation.resolution_scenarios,
+                        "most_likely_outcome": simulation.most_likely_outcome,
+                        "duration_months": simulation.duration_months,
+                        "confidence_level": simulation.confidence_level,
+                        "simulation_basis": simulation.simulation_basis
+                    }
+                    
+                    # Create via canon
+                    sim_id = await canon.create_conflict_simulation(ctx, conn, **sim_data)
+                    
+                    # Apply canonical changes based on outcome
+                    if simulation and simulation.most_likely_outcome:
+                        outcome = simulation.most_likely_outcome
+                        
+                        # Apply territorial changes
+                        if outcome.get("territorial_changes"):
+                            for change in outcome["territorial_changes"]:
+                                if change.get("region_id") and change.get("new_controller"):
+                                    # Verify the region exists
+                                    region_exists = await conn.fetchval("""
+                                        SELECT EXISTS(SELECT 1 FROM GeographicRegions WHERE id = $1)
+                                    """, change["region_id"])
+                                    
+                                    if region_exists:
+                                        old_controller = change.get("old_controller", "Unknown")
                                         
-                                        if region_exists:
-                                            old_controller = change.get("old_controller", "Unknown")
-                                            
-                                            # Apply the territorial change
-                                            await lore_system.propose_and_enact_change(
-                                                ctx=ctx,
-                                                entity_type="GeographicRegions",
-                                                entity_identifier={"id": change["region_id"]},
-                                                updates={"governing_faction": change["new_controller"]},
-                                                reason=f"Territory transferred from {old_controller} to {change['new_controller']} in multi-party {conflict_type}"
-                                            )
-                                            
-                                            # Log territorial change
-                                            from lore.core import canon
-                                            await canon.log_canonical_event(
-                                                ctx, conn,
-                                                f"Region {change['region_id']} control transferred from {old_controller} to {change['new_controller']} following multi-party conflict",
-                                                tags=["conflict", "territorial_change", "multi_party", "canon"],
-                                                significance=8
-                                            )
-                    
-                    # Apply political changes to multiple entities
-                    if outcome.get("political_changes"):
-                        for change in outcome["political_changes"]:
-                            entity_id = change.get("entity_id")
-                            change_type = change.get("change_type", "leadership")
-                            details = change.get("details", {})
-                            
-                            if change_type == "leadership" and details.get("new_leader"):
-                                # Create new leader
-                                async with get_db_connection_context() as conn:
-                                    from lore.core import canon
+                                        # Apply the territorial change
+                                        await lore_system.propose_and_enact_change(
+                                            ctx=ctx,
+                                            entity_type="GeographicRegions",
+                                            entity_identifier={"id": change["region_id"]},
+                                            updates={"governing_faction": change["new_controller"]},
+                                            reason=f"Territory transferred from {old_controller} to {change['new_controller']} in multi-party {conflict_type}"
+                                        )
+                                        
+                                        # Log territorial change
+                                        await canon.log_canonical_event(
+                                            ctx, conn,
+                                            f"Region {change['region_id']} control transferred from {old_controller} to {change['new_controller']} following multi-party conflict",
+                                            tags=["conflict", "territorial_change", "multi_party", "canon"],
+                                            significance=8
+                                        )
+                        
+                        # Apply political changes to multiple entities
+                        if outcome.get("political_changes"):
+                            for change in outcome["political_changes"]:
+                                entity_id = change.get("entity_id")
+                                change_type = change.get("change_type", "leadership")
+                                details = change.get("details", {})
+                                
+                                if change_type == "leadership" and details.get("new_leader"):
+                                    # Create new leader
                                     leader_id = await canon.find_or_create_npc(
                                         ctx, conn,
                                         npc_name=details["new_leader"],
@@ -1209,43 +1017,41 @@ class GeopoliticalSystemManager(BaseLoreManager):
                                         updates={"leader_npc_id": leader_id},
                                         reason=f"Leadership change in {entities_data[entity_id]['name']} due to multi-party conflict"
                                     )
-                            
-                            elif change_type == "government":
-                                # Change government type
-                                await lore_system.propose_and_enact_change(
-                                    ctx=ctx,
-                                    entity_type="PoliticalEntities",
-                                    entity_identifier={"id": entity_id},
-                                    updates={
-                                        "governance_style": details.get("new_style", "transitional"),
-                                        "internal_conflicts": [f"Post-conflict transition from {conflict_type}"]
-                                    },
-                                    reason=f"Government change in {entities_data[entity_id]['name']} following conflict"
-                                )
-                            
-                            elif change_type == "dissolution":
-                                # Entity dissolves/splits
-                                await lore_system.propose_and_enact_change(
-                                    ctx=ctx,
-                                    entity_type="PoliticalEntities",
-                                    entity_identifier={"id": entity_id},
-                                    updates={
-                                        "entity_type": "defunct",
-                                        "description": entities_data[entity_id]['description'] + f" [Dissolved following {conflict_type}]"
-                                    },
-                                    reason=f"{entities_data[entity_id]['name']} dissolved in multi-party conflict"
-                                )
-                    
-                    # Update alliance structures
-                    if outcome.get("alliance_changes"):
-                        for alliance_change in outcome["alliance_changes"]:
-                            if alliance_change.get("type") == "new_alliance":
-                                members = alliance_change.get("members", [])
-                                alliance_name = alliance_change.get("name", "Post-Conflict Alliance")
                                 
-                                # Create new faction for alliance
-                                async with get_db_connection_context() as conn:
-                                    from lore.core import canon
+                                elif change_type == "government":
+                                    # Change government type
+                                    await lore_system.propose_and_enact_change(
+                                        ctx=ctx,
+                                        entity_type="PoliticalEntities",
+                                        entity_identifier={"id": entity_id},
+                                        updates={
+                                            "governance_style": details.get("new_style", "transitional"),
+                                            "internal_conflicts": [f"Post-conflict transition from {conflict_type}"]
+                                        },
+                                        reason=f"Government change in {entities_data[entity_id]['name']} following conflict"
+                                    )
+                                
+                                elif change_type == "dissolution":
+                                    # Entity dissolves/splits
+                                    await lore_system.propose_and_enact_change(
+                                        ctx=ctx,
+                                        entity_type="PoliticalEntities",
+                                        entity_identifier={"id": entity_id},
+                                        updates={
+                                            "entity_type": "defunct",
+                                            "description": entities_data[entity_id]['description'] + f" [Dissolved following {conflict_type}]"
+                                        },
+                                        reason=f"{entities_data[entity_id]['name']} dissolved in multi-party conflict"
+                                    )
+                        
+                        # Update alliance structures
+                        if outcome.get("alliance_changes"):
+                            for alliance_change in outcome["alliance_changes"]:
+                                if alliance_change.get("type") == "new_alliance":
+                                    members = alliance_change.get("members", [])
+                                    alliance_name = alliance_change.get("name", "Post-Conflict Alliance")
+                                    
+                                    # Create new faction for alliance
                                     alliance_id = await canon.find_or_create_faction(
                                         ctx, conn,
                                         faction_name=alliance_name,
@@ -1273,44 +1079,43 @@ class GeopoliticalSystemManager(BaseLoreManager):
                                                 updates={"relations": json.dumps(entity_relations)},
                                                 reason=f"{entities_data[member_id]['name']} joins {alliance_name}"
                                             )
-                    
-                    # Update power balance for all entities
-                    winners = outcome.get("winner_entities", [])
-                    losers = outcome.get("loser_entities", [])
-                    
-                    for entity_id in entity_ids:
-                        if entity_id in winners:
-                            # Increase military strength and influence
-                            new_strength = min(10, entities_data[entity_id].get("military_strength", 5) + 1)
-                            await lore_system.propose_and_enact_change(
-                                ctx=ctx,
-                                entity_type="PoliticalEntities",
-                                entity_identifier={"id": entity_id},
-                                updates={
-                                    "military_strength": new_strength,
-                                    "diplomatic_stance": "confident"
-                                },
-                                reason=f"{entities_data[entity_id]['name']} emerged victorious from conflict"
-                            )
                         
-                        elif entity_id in losers:
-                            # Decrease military strength
-                            new_strength = max(1, entities_data[entity_id].get("military_strength", 5) - 2)
-                            await lore_system.propose_and_enact_change(
-                                ctx=ctx,
-                                entity_type="PoliticalEntities",
-                                entity_identifier={"id": entity_id},
-                                updates={
-                                    "military_strength": new_strength,
-                                    "diplomatic_stance": "defensive",
-                                    "internal_conflicts": entities_data[entity_id].get("internal_conflicts", []) + ["Post-war instability"]
-                                },
-                                reason=f"{entities_data[entity_id]['name']} weakened by conflict"
-                            )
-                    
-                    # Log the overall conflict as a canonical event
-                    async with get_db_connection_context() as conn:
-                        from lore.core import canon
+                        # Update power balance for all entities
+                        winners = outcome.get("winner_entities", [])
+                        losers = outcome.get("loser_entities", [])
+                        
+                        for entity_id in entity_ids:
+                            if entity_id in winners:
+                                # Increase military strength and influence
+                                new_strength = min(10, entities_data[entity_id].get("military_strength", 5) + 1)
+                                await lore_system.propose_and_enact_change(
+                                    ctx=ctx,
+                                    entity_type="PoliticalEntities",
+                                    entity_identifier={"id": entity_id},
+                                    updates={
+                                        "military_strength": new_strength,
+                                        "diplomatic_stance": "confident"
+                                    },
+                                    reason=f"{entities_data[entity_id]['name']} emerged victorious from conflict"
+                                )
+                            
+                            elif entity_id in losers:
+                                # Decrease military strength
+                                new_strength = max(1, entities_data[entity_id].get("military_strength", 5) - 2)
+                                await lore_system.propose_and_enact_change(
+                                    ctx=ctx,
+                                    entity_type="PoliticalEntities",
+                                    entity_identifier={"id": entity_id},
+                                    updates={
+                                        "military_strength": new_strength,
+                                        "diplomatic_stance": "defensive",
+                                        "internal_conflicts": entities_data[entity_id].get("internal_conflicts", []) + ["Post-war instability"]
+                                    },
+                                    reason=f"{entities_data[entity_id]['name']} weakened by conflict"
+                                )
+                        
+                        # Log the overall conflict as a canonical event
+                        entity_names = [entities_data[eid]['name'] for eid in entity_ids]
                         
                         conflict_summary = (
                             f"Multi-party {conflict_type} involving {', '.join(entity_names)} concluded. "
@@ -1324,17 +1129,18 @@ class GeopoliticalSystemManager(BaseLoreManager):
                             tags=["conflict", "multi_party", "geopolitical", "canon"],
                             significance=10  # Multi-party conflicts are highly significant
                         )
-                
-                # Return simulation with ID
-                sim_dict = simulation.dict()
-                sim_dict["id"] = sim_id
-                sim_dict["entity_count"] = len(entity_ids)
-                sim_dict["alliance_structure"] = alliances
-                return sim_dict
-                
+                    
+                    # Return simulation with ID
+                    sim_dict = simulation.dict()
+                    sim_dict["id"] = sim_id
+                    sim_dict["entity_count"] = len(entity_ids)
+                    sim_dict["alliance_structure"] = alliances
+                    return sim_dict
+                    
             except Exception as e:
                 logger.error(f"Error storing multi-party conflict simulation: {e}")
                 return simulation.dict()
+
         
     async def _record_border_dispute(
         self,
@@ -1383,17 +1189,16 @@ class GeopoliticalSystemManager(BaseLoreManager):
         dispute_id: int,
         resolution_approach: str
     ) -> Dict[str, Any]:
-        """
-        Analyze and resolve a border dispute between regions.
+        """Resolve border dispute using canon system."""
+        manager = ctx.context.get("manager")
+        if not manager:
+            from lore.managers.geopolitical import GeopoliticalSystemManager
+            manager = GeopoliticalSystemManager(
+                ctx.context.get("user_id"), 
+                ctx.context.get("conversation_id")
+            )
+            await manager.ensure_initialized()
         
-        Args:
-            ctx: Context object
-            dispute_id: ID of the border dispute
-            resolution_approach: Approach to resolution (negotiation, arbitration, force, etc.)
-            
-        Returns:
-            Dictionary with resolution details
-        """
         # Apply governance if available
         try:
             from nyx.nyx_governance import NyxUnifiedGovernor
@@ -1408,22 +1213,21 @@ class GeopoliticalSystemManager(BaseLoreManager):
             if not permission.get("approved", True):
                 return {"error": permission.get("reasoning", "Action not permitted by governance")}
         except (ImportError, Exception):
-            # Governance optional - continue if not available
             pass
-            
+        
         with trace(
             "ResolveBorderDispute", 
-            group_id=self.trace_group_id,
+            group_id=manager.trace_group_id,
             metadata={
-                **self.trace_metadata, 
+                **manager.trace_metadata, 
                 "dispute_id": dispute_id,
                 "approach": resolution_approach
             }
         ):
-            run_ctx = self.create_run_context(ctx)
+            run_ctx = manager.create_run_context(ctx)
             
             # Fetch dispute details
-            async with self.get_connection_pool() as pool:
+            async with manager.get_connection_pool() as pool:
                 async with pool.acquire() as conn:
                     dispute = await conn.fetchrow("""
                         SELECT * FROM BorderDisputes WHERE id = $1
@@ -1505,7 +1309,7 @@ class GeopoliticalSystemManager(BaseLoreManager):
             
             # Run the resolution
             result = await Runner.run(
-                self.border_resolution_agent, 
+                manager.border_resolution_agent, 
                 resolution_prompt, 
                 context=run_ctx.context
             )
@@ -1515,53 +1319,46 @@ class GeopoliticalSystemManager(BaseLoreManager):
             except json.JSONDecodeError:
                 resolution_data = {"raw_output": result.final_output}
             
-            # Update the dispute status in the database
+            # Update dispute using canon
             try:
-                new_status = "resolved"
-                
-                if "stability_rating" in resolution_data:
-                    stability = resolution_data["stability_rating"]
-                    if stability <= 3:
-                        new_status = "temporarily_resolved"
-                    elif stability >= 8:
-                        new_status = "permanently_resolved"
-                
-                async with self.get_connection_pool() as pool:
-                    async with pool.acquire() as conn:
-                        # Get current resolution attempts
-                        current_attempts = dispute_data.get("resolution_attempts", [])
-                        
-                        # Add new attempt
-                        new_attempt = {
-                            "date": datetime.now().isoformat(),
-                            "approach": resolution_approach,
-                            "outcome": resolution_data.get("resolution_method", resolution_approach),
-                            "details": resolution_data.get("resolution_details", ""),
-                            "stability": resolution_data.get("stability_rating", 5)
-                        }
-                        
-                        current_attempts.append(new_attempt)
-                        
-                        # Update the dispute
-                        await conn.execute("""
-                            UPDATE BorderDisputes
-                            SET status = $1,
-                                resolution_attempts = $2
-                            WHERE id = $3
-                        """, new_status, json.dumps(current_attempts), dispute_id)
-                        
-                        # Also update the strategic implications if available
-                        if "strategic_implications" in resolution_data:
-                            await conn.execute("""
-                                UPDATE BorderDisputes
-                                SET strategic_implications = $1
-                                WHERE id = $2
-                            """, resolution_data["strategic_implications"], dispute_id)
-                
-                resolution_data["status"] = new_status
-                resolution_data["dispute_id"] = dispute_id
-                return resolution_data
-                
+                async with get_db_connection_context() as conn:
+                    from lore.core import canon
+                    
+                    # Get current resolution attempts
+                    current_attempts = dispute_data.get("resolution_attempts", [])
+                    
+                    # Add new attempt
+                    new_attempt = {
+                        "date": datetime.now().isoformat(),
+                        "approach": resolution_approach,
+                        "outcome": resolution_data.get("resolution_method", resolution_approach),
+                        "details": resolution_data.get("resolution_details", ""),
+                        "stability": resolution_data.get("stability_rating", 5)
+                    }
+                    
+                    current_attempts.append(new_attempt)
+                    
+                    # Determine new status
+                    new_status = "resolved"
+                    if "stability_rating" in resolution_data:
+                        stability = resolution_data["stability_rating"]
+                        if stability <= 3:
+                            new_status = "temporarily_resolved"
+                        elif stability >= 8:
+                            new_status = "permanently_resolved"
+                    
+                    # Update via canon
+                    await canon.update_border_dispute_resolution(
+                        ctx, conn, dispute_id,
+                        status=new_status,
+                        resolution_attempts=current_attempts,
+                        strategic_implications=resolution_data.get("strategic_implications")
+                    )
+                    
+                    resolution_data["status"] = new_status
+                    resolution_data["dispute_id"] = dispute_id
+                    return resolution_data
+                    
             except Exception as e:
                 logger.error(f"Error updating border dispute resolution: {e}")
                 resolution_data["error"] = str(e)
