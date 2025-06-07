@@ -1456,3 +1456,164 @@ async def update_entity_canonically(ctx, conn, entity_type: str, entity_id: int,
     )
     
     return result
+
+async def update_entity_with_governance(
+    ctx,
+    conn,
+    entity_type: str,
+    entity_id: int,
+    updates: Dict[str, Any],
+    reason: str,
+    significance: int = 7
+) -> Dict[str, Any]:
+    """
+    Update any entity with governance tracking and validation.
+    This is used by Nyx when it needs to make direct canonical changes.
+    
+    Args:
+        ctx: Context with governance info
+        conn: Database connection
+        entity_type: Type of entity (table name)
+        entity_id: ID of the entity
+        updates: Dictionary of field updates
+        reason: Reason for the update
+        significance: Significance level for the event log
+        
+    Returns:
+        Result dictionary with status and details
+    """
+    try:
+        # Build the update query dynamically
+        set_clauses = []
+        values = []
+        for i, (field, value) in enumerate(updates.items()):
+            set_clauses.append(f"{field} = ${i+1}")
+            values.append(value)
+        
+        if not set_clauses:
+            return {"status": "error", "message": "No updates provided"}
+        
+        # Add the ID as the last parameter
+        values.append(entity_id)
+        
+        # Construct the query
+        query = f"""
+            UPDATE {entity_type}
+            SET {', '.join(set_clauses)}
+            WHERE id = ${len(values)}
+            RETURNING *
+        """
+        
+        # Execute the update
+        result = await conn.fetchrow(query, *values)
+        
+        if not result:
+            return {"status": "error", "message": f"Entity not found: {entity_type} with id {entity_id}"}
+        
+        # Log the canonical event
+        event_text = f"{entity_type} (ID: {entity_id}) updated: {reason}. Changes: {json.dumps(updates)}"
+        await log_canonical_event(
+            ctx, conn,
+            event_text,
+            tags=[entity_type.lower(), 'update', 'governance'],
+            significance=significance
+        )
+        
+        # Update embedding if the entity has text fields that changed
+        text_fields = ['name', 'description', 'title']
+        if any(field in updates for field in text_fields):
+            # Generate new embedding text
+            embedding_parts = []
+            for field in text_fields:
+                if field in result:
+                    embedding_parts.append(str(result[field]))
+            
+            if embedding_parts:
+                embedding_text = ' '.join(embedding_parts)
+                embedding = await generate_embedding(embedding_text)
+                
+                # Update the embedding
+                await conn.execute(
+                    f"UPDATE {entity_type} SET embedding = $1 WHERE id = $2",
+                    embedding, entity_id
+                )
+        
+        return {
+            "status": "success",
+            "entity_type": entity_type,
+            "entity_id": entity_id,
+            "updates": updates,
+            "reason": reason
+        }
+        
+    except Exception as e:
+        logger.error(f"Error updating {entity_type} (ID: {entity_id}): {str(e)}")
+        return {
+            "status": "error",
+            "message": str(e),
+            "entity_type": entity_type,
+            "entity_id": entity_id
+        }
+
+async def get_entity_by_id(ctx, conn, entity_type: str, entity_id: int) -> Optional[Dict[str, Any]]:
+    """
+    Get an entity by its ID from any table.
+    
+    Args:
+        ctx: Context
+        conn: Database connection  
+        entity_type: Table name
+        entity_id: Entity ID
+        
+    Returns:
+        Entity data as dictionary or None
+    """
+    try:
+        query = f"SELECT * FROM {entity_type} WHERE id = $1"
+        row = await conn.fetchrow(query, entity_id)
+        return dict(row) if row else None
+    except Exception as e:
+        logger.error(f"Error fetching {entity_type} with ID {entity_id}: {str(e)}")
+        return None
+
+async def find_entity_by_name(
+    ctx, 
+    conn, 
+    entity_type: str, 
+    name: str,
+    name_field: str = "name"
+) -> Optional[Dict[str, Any]]:
+    """
+    Find an entity by name with fuzzy matching.
+    
+    Args:
+        ctx: Context
+        conn: Database connection
+        entity_type: Table name
+        name: Name to search for
+        name_field: Name of the field containing the name
+        
+    Returns:
+        Best matching entity or None
+    """
+    try:
+        # First try exact match
+        query = f"SELECT * FROM {entity_type} WHERE LOWER({name_field}) = LOWER($1)"
+        row = await conn.fetchrow(query, name)
+        if row:
+            return dict(row)
+        
+        # Try fuzzy match
+        query = f"""
+            SELECT *, similarity({name_field}, $1) as sim
+            FROM {entity_type}
+            WHERE similarity({name_field}, $1) > 0.6
+            ORDER BY sim DESC
+            LIMIT 1
+        """
+        row = await conn.fetchrow(query, name)
+        return dict(row) if row else None
+        
+    except Exception as e:
+        logger.error(f"Error finding {entity_type} by name '{name}': {str(e)}")
+        return None
