@@ -101,7 +101,8 @@ class NyxUnifiedGovernor:
         self.conversation_id = conversation_id
         
         # --- MERGE: Add a placeholder for the LoreSystem ---
-        self.lore_system: Optional[LoreSystem] = None
+        # Use Optional[Any] instead of Optional[LoreSystem] to avoid needing the import
+        self.lore_system: Optional[Any] = None
 
         # Core systems and state
         self.memory_system = None
