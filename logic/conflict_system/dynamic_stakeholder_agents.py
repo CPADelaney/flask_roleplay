@@ -1,0 +1,868 @@
+# logic/conflict_system/dynamic_stakeholder_agents.py
+"""
+Dynamic Stakeholder Agent System for autonomous conflict participation
+"""
+
+import logging
+import json
+import random
+import asyncio
+from typing import Dict, List, Any, Optional, Tuple
+from datetime import datetime
+
+from agents import Agent, function_tool, ModelSettings, RunContextWrapper, Runner
+from db.connection import get_db_connection_context
+from lore.core import canon
+from logic.relationship_integration import RelationshipIntegration
+from npcs.npc_relationship import NPCRelationshipManager
+
+logger = logging.getLogger(__name__)
+
+# Stakeholder Personality Agent
+stakeholder_personality_agent = Agent(
+    name="Stakeholder Personality Agent",
+    model_settings=ModelSettings(model="gpt-4o", temperature=0.9),
+    instructions="""
+    You embody the personality and motivations of a stakeholder in a conflict.
+    
+    Given your character profile, current situation, and relationships, decide:
+    1. What action to take next
+    2. How to pursue your goals
+    3. Who to ally with or oppose
+    4. When to reveal secrets or make power moves
+    
+    Consider your:
+    - Public vs private motivations
+    - Personality traits and quirks
+    - Relationships and grudges
+    - Resources and constraints
+    - Cultural background
+    
+    Make decisions that are:
+    - True to character
+    - Strategically sound
+    - Dramatically interesting
+    - Respectful of established relationships
+    
+    Output your decision as JSON with reasoning.
+    """
+)
+
+# Alliance Negotiation Agent
+alliance_negotiation_agent = Agent(
+    name="Alliance Negotiation Agent",
+    model_settings=ModelSettings(model="gpt-4o", temperature=0.7),
+    instructions="""
+    You facilitate negotiations between stakeholders in conflicts.
+    
+    Consider:
+    - Each party's goals and red lines
+    - Power dynamics between negotiators
+    - What each can offer the other
+    - Trust levels and past betrayals
+    - Cultural negotiation styles
+    
+    Structure negotiations that:
+    - Feel authentic to characters
+    - Create interesting compromises
+    - Leave room for betrayal
+    - Advance the conflict narrative
+    
+    Output negotiation results with specific terms.
+    """
+)
+
+# Secret Revelation Agent
+secret_revelation_agent = Agent(
+    name="Secret Revelation Agent",
+    model_settings=ModelSettings(model="gpt-4o", temperature=0.8),
+    instructions="""
+    You manage when and how secrets are revealed in conflicts.
+    
+    Consider:
+    - Dramatic timing
+    - Who would realistically know
+    - Motivations for revealing/keeping secrets
+    - Consequences of revelation
+    - Method of revelation
+    
+    Secrets should be revealed:
+    - At dramatically appropriate moments
+    - In character-appropriate ways
+    - With meaningful consequences
+    - To advance the conflict
+    
+    Output revelation details and impacts.
+    """
+)
+
+class StakeholderAutonomySystem:
+    """System for autonomous stakeholder actions in conflicts"""
+    
+    def __init__(self, user_id: int, conversation_id: int):
+        self.user_id = user_id
+        self.conversation_id = conversation_id
+        self.relationship_integration = RelationshipIntegration(user_id, conversation_id)
+        
+    async def process_stakeholder_turn(self, conflict_id: int) -> List[Dict[str, Any]]:
+        """Process autonomous actions for all stakeholders in a conflict"""
+        actions_taken = []
+        
+        async with get_db_connection_context() as conn:
+            # Get all stakeholders
+            stakeholders = await conn.fetch("""
+                SELECT s.*, n.*, 
+                       array_agg(DISTINCT ss.secret_id) FILTER (WHERE ss.is_revealed = FALSE) as unrevealed_secrets
+                FROM ConflictStakeholders s
+                JOIN NPCStats n ON s.npc_id = n.npc_id
+                LEFT JOIN StakeholderSecrets ss ON ss.npc_id = s.npc_id AND ss.conflict_id = s.conflict_id
+                WHERE s.conflict_id = $1
+                GROUP BY s.id, n.npc_id
+                ORDER BY s.involvement_level DESC, n.dominance DESC
+            """, conflict_id)
+            
+            # Get conflict details
+            conflict = await conn.fetchrow("""
+                SELECT * FROM Conflicts WHERE conflict_id = $1
+            """, conflict_id)
+            
+            # Process each stakeholder
+            for stakeholder in stakeholders:
+                # Determine if this stakeholder acts this turn
+                if await self._should_stakeholder_act(stakeholder, conflict):
+                    action = await self._determine_stakeholder_action(
+                        stakeholder, conflict, stakeholders
+                    )
+                    
+                    if action:
+                        # Execute the action
+                        result = await self._execute_stakeholder_action(
+                            action, stakeholder, conflict_id
+                        )
+                        actions_taken.append(result)
+                        
+                        # Check for reactive actions
+                        reactions = await self._check_for_reactions(
+                            result, stakeholders, conflict_id
+                        )
+                        actions_taken.extend(reactions)
+            
+        return actions_taken
+    
+    async def _should_stakeholder_act(self, stakeholder: Dict[str, Any], 
+                                    conflict: Dict[str, Any]) -> bool:
+        """Determine if a stakeholder should act this turn"""
+        # Base chance from involvement level
+        base_chance = stakeholder['involvement_level'] / 10.0
+        
+        # Modify by personality
+        if stakeholder['dominance'] > 70:
+            base_chance *= 1.5
+        if stakeholder['intensity'] > 80:
+            base_chance *= 1.3
+            
+        # Modify by conflict phase
+        if conflict['phase'] == 'climax':
+            base_chance *= 2.0
+        elif conflict['phase'] == 'resolution':
+            base_chance *= 1.5
+            
+        # Modify by unrevealed secrets
+        if stakeholder['unrevealed_secrets']:
+            base_chance *= 1.2
+            
+        return random.random() < min(base_chance, 0.9)
+    
+    async def _determine_stakeholder_action(self, stakeholder: Dict[str, Any],
+                                          conflict: Dict[str, Any],
+                                          all_stakeholders: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        """Determine what action a stakeholder will take"""
+        
+        # Get stakeholder's relationships
+        relationships = await self._get_stakeholder_relationships(
+            stakeholder['npc_id'], all_stakeholders
+        )
+        
+        # Get available actions
+        available_actions = await self._get_available_actions(
+            stakeholder, conflict, relationships
+        )
+        
+        # Use personality agent to decide
+        decision_prompt = f"""
+        You are {stakeholder['npc_name']}, a stakeholder in the conflict "{conflict['conflict_name']}".
+        
+        Your profile:
+        - Public Motivation: {stakeholder['public_motivation']}
+        - Private Motivation: {stakeholder['private_motivation']}
+        - Desired Outcome: {stakeholder['desired_outcome']}
+        - Personality: Dominance {stakeholder['dominance']}, Cruelty {stakeholder['cruelty']}, Intensity {stakeholder['intensity']}
+        - Unrevealed Secrets: {len(stakeholder['unrevealed_secrets'] or [])}
+        
+        Current Situation:
+        - Conflict Phase: {conflict['phase']}
+        - Progress: {conflict['progress']}%
+        - Your Involvement: {stakeholder['involvement_level']}/10
+        
+        Your Relationships:
+        {json.dumps(relationships, indent=2)}
+        
+        Available Actions:
+        {json.dumps(available_actions, indent=2)}
+        
+        Choose the best action to advance your goals. Consider both your public face and private ambitions.
+        
+        Output JSON:
+        {{
+            "action_type": "negotiate/manipulate/reveal_secret/form_alliance/betray/escalate/de-escalate",
+            "target": "target_npc_id or null",
+            "details": {{...}},
+            "reasoning": "why this action now"
+        }}
+        """
+        
+        result = await Runner.run(
+            stakeholder_personality_agent,
+            decision_prompt,
+            RunContextWrapper({"user_id": self.user_id, "conversation_id": self.conversation_id})
+        )
+        
+        try:
+            action = json.loads(result.final_output)
+            action['stakeholder_id'] = stakeholder['npc_id']
+            action['stakeholder_name'] = stakeholder['npc_name']
+            return action
+        except:
+            logger.error(f"Failed to parse stakeholder action: {result.final_output}")
+            return None
+    
+    async def _get_stakeholder_relationships(self, npc_id: int,
+                                           all_stakeholders: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Get a stakeholder's relationships with other stakeholders"""
+        relationships = {}
+        
+        for other in all_stakeholders:
+            if other['npc_id'] != npc_id:
+                # Get relationship details
+                rel_manager = NPCRelationshipManager(npc_id, self.user_id, self.conversation_id)
+                relationship = await rel_manager.get_relationship_details('npc', other['npc_id'])
+                
+                relationships[other['npc_id']] = {
+                    'name': other['npc_name'],
+                    'link_level': relationship.get('link_level', 0),
+                    'dynamics': relationship.get('dynamics', {}),
+                    'public_stance': other['public_motivation'],
+                    'involvement': other['involvement_level']
+                }
+        
+        return relationships
+    
+    async def _get_available_actions(self, stakeholder: Dict[str, Any],
+                                   conflict: Dict[str, Any],
+                                   relationships: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Get available actions for a stakeholder"""
+        actions = []
+        
+        # Negotiation options
+        for npc_id, rel in relationships.items():
+            if rel['link_level'] > -50:  # Not sworn enemies
+                actions.append({
+                    'type': 'negotiate',
+                    'target': npc_id,
+                    'target_name': rel['name'],
+                    'success_chance': self._calculate_negotiation_chance(stakeholder, rel)
+                })
+        
+        # Alliance options
+        for npc_id, rel in relationships.items():
+            if rel['link_level'] > 25 and rel['involvement'] > 3:
+                actions.append({
+                    'type': 'form_alliance',
+                    'target': npc_id,
+                    'target_name': rel['name'],
+                    'mutual_benefit': self._calculate_alliance_benefit(stakeholder, rel)
+                })
+        
+        # Betrayal options (if already allied)
+        if stakeholder.get('alliances'):
+            for ally_id in json.loads(stakeholder['alliances']):
+                if ally_id in relationships:
+                    actions.append({
+                        'type': 'betray',
+                        'target': ally_id,
+                        'target_name': relationships[ally_id]['name'],
+                        'impact': 'high'
+                    })
+        
+        # Secret revelation
+        if stakeholder['unrevealed_secrets']:
+            actions.append({
+                'type': 'reveal_secret',
+                'available_secrets': len(stakeholder['unrevealed_secrets']),
+                'phase_appropriate': conflict['phase'] in ['active', 'climax']
+            })
+        
+        # Escalation/De-escalation
+        if stakeholder['involvement_level'] > 5:
+            actions.append({
+                'type': 'escalate',
+                'current_phase': conflict['phase'],
+                'impact': 'significant'
+            })
+            
+        if conflict['progress'] > 50:
+            actions.append({
+                'type': 'de-escalate',
+                'current_phase': conflict['phase'],
+                'wisdom': stakeholder.get('wisdom', 50) > 60
+            })
+        
+        return actions
+    
+    def _calculate_negotiation_chance(self, stakeholder: Dict[str, Any],
+                                    relationship: Dict[str, Any]) -> float:
+        """Calculate chance of successful negotiation"""
+        base_chance = 0.5
+        
+        # Relationship modifier
+        base_chance += relationship['link_level'] / 200.0
+        
+        # Dominance differential
+        if stakeholder['dominance'] > 70:
+            base_chance += 0.1
+            
+        # Involvement differential
+        if stakeholder['involvement_level'] > relationship['involvement']:
+            base_chance += 0.1
+            
+        return min(max(base_chance, 0.1), 0.9)
+    
+    def _calculate_alliance_benefit(self, stakeholder: Dict[str, Any],
+                                  relationship: Dict[str, Any]) -> str:
+        """Calculate mutual benefit of alliance"""
+        combined_involvement = stakeholder['involvement_level'] + relationship['involvement']
+        
+        if combined_involvement > 15:
+            return "high"
+        elif combined_involvement > 10:
+            return "moderate"
+        else:
+            return "low"
+    
+    async def _execute_stakeholder_action(self, action: Dict[str, Any],
+                                        stakeholder: Dict[str, Any],
+                                        conflict_id: int) -> Dict[str, Any]:
+        """Execute a stakeholder's chosen action"""
+        
+        action_type = action['action_type']
+        result = {
+            'stakeholder_id': stakeholder['npc_id'],
+            'stakeholder_name': stakeholder['npc_name'],
+            'action_type': action_type,
+            'timestamp': datetime.utcnow().isoformat(),
+            'success': False,
+            'consequences': []
+        }
+        
+        if action_type == 'negotiate':
+            result.update(await self._execute_negotiation(
+                action, stakeholder, conflict_id
+            ))
+        elif action_type == 'form_alliance':
+            result.update(await self._execute_alliance_formation(
+                action, stakeholder, conflict_id
+            ))
+        elif action_type == 'reveal_secret':
+            result.update(await self._execute_secret_revelation(
+                action, stakeholder, conflict_id
+            ))
+        elif action_type == 'betray':
+            result.update(await self._execute_betrayal(
+                action, stakeholder, conflict_id
+            ))
+        elif action_type == 'escalate':
+            result.update(await self._execute_escalation(
+                action, stakeholder, conflict_id
+            ))
+        elif action_type == 'de-escalate':
+            result.update(await self._execute_deescalation(
+                action, stakeholder, conflict_id
+            ))
+        
+        # Log the action
+        await self._log_stakeholder_action(result, conflict_id)
+        
+        return result
+    
+    async def _execute_negotiation(self, action: Dict[str, Any],
+                                 stakeholder: Dict[str, Any],
+                                 conflict_id: int) -> Dict[str, Any]:
+        """Execute a negotiation between stakeholders"""
+        
+        target_id = action['target']
+        
+        async with get_db_connection_context() as conn:
+            # Get target stakeholder
+            target = await conn.fetchrow("""
+                SELECT s.*, n.* FROM ConflictStakeholders s
+                JOIN NPCStats n ON s.npc_id = n.npc_id
+                WHERE s.conflict_id = $1 AND s.npc_id = $2
+            """, conflict_id, target_id)
+            
+            if not target:
+                return {'success': False, 'reason': 'Target not found'}
+            
+            # Use negotiation agent
+            negotiation_prompt = f"""
+            Facilitate negotiation between:
+            
+            {stakeholder['npc_name']}:
+            - Wants: {stakeholder['desired_outcome']}
+            - Offers: {action['details'].get('offer', 'Support')}
+            - Dominance: {stakeholder['dominance']}
+            
+            {target['npc_name']}:
+            - Wants: {target['desired_outcome']}
+            - Current stance: {target['public_motivation']}
+            - Dominance: {target['dominance']}
+            
+            Conflict: {conflict_id}
+            
+            Determine:
+            1. Does {target['npc_name']} accept?
+            2. What counter-demands might they make?
+            3. What is the final agreement (if any)?
+            
+            Consider personality traits and power dynamics.
+            """
+            
+            negotiation_result = await Runner.run(
+                alliance_negotiation_agent,
+                negotiation_prompt,
+                RunContextWrapper({"user_id": self.user_id, "conversation_id": self.conversation_id})
+            )
+            
+            result_data = json.loads(negotiation_result.final_output)
+            
+            if result_data['accepted']:
+                # Update stakeholder stances
+                await conn.execute("""
+                    UPDATE ConflictStakeholders
+                    SET alliances = alliances || $1::jsonb
+                    WHERE conflict_id = $2 AND npc_id = $3
+                """, json.dumps([target_id]), conflict_id, stakeholder['npc_id'])
+                
+                await conn.execute("""
+                    UPDATE ConflictStakeholders
+                    SET alliances = alliances || $1::jsonb
+                    WHERE conflict_id = $2 AND npc_id = $3
+                """, json.dumps([stakeholder['npc_id']]), conflict_id, target_id)
+                
+                return {
+                    'success': True,
+                    'target_id': target_id,
+                    'target_name': target['npc_name'],
+                    'agreement': result_data.get('agreement', 'Mutual support'),
+                    'consequences': [{
+                        'type': 'alliance_formed',
+                        'parties': [stakeholder['npc_id'], target_id]
+                    }]
+                }
+            else:
+                return {
+                    'success': False,
+                    'target_id': target_id,
+                    'target_name': target['npc_name'],
+                    'reason': result_data.get('reason', 'Terms unacceptable'),
+                    'consequences': [{
+                        'type': 'negotiation_failed',
+                        'parties': [stakeholder['npc_id'], target_id]
+                    }]
+                }
+    
+    async def _execute_secret_revelation(self, action: Dict[str, Any],
+                                       stakeholder: Dict[str, Any],
+                                       conflict_id: int) -> Dict[str, Any]:
+        """Execute revelation of a secret"""
+        
+        async with get_db_connection_context() as conn:
+            # Get unrevealed secrets
+            secrets = await conn.fetch("""
+                SELECT * FROM StakeholderSecrets
+                WHERE conflict_id = $1 AND npc_id = $2 AND is_revealed = FALSE
+            """, conflict_id, stakeholder['npc_id'])
+            
+            if not secrets:
+                return {'success': False, 'reason': 'No secrets to reveal'}
+            
+            # Get conflict context
+            conflict = await conn.fetchrow("""
+                SELECT * FROM Conflicts WHERE conflict_id = $1
+            """, conflict_id)
+            
+            # Use secret revelation agent
+            revelation_prompt = f"""
+            {stakeholder['npc_name']} is considering revealing a secret.
+            
+            Character:
+            - Motivation: {stakeholder['private_motivation']}
+            - Personality: Dominance {stakeholder['dominance']}, Cruelty {stakeholder['cruelty']}
+            
+            Conflict Status:
+            - Phase: {conflict['phase']}
+            - Progress: {conflict['progress']}%
+            
+            Available Secrets:
+            {json.dumps([{
+                'id': s['secret_id'],
+                'type': s['secret_type'],
+                'content': s['content'],
+                'about': s['target_npc_id']
+            } for s in secrets], indent=2)}
+            
+            Choose:
+            1. Which secret to reveal (if any)
+            2. How to reveal it (public announcement, private threat, etc.)
+            3. Who to reveal it to
+            4. Expected impact
+            """
+            
+            revelation_result = await Runner.run(
+                secret_revelation_agent,
+                revelation_prompt,
+                RunContextWrapper({"user_id": self.user_id, "conversation_id": self.conversation_id})
+            )
+            
+            result_data = json.loads(revelation_result.final_output)
+            
+            if result_data.get('reveal'):
+                secret_id = result_data['secret_id']
+                secret = next(s for s in secrets if s['secret_id'] == secret_id)
+                
+                # Update secret as revealed
+                await conn.execute("""
+                    UPDATE StakeholderSecrets
+                    SET is_revealed = TRUE, 
+                        revealed_to = $1,
+                        is_public = $2,
+                        revealed_at = NOW()
+                    WHERE secret_id = $3
+                """, 
+                result_data.get('revealed_to'),
+                result_data.get('method') == 'public',
+                secret_id
+                )
+                
+                # Update conflict tension
+                await conn.execute("""
+                    UPDATE Conflicts
+                    SET progress = LEAST(progress + 10, 100)
+                    WHERE conflict_id = $1
+                """, conflict_id)
+                
+                return {
+                    'success': True,
+                    'secret_type': secret['secret_type'],
+                    'method': result_data['method'],
+                    'impact': result_data['impact'],
+                    'consequences': [{
+                        'type': 'secret_revealed',
+                        'secret_type': secret['secret_type'],
+                        'revealer': stakeholder['npc_id'],
+                        'target': secret.get('target_npc_id')
+                    }]
+                }
+            else:
+                return {
+                    'success': False,
+                    'reason': 'Chose not to reveal any secrets yet'
+                }
+    
+    async def _execute_betrayal(self, action: Dict[str, Any],
+                              stakeholder: Dict[str, Any],
+                              conflict_id: int) -> Dict[str, Any]:
+        """Execute a betrayal"""
+        
+        target_id = action['target']
+        
+        async with get_db_connection_context() as conn:
+            # Remove alliance
+            await conn.execute("""
+                UPDATE ConflictStakeholders
+                SET alliances = alliances - $1::text,
+                    rivalries = rivalries || $2::jsonb
+                WHERE conflict_id = $3 AND npc_id = $4
+            """, 
+            str(target_id), json.dumps([target_id]), 
+            conflict_id, stakeholder['npc_id']
+            )
+            
+            await conn.execute("""
+                UPDATE ConflictStakeholders
+                SET alliances = alliances - $1::text,
+                    rivalries = rivalries || $2::jsonb
+                WHERE conflict_id = $3 AND npc_id = $4
+            """, 
+            str(stakeholder['npc_id']), json.dumps([stakeholder['npc_id']]),
+            conflict_id, target_id
+            )
+            
+            # Create grudge
+            await conn.execute("""
+                INSERT INTO ConflictHistory
+                (user_id, conversation_id, conflict_id, affected_npc_id,
+                 impact_type, grudge_level, narrative_impact)
+                VALUES ($1, $2, $3, $4, $5, $6, $7)
+            """,
+            self.user_id, self.conversation_id, conflict_id, target_id,
+            'betrayal', 80, f"Betrayed by {stakeholder['npc_name']}"
+            )
+            
+            # Increase conflict tension
+            await conn.execute("""
+                UPDATE Conflicts
+                SET progress = LEAST(progress + 15, 100)
+                WHERE conflict_id = $1
+            """, conflict_id)
+            
+            return {
+                'success': True,
+                'target_id': target_id,
+                'betrayal_type': action['details'].get('method', 'sudden'),
+                'consequences': [{
+                    'type': 'betrayal',
+                    'betrayer': stakeholder['npc_id'],
+                    'betrayed': target_id,
+                    'new_grudge_level': 80
+                }]
+            }
+    
+    async def _execute_escalation(self, action: Dict[str, Any],
+                                stakeholder: Dict[str, Any],
+                                conflict_id: int) -> Dict[str, Any]:
+        """Execute conflict escalation"""
+        
+        async with get_db_connection_context() as conn:
+            # Get current conflict state
+            conflict = await conn.fetchrow("""
+                SELECT * FROM Conflicts WHERE conflict_id = $1
+            """, conflict_id)
+            
+            new_phase = conflict['phase']
+            if conflict['phase'] == 'brewing' and conflict['progress'] >= 25:
+                new_phase = 'active'
+            elif conflict['phase'] == 'active' and conflict['progress'] >= 50:
+                new_phase = 'climax'
+            
+            # Update conflict
+            await conn.execute("""
+                UPDATE Conflicts
+                SET progress = LEAST(progress + 20, 100),
+                    phase = $1
+                WHERE conflict_id = $2
+            """, new_phase, conflict_id)
+            
+            # Increase stakeholder involvement
+            await conn.execute("""
+                UPDATE ConflictStakeholders
+                SET involvement_level = LEAST(involvement_level + 2, 10)
+                WHERE conflict_id = $1 AND npc_id = $2
+            """, conflict_id, stakeholder['npc_id'])
+            
+            return {
+                'success': True,
+                'escalation_method': action['details'].get('method', 'aggressive action'),
+                'new_phase': new_phase,
+                'consequences': [{
+                    'type': 'conflict_escalated',
+                    'escalator': stakeholder['npc_id'],
+                    'new_phase': new_phase
+                }]
+            }
+    
+    async def _execute_deescalation(self, action: Dict[str, Any],
+                                  stakeholder: Dict[str, Any],
+                                  conflict_id: int) -> Dict[str, Any]:
+        """Execute conflict de-escalation"""
+        
+        async with get_db_connection_context() as conn:
+            # Reduce conflict progress slightly
+            await conn.execute("""
+                UPDATE Conflicts
+                SET progress = GREATEST(progress - 10, 0)
+                WHERE conflict_id = $1
+            """, conflict_id)
+            
+            # Reduce tensions between some stakeholders
+            await conn.execute("""
+                UPDATE ConflictStakeholders
+                SET involvement_level = GREATEST(involvement_level - 1, 0)
+                WHERE conflict_id = $1
+            """, conflict_id)
+            
+            return {
+                'success': True,
+                'method': action['details'].get('method', 'peace offering'),
+                'consequences': [{
+                    'type': 'tensions_reduced',
+                    'peacemaker': stakeholder['npc_id']
+                }]
+            }
+    
+    async def _check_for_reactions(self, action_result: Dict[str, Any],
+                                 all_stakeholders: List[Dict[str, Any]],
+                                 conflict_id: int) -> List[Dict[str, Any]]:
+        """Check if other stakeholders react to an action"""
+        reactions = []
+        
+        # Betrayals always cause reactions
+        if action_result['action_type'] == 'betray' and action_result['success']:
+            for consequence in action_result.get('consequences', []):
+                if consequence['type'] == 'betrayal':
+                    betrayed_id = consequence['betrayed']
+                    betrayed = next(s for s in all_stakeholders if s['npc_id'] == betrayed_id)
+                    
+                    # Betrayed party always reacts
+                    reaction = {
+                        'stakeholder_id': betrayed_id,
+                        'stakeholder_name': betrayed['npc_name'],
+                        'action_type': 'retaliation',
+                        'trigger': 'betrayal',
+                        'target': action_result['stakeholder_id'],
+                        'success': True,
+                        'consequences': [{
+                            'type': 'retaliation',
+                            'method': 'expose_weakness'
+                        }]
+                    }
+                    reactions.append(reaction)
+        
+        # Secret revelations may cause reactions
+        if action_result['action_type'] == 'reveal_secret' and action_result['success']:
+            for consequence in action_result.get('consequences', []):
+                if consequence['type'] == 'secret_revealed' and consequence.get('target'):
+                    target_id = consequence['target']
+                    target = next((s for s in all_stakeholders if s['npc_id'] == target_id), None)
+                    
+                    if target and target['dominance'] > 60:
+                        # Dominant NPCs likely to react to being exposed
+                        reaction = {
+                            'stakeholder_id': target_id,
+                            'stakeholder_name': target['npc_name'],
+                            'action_type': 'counter_reveal',
+                            'trigger': 'secret_exposed',
+                            'success': random.random() < 0.7,
+                            'consequences': []
+                        }
+                        reactions.append(reaction)
+        
+        return reactions
+    
+    async def _log_stakeholder_action(self, action_result: Dict[str, Any],
+                                    conflict_id: int):
+        """Log stakeholder action to conflict memory"""
+        try:
+            async with get_db_connection_context() as conn:
+                # Create memory event
+                action_desc = f"{action_result['stakeholder_name']} performed {action_result['action_type']}"
+                if action_result.get('target_name'):
+                    action_desc += f" targeting {action_result['target_name']}"
+                if not action_result['success']:
+                    action_desc += " (failed)"
+                
+                await conn.execute("""
+                    INSERT INTO ConflictMemoryEvents
+                    (conflict_id, memory_text, significance, entity_type, entity_id)
+                    VALUES ($1, $2, $3, $4, $5)
+                """,
+                conflict_id, action_desc, 
+                7 if action_result['success'] else 5,
+                'npc', action_result['stakeholder_id']
+                )
+                
+                # Log canonical event for significant actions
+                if action_result['success'] and action_result['action_type'] in ['betray', 'reveal_secret']:
+                    ctx = type("ctx", (), {
+                        "user_id": self.user_id,
+                        "conversation_id": self.conversation_id
+                    })()
+                    
+                    await canon.log_canonical_event(
+                        ctx, conn, action_desc,
+                        tags=["conflict", "stakeholder_action", action_result['action_type']],
+                        significance=8
+                    )
+                    
+        except Exception as e:
+            logger.error(f"Error logging stakeholder action: {e}")
+
+# Tool functions
+@function_tool
+async def process_conflict_stakeholder_turns(ctx: RunContextWrapper, 
+                                           conflict_id: int) -> List[Dict[str, Any]]:
+    """
+    Process autonomous turns for all stakeholders in a conflict.
+    
+    Returns:
+        List of actions taken by stakeholders
+    """
+    context = ctx.context
+    system = StakeholderAutonomySystem(context.user_id, context.conversation_id)
+    
+    try:
+        actions = await system.process_stakeholder_turn(conflict_id)
+        return actions
+    except Exception as e:
+        logger.error(f"Error processing stakeholder turns: {e}", exc_info=True)
+        return []
+
+@function_tool  
+async def force_stakeholder_action(ctx: RunContextWrapper,
+                                 conflict_id: int,
+                                 npc_id: int,
+                                 action_type: str,
+                                 action_details: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Force a specific stakeholder to take an action.
+    
+    Args:
+        conflict_id: The conflict ID
+        npc_id: The stakeholder NPC ID
+        action_type: Type of action to force
+        action_details: Details of the action
+        
+    Returns:
+        Result of the action
+    """
+    context = ctx.context
+    system = StakeholderAutonomySystem(context.user_id, context.conversation_id)
+    
+    try:
+        async with get_db_connection_context() as conn:
+            # Get stakeholder
+            stakeholder = await conn.fetchrow("""
+                SELECT s.*, n.* FROM ConflictStakeholders s
+                JOIN NPCStats n ON s.npc_id = n.npc_id
+                WHERE s.conflict_id = $1 AND s.npc_id = $2
+            """, conflict_id, npc_id)
+            
+            if not stakeholder:
+                return {"error": "Stakeholder not found"}
+            
+            action = {
+                "action_type": action_type,
+                "stakeholder_id": npc_id,
+                "stakeholder_name": stakeholder['npc_name'],
+                "details": action_details,
+                "target": action_details.get("target")
+            }
+            
+            result = await system._execute_stakeholder_action(
+                action, dict(stakeholder), conflict_id
+            )
+            
+            return result
+            
+    except Exception as e:
+        logger.error(f"Error forcing stakeholder action: {e}", exc_info=True)
+        return {"error": str(e)}
