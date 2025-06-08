@@ -260,32 +260,31 @@ class CurrencyGenerator:
         try:
             setting_context = await self._get_setting_context()
             
+            # Create a context object for canon functions
+            from types import SimpleNamespace
+            ctx = SimpleNamespace(
+                user_id=self.user_id,
+                conversation_id=self.conversation_id
+            )
+            
+            # Use canon to create currency system
+            from lore.core import canon
+            
             async with get_db_connection_context() as conn:
-                async with conn.transaction():
-                    await conn.execute("""
-                        INSERT INTO CurrencySystem 
-                        (user_id, conversation_id, currency_name, currency_plural, 
-                         minor_currency_name, minor_currency_plural, exchange_rate, 
-                         currency_symbol, format_template, description, setting_context)
-                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-                        ON CONFLICT (user_id, conversation_id)
-                        DO UPDATE SET 
-                            currency_name = EXCLUDED.currency_name,
-                            currency_plural = EXCLUDED.currency_plural,
-                            minor_currency_name = EXCLUDED.minor_currency_name,
-                            minor_currency_plural = EXCLUDED.minor_currency_plural,
-                            exchange_rate = EXCLUDED.exchange_rate,
-                            currency_symbol = EXCLUDED.currency_symbol,
-                            format_template = EXCLUDED.format_template,
-                            description = EXCLUDED.description,
-                            setting_context = EXCLUDED.setting_context
-                    """, 
-                    self.user_id, self.conversation_id, 
-                    currency_system.get("currency_name"), currency_system.get("currency_plural"),
-                    currency_system.get("minor_currency_name"), currency_system.get("minor_currency_plural"),
-                    currency_system.get("exchange_rate"), currency_system.get("currency_symbol"),
-                    currency_system.get("format_template"), currency_system.get("description"),
-                    setting_context)
+                currency_id = await canon.find_or_create_currency_system(
+                    ctx, conn,
+                    currency_name=currency_system.get("currency_name"),
+                    currency_plural=currency_system.get("currency_plural"),
+                    minor_currency_name=currency_system.get("minor_currency_name"),
+                    minor_currency_plural=currency_system.get("minor_currency_plural"),
+                    exchange_rate=currency_system.get("exchange_rate"),
+                    currency_symbol=currency_system.get("currency_symbol"),
+                    format_template=currency_system.get("format_template"),
+                    description=currency_system.get("description"),
+                    setting_context=setting_context
+                )
+                
+                logger.info(f"Currency system stored with ID: {currency_id}")
                 
         except Exception as e:
-            logging.error(f"Error storing currency system: {e}")
+            logger.error(f"Error storing currency system: {e}")
