@@ -2503,3 +2503,133 @@ async def adjust_player_vital(
     )
 
     return {"old_value": old_value, "new_value": new_value, "change": amount}
+
+async def find_or_create_inventory_item(
+    ctx, conn,
+    player_name: str,
+    item_name: str,
+    **kwargs
+) -> int:
+    """
+    Find or create an inventory item for a player.
+    """
+    # Check if item already exists
+    existing = await conn.fetchrow("""
+        SELECT item_id, quantity FROM PlayerInventory
+        WHERE user_id = $1 AND conversation_id = $2 
+        AND player_name = $3 AND item_name = $4
+    """, ctx.user_id, ctx.conversation_id, player_name, item_name)
+    
+    if existing:
+        return existing['item_id']
+    
+    # Create new item
+    item_id = await conn.fetchval("""
+        INSERT INTO PlayerInventory (
+            user_id, conversation_id, player_name, item_name,
+            item_description, item_category, item_properties,
+            quantity, equipped, date_acquired
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, CURRENT_TIMESTAMP)
+        RETURNING item_id
+    """,
+        ctx.user_id, ctx.conversation_id, player_name, item_name,
+        kwargs.get('item_description', ''),
+        kwargs.get('item_category', 'misc'),
+        json.dumps(kwargs.get('item_properties', {})),
+        kwargs.get('quantity', 1),
+        kwargs.get('equipped', False)
+    )
+    
+    await log_canonical_event(
+        ctx, conn,
+        f"Player {player_name} acquired new item: {item_name}",
+        tags=['inventory', 'item_acquisition', kwargs.get('item_category', 'misc')],
+        significance=4
+    )
+    
+    return item_id
+
+async def update_inventory_quantity(
+    ctx, conn,
+    item_id: int,
+    new_quantity: int,
+    reason: str
+) -> bool:
+    """
+    Update the quantity of an inventory item.
+    """
+    if new_quantity <= 0:
+        # Delete the item
+        await conn.execute("""
+            DELETE FROM PlayerInventory WHERE item_id = $1
+        """, item_id)
+        
+        await log_canonical_event(
+            ctx, conn,
+            f"Item removed from inventory: {reason}",
+            tags=['inventory', 'item_removal'],
+            significance=3
+        )
+        return True
+    else:
+        # Update quantity
+        result = await conn.execute("""
+            UPDATE PlayerInventory 
+            SET quantity = $1, date_acquired = CURRENT_TIMESTAMP
+            WHERE item_id = $2
+        """, new_quantity, item_id)
+        
+        await log_canonical_event(
+            ctx, conn,
+            f"Inventory quantity updated: {reason}",
+            tags=['inventory', 'quantity_change'],
+            significance=2
+        )
+        return result != "UPDATE 0"
+
+async def find_or_create_currency_system(
+    ctx, conn,
+    **currency_data
+) -> int:
+    """
+    Find or create a currency system.
+    """
+    # Check if currency exists
+    existing = await conn.fetchrow("""
+        SELECT id FROM CurrencySystem
+        WHERE user_id = $1 AND conversation_id = $2
+    """, ctx.user_id, ctx.conversation_id)
+    
+    if existing:
+        return existing['id']
+    
+    # Create new currency
+    currency_id = await conn.fetchval("""
+        INSERT INTO CurrencySystem (
+            user_id, conversation_id, currency_name, currency_plural,
+            minor_currency_name, minor_currency_plural, exchange_rate,
+            currency_symbol, format_template, description, setting_context,
+            created_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, CURRENT_TIMESTAMP)
+        RETURNING id
+    """,
+        ctx.user_id, ctx.conversation_id, 
+        currency_data['currency_name'],
+        currency_data.get('currency_plural', currency_data['currency_name'] + 's'),
+        currency_data.get('minor_currency_name'),
+        currency_data.get('minor_currency_plural'),
+        currency_data.get('exchange_rate', 100),
+        currency_data.get('currency_symbol', '$'),
+        currency_data.get('format_template', '{{amount}} {{currency}}'),
+        currency_data.get('description', ''),
+        currency_data.get('setting_context', '')
+    )
+    
+    await log_canonical_event(
+        ctx, conn,
+        f"Currency system established: {currency_data['currency_name']}",
+        tags=['currency', 'economic_system', 'creation'],
+        significance=6
+    )
+    
+    return currency_id
