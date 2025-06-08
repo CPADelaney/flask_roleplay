@@ -7,7 +7,8 @@ import json
 import random
 from typing import Dict, Any, List
 from db.connection import get_db_connection_context
-from quart import Blueprint, request, jsonify, session, redirect, url_for  
+from quart import Blueprint, request, jsonify, session, redirect, url_for
+from lore.core import canon
 
 stats_bp = Blueprint('stats_bp', __name__)
 
@@ -583,20 +584,16 @@ async def update_player_stats(user_id, conversation_id, player_name, stat_key, v
     """
     try:
         async with get_db_connection_context() as conn:
-            # Note: Using parameterized SQL dynamically with column names requires special handling
-            # This is a simplistic approach - ideally validate stat_key against allowed column names
-            query = f"UPDATE PlayerStats SET {stat_key} = $1 WHERE user_id=$2 AND conversation_id=$3 AND player_name=$4"
-            result = await conn.execute(query, value, user_id, conversation_id, player_name)
-            
-            # Parse the result string (e.g., "UPDATE 1")
-            affected = 0
-            if result and result.startswith("UPDATE"):
-                try:
-                    affected = int(result.split()[1])
-                except (IndexError, ValueError):
-                    pass
-                    
-            return {"success": affected > 0, "affected_rows": affected}
+            canon_ctx = type("ctx", (), {"user_id": user_id, "conversation_id": conversation_id})()
+            await canon.update_player_stat_canonically(
+                canon_ctx,
+                conn,
+                player_name,
+                stat_key,
+                value,
+                reason="direct_update",
+            )
+            return {"success": True, "affected_rows": 1}
             
     except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as db_err:
         logging.error(f"DB Error updating player stats: {db_err}", exc_info=True)
@@ -849,28 +846,23 @@ async def apply_stat_change(user_id, conversation_id, changes, cause=""):
                 "physical_endurance": row['physical_endurance']
             }
             
-            # Process each stat change
+            canon_ctx = type("ctx", (), {"user_id": user_id, "conversation_id": conversation_id})()
+
             for stat_name, change in changes.items():
                 if stat_name not in current_stats:
                     continue
-                    
+
                 old_value = current_stats[stat_name]
-                new_value = max(0, min(100, old_value + change))  # Clamp between 0-100
-                
-                # Update the stat
-                # Note: Using parameterized SQL dynamically with column names requires special handling
-                # This is a simplistic approach - ideally validate stat_name against allowed column names
-                valid_stat_columns = ["corruption", "confidence", "willpower", "obedience", 
-                                     "dependency", "lust", "mental_resilience", "physical_endurance"]
-                                     
-                if stat_name not in valid_stat_columns:
-                    continue
-                    
-                query = f"UPDATE PlayerStats SET {stat_name} = $1 WHERE user_id=$2 AND conversation_id=$3 AND player_name='Chase'"
-                await conn.execute(query, new_value, user_id, conversation_id)
-                
-                # Record the change
-                await record_stat_change_event(user_id, conversation_id, stat_name, old_value, new_value, cause)
+                new_value = max(0, min(100, old_value + change))
+
+                await canon.update_player_stat_canonically(
+                    canon_ctx,
+                    conn,
+                    "Chase",
+                    stat_name,
+                    new_value,
+                    reason=cause or "batch_update",
+                )
             
             return {"success": True, "changes_applied": len(changes)}
             

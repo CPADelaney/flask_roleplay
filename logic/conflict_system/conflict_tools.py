@@ -21,6 +21,7 @@ from agents import (
 
 from db.connection import get_db_connection_context
 from logic.stats_logic import apply_stat_change
+from lore.core import canon
 from logic.resource_management import ResourceManager
 from logic.conflict_system.conflict_agents import get_relationship_status, get_manipulation_leverage
 from logic.chatgpt_integration import get_chatgpt_response
@@ -448,9 +449,35 @@ async def _internal_create_manipulation_attempt_logic(ctx: RunContextWrapper, co
         async with get_db_connection_context() as conn:
             npc_name = await _internal_get_npc_name_logic(ctx, npc_id)
             async with conn.transaction():
-                attempt_id = await conn.fetchval("""INSERT INTO PlayerManipulationAttempts (conflict_id, user_id, conversation_id, npc_id, manipulation_type, content, goal, success, leverage_used, intimacy_level, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, CURRENT_TIMESTAMP) RETURNING attempt_id""", conflict_id, context.user_id, context.conversation_id, npc_id, manipulation_type, content, json.dumps(goal), False, json.dumps(leverage_used), intimacy_level)
-                await _internal_create_conflict_memory_logic(ctx, conflict_id, f"{npc_name} attempted to {manipulation_type} the player regarding the conflict.", significance=7)
-                return {"attempt_id": attempt_id, "npc_id": npc_id, "npc_name": npc_name, "manipulation_type": manipulation_type, "content": content, "goal": goal, "leverage_used": leverage_used, "intimacy_level": intimacy_level, "success": False, "is_resolved": False}
+                attempt_id = await canon.create_player_manipulation_attempt(
+                    context,
+                    conn,
+                    conflict_id,
+                    npc_id,
+                    manipulation_type,
+                    content,
+                    goal,
+                    leverage_used,
+                    intimacy_level,
+                )
+                await _internal_create_conflict_memory_logic(
+                    ctx,
+                    conflict_id,
+                    f"{npc_name} attempted to {manipulation_type} the player regarding the conflict.",
+                    significance=7,
+                )
+                return {
+                    "attempt_id": attempt_id,
+                    "npc_id": npc_id,
+                    "npc_name": npc_name,
+                    "manipulation_type": manipulation_type,
+                    "content": content,
+                    "goal": goal,
+                    "leverage_used": leverage_used,
+                    "intimacy_level": intimacy_level,
+                    "success": False,
+                    "is_resolved": False,
+                }
     except Exception as e:
         logger.error(f"Error creating player manipulation attempt: {e}", exc_info=True)
         raise
@@ -463,7 +490,13 @@ async def _internal_resolve_manipulation_attempt_logic(ctx: RunContextWrapper, a
             if not attempt_row: return {"error": "Manipulation attempt not found"}
             conflict_id, npc_id, manipulation_type, goal_str = attempt_row["conflict_id"], attempt_row["npc_id"], attempt_row["manipulation_type"], attempt_row["goal"]
             async with conn.transaction():
-                await conn.execute("UPDATE PlayerManipulationAttempts SET success = $1, player_response = $2, resolved_at = CURRENT_TIMESTAMP WHERE attempt_id = $3", success, player_response, attempt_id)
+                await canon.resolve_player_manipulation_attempt(
+                    context,
+                    conn,
+                    attempt_id,
+                    success,
+                    player_response,
+                )
                 stat_changes = {}
                 if success:
                     obedience_change, dependency_change = random.randint(2, 5), random.randint(1, 3)
