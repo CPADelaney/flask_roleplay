@@ -843,3 +843,724 @@ class ConflictSystemIntegration:
 
 # Registration method remains the same
 register_enhanced_integration = ConflictSystemIntegration.register_enhanced_integration
+
+# logic/conflict_system/canonical_conflict_integration.py
+"""
+Refactored Conflict Integration that deeply integrates with canon and uses dynamic agents
+"""
+
+import logging
+import json
+import asyncio
+from typing import Dict, List, Any, Optional, Union
+from datetime import datetime
+
+from agents import Agent, Runner, trace, function_tool, RunContextWrapper
+from nyx.integrate import get_central_governance
+from nyx.nyx_governance import AgentType, DirectiveType
+from nyx.governance_helpers import with_governance
+from lore.lore_system import LoreSystem
+from db.connection import get_db_connection_context
+from lore.core import canon
+from logic.fully_integrated_npc_system import IntegratedNPCSystem
+from logic.conflict_system.enhanced_conflict_generation import (
+    OrganicConflictGenerator, generate_organic_conflict, analyze_conflict_pressure
+)
+from logic.conflict_system.conflict_agents import (
+    initialize_agents, ConflictContext
+)
+from logic.conflict_system.conflict_tools import (
+    get_active_conflicts, get_conflict_details, get_conflict_stakeholders,
+    get_resolution_paths, get_player_involvement, update_conflict_progress,
+    track_story_beat, resolve_conflict as resolve_conflict_tool
+)
+from npcs.npc_agent_system import NPCAgentSystem
+from logic.conflict_system.conflict_resolution import ConflictResolutionSystem
+
+logger = logging.getLogger(__name__)
+
+# Dynamic Conflict Manager Agent
+conflict_manager_agent = Agent(
+    name="Canonical Conflict Manager",
+    instructions="""
+    You are the Canonical Conflict Manager for a femdom-themed RPG. Your role is to:
+    
+    1. Monitor world state for conflict opportunities
+    2. Generate conflicts that feel organic and connected to established lore
+    3. Manage conflict progression based on player actions and NPC behaviors
+    4. Ensure conflicts respect canon and create meaningful narrative moments
+    
+    Key principles:
+    - Conflicts emerge from established relationships and tensions
+    - Every conflict has multiple valid resolutions
+    - Power dynamics and femdom themes are woven naturally
+    - Player agency is respected while maintaining narrative coherence
+    - Stakes scale appropriately from personal to apocalyptic
+    
+    When managing conflicts:
+    - Reference specific canonical events and relationships
+    - Consider timing and pacing
+    - Create opportunities for character growth
+    - Maintain consistency with established world rules
+    """
+)
+
+# Conflict Evolution Agent
+conflict_evolution_agent = Agent(
+    name="Conflict Evolution Agent",
+    instructions="""
+    You manage how conflicts evolve based on player actions and world events.
+    
+    Consider:
+    - How player choices affect conflict trajectory
+    - NPC autonomous actions and their impacts
+    - Escalation and de-escalation triggers
+    - Ripple effects on other conflicts
+    - Timing of phase transitions
+    
+    Ensure evolution feels natural and responds to:
+    - Story beats completed
+    - Stakeholder actions
+    - Resource changes
+    - Relationship shifts
+    - External events
+    
+    Output specific updates to conflict state.
+    """
+)
+
+class CanonicalConflictSystem:
+    """
+    Refactored conflict system with deep canonical integration
+    """
+    
+    def __init__(self, user_id: int, conversation_id: int):
+        self.user_id = user_id
+        self.conversation_id = conversation_id
+        self.agent_id = "canonical_conflict_manager"
+        self.is_initialized = False
+        self.agents = None
+        self.lore_system = None
+        self.npc_system = None
+        self.resolution_system = None
+        self.conflict_generator = None
+        self.active_monitoring = False
+        
+    async def initialize(self):
+        """Initialize all conflict system components"""
+        if not self.is_initialized:
+            logger.info(f"Initializing canonical conflict system for user {self.user_id}")
+            
+            with trace(workflow_name="CanonicalConflictInit", group_id=f"conflict_{self.conversation_id}"):
+                # Initialize agents
+                self.agents = await initialize_agents()
+                
+                # Initialize systems
+                self.lore_system = await LoreSystem.get_instance(self.user_id, self.conversation_id)
+                self.npc_system = IntegratedNPCSystem(self.user_id, self.conversation_id)
+                await self.npc_system.initialize()
+                
+                # Initialize resolution system
+                self.resolution_system = ConflictResolutionSystem(self.user_id, self.conversation_id)
+                await self.resolution_system.initialize()
+                
+                # Initialize conflict generator
+                self.conflict_generator = OrganicConflictGenerator(self.user_id, self.conversation_id)
+                
+                # Register with governance
+                await self._register_with_governance()
+                
+                self.is_initialized = True
+                logger.info("Canonical conflict system initialized")
+                
+    async def _register_with_governance(self):
+        """Register with the central governance system"""
+        try:
+            governance = await get_central_governance(self.user_id, self.conversation_id)
+            
+            await governance.register_agent(
+                self.agent_id,
+                AgentType.CONFLICT_ANALYST,
+                self
+            )
+            
+            # Issue monitoring directive
+            await governance.issue_directive(
+                agent_type=AgentType.CONFLICT_ANALYST,
+                agent_id=self.agent_id,
+                directive_type=DirectiveType.ACTION,
+                directive_data={
+                    "instruction": "Monitor world state for conflict opportunities",
+                    "scope": "continuous"
+                }
+            )
+            
+        except Exception as e:
+            logger.error(f"Error registering with governance: {e}")
+    
+    @with_governance(
+        agent_type=AgentType.CONFLICT_ANALYST,
+        action_type="monitor_and_generate",
+        action_description="Monitoring world state and generating conflicts"
+    )
+    async def monitor_and_generate_conflicts(self) -> Dict[str, Any]:
+        """Monitor world state and generate conflicts when appropriate"""
+        await self.initialize()
+        
+        try:
+            # Analyze current pressure
+            ctx = RunContextWrapper({
+                "user_id": self.user_id,
+                "conversation_id": self.conversation_id
+            })
+            pressure_analysis = await analyze_conflict_pressure(ctx)
+            
+            # Get active conflicts
+            active_conflicts = await get_active_conflicts(ctx)
+            
+            # Determine if new conflict should be generated
+            should_generate = await self._should_generate_conflict(
+                pressure_analysis, 
+                active_conflicts
+            )
+            
+            results = {
+                "pressure_analysis": pressure_analysis,
+                "active_conflicts": len(active_conflicts),
+                "generated_conflict": None
+            }
+            
+            if should_generate:
+                # Generate new conflict
+                conflict_data = await self.conflict_generator.generate_contextual_conflict(
+                    preferred_scale=should_generate.get("preferred_scale")
+                )
+                
+                # Create conflict with full canonical integration
+                created_conflict = await self._create_canonical_conflict(conflict_data)
+                results["generated_conflict"] = created_conflict
+                
+                # Notify other systems
+                await self._notify_conflict_emergence(created_conflict)
+            
+            return results
+            
+        except Exception as e:
+            logger.error(f"Error monitoring conflicts: {e}", exc_info=True)
+            return {"error": str(e)}
+    
+    async def _should_generate_conflict(self, 
+                                      pressure_analysis: Dict[str, Any],
+                                      active_conflicts: List[Dict[str, Any]]) -> Union[Dict[str, Any], bool]:
+        """Determine if a new conflict should be generated"""
+        
+        # Use agent to make decision
+        decision_prompt = f"""
+        Should a new conflict be generated based on this analysis?
+        
+        World Pressure: {pressure_analysis['total_pressure']}
+        Active Conflicts: {len(active_conflicts)}
+        Recommendation: {pressure_analysis['recommended_action']}
+        
+        Recent Events:
+        {json.dumps(pressure_analysis.get('recent_events', [])[:3], indent=2)}
+        
+        Consider:
+        - Are there already too many active conflicts?
+        - Is the pressure high enough to warrant a new conflict?
+        - Would a new conflict enhance or overwhelm the narrative?
+        - What scale of conflict would be appropriate?
+        
+        Respond with JSON:
+        {{
+            "should_generate": true/false,
+            "reason": "explanation",
+            "preferred_scale": "personal/local/regional/world" or null
+        }}
+        """
+        
+        context = ConflictContext(self.user_id, self.conversation_id)
+        result = await Runner.run(
+            conflict_manager_agent,
+            decision_prompt,
+            context=context
+        )
+        
+        try:
+            decision = json.loads(result.final_output)
+            return decision if decision["should_generate"] else False
+        except:
+            return False
+    
+    async def _create_canonical_conflict(self, conflict_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Create a conflict with full canonical integration"""
+        async with get_db_connection_context() as conn:
+            async with conn.transaction():
+                # Get canonical context
+                ctx = type("ctx", (), {
+                    "user_id": self.user_id,
+                    "conversation_id": self.conversation_id
+                })()
+                
+                # Create conflict record
+                current_day = await conn.fetchval("""
+                    SELECT value FROM CurrentRoleplay
+                    WHERE user_id = $1 AND conversation_id = $2 AND key = 'CurrentDay'
+                """, self.user_id, self.conversation_id)
+                current_day = int(current_day) if current_day else 1
+                
+                conflict_id = await conn.fetchval("""
+                    INSERT INTO Conflicts (
+                        user_id, conversation_id, conflict_name, conflict_type,
+                        description, progress, phase, start_day, estimated_duration,
+                        success_rate, is_active
+                    ) VALUES ($1, $2, $3, $4, $5, 0, 'brewing', $6, $7, $8, TRUE)
+                    RETURNING conflict_id
+                """, 
+                self.user_id, self.conversation_id,
+                conflict_data["conflict_name"], conflict_data["archetype"],
+                conflict_data["description"], current_day,
+                conflict_data["estimated_duration"], 0.5
+                )
+                
+                # Create stakeholders with canonical NPCs
+                for stakeholder in conflict_data.get("stakeholders", []):
+                    # Ensure NPC exists canonically
+                    if "npc_name" in stakeholder:
+                        npc_id = await canon.find_or_create_npc(
+                            ctx, conn, 
+                            stakeholder["npc_name"],
+                            role=stakeholder.get("role")
+                        )
+                        stakeholder["npc_id"] = npc_id
+                    
+                    # Create stakeholder record
+                    await conn.execute("""
+                        INSERT INTO ConflictStakeholders (
+                            conflict_id, npc_id, faction_id, faction_name,
+                            public_motivation, private_motivation, desired_outcome,
+                            involvement_level, leadership_ambition, faction_standing
+                        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                    """,
+                    conflict_id, stakeholder["npc_id"], 
+                    stakeholder.get("faction_id"), stakeholder.get("faction_name"),
+                    stakeholder["public_motivation"], stakeholder["private_motivation"],
+                    stakeholder["desired_outcome"], stakeholder.get("involvement_level", 5),
+                    stakeholder.get("leadership_ambition", 50),
+                    stakeholder.get("faction_standing", 50)
+                    )
+                    
+                    # Create secrets if any
+                    for secret in stakeholder.get("secrets", []):
+                        await conn.execute("""
+                            INSERT INTO StakeholderSecrets (
+                                conflict_id, npc_id, secret_id, secret_type,
+                                content, target_npc_id
+                            ) VALUES ($1, $2, $3, $4, $5, $6)
+                        """,
+                        conflict_id, stakeholder["npc_id"],
+                        f"secret_{conflict_id}_{stakeholder['npc_id']}_{secret.get('type', 'unknown')}",
+                        secret.get("type", "personal"),
+                        secret["content"],
+                        secret.get("target_npc_id")
+                        )
+                
+                # Create resolution paths
+                for path in conflict_data.get("resolution_paths", []):
+                    await conn.execute("""
+                        INSERT INTO ResolutionPaths (
+                            conflict_id, path_id, name, description,
+                            approach_type, difficulty, requirements,
+                            stakeholders_involved, key_challenges
+                        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                    """,
+                    conflict_id, path["path_id"], path["name"], path["description"],
+                    path["approach_type"], path["difficulty"],
+                    json.dumps(path.get("requirements", {})),
+                    json.dumps(path["stakeholders_involved"]),
+                    json.dumps(path["key_challenges"])
+                    )
+                
+                # Log canonical event with historical context
+                event_text = f"Conflict emerged: {conflict_data['conflict_name']} - {conflict_data['description'][:100]}..."
+                if conflict_data.get("historical_context"):
+                    event_text += f" (Echoes of: {conflict_data['historical_context'][0]['name']})"
+                
+                await canon.log_canonical_event(
+                    ctx, conn, event_text,
+                    tags=["conflict", conflict_data["archetype"], "emergence", conflict_data["scale"]],
+                    significance=8
+                )
+                
+                # Create conflict memory events
+                await conn.execute("""
+                    INSERT INTO ConflictMemoryEvents (
+                        conflict_id, memory_text, significance,
+                        entity_type, entity_id
+                    ) VALUES ($1, $2, $3, $4, $5)
+                """,
+                conflict_id, 
+                f"The {conflict_data['archetype']} '{conflict_data['conflict_name']}' began, rooted in {conflict_data.get('root_cause', 'unknown tensions')}",
+                9, "conflict", conflict_id
+                )
+                
+                conflict_data["conflict_id"] = conflict_id
+                
+        return conflict_data
+    
+    async def _notify_conflict_emergence(self, conflict: Dict[str, Any]):
+        """Notify other systems about new conflict"""
+        try:
+            # Notify lore system
+            await self.lore_system.handle_narrative_event(
+                RunContextWrapper({"user_id": self.user_id, "conversation_id": self.conversation_id}),
+                f"New conflict emerged: {conflict['conflict_name']}",
+                affected_lore_ids=[],
+                resolution_type="conflict_emergence",
+                impact_level="high"
+            )
+            
+            # Notify NPC system for autonomous reactions
+            for stakeholder in conflict.get("stakeholders", []):
+                await self.npc_system.notify_npc_of_event(
+                    stakeholder["npc_id"],
+                    "conflict_involvement",
+                    {
+                        "conflict_id": conflict["conflict_id"],
+                        "conflict_name": conflict["conflict_name"],
+                        "role": stakeholder.get("role", "stakeholder")
+                    }
+                )
+            
+        except Exception as e:
+            logger.error(f"Error notifying systems: {e}")
+    
+    @with_governance(
+        agent_type=AgentType.CONFLICT_ANALYST,
+        action_type="evolve_conflict",
+        action_description="Evolving conflict based on events"
+    )
+    async def evolve_conflict(self, conflict_id: int, 
+                            event_type: str,
+                            event_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Evolve a conflict based on events"""
+        await self.initialize()
+        
+        try:
+            ctx = RunContextWrapper({
+                "user_id": self.user_id,
+                "conversation_id": self.conversation_id
+            })
+            
+            # Get current conflict state
+            conflict = await get_conflict_details(ctx, conflict_id)
+            if not conflict:
+                return {"error": "Conflict not found"}
+            
+            # Get stakeholders
+            stakeholders = await get_conflict_stakeholders(ctx, conflict_id)
+            
+            # Get player involvement
+            player_involvement = await get_player_involvement(ctx, conflict_id)
+            
+            # Use evolution agent to determine changes
+            evolution_prompt = f"""
+            A {event_type} event has occurred in the conflict:
+            
+            Conflict: {conflict['conflict_name']} ({conflict['phase']} phase, {conflict['progress']}% progress)
+            Event: {json.dumps(event_data, indent=2)}
+            
+            Current Stakeholders:
+            {json.dumps(stakeholders, indent=2)}
+            
+            Player Involvement: {player_involvement['involvement_level']}
+            
+            Determine how this event should affect:
+            1. Conflict progress and phase
+            2. Stakeholder positions and motivations
+            3. New complications or opportunities
+            4. Resolution path viability
+            
+            Output specific updates as JSON.
+            """
+            
+            context = ConflictContext(self.user_id, self.conversation_id)
+            evolution = await Runner.run(
+                conflict_evolution_agent,
+                evolution_prompt,
+                context=context
+            )
+            
+            # Parse and apply updates
+            updates = json.loads(evolution.final_output)
+            
+            results = {
+                "conflict_id": conflict_id,
+                "event_type": event_type,
+                "updates_applied": []
+            }
+            
+            # Apply progress changes
+            if "progress_change" in updates:
+                progress_result = await update_conflict_progress(
+                    ctx, conflict_id, updates["progress_change"]
+                )
+                results["updates_applied"].append({
+                    "type": "progress",
+                    "result": progress_result
+                })
+            
+            # Apply stakeholder changes
+            if "stakeholder_updates" in updates:
+                for npc_id, changes in updates["stakeholder_updates"].items():
+                    # Update in database
+                    async with get_db_connection_context() as conn:
+                        await conn.execute("""
+                            UPDATE ConflictStakeholders
+                            SET public_motivation = COALESCE($1, public_motivation),
+                                private_motivation = COALESCE($2, private_motivation),
+                                involvement_level = COALESCE($3, involvement_level)
+                            WHERE conflict_id = $4 AND npc_id = $5
+                        """,
+                        changes.get("public_motivation"),
+                        changes.get("private_motivation"),
+                        changes.get("involvement_level"),
+                        conflict_id, int(npc_id)
+                        )
+                    
+                    results["updates_applied"].append({
+                        "type": "stakeholder",
+                        "npc_id": npc_id,
+                        "changes": changes
+                    })
+            
+            # Add complications
+            if "new_complications" in updates:
+                for complication in updates["new_complications"]:
+                    await self._add_complication(conflict_id, complication)
+                    results["updates_applied"].append({
+                        "type": "complication",
+                        "detail": complication
+                    })
+            
+            # Log evolution as canonical event
+            async with get_db_connection_context() as conn:
+                ctx_obj = type("ctx", (), {
+                    "user_id": self.user_id,
+                    "conversation_id": self.conversation_id
+                })()
+                
+                await canon.log_canonical_event(
+                    ctx_obj, conn,
+                    f"Conflict '{conflict['conflict_name']}' evolved due to {event_type}",
+                    tags=["conflict", "evolution", event_type],
+                    significance=6
+                )
+            
+            return results
+            
+        except Exception as e:
+            logger.error(f"Error evolving conflict: {e}", exc_info=True)
+            return {"error": str(e)}
+    
+    async def _add_complication(self, conflict_id: int, complication: Dict[str, Any]):
+        """Add a complication to a conflict"""
+        try:
+            async with get_db_connection_context() as conn:
+                # Add as internal conflict if it's faction-based
+                if complication.get("type") == "internal_faction":
+                    await conn.execute("""
+                        INSERT INTO InternalFactionConflicts (
+                            faction_id, conflict_name, description,
+                            primary_npc_id, target_npc_id, prize, approach,
+                            public_knowledge, current_phase, progress,
+                            parent_conflict_id
+                        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                    """,
+                    complication["faction_id"], complication["name"],
+                    complication["description"], complication["primary_npc_id"],
+                    complication["target_npc_id"], complication["prize"],
+                    complication["approach"], complication.get("public_knowledge", False),
+                    "brewing", 10, conflict_id
+                    )
+                
+                # Add as conflict memory event
+                await conn.execute("""
+                    INSERT INTO ConflictMemoryEvents (
+                        conflict_id, memory_text, significance,
+                        entity_type, entity_id
+                    ) VALUES ($1, $2, $3, $4, $5)
+                """,
+                conflict_id,
+                f"Complication arose: {complication['description']}",
+                7, "conflict", conflict_id
+                )
+                
+        except Exception as e:
+            logger.error(f"Error adding complication: {e}")
+    
+    @with_governance(
+        agent_type=AgentType.CONFLICT_ANALYST,
+        action_type="handle_story_beat",
+        action_description="Processing story beat for conflict"
+    )
+    async def handle_story_beat(self, conflict_id: int, path_id: str,
+                               beat_description: str,
+                               involved_npcs: List[int]) -> Dict[str, Any]:
+        """Handle a story beat in a conflict"""
+        await self.initialize()
+        
+        try:
+            ctx = RunContextWrapper({
+                "user_id": self.user_id,
+                "conversation_id": self.conversation_id
+            })
+            
+            # Calculate progress value based on beat significance
+            progress_value = await self._calculate_beat_progress(
+                conflict_id, path_id, beat_description
+            )
+            
+            # Track the story beat
+            result = await track_story_beat(
+                ctx, conflict_id, path_id, beat_description,
+                involved_npcs, progress_value
+            )
+            
+            # Check for phase transitions or resolution
+            if result.get("new_progress", 0) >= 100:
+                # Path completed - check if conflict should resolve
+                await self._check_conflict_resolution(conflict_id, path_id)
+            
+            # Evolve conflict based on beat
+            await self.evolve_conflict(conflict_id, "story_beat", {
+                "path_id": path_id,
+                "description": beat_description,
+                "progress": result.get("new_progress", 0)
+            })
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error handling story beat: {e}", exc_info=True)
+            return {"error": str(e)}
+    
+    async def _calculate_beat_progress(self, conflict_id: int, 
+                                     path_id: str,
+                                     beat_description: str) -> float:
+        """Calculate progress value for a story beat"""
+        # Base progress
+        base_progress = 10.0
+        
+        # Adjust based on beat content
+        if any(word in beat_description.lower() for word in ["crucial", "decisive", "final"]):
+            base_progress *= 2.0
+        elif any(word in beat_description.lower() for word in ["minor", "small", "slight"]):
+            base_progress *= 0.5
+        
+        # Get path difficulty
+        async with get_db_connection_context() as conn:
+            difficulty = await conn.fetchval("""
+                SELECT difficulty FROM ResolutionPaths
+                WHERE conflict_id = $1 AND path_id = $2
+            """, conflict_id, path_id)
+            
+            if difficulty:
+                # Higher difficulty = slower progress
+                base_progress *= (10 / max(difficulty, 1))
+        
+        return min(base_progress, 50.0)  # Cap at 50% per beat
+    
+    async def _check_conflict_resolution(self, conflict_id: int, 
+                                       completed_path_id: str):
+        """Check if conflict should resolve after path completion"""
+        ctx = RunContextWrapper({
+            "user_id": self.user_id,
+            "conversation_id": self.conversation_id
+        })
+        
+        # Get all paths
+        paths = await get_resolution_paths(ctx, conflict_id)
+        completed_paths = [p for p in paths if p["is_completed"]]
+        
+        # If enough paths completed, resolve conflict
+        if len(completed_paths) >= 1 or len(completed_paths) >= len(paths) / 2:
+            await resolve_conflict_tool(ctx, conflict_id)
+    
+    @classmethod
+    async def register_canonical_integration(cls, user_id: int, conversation_id: int):
+        """Register the canonical conflict system"""
+        try:
+            logger.info(f"Registering canonical conflict system for user={user_id}")
+            
+            # Create and initialize
+            system = cls(user_id, conversation_id)
+            await system.initialize()
+            
+            # Start monitoring if configured
+            if await system._should_auto_monitor():
+                asyncio.create_task(system._monitoring_loop())
+            
+            return {"success": True, "system": system}
+            
+        except Exception as e:
+            logger.error(f"Error registering canonical conflict system: {e}")
+            return {"success": False, "message": str(e)}
+    
+    async def _should_auto_monitor(self) -> bool:
+        """Check if automatic monitoring should be enabled"""
+        async with get_db_connection_context() as conn:
+            auto_monitor = await conn.fetchval("""
+                SELECT value FROM Settings
+                WHERE name = 'auto_conflict_monitoring'
+            """)
+            return auto_monitor == "true" if auto_monitor else True
+    
+    async def _monitoring_loop(self):
+        """Background monitoring loop"""
+        self.active_monitoring = True
+        
+        while self.active_monitoring:
+            try:
+                # Monitor and potentially generate conflicts
+                await self.monitor_and_generate_conflicts()
+                
+                # Check active conflicts for evolution opportunities
+                ctx = RunContextWrapper({
+                    "user_id": self.user_id,
+                    "conversation_id": self.conversation_id
+                })
+                active_conflicts = await get_active_conflicts(ctx)
+                
+                for conflict in active_conflicts:
+                    # Check if conflict needs evolution
+                    if await self._needs_evolution(conflict):
+                        await self.evolve_conflict(
+                            conflict["conflict_id"],
+                            "natural_progression",
+                            {"days_active": conflict.get("days_active", 1)}
+                        )
+                
+                # Wait before next check (adjust based on game pacing)
+                await asyncio.sleep(300)  # 5 minutes
+                
+            except Exception as e:
+                logger.error(f"Error in monitoring loop: {e}")
+                await asyncio.sleep(60)  # Shorter wait on error
+    
+    async def _needs_evolution(self, conflict: Dict[str, Any]) -> bool:
+        """Check if a conflict needs natural evolution"""
+        # Conflicts should evolve if stagnant
+        days_since_update = 0  # Calculate from last update
+        
+        if conflict["phase"] == "brewing" and conflict["progress"] < 30:
+            return days_since_update > 2
+        elif conflict["phase"] == "active" and conflict["progress"] < 60:
+            return days_since_update > 3
+        elif conflict["phase"] == "climax" and conflict["progress"] < 90:
+            return days_since_update > 1
+        
+        return False
+
+# Export registration function
+register_canonical_conflict_system = CanonicalConflictSystem.register_canonical_integration
