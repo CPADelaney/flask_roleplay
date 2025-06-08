@@ -746,7 +746,7 @@ class GeopoliticalSystemManager(BaseLoreManager):
     # 3) Conflict simulation between nations/regions
     # ------------------------------------------------------------------------
     @staticmethod
-    @function_tool(strict=False)
+    @function_tool(strict_mode=False)
     async def simulate_conflict(
         ctx: RunContextWrapper,
         entity_ids: List[int],
