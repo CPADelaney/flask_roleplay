@@ -2,18 +2,7 @@
 
 """
 Unified governance system for Nyx to control all agents (NPCs and beyond).
-
-This file provides a comprehensive governance system that handles:
-1. Central authority over all agents (NPCs, story, specialized).
-2. Permission checking for all actions (NPC or other).
-3. Directive management for all agent types.
-4. Action reporting, monitoring, and override capabilities.
-5. NPC-specific and general-agent logic in one place.
-6. Enhanced decision making with memory integration.
-7. User preference adaptation.
-8. Cross-agent coordination for narrative coherence.
-9. Performance monitoring and feedback loops.
-10. Temporal consistency enforcement.
+...
 """
 
 import logging
@@ -25,7 +14,7 @@ import importlib
 import pkgutil
 import re
 from datetime import datetime, timedelta
-from typing import Dict, List, Any, Optional, Tuple, Union, Callable, Set
+from typing import Dict, List, Any, Optional, Tuple, Union, Callable, Set, TYPE_CHECKING
 
 import asyncpg
 
@@ -36,7 +25,9 @@ from agents import trace, RunContextWrapper
 from db.connection import get_db_connection_context
 
 # --- MERGE: Import the new LoreSystem ---
-from lore.lore_system import LoreSystem
+# Use TYPE_CHECKING to avoid circular import
+if TYPE_CHECKING:
+    from lore.lore_system import LoreSystem
 
 from nyx.constants import DirectiveType, DirectivePriority, AgentType
 
@@ -51,7 +42,6 @@ from nyx.llm_integration import generate_text_completion, generate_reflection
 from utils.caching import CACHE_TTL, NPC_DIRECTIVE_CACHE, AGENT_DIRECTIVE_CACHE
 
 logger = logging.getLogger(__name__)
-
 
 class DirectiveType:
     """Constants for directive types."""
