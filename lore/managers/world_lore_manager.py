@@ -155,7 +155,7 @@ class WorldLoreManager(BaseLoreManager):
         """Internal method to get world data with optional fetch function."""
         return await self.get_cached_data('world', world_id, fetch_func)
 
-    @function_tool
+    @function_tool(strict_mode=False)
     async def set_world_data(
         self,
         world_id: str,
@@ -205,7 +205,7 @@ class WorldLoreManager(BaseLoreManager):
         """Internal method to get world history with optional fetch function."""
         return await self.get_cached_data('world_history', world_id, fetch_func)
 
-    @function_tool
+    @function_tool(strict_mode=False)
     async def set_world_history(
         self,
         world_id: str,
@@ -220,7 +220,7 @@ class WorldLoreManager(BaseLoreManager):
             logger.error(f"Error setting world history: {e}")
             return False
 
-    @function_tool
+    @function_tool(strict_mode=False)
     async def create_world_element(self, element_type: str, element_data: Dict[str, Any]) -> Dict[str, Any]:
         """Create any world element using the canon system."""
         from lore.core import canon
@@ -295,7 +295,7 @@ class WorldLoreManager(BaseLoreManager):
         """Internal method to get world events with optional fetch function."""
         return await self.get_cached_data('world_events', world_id, fetch_func)
 
-    @function_tool
+    @function_tool(strict_mode=False)
     async def set_world_events(
         self,
         world_id: str,
@@ -345,7 +345,7 @@ class WorldLoreManager(BaseLoreManager):
         """Internal method to get world relationships with optional fetch function."""
         return await self.get_cached_data('world_relationships', world_id, fetch_func)
 
-    @function_tool
+    @function_tool(strict_mode=False)
     async def set_world_relationships(
         self,
         world_id: str,
