@@ -401,7 +401,7 @@ class MatriarchalPowerStructureFramework(BaseLoreManager):
     # ------------------------------------------------------------------
     # 3) LENS APPLICATION WITH SPECIALIZED HANDOFFS
     # ------------------------------------------------------------------
-    @function_tool(strict=False)  # Disable strict schema to allow flexible data
+    @function_tool(strict_mode=False)  # Disable strict schema to allow flexible data
     async def apply_power_lens(self, foundation_data: Dict[str, Any]) -> Dict[str, Any]:
         """
         Apply a matriarchal lens to the foundation lore, using specialized narrative
