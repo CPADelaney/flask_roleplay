@@ -1888,11 +1888,11 @@ async def find_or_create_player_stats(
         )
 
 async def log_stat_change(
-    ctx, conn, 
-    player_name: str, 
-    stat_name: str, 
-    old_value: int, 
-    new_value: int, 
+    ctx, conn,
+    player_name: str,
+    stat_name: str,
+    old_value: int,
+    new_value: int,
     cause: str
 ) -> None:
     """
@@ -1931,6 +1931,39 @@ async def log_stat_change(
             tags=['player_stats', stat_name, 'change'],
             significance=significance
         )
+
+async def update_player_stat_canonically(
+    ctx, conn,
+    player_name: str,
+    stat_name: str,
+    new_value: int,
+    reason: str
+) -> None:
+    """Update a player's stat while logging the change canonically."""
+    current_value = await conn.fetchval(
+        f"SELECT {stat_name} FROM PlayerStats "
+        "WHERE user_id = $1 AND conversation_id = $2 AND player_name = $3",
+        ctx.user_id, ctx.conversation_id, player_name
+    )
+
+    if current_value is None:
+        await find_or_create_player_stats(ctx, conn, player_name, **{stat_name: new_value})
+        return
+
+    await conn.execute(
+        f"UPDATE PlayerStats SET {stat_name} = $1 "
+        "WHERE user_id = $2 AND conversation_id = $3 AND player_name = $4",
+        new_value, ctx.user_id, ctx.conversation_id, player_name
+    )
+
+    await log_stat_change(
+        ctx, conn,
+        player_name,
+        stat_name,
+        current_value,
+        new_value,
+        reason
+    )
 
 async def find_or_create_inventory_item(
     ctx, conn,
