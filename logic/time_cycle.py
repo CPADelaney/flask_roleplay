@@ -22,6 +22,7 @@ from agents.run_context import RunContextWrapper
 
 from db.connection import get_db_connection_context
 import asyncpg
+from lore.core import canon
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # Merged Constants and Data
@@ -184,19 +185,14 @@ async def set_current_time(user_id, conversation_id, new_year, new_month, new_da
     """
     try:
         async with get_db_connection_context() as conn:
-            # Upsert pattern for each of the 4 keys
+            canon_ctx = type("ctx", (), {"user_id": user_id, "conversation_id": conversation_id})()
             for key, val in [
                 ("CurrentYear", str(new_year)),
                 ("CurrentMonth", str(new_month)),
                 ("CurrentDay", str(new_day)),
                 ("TimeOfDay", new_phase),
             ]:
-                await conn.execute("""
-                    INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
-                    VALUES ($1, $2, $3, $4)
-                    ON CONFLICT (user_id, conversation_id, key)
-                    DO UPDATE SET value=EXCLUDED.value
-                """, user_id, conversation_id, key, val)
+                await canon.update_current_roleplay(canon_ctx, conn, user_id, conversation_id, key, val)
     except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as e:
         logger.error(f"Database error setting current time: {e}", exc_info=True)
     except Exception as e:
@@ -275,11 +271,8 @@ async def update_npc_schedules_for_time(user_id, conversation_id, day, time_of_d
                     else:
                         new_location = "No schedule"
                 
-                await conn.execute("""
-                    UPDATE NPCStats
-                    SET current_location=$1
-                    WHERE user_id=$2 AND conversation_id=$3 AND npc_id=$4
-                """, new_location, user_id, conversation_id, npc_id)
+                canon_ctx = type("ctx", (), {"user_id": user_id, "conversation_id": conversation_id})()
+                await canon.update_npc_current_location(canon_ctx, conn, npc_id, new_location)
     except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as e:
         logger.error(f"Database error updating NPC schedules: {e}", exc_info=True)
     except Exception as e:

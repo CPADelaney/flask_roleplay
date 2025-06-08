@@ -30,6 +30,7 @@ from pydantic import BaseModel, Field
 # DB connection
 from db.connection import get_db_connection_context
 import asyncpg
+from lore.core import canon
 
 # Nyx governance integration
 from nyx.nyx_governance import (
@@ -178,47 +179,33 @@ async def add_item_to_inventory(
         return InventoryOperation(success=False, item_name=item_name, player_name=player_name, operation="add", quantity=quantity, error=permission["reasoning"]).model_dump()
 
 
-    # --- Updated DB Access ---
-    select_query = """
-        SELECT id, quantity
-        FROM PlayerInventory
-        WHERE user_id=$1 AND conversation_id=$2 AND player_name=$3 AND item_name=$4
-    """
-    update_query = "UPDATE PlayerInventory SET quantity=$1 WHERE id=$2"
-    insert_query = """
-        INSERT INTO PlayerInventory (
-            user_id, conversation_id, player_name, item_name,
-            item_description, item_effect, category, quantity
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-    """
     result = {}
     try:
-        async with get_db_connection_context() as conn: # Use context manager
-            # Check if the item already exists
-            row: Optional[asyncpg.Record] = await conn.fetchrow(
-                select_query, user_id, conversation_id, player_name, item_name
+        async with get_db_connection_context() as conn:
+            canon_ctx = type("ctx", (), {"user_id": user_id, "conversation_id": conversation_id})()
+            item_data = {
+                "item_description": description,
+                "item_category": category,
+                "item_properties": {},
+                "quantity": quantity,
+                "equipped": False,
+            }
+            item_id = await canon.find_or_create_inventory_item(
+                canon_ctx,
+                conn,
+                item_name=item_name,
+                player_name=player_name,
+                **item_data,
             )
 
-            if row:
-                # Update existing item
-                existing_id, existing_qty = row["id"], row["quantity"]
-                new_qty = existing_qty + quantity
-                await conn.execute(update_query, new_qty, existing_id)
-                result = InventoryOperation(
-                    success=True, item_name=item_name, player_name=player_name,
-                    operation="add", quantity=quantity, metadata={"new_total": new_qty, "was_update": True}
-                ).model_dump() # Use Pydantic model for structure
-            else:
-                # Insert new item
-                await conn.execute(
-                    insert_query,
-                    user_id, conversation_id, player_name, item_name,
-                    description, effect, category, quantity
-                )
-                result = InventoryOperation(
-                    success=True, item_name=item_name, player_name=player_name,
-                    operation="add", quantity=quantity, metadata={"new_total": quantity, "was_update": False}
-                ).model_dump()
+            result = InventoryOperation(
+                success=True,
+                item_name=item_name,
+                player_name=player_name,
+                operation="add",
+                quantity=quantity,
+                metadata={"item_id": item_id},
+            ).model_dump()
 
         # Report action to governance (Keep as is)
         await governor.process_agent_action_report(...)
@@ -252,49 +239,36 @@ async def remove_item_from_inventory(
     if not permission["approved"]:
         return InventoryOperation(success=False, item_name=item_name, player_name=player_name, operation="remove", quantity=quantity, error=permission["reasoning"]).model_dump()
 
-    # --- Updated DB Access ---
-    select_query = """
-        SELECT id, quantity
-        FROM PlayerInventory
-        WHERE user_id=$1 AND conversation_id=$2 AND player_name=$3 AND item_name=$4
-    """
-    update_query = "UPDATE PlayerInventory SET quantity=$1 WHERE id=$2"
-    delete_query = "DELETE FROM PlayerInventory WHERE id=$1"
     result = {}
 
     try:
-        async with get_db_connection_context() as conn: # Use context manager
-            # Check if the item exists
-            row: Optional[asyncpg.Record] = await conn.fetchrow(
-                select_query, user_id, conversation_id, player_name, item_name
+        async with get_db_connection_context() as conn:
+            canon_ctx = type("ctx", (), {"user_id": user_id, "conversation_id": conversation_id})()
+            removed = await canon.remove_inventory_item(
+                canon_ctx,
+                conn,
+                item_name=item_name,
+                player_name=player_name,
+                quantity=quantity,
             )
 
-            if not row:
-                # Item doesn't exist
+            if not removed:
                 result = InventoryOperation(
-                    success=False, item_name=item_name, player_name=player_name,
-                    operation="remove", quantity=quantity,
-                    error=f"No item named '{item_name}' found in {player_name}'s inventory"
+                    success=False,
+                    item_name=item_name,
+                    player_name=player_name,
+                    operation="remove",
+                    quantity=quantity,
+                    error=f"No item named '{item_name}' found in {player_name}'s inventory",
                 ).model_dump()
             else:
-                # Process removal
-                item_id, existing_qty = row["id"], row["quantity"]
-                new_qty = existing_qty - quantity
-
-                if new_qty > 0:
-                    # Update quantity
-                    await conn.execute(update_query, new_qty, item_id)
-                    result = InventoryOperation(
-                        success=True, item_name=item_name, player_name=player_name,
-                        operation="remove", quantity=quantity, metadata={"new_total": new_qty, "was_removed": False}
-                    ).model_dump()
-                else:
-                    # Remove the item entirely
-                    await conn.execute(delete_query, item_id)
-                    result = InventoryOperation(
-                        success=True, item_name=item_name, player_name=player_name,
-                        operation="remove", quantity=quantity, metadata={"new_total": 0, "was_removed": True}
-                    ).model_dump()
+                result = InventoryOperation(
+                    success=True,
+                    item_name=item_name,
+                    player_name=player_name,
+                    operation="remove",
+                    quantity=quantity,
+                ).model_dump()
 
         # Report action to governance (Keep as is)
         await governor.process_agent_action_report(...)
@@ -385,38 +359,34 @@ async def update_item_effect(
         return InventoryOperation(success=False, item_name=item_name, player_name=player_name, operation="update_effect", error=permission["reasoning"]).model_dump()
 
 
-    # --- Updated DB Access ---
-    update_query = """
-        UPDATE PlayerInventory
-        SET item_effect=$1
-        WHERE user_id=$2 AND conversation_id=$3 AND player_name=$4 AND item_name=$5
-        RETURNING item_effect -- Return old effect for reporting (Optional)
-    """ # Note: RETURNING might not be reliable for getting the *old* value before update in all cases.
-      # A SELECT before UPDATE is safer if old value is strictly needed.
-
     result = {}
     try:
-        async with get_db_connection_context() as conn: # Use context manager
-            # Execute update and check if any row was affected
-            status = await conn.execute(
-                update_query, new_effect, user_id, conversation_id, player_name, item_name
+        async with get_db_connection_context() as conn:
+            canon_ctx = type("ctx", (), {"user_id": user_id, "conversation_id": conversation_id})()
+            updated = await canon.update_inventory_item_effect(
+                canon_ctx,
+                conn,
+                item_name=item_name,
+                player_name=player_name,
+                new_effect=new_effect,
             )
 
-            # asyncpg's execute returns status string like 'UPDATE 1'
-            if status and status.startswith("UPDATE") and not status.endswith(" 0"):
-                 # Assume update was successful if status indicates rows affected
-                 result = InventoryOperation(
-                     success=True, item_name=item_name, player_name=player_name,
-                     operation="update_effect", metadata={"new_effect": new_effect}
-                 ).model_dump()
-                 # Note: Getting the old_effect accurately requires a prior SELECT.
+            if updated:
+                result = InventoryOperation(
+                    success=True,
+                    item_name=item_name,
+                    player_name=player_name,
+                    operation="update_effect",
+                    metadata={"new_effect": new_effect},
+                ).model_dump()
             else:
-                 # Item not found or update failed
-                 result = InventoryOperation(
-                     success=False, item_name=item_name, player_name=player_name,
-                     operation="update_effect",
-                     error=f"No item named '{item_name}' found for {player_name} or update failed."
-                 ).model_dump()
+                result = InventoryOperation(
+                    success=False,
+                    item_name=item_name,
+                    player_name=player_name,
+                    operation="update_effect",
+                    error=f"No item named '{item_name}' found for {player_name} or update failed.",
+                ).model_dump()
 
         # Report action to governance (Keep as is)
         # Make sure the result dict passed here matches governance expectations
@@ -458,40 +428,25 @@ async def categorize_items(
             "items_updated": 0, "items_not_found": [], "details": {}, "message": "No items provided for categorization."
          }
 
-    # --- Updated DB Access ---
-    # Consider using a transaction for multiple updates
     results = {
-        "success": True, "player_name": player_name, "operation": "categorize",
-        "items_updated": 0, "items_not_found": [], "details": {}
+        "success": True,
+        "player_name": player_name,
+        "operation": "categorize",
+        "items_updated": 0,
+        "items_not_found": [],
+        "details": {},
     }
-    update_query = """
-        UPDATE PlayerInventory
-        SET category=$1
-        WHERE user_id=$2 AND conversation_id=$3 AND player_name=$4 AND item_name=$5
-    """
 
     try:
-        async with get_db_connection_context() as conn: # Use context manager
-             # Optional: Start transaction
-             # async with conn.transaction():
-                 tasks = []
-                 item_names_to_update = list(category_mapping.keys())
-
-                 # Prepare update tasks
-                 for item_name, category in category_mapping.items():
-                     # Execute update and check status
-                     # We run these sequentially for simplicity, but could use asyncio.gather for parallel execution
-                     # However, parallel execution within a single transaction needs care.
-                     status = await conn.execute(
-                         update_query, category, user_id, conversation_id, player_name, item_name
-                     )
-                     # Check status string ('UPDATE 1', 'UPDATE 0', etc.)
-                     if status and status.startswith("UPDATE") and not status.endswith(" 0"):
-                         results["items_updated"] += 1
-                         results["details"][item_name] = "updated"
-                     else:
-                         results["items_not_found"].append(item_name)
-                         results["details"][item_name] = "not found or no change needed"
+        async with get_db_connection_context() as conn:
+            canon_ctx = type("ctx", (), {"user_id": user_id, "conversation_id": conversation_id})()
+            canon_results = await canon.categorize_inventory_items(
+                canon_ctx,
+                conn,
+                player_name=player_name,
+                category_mapping=category_mapping,
+            )
+            results.update(canon_results)
 
         # Report action to governance (outside DB block)
         await governor.process_agent_action_report(...)
