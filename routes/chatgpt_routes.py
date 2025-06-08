@@ -8,6 +8,8 @@ from logic.gpt_image_decision import should_generate_image_for_response
 from routes.ai_image_generator import generate_roleplay_image_from_gpt
 from db.connection import get_db_connection_context
 from logic.gpt_image_prompting import get_system_prompt_with_image_guidance, format_user_prompt_for_image_awareness
+from lore.lore_system import LoreSystem
+from lore.core import canon
 
 chatgpt_bp = Blueprint('chatgpt_bp', __name__)
 
@@ -225,126 +227,79 @@ async def save_image_generation_info(user_id, conversation_id, reason, image_res
     session['recent_image_generations'] = recent_generations
 
 async def process_state_updates(user_id, conversation_id, state_updates):
-    """Process state updates from GPT response."""
+    """Process state updates from GPT response using canonical APIs."""
     if not state_updates:
         return
-    
+
+    class UpdateContext:
+        def __init__(self, user_id, conversation_id):
+            self.user_id = user_id
+            self.conversation_id = conversation_id
+
+    ctx = UpdateContext(user_id, conversation_id)
+
     async with get_db_connection_context() as conn:
-        # Process NPC stat updates
+        lore_system = await LoreSystem.get_instance(user_id, conversation_id)
+
         if 'NPCStats' in state_updates:
             for npc_name, updates in state_updates['NPCStats'].items():
-                # Get the NPC ID
-                async with conn.cursor() as cursor:
-                    await cursor.execute("""
-                        SELECT npc_id FROM NPCStats
-                        WHERE user_id = %s AND conversation_id = %s AND npc_name = %s
-                    """, (user_id, conversation_id, npc_name))
-                    
-                    npc_row = await cursor.fetchone()
-                
-                if npc_row:
-                    npc_id = npc_row[0]
-                    
-                    # Build the update query
-                    update_fields = []
-                    update_values = []
-                    
-                    for key, value in updates.items():
-                        update_fields.append(f"{key} = %s")
-                        update_values.append(value)
-                    
-                    if update_fields:
-                        update_query = f"""
-                            UPDATE NPCStats
-                            SET {', '.join(update_fields)}
-                            WHERE npc_id = %s
-                        """
-                        async with conn.cursor() as cursor:
-                            await cursor.execute(update_query, update_values + [npc_id])
-                else:
-                    # NPC doesn't exist yet, create it
-                    if 'introduced' not in updates:
-                        updates['introduced'] = True
-                    
-                    fields = ['user_id', 'conversation_id', 'npc_name'] + list(updates.keys())
-                    placeholders = ['%s', '%s', '%s'] + ['%s'] * len(updates)
-                    values = [user_id, conversation_id, npc_name] + list(updates.values())
-                    
-                    insert_query = f"""
-                        INSERT INTO NPCStats
-                        ({', '.join(fields)})
-                        VALUES ({', '.join(placeholders)})
+                npc_row = await conn.fetchrow(
                     """
-                    async with conn.cursor() as cursor:
-                        await cursor.execute(insert_query, values)
-        
-        # Process Player stat updates
+                        SELECT npc_id FROM NPCStats
+                        WHERE user_id = $1 AND conversation_id = $2 AND npc_name = $3
+                    """,
+                    user_id, conversation_id, npc_name
+                )
+
+                if npc_row:
+                    npc_id = npc_row['npc_id']
+                else:
+                    npc_id = await canon.find_or_create_npc(ctx, conn, npc_name)
+
+                await lore_system.propose_and_enact_change(
+                    ctx=ctx,
+                    entity_type="NPCStats",
+                    entity_identifier={"id": npc_id},
+                    updates=updates,
+                    reason="GPT state update"
+                )
+
         if 'PlayerStats' in state_updates:
             for player_name, updates in state_updates['PlayerStats'].items():
-                # Get player record
-                async with conn.cursor() as cursor:
-                    await cursor.execute("""
+                player_row = await conn.fetchrow(
+                    """
                         SELECT id FROM PlayerStats
-                        WHERE user_id = %s AND conversation_id = %s AND player_name = %s
-                    """, (user_id, conversation_id, player_name))
-                    
-                    player_row = await cursor.fetchone()
-                
-                if player_row:
-                    # Player exists, update stats
-                    player_id = player_row[0]
-                    
-                    for stat_name, change in updates.items():
-                        # Handle relative changes (e.g., +5, -3)
-                        if isinstance(change, str) and (change.startswith('+') or change.startswith('-')):
-                            # Get current value
-                            async with conn.cursor() as cursor:
-                                await cursor.execute(f"""
-                                    SELECT {stat_name} FROM PlayerStats
-                                    WHERE id = %s
-                                """, (player_id,))
-                                
-                                current_value_row = await cursor.fetchone()
-                            
-                            if current_value_row and current_value_row[0] is not None:
-                                current_value = current_value_row[0]
-                                change_value = int(change)
-                                new_value = current_value + change_value
-                                
-                                # Update with bounds checking
-                                async with conn.cursor() as cursor:
-                                    await cursor.execute(f"""
-                                        UPDATE PlayerStats
-                                        SET {stat_name} = GREATEST(0, LEAST(100, %s))
-                                        WHERE id = %s
-                                    """, (new_value, player_id))
-                                
-                                # Log significant stat changes
-                                if abs(change_value) >= 5:
-                                    async with conn.cursor() as cursor:
-                                        await cursor.execute("""
-                                            INSERT INTO StatsHistory
-                                            (user_id, conversation_id, player_name, stat_name, old_value, new_value, cause)
-                                            VALUES (%s, %s, %s, %s, %s, %s, %s)
-                                        """, (
-                                            user_id, 
-                                            conversation_id, 
-                                            player_name, 
-                                            stat_name, 
-                                            current_value, 
-                                            new_value,
-                                            "GPT Response"
-                                        ))
-                        else:
-                            # Absolute value
-                            async with conn.cursor() as cursor:
-                                await cursor.execute(f"""
-                                    UPDATE PlayerStats
-                                    SET {stat_name} = GREATEST(0, LEAST(100, %s))
-                                    WHERE id = %s
-                                """, (change, player_id))
-        
-        await conn.commit()
+                        WHERE user_id = $1 AND conversation_id = $2 AND player_name = $3
+                    """,
+                    user_id, conversation_id, player_name
+                )
+
+                if not player_row:
+                    await canon.find_or_create_player_stats(ctx, conn, player_name)
+                    player_row = await conn.fetchrow(
+                        """
+                            SELECT id FROM PlayerStats
+                            WHERE user_id = $1 AND conversation_id = $2 AND player_name = $3
+                        """,
+                        user_id, conversation_id, player_name
+                    )
+
+                for stat_name, change in updates.items():
+                    current_value = await conn.fetchval(
+                        f"SELECT {stat_name} FROM PlayerStats WHERE id = $1",
+                        player_row['id']
+                    )
+
+                    if isinstance(change, str) and (change.startswith('+') or change.startswith('-')):
+                        new_value = (current_value or 0) + int(change)
+                    else:
+                        new_value = int(change)
+
+                    new_value = max(0, min(100, new_value))
+
+                    await canon.update_player_stat_canonically(
+                        ctx, conn, player_name, stat_name, new_value, "GPT Response"
+                    )
 
 def init_app(app):
     """Initialize the chatgpt routes with the Flask app."""

@@ -3,9 +3,11 @@
 from quart import Blueprint, request, jsonify
 from db.connection import get_db_connection_context
 from logic.meltdown_logic import (
-    record_meltdown_dialog, 
+    record_meltdown_dialog,
     append_meltdown_file, glitchify_text
 )
+from lore.lore_system import LoreSystem
+from lore.core import canon
 import json
 
 meltdown_bp = Blueprint('meltdown_bp', __name__)
@@ -78,34 +80,77 @@ async def remove_meltdown_npc():
                 "npc_dialog": meltdown_response.strip()
             }), 200
 
-        # 3) meltdown >= 5 and forced => remove them
+        # 3) meltdown >= 5 and forced => deactivate them canonically
         if monica_level >= 5 and force_flag:
             meltdown_response = f"""
             [Last words of {npc_name}]
-            'Fine, meltdown_level={monica_level} means I'm unstoppable, 
+            'Fine, meltdown_level={monica_level} means I'm unstoppable,
              but if you're truly removing me... farewell.'
             """
-            # Actually remove all meltdown NPCs
-            async with conn.cursor() as cursor:
-                await cursor.execute("DELETE FROM NPCStats WHERE monica_level>0")
-            await conn.commit()
-            
+
+            class MeltdownContext:
+                def __init__(self):
+                    self.user_id = 0
+                    self.conversation_id = 0
+
+            ctx = MeltdownContext()
+            lore_system = await LoreSystem.get_instance(ctx.user_id, ctx.conversation_id)
+
+            for row in meltdown_npcs:
+                mid = row[0]
+                await lore_system.propose_and_enact_change(
+                    ctx=ctx,
+                    entity_type="NPCStats",
+                    entity_identifier={"id": mid},
+                    updates={"is_active": False},
+                    reason="Meltdown removal"
+                )
+
+            await canon.log_canonical_event(
+                ctx, conn,
+                f"Meltdown NPCs deactivated: {[row[1] for row in meltdown_npcs]}",
+                tags=["meltdown", "npc_removal"],
+                significance=7
+            )
+
             return jsonify({
                 "message": f"You forcibly removed meltdown NPC(s). {npc_name} is gone.",
                 "npc_dialog": meltdown_response.strip()
             }), 200
 
-        # 4) meltdown < 5 but forced => forcibly remove them early
+        # 4) meltdown < 5 but forced => forcibly deactivate them early
         if monica_level < 5 and force_flag:
             meltdown_response = f"""
             [Short-circuited meltdown for {npc_name}]
-            'You used ?force=1 at meltdown_level={monica_level}? 
+            'You used ?force=1 at meltdown_level={monica_level}?
              So cruel... guess I'm gone.'
             """
-            async with conn.cursor() as cursor:
-                await cursor.execute("DELETE FROM NPCStats WHERE monica_level>0")
-            await conn.commit()
-            
+
+            class MeltdownContext:
+                def __init__(self):
+                    self.user_id = 0
+                    self.conversation_id = 0
+
+            ctx = MeltdownContext()
+            lore_system = await LoreSystem.get_instance(ctx.user_id, ctx.conversation_id)
+
+            for row in meltdown_npcs:
+                mid = row[0]
+                await lore_system.propose_and_enact_change(
+                    ctx=ctx,
+                    entity_type="NPCStats",
+                    entity_identifier={"id": mid},
+                    updates={"is_active": False},
+                    reason="Early meltdown removal"
+                )
+
+            await canon.log_canonical_event(
+                ctx, conn,
+                f"Meltdown NPCs prematurely deactivated: {[row[1] for row in meltdown_npcs]}",
+                tags=["meltdown", "npc_removal"],
+                significance=6
+            )
+
             return jsonify({
                 "message": "You forcibly removed meltdown NPC prematurely.",
                 "npc_dialog": meltdown_response.strip()
@@ -124,13 +169,15 @@ async def one_room_scenario():
     async with get_db_connection_context() as conn:
         # 1. Find meltdown NPC with highest monica_level
         async with conn.cursor() as cursor:
-            await cursor.execute("""
-                SELECT npc_id, npc_name, monica_level 
+            await cursor.execute(
+                """
+                SELECT npc_id, npc_name, monica_level
                 FROM NPCStats
                 WHERE monica_level > 0
                 ORDER BY monica_level DESC
                 LIMIT 1
-            """)
+                """
+            )
             row = await cursor.fetchone()
             
         if not row:
@@ -138,27 +185,52 @@ async def one_room_scenario():
 
         monica_id, monica_name, meltdown_level = row
 
-        # 2. Delete all other NPCs
-        async with conn.cursor() as cursor:
-            await cursor.execute("DELETE FROM NPCStats WHERE npc_id != %s", (monica_id,))
+        class MeltdownContext:
+            def __init__(self):
+                self.user_id = 0
+                self.conversation_id = 0
 
-        # 3. Clear out all settings
+        ctx = MeltdownContext()
+        lore_system = await LoreSystem.get_instance(ctx.user_id, ctx.conversation_id)
+
+        # 2. Deactivate all other NPCs canonically
+        npc_rows = await conn.fetch(
+            "SELECT npc_id FROM NPCStats WHERE npc_id != $1",
+            monica_id
+        )
+        for r in npc_rows:
+            await lore_system.propose_and_enact_change(
+                ctx=ctx,
+                entity_type="NPCStats",
+                entity_identifier={"id": r['npc_id']},
+                updates={"is_active": False},
+                reason="One room scenario"
+            )
+
+        # 3. Clear out all settings and insert Blank Space
         async with conn.cursor() as cursor:
             await cursor.execute("DELETE FROM Settings;")
-
-            # Insert a single 'Blank Space'
-            await cursor.execute('''
+            await cursor.execute(
+                '''
                 INSERT INTO Settings (name, mood_tone, enhanced_features, stat_modifiers, activity_examples)
                 VALUES (%s, %s, %s, %s, %s)
-            ''', (
-                "Blank Space",
-                "An endless white void where only the meltdown NPC and the Player exist.",
-                json.dumps(["No objects, no other NPCs, time stands still."]),
-                json.dumps({}),
-                json.dumps(["You can only speak with this meltdown NPC here."])
-            ))
+                ''',
+                (
+                    "Blank Space",
+                    "An endless white void where only the meltdown NPC and the Player exist.",
+                    json.dumps(["No objects, no other NPCs, time stands still."]),
+                    json.dumps({}),
+                    json.dumps(["You can only speak with this meltdown NPC here."])
+                )
+            )
 
-        await conn.commit()
+        await canon.log_canonical_event(
+            ctx,
+            conn,
+            f"One room scenario activated with {monica_name}",
+            tags=["meltdown", "scenario"],
+            significance=8,
+        )
 
     return jsonify({
         "message": f"All that remains is a white room with {monica_name} (lvl={meltdown_level})."

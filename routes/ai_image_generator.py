@@ -16,6 +16,7 @@ from logic.addiction_system_sdk import check_addiction_status
 from logic.chatgpt_integration import get_openai_client, safe_json_loads
 from dotenv import load_dotenv
 from lore.lore_system import LoreSystem
+from lore.core import canon
 
 # Load environment variables
 load_dotenv()
@@ -402,21 +403,40 @@ Return a JSON object with these keys, using 'unknown' if not specified."""
             # Since NPCVisualAttributes might not be a "core" lore table
             # Keep the insert for now or create a canon function
             async with conn.cursor() as cursor:
-                await cursor.execute("""
-                    INSERT INTO NPCVisualAttributes
-                    (npc_id, user_id, conversation_id, hair_color, hair_style, eye_color, 
-                     skin_tone, body_type, height, age_appearance, default_outfit, makeup_style, 
-                     accessories, visual_seed, last_generated_image)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                """, (
-                    npc_id, user_id, conversation_id,
-                    new_attrs["hair_color"], new_attrs["hair_style"], new_attrs["eye_color"],
-                    new_attrs["skin_tone"], new_attrs["body_type"], new_attrs["height"],
-                    new_attrs["age_appearance"], new_attrs["default_outfit"], new_attrs["makeup_style"],
-                    json.dumps(new_attrs["accessories"]),
-                    hashlib.md5(f"{npc_id}".encode()).hexdigest(),
-                    image_path
-                ))
+                await cursor.execute(
+                    """
+                    INSERT INTO NPCVisualAttributes (
+                        npc_id, user_id, conversation_id, hair_color, hair_style, eye_color,
+                        skin_tone, body_type, height, age_appearance, default_outfit, makeup_style,
+                        accessories, visual_seed, last_generated_image
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        npc_id,
+                        user_id,
+                        conversation_id,
+                        new_attrs["hair_color"],
+                        new_attrs["hair_style"],
+                        new_attrs["eye_color"],
+                        new_attrs["skin_tone"],
+                        new_attrs["body_type"],
+                        new_attrs["height"],
+                        new_attrs["age_appearance"],
+                        new_attrs["default_outfit"],
+                        new_attrs["makeup_style"],
+                        json.dumps(new_attrs["accessories"]),
+                        hashlib.md5(f"{npc_id}".encode()).hexdigest(),
+                        image_path,
+                    ),
+                )
+
+            await canon.log_canonical_event(
+                ctx,
+                conn,
+                f"Initialized visual attributes for NPC {npc_id}",
+                tags=["visual", "creation"],
+                significance=5,
+            )
     
     return new_attrs, current_state
 
