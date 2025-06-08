@@ -7,6 +7,7 @@ import asyncpg
 from datetime import datetime
 from db.connection import get_db_connection_context
 from logic.currency_generator import CurrencyGenerator
+from lore.core import canon
 
 class ResourceManager:
     """
@@ -141,51 +142,22 @@ class ResourceManager:
         """
         try:
             async with get_db_connection_context() as conn:
-                # Get current value
-                row = await conn.fetchrow("""
-                    SELECT money FROM PlayerResources
-                    WHERE user_id=$1 AND conversation_id=$2 AND player_name=$3
-                    FOR UPDATE
-                """, self.user_id, self.conversation_id, self.player_name)
-                
-                if not row:
-                    # Create default resources if not found
-                    await self.create_default_resources()
-                    old_value = 100
-                else:
-                    old_value = row['money']
-                
-                new_value = max(0, old_value + amount)
-                
-                # Update resources
-                await conn.execute("""
-                    UPDATE PlayerResources
-                    SET money=$1, updated_at=CURRENT_TIMESTAMP
-                    WHERE user_id=$2 AND conversation_id=$3 AND player_name=$4
-                """, new_value, self.user_id, self.conversation_id, self.player_name)
-                
-                # Log the change
-                await conn.execute("""
-                    INSERT INTO ResourceHistoryLog 
-                    (user_id, conversation_id, player_name, resource_type, 
-                     old_value, new_value, amount_changed, source, description)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-                """, self.user_id, self.conversation_id, self.player_name, 
-                      "money", old_value, new_value, amount, source, description)
-                
-                result = {
-                    "success": True,
-                    "old_value": old_value,
-                    "new_value": new_value,
-                    "change": amount
-                }
-                
-                # Add formatted currency values
+                canon_ctx = type("ctx", (), {"user_id": self.user_id, "conversation_id": self.conversation_id})()
+                result = await canon.adjust_player_resource(
+                    canon_ctx,
+                    conn,
+                    self.player_name,
+                    "money",
+                    amount,
+                    source,
+                    description,
+                )
+
                 currency_generator = CurrencyGenerator(self.user_id, self.conversation_id)
-                result["formatted_old_value"] = await currency_generator.format_currency(old_value)
-                result["formatted_new_value"] = await currency_generator.format_currency(new_value)
+                result["formatted_old_value"] = await currency_generator.format_currency(result["old_value"])
+                result["formatted_new_value"] = await currency_generator.format_currency(result["new_value"])
                 result["formatted_change"] = await currency_generator.format_currency(amount)
-                
+                result["success"] = True
                 return result
                 
         except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as db_err:
@@ -215,44 +187,19 @@ class ResourceManager:
         """
         try:
             async with get_db_connection_context() as conn:
-                # Get current value
-                row = await conn.fetchrow("""
-                    SELECT supplies FROM PlayerResources
-                    WHERE user_id=$1 AND conversation_id=$2 AND player_name=$3
-                    FOR UPDATE
-                """, self.user_id, self.conversation_id, self.player_name)
-                
-                if not row:
-                    # Create default resources if not found
-                    await self.create_default_resources()
-                    old_value = 20
-                else:
-                    old_value = row['supplies']
-                
-                new_value = max(0, old_value + amount)
-                
-                # Update resources
-                await conn.execute("""
-                    UPDATE PlayerResources
-                    SET supplies=$1, updated_at=CURRENT_TIMESTAMP
-                    WHERE user_id=$2 AND conversation_id=$3 AND player_name=$4
-                """, new_value, self.user_id, self.conversation_id, self.player_name)
-                
-                # Log the change
-                await conn.execute("""
-                    INSERT INTO ResourceHistoryLog 
-                    (user_id, conversation_id, player_name, resource_type, 
-                     old_value, new_value, amount_changed, source, description)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-                """, self.user_id, self.conversation_id, self.player_name, 
-                      "supplies", old_value, new_value, amount, source, description)
-                
-                return {
-                    "success": True,
-                    "old_value": old_value,
-                    "new_value": new_value,
-                    "change": amount
-                }
+                canon_ctx = type("ctx", (), {"user_id": self.user_id, "conversation_id": self.conversation_id})()
+                result = await canon.adjust_player_resource(
+                    canon_ctx,
+                    conn,
+                    self.player_name,
+                    "supplies",
+                    amount,
+                    source,
+                    description,
+                )
+
+                result["success"] = True
+                return result
                 
         except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as db_err:
             logging.error(f"DB Error modifying supplies: {db_err}", exc_info=True)
@@ -281,44 +228,19 @@ class ResourceManager:
         """
         try:
             async with get_db_connection_context() as conn:
-                # Get current value
-                row = await conn.fetchrow("""
-                    SELECT influence FROM PlayerResources
-                    WHERE user_id=$1 AND conversation_id=$2 AND player_name=$3
-                    FOR UPDATE
-                """, self.user_id, self.conversation_id, self.player_name)
-                
-                if not row:
-                    # Create default resources if not found
-                    await self.create_default_resources()
-                    old_value = 10
-                else:
-                    old_value = row['influence']
-                
-                new_value = max(0, old_value + amount)
-                
-                # Update resources
-                await conn.execute("""
-                    UPDATE PlayerResources
-                    SET influence=$1, updated_at=CURRENT_TIMESTAMP
-                    WHERE user_id=$2 AND conversation_id=$3 AND player_name=$4
-                """, new_value, self.user_id, self.conversation_id, self.player_name)
-                
-                # Log the change
-                await conn.execute("""
-                    INSERT INTO ResourceHistoryLog 
-                    (user_id, conversation_id, player_name, resource_type, 
-                     old_value, new_value, amount_changed, source, description)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-                """, self.user_id, self.conversation_id, self.player_name, 
-                      "influence", old_value, new_value, amount, source, description)
-                
-                return {
-                    "success": True,
-                    "old_value": old_value,
-                    "new_value": new_value,
-                    "change": amount
-                }
+                canon_ctx = type("ctx", (), {"user_id": self.user_id, "conversation_id": self.conversation_id})()
+                result = await canon.adjust_player_resource(
+                    canon_ctx,
+                    conn,
+                    self.player_name,
+                    "influence",
+                    amount,
+                    source,
+                    description,
+                )
+
+                result["success"] = True
+                return result
                 
         except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as db_err:
             logging.error(f"DB Error modifying influence: {db_err}", exc_info=True)
@@ -347,45 +269,19 @@ class ResourceManager:
         """
         try:
             async with get_db_connection_context() as conn:
-                # Get current value
-                row = await conn.fetchrow("""
-                    SELECT hunger FROM PlayerVitals
-                    WHERE user_id=$1 AND conversation_id=$2 AND player_name=$3
-                    FOR UPDATE
-                """, self.user_id, self.conversation_id, self.player_name)
-                
-                if not row:
-                    # Create default vitals if not found
-                    await self.create_default_vitals()
-                    old_value = 100
-                else:
-                    old_value = row['hunger']
-                
-                # Hunger is capped between 0 and 100
-                new_value = max(0, min(100, old_value + amount))
-                
-                # Update vitals
-                await conn.execute("""
-                    UPDATE PlayerVitals
-                    SET hunger=$1, last_update=CURRENT_TIMESTAMP
-                    WHERE user_id=$2 AND conversation_id=$3 AND player_name=$4
-                """, new_value, self.user_id, self.conversation_id, self.player_name)
-                
-                # Log the change
-                await conn.execute("""
-                    INSERT INTO ResourceHistoryLog 
-                    (user_id, conversation_id, player_name, resource_type, 
-                     old_value, new_value, amount_changed, source, description)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-                """, self.user_id, self.conversation_id, self.player_name, 
-                      "hunger", old_value, new_value, amount, source or "activity", description)
-                
-                return {
-                    "success": True,
-                    "old_value": old_value,
-                    "new_value": new_value,
-                    "change": amount
-                }
+                canon_ctx = type("ctx", (), {"user_id": self.user_id, "conversation_id": self.conversation_id})()
+                result = await canon.adjust_player_vital(
+                    canon_ctx,
+                    conn,
+                    self.player_name,
+                    "hunger",
+                    amount,
+                    source,
+                    description,
+                )
+
+                result["success"] = True
+                return result
                 
         except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as db_err:
             logging.error(f"DB Error modifying hunger: {db_err}", exc_info=True)
@@ -414,45 +310,19 @@ class ResourceManager:
         """
         try:
             async with get_db_connection_context() as conn:
-                # Get current value
-                row = await conn.fetchrow("""
-                    SELECT energy FROM PlayerVitals
-                    WHERE user_id=$1 AND conversation_id=$2 AND player_name=$3
-                    FOR UPDATE
-                """, self.user_id, self.conversation_id, self.player_name)
-                
-                if not row:
-                    # Create default vitals if not found
-                    await self.create_default_vitals()
-                    old_value = 100
-                else:
-                    old_value = row['energy']
-                
-                # Energy is capped between 0 and 100
-                new_value = max(0, min(100, old_value + amount))
-                
-                # Update vitals
-                await conn.execute("""
-                    UPDATE PlayerVitals
-                    SET energy=$1, last_update=CURRENT_TIMESTAMP
-                    WHERE user_id=$2 AND conversation_id=$3 AND player_name=$4
-                """, new_value, self.user_id, self.conversation_id, self.player_name)
-                
-                # Log the change
-                await conn.execute("""
-                    INSERT INTO ResourceHistoryLog 
-                    (user_id, conversation_id, player_name, resource_type, 
-                     old_value, new_value, amount_changed, source, description)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-                """, self.user_id, self.conversation_id, self.player_name, 
-                      "energy", old_value, new_value, amount, source or "activity", description)
-                
-                return {
-                    "success": True,
-                    "old_value": old_value,
-                    "new_value": new_value,
-                    "change": amount
-                }
+                canon_ctx = type("ctx", (), {"user_id": self.user_id, "conversation_id": self.conversation_id})()
+                result = await canon.adjust_player_vital(
+                    canon_ctx,
+                    conn,
+                    self.player_name,
+                    "energy",
+                    amount,
+                    source,
+                    description,
+                )
+
+                result["success"] = True
+                return result
                 
         except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as db_err:
             logging.error(f"DB Error modifying energy: {db_err}", exc_info=True)
@@ -558,13 +428,8 @@ class ResourceManager:
         """Create default resources for a player if not exists."""
         try:
             async with get_db_connection_context() as conn:
-                # Note: ON CONFLICT might need to be handled differently in asyncpg depending on the DB schema
-                await conn.execute("""
-                    INSERT INTO PlayerResources (user_id, conversation_id, player_name, money, supplies, influence)
-                    VALUES ($1, $2, $3, 100, 20, 10)
-                    ON CONFLICT (user_id, conversation_id, player_name) DO NOTHING
-                """, self.user_id, self.conversation_id, self.player_name)
-                
+                canon_ctx = type("ctx", (), {"user_id": self.user_id, "conversation_id": self.conversation_id})()
+                await canon.create_default_resources(canon_ctx, conn, self.player_name)
                 return True
         except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as db_err:
             logging.error(f"DB Error creating default resources: {db_err}", exc_info=True)
@@ -577,13 +442,8 @@ class ResourceManager:
         """Create default vitals for a player if not exists."""
         try:
             async with get_db_connection_context() as conn:
-                # Note: ON CONFLICT might need to be handled differently in asyncpg depending on the DB schema
-                await conn.execute("""
-                    INSERT INTO PlayerVitals (user_id, conversation_id, player_name, energy, hunger)
-                    VALUES ($1, $2, $3, 100, 100)
-                    ON CONFLICT (user_id, conversation_id, player_name) DO NOTHING
-                """, self.user_id, self.conversation_id, self.player_name)
-                
+                canon_ctx = type("ctx", (), {"user_id": self.user_id, "conversation_id": self.conversation_id})()
+                await canon.create_default_vitals(canon_ctx, conn, self.player_name)
                 return True
         except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as db_err:
             logging.error(f"DB Error creating default vitals: {db_err}", exc_info=True)

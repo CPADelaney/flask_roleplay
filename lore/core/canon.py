@@ -2321,3 +2321,185 @@ async def resolve_player_manipulation_attempt(
         tags=["conflict", "manipulation", "resolution"],
         significance=6,
     )
+
+# ---------------------------------------------------------------------------
+# Resource and Vital Management Helpers
+# ---------------------------------------------------------------------------
+
+async def create_default_resources(ctx, conn, player_name: str = "Chase") -> None:
+    """Ensure a PlayerResources row exists for the given player."""
+    await conn.execute(
+        """
+        INSERT INTO PlayerResources (user_id, conversation_id, player_name, money, supplies, influence)
+        VALUES ($1, $2, $3, 100, 20, 10)
+        ON CONFLICT (user_id, conversation_id, player_name) DO NOTHING
+        """,
+        ctx.user_id,
+        ctx.conversation_id,
+        player_name,
+    )
+
+    await log_canonical_event(
+        ctx,
+        conn,
+        f"Default resources initialized for {player_name}",
+        tags=["resources", "init"],
+        significance=4,
+    )
+
+
+async def create_default_vitals(ctx, conn, player_name: str = "Chase") -> None:
+    """Ensure a PlayerVitals row exists for the given player."""
+    await conn.execute(
+        """
+        INSERT INTO PlayerVitals (user_id, conversation_id, player_name, energy, hunger)
+        VALUES ($1, $2, $3, 100, 100)
+        ON CONFLICT (user_id, conversation_id, player_name) DO NOTHING
+        """,
+        ctx.user_id,
+        ctx.conversation_id,
+        player_name,
+    )
+
+    await log_canonical_event(
+        ctx,
+        conn,
+        f"Default vitals initialized for {player_name}",
+        tags=["vitals", "init"],
+        significance=4,
+    )
+
+
+async def adjust_player_resource(
+    ctx,
+    conn,
+    player_name: str,
+    resource_type: str,
+    amount: int,
+    source: str,
+    description: str = None,
+) -> dict:
+    """Adjust a player's resource canonically and log the change."""
+    if resource_type not in {"money", "supplies", "influence"}:
+        raise ValueError("Invalid resource type")
+
+    row = await conn.fetchrow(
+        f"SELECT {resource_type} FROM PlayerResources "
+        "WHERE user_id=$1 AND conversation_id=$2 AND player_name=$3 FOR UPDATE",
+        ctx.user_id,
+        ctx.conversation_id,
+        player_name,
+    )
+
+    if not row:
+        await create_default_resources(ctx, conn, player_name)
+        defaults = {"money": 100, "supplies": 20, "influence": 10}
+        old_value = defaults[resource_type]
+    else:
+        old_value = row[resource_type]
+
+    new_value = max(0, old_value + amount)
+
+    await conn.execute(
+        f"UPDATE PlayerResources SET {resource_type}=$1, updated_at=CURRENT_TIMESTAMP "
+        "WHERE user_id=$2 AND conversation_id=$3 AND player_name=$4",
+        new_value,
+        ctx.user_id,
+        ctx.conversation_id,
+        player_name,
+    )
+
+    await conn.execute(
+        """
+        INSERT INTO ResourceHistoryLog
+            (user_id, conversation_id, player_name, resource_type,
+             old_value, new_value, amount_changed, source, description)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        """,
+        ctx.user_id,
+        ctx.conversation_id,
+        player_name,
+        resource_type,
+        old_value,
+        new_value,
+        amount,
+        source,
+        description,
+    )
+
+    await log_canonical_event(
+        ctx,
+        conn,
+        f"{player_name}'s {resource_type} changed by {amount}",
+        tags=["resources", resource_type],
+        significance=3,
+    )
+
+    return {"old_value": old_value, "new_value": new_value, "change": amount}
+
+
+async def adjust_player_vital(
+    ctx,
+    conn,
+    player_name: str,
+    vital_type: str,
+    amount: int,
+    source: str = None,
+    description: str = None,
+) -> dict:
+    """Adjust a player's vitals canonically and log the change."""
+    if vital_type not in {"hunger", "energy"}:
+        raise ValueError("Invalid vital type")
+
+    row = await conn.fetchrow(
+        f"SELECT {vital_type} FROM PlayerVitals "
+        "WHERE user_id=$1 AND conversation_id=$2 AND player_name=$3 FOR UPDATE",
+        ctx.user_id,
+        ctx.conversation_id,
+        player_name,
+    )
+
+    if not row:
+        await create_default_vitals(ctx, conn, player_name)
+        old_value = 100
+    else:
+        old_value = row[vital_type]
+
+    new_value = max(0, min(100, old_value + amount))
+
+    await conn.execute(
+        f"UPDATE PlayerVitals SET {vital_type}=$1, last_update=CURRENT_TIMESTAMP "
+        "WHERE user_id=$2 AND conversation_id=$3 AND player_name=$4",
+        new_value,
+        ctx.user_id,
+        ctx.conversation_id,
+        player_name,
+    )
+
+    await conn.execute(
+        """
+        INSERT INTO ResourceHistoryLog
+            (user_id, conversation_id, player_name, resource_type,
+             old_value, new_value, amount_changed, source, description)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        """,
+        ctx.user_id,
+        ctx.conversation_id,
+        player_name,
+        vital_type,
+        old_value,
+        new_value,
+        amount,
+        source or "activity",
+        description,
+    )
+
+    await log_canonical_event(
+        ctx,
+        conn,
+        f"{player_name}'s {vital_type} changed by {amount}",
+        tags=["vitals", vital_type],
+        significance=3,
+    )
+
+    return {"old_value": old_value, "new_value": new_value, "change": amount}

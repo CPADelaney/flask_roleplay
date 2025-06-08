@@ -12,6 +12,7 @@ from nyx.nyx_governance import AgentType, DirectiveType
 from nyx.governance_helpers import with_governance
 from lore.lore_system import LoreSystem
 from db.connection import get_db_connection_context
+from lore.core import canon
 from logic.fully_integrated_npc_system import IntegratedNPCSystem
 from logic.conflict_system.conflict_agents import (
     triage_agent, conflict_generation_agent, stakeholder_agent,
@@ -727,17 +728,26 @@ class ConflictSystemIntegration:
         try:
             async with get_db_connection_context() as conn:
                 async with conn.transaction():
+                    canon_ctx = type("ctx", (), {"user_id": self.user_id, "conversation_id": self.conversation_id})()
                     for consequence in consequences:
                         ctype = consequence.get("type")
                         # Player stat changes
                         if ctype == "player_stat" and "stat_changes" in consequence:
                             for stat, change in consequence["stat_changes"].items():
-                                query = f"""
-                                    UPDATE PlayerStats
-                                    SET {stat} = {stat} + $1
-                                    WHERE user_id = $2 AND conversation_id = $3
-                                """
-                                await conn.execute(query, change, self.user_id, self.conversation_id)
+                                current_val = await conn.fetchval(
+                                    f"SELECT {stat} FROM PlayerStats WHERE user_id=$1 AND conversation_id=$2",
+                                    self.user_id,
+                                    self.conversation_id,
+                                )
+                                new_val = (current_val or 0) + change
+                                await canon.update_player_stat_canonically(
+                                    canon_ctx,
+                                    conn,
+                                    "Chase",
+                                    stat,
+                                    new_val,
+                                    reason="conflict_reward",
+                                )
                                 logger.info(f"Updated player stat {stat} by {change} for user {self.user_id}")
                                 
                                 # Record this change in memory
@@ -757,23 +767,20 @@ class ConflictSystemIntegration:
                         # Item rewards
                         elif ctype == "item_reward" and "item" in consequence:
                             item = consequence["item"]
-                            query = """
-                                INSERT INTO PlayerInventory
-                                (user_id, conversation_id, item_name, item_description,
-                                 item_category, item_properties, quantity, equipped)
-                                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-                            """
-                            await conn.execute(
-                                query,
-                                self.user_id,
-                                self.conversation_id,
-                                item["name"], item["description"], item.get("category", "conflict_reward"),
-                                json.dumps({
+                            await canon.find_or_create_inventory_item(
+                                canon_ctx,
+                                conn,
+                                item_name=item["name"],
+                                player_name="Chase",
+                                item_description=item["description"],
+                                item_category=item.get("category", "conflict_reward"),
+                                item_properties={
                                     "rarity": item.get("rarity", "common"),
                                     "resolution_style": item.get("resolution_style", "neutral"),
-                                    "source": "conflict_resolution"
-                                }),
-                                1, False
+                                    "source": "conflict_resolution",
+                                },
+                                quantity=1,
+                                equipped=False,
                             )
                             logger.info(f"Added item {item['name']} to inventory for user {self.user_id}")
                             
