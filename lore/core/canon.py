@@ -2322,7 +2322,6 @@ async def resolve_player_manipulation_attempt(
         significance=6,
     )
 
-
 # ---------------------------------------------------------------------------
 # Resource and Vital Management Helpers
 # ---------------------------------------------------------------------------

@@ -133,21 +133,29 @@ class WorldLoreManager(BaseLoreManager):
     @function_tool
     async def get_world_data(
         self,
-        world_id: str,
-        fetch_func: Optional[callable] = None
+        world_id: str
     ) -> Optional[Dict[str, Any]]:
         """Get world data from cache or fetch if not available."""
         try:
             # Check resource availability before fetching
-            if fetch_func:
-                await self.resource_manager._check_resource_availability('memory')
+            await self.resource_manager._check_resource_availability('memory')
             
-            return await self.get_cached_data('world', world_id, fetch_func)
+            # Use the internal method that can handle fetch_func
+            return await self._get_world_data_internal(world_id, None)
         except Exception as e:
             logger.error(f"Error getting world data: {e}")
             return None
 
-    @function_tool
+    # Internal method that handles the fetch_func parameter
+    async def _get_world_data_internal(
+        self,
+        world_id: str,
+        fetch_func: Optional[Any] = None
+    ) -> Optional[Dict[str, Any]]:
+        """Internal method to get world data with optional fetch function."""
+        return await self.get_cached_data('world', world_id, fetch_func)
+
+    @function_tool(strict_mode=False)
     async def set_world_data(
         self,
         world_id: str,
@@ -177,20 +185,27 @@ class WorldLoreManager(BaseLoreManager):
     @function_tool
     async def get_world_history(
         self,
-        world_id: str,
-        fetch_func: Optional[callable] = None
+        world_id: str
     ) -> Optional[List[Dict[str, Any]]]:
         """Get world history from cache or fetch if not available."""
         try:
-            if fetch_func:
-                await self.resource_manager._check_resource_availability('memory')
+            await self.resource_manager._check_resource_availability('memory')
             
-            return await self.get_cached_data('world_history', world_id, fetch_func)
+            return await self._get_world_history_internal(world_id, None)
         except Exception as e:
             logger.error(f"Error getting world history: {e}")
             return None
 
-    @function_tool
+    # Internal method that handles the fetch_func parameter
+    async def _get_world_history_internal(
+        self,
+        world_id: str,
+        fetch_func: Optional[Any] = None
+    ) -> Optional[List[Dict[str, Any]]]:
+        """Internal method to get world history with optional fetch function."""
+        return await self.get_cached_data('world_history', world_id, fetch_func)
+
+    @function_tool(strict_mode=False)
     async def set_world_history(
         self,
         world_id: str,
@@ -205,7 +220,7 @@ class WorldLoreManager(BaseLoreManager):
             logger.error(f"Error setting world history: {e}")
             return False
 
-    @function_tool
+    @function_tool(strict_mode=False)
     async def create_world_element(self, element_type: str, element_data: Dict[str, Any]) -> Dict[str, Any]:
         """Create any world element using the canon system."""
         from lore.core import canon
@@ -260,20 +275,27 @@ class WorldLoreManager(BaseLoreManager):
     @function_tool
     async def get_world_events(
         self,
-        world_id: str,
-        fetch_func: Optional[callable] = None
+        world_id: str
     ) -> Optional[List[Dict[str, Any]]]:
         """Get world events from cache or fetch if not available."""
         try:
-            if fetch_func:
-                await self.resource_manager._check_resource_availability('memory')
+            await self.resource_manager._check_resource_availability('memory')
             
-            return await self.get_cached_data('world_events', world_id, fetch_func)
+            return await self._get_world_events_internal(world_id, None)
         except Exception as e:
             logger.error(f"Error getting world events: {e}")
             return None
 
-    @function_tool
+    # Internal method that handles the fetch_func parameter
+    async def _get_world_events_internal(
+        self,
+        world_id: str,
+        fetch_func: Optional[Any] = None
+    ) -> Optional[List[Dict[str, Any]]]:
+        """Internal method to get world events with optional fetch function."""
+        return await self.get_cached_data('world_events', world_id, fetch_func)
+
+    @function_tool(strict_mode=False)
     async def set_world_events(
         self,
         world_id: str,
@@ -303,20 +325,27 @@ class WorldLoreManager(BaseLoreManager):
     @function_tool
     async def get_world_relationships(
         self,
-        world_id: str,
-        fetch_func: Optional[callable] = None
+        world_id: str
     ) -> Optional[Dict[str, Any]]:
         """Get world relationships from cache or fetch if not available."""
         try:
-            if fetch_func:
-                await self.resource_manager._check_resource_availability('memory')
+            await self.resource_manager._check_resource_availability('memory')
             
-            return await self.get_cached_data('world_relationships', world_id, fetch_func)
+            return await self._get_world_relationships_internal(world_id, None)
         except Exception as e:
             logger.error(f"Error getting world relationships: {e}")
             return None
 
-    @function_tool
+    # Internal method that handles the fetch_func parameter
+    async def _get_world_relationships_internal(
+        self,
+        world_id: str,
+        fetch_func: Optional[Any] = None
+    ) -> Optional[Dict[str, Any]]:
+        """Internal method to get world relationships with optional fetch function."""
+        return await self.get_cached_data('world_relationships', world_id, fetch_func)
+
+    @function_tool(strict_mode=False)
     async def set_world_relationships(
         self,
         world_id: str,
@@ -346,18 +375,25 @@ class WorldLoreManager(BaseLoreManager):
     @function_tool
     async def get_world_metadata(
         self,
-        world_id: str,
-        fetch_func: Optional[callable] = None
+        world_id: str
     ) -> Optional[Dict[str, Any]]:
         """Get world metadata from cache or fetch if not available."""
         try:
-            if fetch_func:
-                await self.resource_manager._check_resource_availability('memory')
+            await self.resource_manager._check_resource_availability('memory')
             
-            return await self.get_cached_data('world_metadata', world_id, fetch_func)
+            return await self._get_world_metadata_internal(world_id, None)
         except Exception as e:
             logger.error(f"Error getting world metadata: {e}")
             return None
+
+    # Internal method that handles the fetch_func parameter
+    async def _get_world_metadata_internal(
+        self,
+        world_id: str,
+        fetch_func: Optional[Any] = None
+    ) -> Optional[Dict[str, Any]]:
+        """Internal method to get world metadata with optional fetch function."""
+        return await self.get_cached_data('world_metadata', world_id, fetch_func)
 
     @function_tool
     async def set_world_metadata(
@@ -993,36 +1029,11 @@ class WorldLoreManager(BaseLoreManager):
                 ON CONFLICT (event_id, referenced_event_id) DO NOTHING
             """, event_id, mentioned['id'], 'mentioned')
     
-    @function_tool
-    async def query_world_state(self, query: str) -> str:
-        """Query world state with canon awareness."""
-        # First check canonical events
-        async with self.get_connection_pool() as pool:
-            async with pool.acquire() as conn:
-                # Search canonical events
-                recent_events = await conn.fetch("""
-                    SELECT event_text, tags, significance, timestamp
-                    FROM CanonicalEvents
-                    WHERE user_id = $1 AND conversation_id = $2
-                    ORDER BY timestamp DESC
-                    LIMIT 10
-                """, self.user_id, self.conversation_id)
-                
-                # Use agent to interpret query
-                query_agent = self._get_agent("query")
-                
-                prompt = f"""
-                User query: {query}
-                
-                Recent canonical events:
-                {json.dumps([dict(e) for e in recent_events], indent=2)}
-                
-                Answer the query based on the world state and recent events.
-                Be specific and reference canonical events where relevant.
-                """
-                
-                result = await Runner.run(query_agent, prompt)
-                return result.final_output
+    # Remove duplicate declaration - keep only one version
+    # @function_tool decorator already applied above
+    # async def query_world_state(self, query: str) -> str:
+    #     """Query world state with canon awareness."""
+    #     # Implementation already exists above
     
     async def validate_world_consistency(self) -> Dict[str, Any]:
         """Validate world consistency and find issues."""
@@ -1316,7 +1327,7 @@ class MasterCoordinationAgent:
         """Get existing content related to the new content for consistency checking."""
         related_content = []
         
-        async with self.get_connection_pool() as pool:
+        async with self.world_lore_manager.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 if content_type == "faction":
                     # Find factions with shared territory, rivals, or allies
@@ -1745,7 +1756,7 @@ class LoreRelationshipMapper:
     
     async def _store_relationship_graph(self, graph: Dict[str, Any]) -> None:
         """Store a relationship graph in the database."""
-        async with self.get_connection_pool() as pool:
+        async with self.world_lore_manager.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 # Create transaction
                 async with conn.transaction():
@@ -1755,7 +1766,7 @@ class LoreRelationshipMapper:
                             user_id, creation_date, graph_name, description
                         ) VALUES ($1, $2, $3, $4)
                         RETURNING id
-                    """, self.user_id, datetime.now(), graph.get("name", "Graph"), graph.get("description", ""))
+                    """, self.world_lore_manager.user_id, datetime.now(), graph.get("name", "Graph"), graph.get("description", ""))
                     
                     # Store all nodes
                     for node in graph.get("nodes", []):
@@ -1781,7 +1792,7 @@ class LoreRelationshipMapper:
         """Get previously mapped relationships for an element."""
         relationships = {"related_elements": []}
         
-        async with self.get_connection_pool() as pool:
+        async with self.world_lore_manager.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 # Check if table exists
                 table_exists = await conn.fetchval("""
@@ -1834,7 +1845,7 @@ class LoreRelationshipMapper:
     
     async def _store_element_relationships(self, element_id: str, relationships: Dict[str, Any]) -> None:
         """Store relationships for an element."""
-        async with self.get_connection_pool() as pool:
+        async with self.world_lore_manager.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 # Create transaction
                 async with conn.transaction():
@@ -1851,7 +1862,7 @@ class LoreRelationshipMapper:
                                 user_id, creation_date, graph_name, description
                             ) VALUES ($1, $2, $3, $4)
                             RETURNING id
-                        """, self.user_id, datetime.now(), "Generated Graph", "Automatically generated relationships")
+                        """, self.world_lore_manager.user_id, datetime.now(), "Generated Graph", "Automatically generated relationships")
                         
                         # Ensure the element node exists
                         await conn.execute("""
@@ -1898,7 +1909,7 @@ class LoreRelationshipMapper:
         """Get potential related elements based on element type and content."""
         related_elements = []
         
-        async with self.get_connection_pool() as pool:
+        async with self.world_lore_manager.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 if element_type == "faction":
                     # Get factions with similar territory
