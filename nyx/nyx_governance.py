@@ -156,6 +156,14 @@ class NyxUnifiedGovernor:
 
     async def _initialize_systems(self):
         """Initialize memory system, game state, and discover agents."""
+        # --- MERGE: Import LoreSystem locally to avoid circular import ---
+        from lore.lore_system import LoreSystem
+        
+        # --- MERGE: Get an instance of the LoreSystem during initialization ---
+        # Nyx needs its primary tool to execute its will.
+        self.lore_system = await LoreSystem.get_instance(self.user_id, self.conversation_id)
+
+        # Initialize other systems
         self.memory_system = await get_memory_nyx_bridge(self.user_id, self.conversation_id)
         self.game_state = await self.initialize_game_state()
         await self.discover_and_register_agents()
