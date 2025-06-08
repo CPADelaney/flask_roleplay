@@ -173,52 +173,92 @@ async def add_item_to_inventory(
     conversation_id = ctx.context.conversation_id
     governor = ctx.context.governor
 
-    # Check permission (Keep as is)
-    permission = await governor.check_action_permission(...)
+    # Check permission
+    permission = await governor.check_action_permission(
+        agent_type=AgentType.UNIVERSAL_UPDATER,
+        agent_id="inventory_system",
+        action_type="add_item",
+        context={"item": item_name, "player": player_name}
+    )
     if not permission["approved"]:
-        return InventoryOperation(success=False, item_name=item_name, player_name=player_name, operation="add", quantity=quantity, error=permission["reasoning"]).model_dump()
+        return InventoryOperation(
+            success=False, item_name=item_name, player_name=player_name, 
+            operation="add", quantity=quantity, error=permission["reasoning"]
+        ).model_dump()
 
-
+    # Get LoreSystem instance
+    from lore.lore_system import LoreSystem
+    lore_system = await LoreSystem.get_instance(user_id, conversation_id)
+    
+    # Use canon to find or create item
+    from lore.core import canon
+    
     result = {}
     try:
         async with get_db_connection_context() as conn:
-            canon_ctx = type("ctx", (), {"user_id": user_id, "conversation_id": conversation_id})()
-            item_data = {
-                "item_description": description,
-                "item_category": category,
-                "item_properties": {},
-                "quantity": quantity,
-                "equipped": False,
-            }
-            item_id = await canon.find_or_create_inventory_item(
-                canon_ctx,
-                conn,
-                item_name=item_name,
-                player_name=player_name,
-                **item_data,
-            )
+            # Check if item exists
+            existing = await conn.fetchrow("""
+                SELECT item_id, quantity FROM PlayerInventory
+                WHERE user_id = $1 AND conversation_id = $2 
+                AND player_name = $3 AND item_name = $4
+            """, user_id, conversation_id, player_name, item_name)
+            
+            if existing:
+                # Update existing item quantity using LoreSystem
+                new_quantity = existing['quantity'] + quantity
+                update_result = await lore_system.propose_and_enact_change(
+                    ctx=ctx.context,
+                    entity_type="PlayerInventory",
+                    entity_identifier={"item_id": existing['item_id']},
+                    updates={"quantity": new_quantity},
+                    reason=f"Adding {quantity} more {item_name} to inventory"
+                )
+                
+                if update_result["status"] == "committed":
+                    result = InventoryOperation(
+                        success=True, item_name=item_name, player_name=player_name,
+                        operation="add", quantity=quantity, 
+                        metadata={"new_total": new_quantity, "was_update": True}
+                    ).model_dump()
+                else:
+                    result = InventoryOperation(
+                        success=False, item_name=item_name, player_name=player_name,
+                        operation="add", quantity=quantity, error=str(update_result)
+                    ).model_dump()
+            else:
+                # Create new item using canon
+                item_id = await canon.find_or_create_inventory_item(
+                    ctx.context, conn,
+                    player_name=player_name,
+                    item_name=item_name,
+                    item_description=description,
+                    item_effect=effect,
+                    item_category=category,
+                    quantity=quantity
+                )
+                
+                result = InventoryOperation(
+                    success=True, item_name=item_name, player_name=player_name,
+                    operation="add", quantity=quantity, 
+                    metadata={"new_total": quantity, "was_update": False, "item_id": item_id}
+                ).model_dump()
 
-            result = InventoryOperation(
-                success=True,
-                item_name=item_name,
-                player_name=player_name,
-                operation="add",
-                quantity=quantity,
-                metadata={"item_id": item_id},
-            ).model_dump()
-
-        # Report action to governance (Keep as is)
-        await governor.process_agent_action_report(...)
+        # Report action to governance
+        await governor.process_agent_action_report(
+            agent_type=AgentType.UNIVERSAL_UPDATER,
+            agent_id="inventory_system",
+            action_type="add_item",
+            result=result,
+            context={"item": item_name, "player": player_name}
+        )
         return result
 
-    except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as db_err:
-        logger.error(f"DB Error adding item '{item_name}': {db_err}", exc_info=True)
-        return InventoryOperation(success=False, item_name=item_name, player_name=player_name, operation="add", quantity=quantity, error=f"Database error: {db_err}").model_dump()
     except Exception as e:
         logger.error(f"Error adding item '{item_name}' to inventory: {e}", exc_info=True)
-        return InventoryOperation(success=False, item_name=item_name, player_name=player_name, operation="add", quantity=quantity, error=str(e)).model_dump()
-    # No finally block needed
-
+        return InventoryOperation(
+            success=False, item_name=item_name, player_name=player_name, 
+            operation="add", quantity=quantity, error=str(e)
+        ).model_dump()
 
 @function_tool
 async def remove_item_from_inventory(
@@ -234,53 +274,94 @@ async def remove_item_from_inventory(
     conversation_id = ctx.context.conversation_id
     governor = ctx.context.governor
 
-    # Check permission (Keep as is)
-    permission = await governor.check_action_permission(...)
+    # Check permission
+    permission = await governor.check_action_permission(
+        agent_type=AgentType.UNIVERSAL_UPDATER,
+        agent_id="inventory_system",
+        action_type="remove_item",
+        context={"item": item_name, "player": player_name}
+    )
     if not permission["approved"]:
-        return InventoryOperation(success=False, item_name=item_name, player_name=player_name, operation="remove", quantity=quantity, error=permission["reasoning"]).model_dump()
+        return InventoryOperation(
+            success=False, item_name=item_name, player_name=player_name, 
+            operation="remove", quantity=quantity, error=permission["reasoning"]
+        ).model_dump()
 
+    # Get LoreSystem instance
+    from lore.lore_system import LoreSystem
+    lore_system = await LoreSystem.get_instance(user_id, conversation_id)
+    
     result = {}
-
     try:
         async with get_db_connection_context() as conn:
-            canon_ctx = type("ctx", (), {"user_id": user_id, "conversation_id": conversation_id})()
-            removed = await canon.remove_inventory_item(
-                canon_ctx,
-                conn,
-                item_name=item_name,
-                player_name=player_name,
-                quantity=quantity,
-            )
+            # Check if the item exists
+            row = await conn.fetchrow("""
+                SELECT item_id, quantity FROM PlayerInventory
+                WHERE user_id = $1 AND conversation_id = $2 
+                AND player_name = $3 AND item_name = $4
+            """, user_id, conversation_id, player_name, item_name)
 
-            if not removed:
+            if not row:
                 result = InventoryOperation(
-                    success=False,
-                    item_name=item_name,
-                    player_name=player_name,
-                    operation="remove",
-                    quantity=quantity,
-                    error=f"No item named '{item_name}' found in {player_name}'s inventory",
+                    success=False, item_name=item_name, player_name=player_name,
+                    operation="remove", quantity=quantity,
+                    error=f"No item named '{item_name}' found in {player_name}'s inventory"
                 ).model_dump()
             else:
-                result = InventoryOperation(
-                    success=True,
-                    item_name=item_name,
-                    player_name=player_name,
-                    operation="remove",
-                    quantity=quantity,
-                ).model_dump()
+                item_id, existing_qty = row["item_id"], row["quantity"]
+                new_qty = existing_qty - quantity
 
-        # Report action to governance (Keep as is)
-        await governor.process_agent_action_report(...)
+                if new_qty > 0:
+                    # Update quantity using LoreSystem
+                    update_result = await lore_system.propose_and_enact_change(
+                        ctx=ctx.context,
+                        entity_type="PlayerInventory",
+                        entity_identifier={"item_id": item_id},
+                        updates={"quantity": new_qty},
+                        reason=f"Removing {quantity} {item_name} from inventory"
+                    )
+                    
+                    if update_result["status"] == "committed":
+                        result = InventoryOperation(
+                            success=True, item_name=item_name, player_name=player_name,
+                            operation="remove", quantity=quantity, 
+                            metadata={"new_total": new_qty, "was_removed": False}
+                        ).model_dump()
+                    else:
+                        result = InventoryOperation(
+                            success=False, item_name=item_name, player_name=player_name,
+                            operation="remove", quantity=quantity, error=str(update_result)
+                        ).model_dump()
+                else:
+                    # Remove the item entirely using canon
+                    from lore.core import canon
+                    removed = await canon.update_inventory_quantity(
+                        ctx.context, conn, item_id, 0, 
+                        f"Removing all {item_name} from {player_name}'s inventory"
+                    )
+                    
+                    result = InventoryOperation(
+                        success=removed, item_name=item_name, player_name=player_name,
+                        operation="remove", quantity=quantity, 
+                        metadata={"new_total": 0, "was_removed": True}
+                    ).model_dump()
+
+        # Report action to governance
+        await governor.process_agent_action_report(
+            agent_type=AgentType.UNIVERSAL_UPDATER,
+            agent_id="inventory_system",
+            action_type="remove_item",
+            result=result,
+            context={"item": item_name, "player": player_name}
+        )
         return result
 
-    except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as db_err:
-        logger.error(f"DB Error removing item '{item_name}': {db_err}", exc_info=True)
-        return InventoryOperation(success=False, item_name=item_name, player_name=player_name, operation="remove", quantity=quantity, error=f"Database error: {db_err}").model_dump()
     except Exception as e:
         logger.error(f"Error removing item '{item_name}' from inventory: {e}", exc_info=True)
-        return InventoryOperation(success=False, item_name=item_name, player_name=player_name, operation="remove", quantity=quantity, error=str(e)).model_dump()
-    # No finally block needed
+        return InventoryOperation(
+            success=False, item_name=item_name, player_name=player_name, 
+            operation="remove", quantity=quantity, error=str(e)
+        ).model_dump()
 
 @function_tool
 async def get_player_inventory(
@@ -353,53 +434,77 @@ async def update_item_effect(
     conversation_id = ctx.context.conversation_id
     governor = ctx.context.governor
 
-    # Check permission (Keep as is)
-    permission = await governor.check_action_permission(...)
+    # Check permission
+    permission = await governor.check_action_permission(
+        agent_type=AgentType.UNIVERSAL_UPDATER,
+        agent_id="inventory_system",
+        action_type="update_item",
+        context={"item": item_name, "player": player_name}
+    )
     if not permission["approved"]:
-        return InventoryOperation(success=False, item_name=item_name, player_name=player_name, operation="update_effect", error=permission["reasoning"]).model_dump()
+        return InventoryOperation(
+            success=False, item_name=item_name, player_name=player_name, 
+            operation="update_effect", error=permission["reasoning"]
+        ).model_dump()
 
-
+    # Get LoreSystem instance
+    from lore.lore_system import LoreSystem
+    lore_system = await LoreSystem.get_instance(user_id, conversation_id)
+    
     result = {}
     try:
         async with get_db_connection_context() as conn:
-            canon_ctx = type("ctx", (), {"user_id": user_id, "conversation_id": conversation_id})()
-            updated = await canon.update_inventory_item_effect(
-                canon_ctx,
-                conn,
-                item_name=item_name,
-                player_name=player_name,
-                new_effect=new_effect,
-            )
-
-            if updated:
+            # Find the item
+            row = await conn.fetchrow("""
+                SELECT item_id FROM PlayerInventory
+                WHERE user_id = $1 AND conversation_id = $2 
+                AND player_name = $3 AND item_name = $4
+            """, user_id, conversation_id, player_name, item_name)
+            
+            if not row:
                 result = InventoryOperation(
-                    success=True,
-                    item_name=item_name,
-                    player_name=player_name,
+                    success=False, item_name=item_name, player_name=player_name,
                     operation="update_effect",
-                    metadata={"new_effect": new_effect},
+                    error=f"No item named '{item_name}' found for {player_name}"
                 ).model_dump()
             else:
-                result = InventoryOperation(
-                    success=False,
-                    item_name=item_name,
-                    player_name=player_name,
-                    operation="update_effect",
-                    error=f"No item named '{item_name}' found for {player_name} or update failed.",
-                ).model_dump()
+                # Update using LoreSystem
+                update_result = await lore_system.propose_and_enact_change(
+                    ctx=ctx.context,
+                    entity_type="PlayerInventory",
+                    entity_identifier={"item_id": row['item_id']},
+                    updates={"item_effect": new_effect},
+                    reason=f"Updating effect of {item_name} to: {new_effect}"
+                )
+                
+                if update_result["status"] == "committed":
+                    result = InventoryOperation(
+                        success=True, item_name=item_name, player_name=player_name,
+                        operation="update_effect", 
+                        metadata={"new_effect": new_effect}
+                    ).model_dump()
+                else:
+                    result = InventoryOperation(
+                        success=False, item_name=item_name, player_name=player_name,
+                        operation="update_effect", error=str(update_result)
+                    ).model_dump()
 
-        # Report action to governance (Keep as is)
-        # Make sure the result dict passed here matches governance expectations
-        await governor.process_agent_action_report(...)
+        # Report action to governance
+        await governor.process_agent_action_report(
+            agent_type=AgentType.UNIVERSAL_UPDATER,
+            agent_id="inventory_system",
+            action_type="update_item",
+            result=result,
+            context={"item": item_name, "player": player_name, "effect": new_effect}
+        )
         return result
 
-    except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as db_err:
-        logger.error(f"DB Error updating effect for item '{item_name}': {db_err}", exc_info=True)
-        return InventoryOperation(success=False, item_name=item_name, player_name=player_name, operation="update_effect", error=f"Database error: {db_err}").model_dump()
     except Exception as e:
         logger.error(f"Error updating item effect for '{item_name}': {e}", exc_info=True)
-        return InventoryOperation(success=False, item_name=item_name, player_name=player_name, operation="update_effect", error=str(e)).model_dump()
-    # No finally block needed
+        return InventoryOperation(
+            success=False, item_name=item_name, player_name=player_name, 
+            operation="update_effect", error=str(e)
+        ).model_dump()
 
 @function_tool
 async def categorize_items(
@@ -414,8 +519,13 @@ async def categorize_items(
     conversation_id = ctx.context.conversation_id
     governor = ctx.context.governor
 
-    # Check permission (Keep as is)
-    permission = await governor.check_action_permission(...)
+    # Check permission
+    permission = await governor.check_action_permission(
+        agent_type=AgentType.UNIVERSAL_UPDATER,
+        agent_id="inventory_system",
+        action_type="categorize_items",
+        context={"player": player_name, "items_count": len(category_mapping)}
+    )
     if not permission["approved"]:
         return {
             "success": False, "player_name": player_name,
@@ -423,45 +533,69 @@ async def categorize_items(
         }
 
     if not category_mapping:
-         return {
+        return {
             "success": True, "player_name": player_name, "operation": "categorize",
-            "items_updated": 0, "items_not_found": [], "details": {}, "message": "No items provided for categorization."
-         }
+            "items_updated": 0, "items_not_found": [], "details": {}, 
+            "message": "No items provided for categorization."
+        }
 
+    # Get LoreSystem instance
+    from lore.lore_system import LoreSystem
+    lore_system = await LoreSystem.get_instance(user_id, conversation_id)
+    
     results = {
-        "success": True,
-        "player_name": player_name,
-        "operation": "categorize",
-        "items_updated": 0,
-        "items_not_found": [],
-        "details": {},
+        "success": True, "player_name": player_name, "operation": "categorize",
+        "items_updated": 0, "items_not_found": [], "details": {}
     }
 
     try:
         async with get_db_connection_context() as conn:
-            canon_ctx = type("ctx", (), {"user_id": user_id, "conversation_id": conversation_id})()
-            canon_results = await canon.categorize_inventory_items(
-                canon_ctx,
-                conn,
-                player_name=player_name,
-                category_mapping=category_mapping,
-            )
-            results.update(canon_results)
+            for item_name, category in category_mapping.items():
+                # Find the item
+                row = await conn.fetchrow("""
+                    SELECT item_id FROM PlayerInventory
+                    WHERE user_id = $1 AND conversation_id = $2 
+                    AND player_name = $3 AND item_name = $4
+                """, user_id, conversation_id, player_name, item_name)
+                
+                if row:
+                    # Update using LoreSystem
+                    update_result = await lore_system.propose_and_enact_change(
+                        ctx=ctx.context,
+                        entity_type="PlayerInventory",
+                        entity_identifier={"item_id": row['item_id']},
+                        updates={"item_category": category},
+                        reason=f"Categorizing {item_name} as {category}"
+                    )
+                    
+                    if update_result["status"] == "committed":
+                        results["items_updated"] += 1
+                        results["details"][item_name] = "updated"
+                    else:
+                        results["items_not_found"].append(item_name)
+                        results["details"][item_name] = "update failed"
+                else:
+                    results["items_not_found"].append(item_name)
+                    results["details"][item_name] = "not found"
 
-        # Report action to governance (outside DB block)
-        await governor.process_agent_action_report(...)
+        # Report action to governance
+        await governor.process_agent_action_report(
+            agent_type=AgentType.UNIVERSAL_UPDATER,
+            agent_id="inventory_system",
+            action_type="categorize_items",
+            result=results,
+            context={"player": player_name, "items_updated": results["items_updated"]}
+        )
 
         if results["items_not_found"]:
-             results["success"] = False # Indicate partial failure if items not found
-             logger.warning(f"Categorize items for {player_name}: {results['items_updated']} updated, {len(results['items_not_found'])} not found.")
+            results["success"] = False
+            logger.warning(
+                f"Categorize items for {player_name}: {results['items_updated']} updated, "
+                f"{len(results['items_not_found'])} not found."
+            )
 
         return results
 
-    except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as db_err:
-        logger.error(f"DB Error categorizing items for '{player_name}': {db_err}", exc_info=True)
-        results["success"] = False
-        results["error"] = f"Database error: {db_err}"
-        return results
     except Exception as e:
         logger.error(f"Error categorizing items for '{player_name}': {e}", exc_info=True)
         results["success"] = False
