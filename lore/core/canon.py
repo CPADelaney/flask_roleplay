@@ -2105,7 +2105,219 @@ async def log_event_creation(
 ADDICTION_LEVELS = {
     0: "None",
     1: "Mild",
-    2: "Moderate", 
+    2: "Moderate",
     3: "Heavy",
     4: "Extreme"
 }
+
+# ---------------------------------------------------------------------------
+# Additional canonical helpers for core world state updates
+# ---------------------------------------------------------------------------
+
+async def update_npc_current_location(ctx, conn, npc_id: int, new_location: str) -> None:
+    """Update an NPC's current location canonically."""
+    await conn.execute(
+        """
+        UPDATE NPCStats
+        SET current_location = $1
+        WHERE user_id = $2 AND conversation_id = $3 AND npc_id = $4
+        """,
+        new_location, ctx.user_id, ctx.conversation_id, npc_id,
+    )
+
+    await log_canonical_event(
+        ctx,
+        conn,
+        f"NPC {npc_id} moved to {new_location}",
+        tags=["npc", "location", "update"],
+        significance=3,
+    )
+
+
+async def remove_inventory_item(
+    ctx,
+    conn,
+    item_name: str,
+    player_name: str = "Chase",
+    quantity: int = 1,
+) -> bool:
+    """Remove quantity of an item from a player's inventory canonically."""
+    row = await conn.fetchrow(
+        """
+        SELECT item_id, quantity FROM PlayerInventory
+        WHERE user_id=$1 AND conversation_id=$2 AND player_name=$3 AND item_name=$4
+        """,
+        ctx.user_id,
+        ctx.conversation_id,
+        player_name,
+        item_name,
+    )
+
+    if not row:
+        return False
+
+    item_id, current_qty = row["item_id"], row["quantity"]
+    new_qty = current_qty - quantity
+
+    if new_qty > 0:
+        await conn.execute(
+            "UPDATE PlayerInventory SET quantity=$1 WHERE item_id=$2",
+            new_qty,
+            item_id,
+        )
+    else:
+        await conn.execute("DELETE FROM PlayerInventory WHERE item_id=$1", item_id)
+
+    await log_canonical_event(
+        ctx,
+        conn,
+        f"Removed {quantity} of {item_name} from {player_name}",
+        tags=["inventory", "item_removal"],
+        significance=4,
+    )
+
+    return True
+
+
+async def update_inventory_item_effect(
+    ctx,
+    conn,
+    item_name: str,
+    player_name: str,
+    new_effect: str,
+) -> bool:
+    """Update an inventory item's effect canonically."""
+    status = await conn.execute(
+        """
+        UPDATE PlayerInventory
+        SET item_effect=$1
+        WHERE user_id=$2 AND conversation_id=$3 AND player_name=$4 AND item_name=$5
+        """,
+        new_effect,
+        ctx.user_id,
+        ctx.conversation_id,
+        player_name,
+        item_name,
+    )
+
+    if not status.startswith("UPDATE") or status.endswith("0"):
+        return False
+
+    await log_canonical_event(
+        ctx,
+        conn,
+        f"Updated effect of {item_name} for {player_name}",
+        tags=["inventory", "item_update"],
+        significance=3,
+    )
+
+    return True
+
+
+async def categorize_inventory_items(
+    ctx,
+    conn,
+    player_name: str,
+    category_mapping: Dict[str, str],
+) -> Dict[str, Any]:
+    """Categorize multiple inventory items canonically."""
+    results = {"items_updated": 0, "items_not_found": []}
+    for item, category in category_mapping.items():
+        status = await conn.execute(
+            """
+            UPDATE PlayerInventory
+            SET category=$1
+            WHERE user_id=$2 AND conversation_id=$3 AND player_name=$4 AND item_name=$5
+            """,
+            category,
+            ctx.user_id,
+            ctx.conversation_id,
+            player_name,
+            item,
+        )
+        if status.startswith("UPDATE") and not status.endswith("0"):
+            results["items_updated"] += 1
+        else:
+            results["items_not_found"].append(item)
+
+    await log_canonical_event(
+        ctx,
+        conn,
+        f"Categorized items for {player_name}",
+        tags=["inventory", "categorize"],
+        significance=3,
+    )
+
+    return results
+
+
+async def create_player_manipulation_attempt(
+    ctx,
+    conn,
+    conflict_id: int,
+    npc_id: int,
+    manipulation_type: str,
+    content: str,
+    goal: Dict[str, Any],
+    leverage_used: Dict[str, Any],
+    intimacy_level: int = 0,
+) -> int:
+    """Create a player manipulation attempt canonically."""
+    attempt_id = await conn.fetchval(
+        """
+        INSERT INTO PlayerManipulationAttempts (
+            conflict_id, user_id, conversation_id, npc_id,
+            manipulation_type, content, goal, success,
+            leverage_used, intimacy_level, created_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, CURRENT_TIMESTAMP)
+        RETURNING attempt_id
+        """,
+        conflict_id,
+        ctx.user_id,
+        ctx.conversation_id,
+        npc_id,
+        manipulation_type,
+        content,
+        json.dumps(goal),
+        False,
+        json.dumps(leverage_used),
+        intimacy_level,
+    )
+
+    await log_canonical_event(
+        ctx,
+        conn,
+        f"NPC {npc_id} attempted {manipulation_type} in conflict {conflict_id}",
+        tags=["conflict", "manipulation", manipulation_type],
+        significance=7,
+    )
+
+    return attempt_id
+
+
+async def resolve_player_manipulation_attempt(
+    ctx,
+    conn,
+    attempt_id: int,
+    success: bool,
+    player_response: str,
+) -> None:
+    """Resolve a player manipulation attempt canonically."""
+    await conn.execute(
+        """
+        UPDATE PlayerManipulationAttempts
+        SET success=$1, player_response=$2, resolved_at=CURRENT_TIMESTAMP
+        WHERE attempt_id=$3
+        """,
+        success,
+        player_response,
+        attempt_id,
+    )
+
+    await log_canonical_event(
+        ctx,
+        conn,
+        f"Manipulation attempt {attempt_id} resolved as {'success' if success else 'failure'}",
+        tags=["conflict", "manipulation", "resolution"],
+        significance=6,
+    )
