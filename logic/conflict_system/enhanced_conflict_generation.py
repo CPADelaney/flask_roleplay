@@ -570,6 +570,11 @@ class OrganicConflictGenerator:
     async def _enrich_with_canon(self, conflict_data: Dict[str, Any]) -> Dict[str, Any]:
         """Enrich conflict with canonical references and connections"""
         async with get_db_connection_context() as conn:
+            ctx = RunContextWrapper({
+                "user_id": self.user_id,
+                "conversation_id": self.conversation_id
+            })
+            
             # Add historical context
             if "root_cause" in conflict_data:
                 # Search for related historical events
@@ -586,6 +591,16 @@ class OrganicConflictGenerator:
                 """, search_vector, self.user_id, self.conversation_id)
                 
                 conflict_data["historical_context"] = [dict(h) for h in historical_context]
+                
+                # Create canonical links to historical events
+                for event in historical_context[:1]:  # Link to most relevant
+                    if event['relevance'] > 0.7:
+                        await canon.log_canonical_event(
+                            ctx, conn,
+                            f"Conflict '{conflict_data['conflict_name']}' echoes historical event '{event['name']}'",
+                            tags=["conflict", "history", "connection"],
+                            significance=6
+                        )
             
             # Add cultural context
             if conflict_data.get("scale") in ["regional", "world"]:
@@ -610,6 +625,15 @@ class OrganicConflictGenerator:
                 """)
                 
                 conflict_data["prophetic_elements"] = [dict(m) for m in myths]
+                
+                # Create canonical connection to myths
+                for myth in myths[:1]:
+                    await canon.log_canonical_event(
+                        ctx, conn,
+                        f"Conflict '{conflict_data['conflict_name']}' fulfills prophecy from myth '{myth['name']}'",
+                        tags=["conflict", "prophecy", "myth"],
+                        significance=9
+                    )
             
             return conflict_data
     
