@@ -2,8 +2,10 @@ import asyncio
 import os
 import tempfile
 import shutil
+from agents import function_tool
 
 
+@function_tool
 async def execute_python(code: str, tests: str, timeout: int = 300) -> dict:
     """Execute Python code and tests using pytest.
 

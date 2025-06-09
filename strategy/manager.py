@@ -53,6 +53,17 @@ class StrategyManager:
             json.dump(data, f, indent=2)
 
     # ------------------------------------------------------------------
+    def update_tool_bias(self, tool_name: str, success_rate: float) -> None:
+        """Boost bias for a tool if its success rate is high."""
+        if success_rate <= 0.8:
+            return
+        cur = self._params.tool_biases.get(tool_name, 0.0)
+        new_val = min(cur + 0.1, 1.0)
+        if new_val != cur:
+            self._params.tool_biases[tool_name] = new_val
+            self._save()
+
+    # ------------------------------------------------------------------
     def current(self) -> StrategyParams:
         return self._params
 
@@ -82,3 +93,7 @@ def current() -> StrategyParams:
 async def apply(insight: str) -> None:
     """Public wrapper for :meth:`StrategyManager.apply`."""
     await _manager.apply(insight)
+
+def update_tool_bias(tool_name: str, success_rate: float) -> None:
+    """Public wrapper for :meth:`StrategyManager.update_tool_bias`."""
+    _manager.update_tool_bias(tool_name, success_rate)
