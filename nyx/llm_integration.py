@@ -4,9 +4,10 @@ import os
 import logging
 import json
 import asyncio
-import numpy as np
 from typing import Dict, List, Any, Optional
 import openai
+
+from nyx.core.orchestrator import prepare_context
 
 logger = logging.getLogger(__name__)
 
@@ -47,30 +48,47 @@ async def generate_text_completion(
     # Use task-specific temperature if not specified
     if temperature is None:
         temperature = TEMPERATURE_SETTINGS.get(task_type, 0.7)
+
+    # Inject relevant memories into the system prompt
+    system_prompt = await prepare_context(system_prompt, user_prompt)
     
+    # Create messages array
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ]
+
+    # Call OpenAI API with simple exponential backoff on rate limits
+    response = None
+    for attempt in range(3):
+        try:
+            response = await openai.ChatCompletion.acreate(
+                model="gpt-4.1-nano",
+                messages=messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                stop=stop_sequences,
+            )
+            break
+        except openai.error.RateLimitError:
+            wait = 2 ** attempt
+            logger.warning(
+                f"Rate limit hit, retrying in {wait}s (attempt {attempt + 1}/3)"
+            )
+            await asyncio.sleep(wait)
+    else:
+        logger.error("Exceeded retry attempts due to rate limiting")
+        return "I'm having trouble processing your request at the moment."
+
     try:
-        # Create messages array
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt}
-        ]
-        
-        # Call OpenAI API
-        response = await openai.ChatCompletion.acreate(
-            model="gpt-4.1-nano",
-            messages=messages,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            stop=stop_sequences
-        )
-        
         # Extract and return the text
         return response.choices[0].message.content.strip()
-        
     except Exception as e:
         logger.error(f"Error generating text completion: {e}")
-        # Return fallback response
-        return f"I'm having trouble processing your request at the moment. {str(e)[:50]}"
+        return (
+            "I'm having trouble processing your request at the moment. "
+            + str(e)[:50]
+        )
 
 async def create_semantic_abstraction(memory_text: str) -> str:
     """

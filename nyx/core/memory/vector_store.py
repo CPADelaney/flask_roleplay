@@ -79,18 +79,22 @@ async def query(query_text: str, k: int = 5) -> List[Dict]:
         return []
     vec = _to_vec([query_text])
     D, I = await _faiss_search(vec, k)
-    results = []
-    for score, idx in zip(D[0], I[0]):
-        if idx == -1:
-            continue
-        entry = _store.get(idx)
-        if not entry:
-            continue
-        results.append({
+    async with _lock:
+        entries = [
+            (float(score), _store.get(idx))
+            for score, idx in zip(D[0], I[0])
+            if idx != -1
+        ]
+
+    results = [
+        {
             "text": entry["text"],
             "meta": entry["meta"],
-            "score": float(score),
-        })
+            "score": score,
+        }
+        for score, entry in entries
+        if entry
+    ]
     return results
 
 
