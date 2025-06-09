@@ -1413,7 +1413,7 @@ async def get_active_conflicts(ctx: RunContextWrapper) -> List[Dict[str, Any]]:
     return await _internal_get_active_conflicts_logic(ctx)
 
 @function_tool
-async def update_stakeholder_status(ctx: RunContextWrapper, conflict_id: int, npc_id: int, status: Dict[str, Any]) -> Dict[str, Any]:
+async def update_stakeholder_status(ctx: RunContextWrapper, conflict_id: int, npc_id: int, status: Dict[str, Union[str, int, bool, float, None]]) -> Dict[str, Any]:
     """Update the status of a stakeholder in a conflict."""
     return await _internal_update_stakeholder_status_logic(ctx, conflict_id, npc_id, status)
 
