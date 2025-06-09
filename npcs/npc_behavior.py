@@ -333,7 +333,7 @@ class BehaviorEvolution:
 
     async def apply_scheming_adjustments(self, npc_id: int, adjustments: Dict[str, Any]) -> bool:
         """
-        Apply scheming behavior adjustments to the NPC.
+        Apply scheming behavior adjustments to the NPC using LoreSystem.
         
         Args:
             npc_id: ID of the NPC
@@ -343,55 +343,64 @@ class BehaviorEvolution:
             True if successful, False otherwise
         """
         try:
-            async with get_db_connection_context() as conn:
-                async with conn.cursor() as cursor:
-                    # Update scheming level
-                    new_level = adjustments.get("scheme_level", 0)
-                    await cursor.execute(
-                        """
-                        UPDATE NPCStats
-                        SET scheming_level = %s
-                        WHERE npc_id = %s AND user_id = %s AND conversation_id = %s
-                        """,
-                        (new_level, npc_id, self.user_id, self.conversation_id)
+            # Get LoreSystem instance
+            from lore.lore_system import LoreSystem
+            lore_system = await LoreSystem.get_instance(self.user_id, self.conversation_id)
+            
+            # Create context for governance
+            ctx = type('obj', (object,), {
+                'user_id': self.user_id,
+                'conversation_id': self.conversation_id,
+                'npc_id': npc_id
+            })
+            
+            # Prepare updates
+            updates = {}
+            
+            # Update scheming level
+            new_level = adjustments.get("scheme_level", 0)
+            updates["scheming_level"] = new_level
+            
+            # Update betrayal planning
+            betrayal_planning = adjustments.get("betrayal_planning", False)
+            updates["betrayal_planning"] = betrayal_planning
+            
+            # Use LoreSystem to update
+            result = await lore_system.propose_and_enact_change(
+                ctx=ctx,
+                entity_type="NPCStats",
+                entity_identifier={"npc_id": npc_id},
+                updates=updates,
+                reason=f"Behavior evolution: scheme_level={new_level}, betrayal_planning={betrayal_planning}"
+            )
+            
+            if result.get("status") == "committed":
+                # If targeting player, create a memory
+                if adjustments.get("targeting_player"):
+                    memory_system = await self.get_memory_system()
+                    await memory_system.remember(
+                        entity_type="npc",
+                        entity_id=npc_id,
+                        memory_text="I decided to target the player, suspecting them of deception.",
+                        importance="high",
+                        tags=["scheming", "targeting_player"]
                     )
-                    
-                    # Update betrayal planning
-                    betrayal_planning = adjustments.get("betrayal_planning", False)
-                    await cursor.execute(
-                        """
-                        UPDATE NPCStats
-                        SET betrayal_planning = %s
-                        WHERE npc_id = %s AND user_id = %s AND conversation_id = %s
-                        """,
-                        (betrayal_planning, npc_id, self.user_id, self.conversation_id)
-                    )
-                    
-                    await conn.commit()
-            
-            # If targeting player, create a memory
-            if adjustments.get("targeting_player"):
-                memory_system = await self.get_memory_system()
-                await memory_system.remember(
-                    entity_type="npc",
-                    entity_id=npc_id,
-                    memory_text="I decided to target the player, suspecting them of deception.",
-                    importance="high",
-                    tags=["scheming", "targeting_player"]
-                )
-            
-            # Invalidate cache for this NPC
-            cache_key = f"npc_{npc_id}"
-            if cache_key in self.npc_data_cache:
-                del self.npc_data_cache[cache_key]
-                if cache_key in self.cache_expiry:
-                    del self.cache_expiry[cache_key]
-            
-            return True
+                
+                # Invalidate cache for this NPC
+                cache_key = f"npc_{npc_id}"
+                if cache_key in self.npc_data_cache:
+                    del self.npc_data_cache[cache_key]
+                    if cache_key in self.cache_expiry:
+                        del self.cache_expiry[cache_key]
+                
+                return True
+            else:
+                logger.error(f"Failed to apply scheming adjustments via LoreSystem: {result}")
+                return False
+                
         except Exception as e:
             logger.error(f"Error applying scheming adjustments: {e}")
             return False
-
     async def evaluate_npc_scheming_for_all(self, npc_ids: List[int]) -> Dict[int, Dict[str, Any]]:
         """
         Evaluate and update scheming behavior for multiple NPCs.
