@@ -1,3 +1,5 @@
+# logic/conflict_system/conflict_resolution.py
+
 """
 Conflict Resolution System
 
@@ -474,28 +476,42 @@ class ConflictResolutionSystem:
     ) -> Dict[str, Any]:
         """Update the conflict state after resolution."""
         try:
-            # Update conflict progress
-            await update_conflict_progress(
-                RunContextWrapper(self.user_id, self.conversation_id),
-                conflict_id,
-                resolution_result.get("outcomes", {}).get("progress", 0)
-            )
+            ctx = RunContextWrapper({
+                "user_id": self.user_id,
+                "conversation_id": self.conversation_id
+            })
             
-            # Update stakeholder statuses
-            for stakeholder_id, status in resolution_result.get("outcomes", {}).get("stakeholder_statuses", {}).items():
-                await update_stakeholder_status(
-                    RunContextWrapper(self.user_id, self.conversation_id),
+            async with get_db_connection_context() as conn:
+                # Update conflict progress
+                await update_conflict_progress(
+                    ctx,
                     conflict_id,
-                    stakeholder_id,
-                    status
+                    resolution_result.get("outcomes", {}).get("progress", 0)
                 )
                 
-            # Update player involvement
-            if "player_outcome" in resolution_result.get("outcomes", {}):
-                await update_player_involvement(
-                    RunContextWrapper(self.user_id, self.conversation_id),
-                    conflict_id,
-                    resolution_result["outcomes"]["player_outcome"]
+                # Update stakeholder statuses
+                for stakeholder_id, status in resolution_result.get("outcomes", {}).get("stakeholder_statuses", {}).items():
+                    await update_stakeholder_status(
+                        ctx,
+                        conflict_id,
+                        stakeholder_id,
+                        status
+                    )
+                
+                # Update player involvement
+                if "player_outcome" in resolution_result.get("outcomes", {}):
+                    await update_player_involvement(
+                        ctx,
+                        conflict_id,
+                        resolution_result["outcomes"]["player_outcome"]
+                    )
+                
+                # Log canonical event for resolution
+                await canon.log_canonical_event(
+                    ctx, conn,
+                    f"Conflict {conflict_id} reached new phase with {resolution_result.get('outcomes', {}).get('progress', 0)}% progress",
+                    tags=["conflict", "resolution", "progress"],
+                    significance=6
                 )
                 
             return {"success": True}
