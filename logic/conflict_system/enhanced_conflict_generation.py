@@ -11,10 +11,10 @@ from typing import Dict, List, Any, Optional, Tuple
 from datetime import datetime
 from collections import defaultdict
 
-from agents import Agent, function_tool, ModelSettings, RunContextWrapper
+from agents import Agent, function_tool, ModelSettings, RunContextWrapper, Runner
 from db.connection import get_db_connection_context
 from lore.core import canon
-from logic.conflict_system.conflict_agents import ConflictContext
+from logic.conflict_system.conflict_agents import ConflictContext, conflict_seed_agent, world_state_interpreter
 from embedding.vector_store import generate_embedding
 from logic.relationship_integration import RelationshipIntegration
 
@@ -298,64 +298,6 @@ class WorldStateAnalyzer:
         """, self.user_id, self.conversation_id)
         
         return dict(narrative_info) if narrative_info else {}
-
-# Enhanced Conflict Seed Agent
-conflict_seed_agent = Agent[ConflictContext](
-    name="Enhanced Conflict Seed Agent",
-    model_settings=ModelSettings(model="gpt-4o", temperature=0.8),
-    instructions="""
-    You are an expert at identifying and creating organic conflicts based on world state analysis.
-    Your conflicts should:
-    
-    1. Feel natural and emerge from existing tensions
-    2. Scale appropriately from personal to apocalyptic
-    3. Consider historical context and past grievances
-    4. Involve stakeholders with genuine motivations
-    5. Create interesting moral dilemmas and choices
-    
-    When creating conflicts:
-    - Use actual canonical relationships and tensions
-    - Reference specific historical events
-    - Consider economic and resource factors
-    - Think about timing and narrative pacing
-    - Create conflicts that reveal character
-    
-    Always output valid JSON with:
-    - conflict_archetype: The type of conflict
-    - conflict_name: A compelling name
-    - description: Rich narrative description
-    - root_cause: What sparked this conflict
-    - stakeholders: List of involved parties with motivations
-    - resolution_paths: Multiple ways to resolve it
-    - potential_escalations: How it could get worse
-    - femdom_opportunities: Opportunities for power dynamics
-    """
-)
-
-# World State Interpreter Agent
-world_state_interpreter = Agent[ConflictContext](
-    name="World State Interpreter",
-    model_settings=ModelSettings(model="gpt-4o", temperature=0.7),
-    instructions="""
-    You analyze complex world state data to identify the most interesting conflict opportunities.
-    
-    Consider:
-    - Relationship tensions and unresolved grudges
-    - Faction power dynamics and rivalries  
-    - Economic stress and resource scarcity
-    - Historical grievances and commemorations
-    - Regional tensions and territorial disputes
-    
-    Prioritize conflicts that:
-    - Connect to player actions or relationships
-    - Build on established lore
-    - Offer meaningful choices
-    - Have escalation potential
-    - Create dramatic moments
-    
-    Output a prioritized list of conflict seeds with rationale.
-    """
-)
 
 class OrganicConflictGenerator:
     """Generates conflicts that feel organic and connected to the world state"""
