@@ -587,10 +587,10 @@ class ConflictSystemIntegration:
         """Create a conflict with full canonical integration"""
         async with get_db_connection_context() as conn:
             async with conn.transaction():
-                ctx = type("ctx", (), {
+                ctx = RunContextWrapper({
                     "user_id": self.user_id,
                     "conversation_id": self.conversation_id
-                })()
+                })
                 
                 current_day = await conn.fetchval("""
                     SELECT value FROM CurrentRoleplay
@@ -612,43 +612,60 @@ class ConflictSystemIntegration:
                 conflict_data["estimated_duration"], 0.5
                 )
                 
-                # Create stakeholders
+                # Create stakeholders with canonical NPC handling
                 for stakeholder in conflict_data.get("stakeholders", []):
-                    if "npc_name" in stakeholder:
-                        npc_id = await canon.find_or_create_npc(
-                            ctx, conn, 
-                            stakeholder["npc_name"],
-                            role=stakeholder.get("role")
-                        )
-                        stakeholder["npc_id"] = npc_id
-                    
-                    await conn.execute("""
-                        INSERT INTO ConflictStakeholders (
-                            conflict_id, npc_id, faction_id, faction_name,
-                            public_motivation, private_motivation, desired_outcome,
-                            involvement_level, leadership_ambition, faction_standing
-                        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-                    """,
-                    conflict_id, stakeholder["npc_id"], 
-                    stakeholder.get("faction_id"), stakeholder.get("faction_name"),
-                    stakeholder["public_motivation"], stakeholder["private_motivation"],
-                    stakeholder["desired_outcome"], stakeholder.get("involvement_level", 5),
-                    stakeholder.get("leadership_ambition", 50),
-                    stakeholder.get("faction_standing", 50)
+                    # Use canon.find_or_create_npc instead of manual creation
+                    npc_id = await canon.find_or_create_npc(
+                        ctx, conn, 
+                        npc_name=stakeholder["npc_name"],
+                        role=stakeholder.get("role"),
+                        affiliations=stakeholder.get("faction_affiliations", [])
                     )
+                    stakeholder["npc_id"] = npc_id
                     
+                    # Check if stakeholder already exists for this conflict
+                    existing = await conn.fetchrow("""
+                        SELECT id FROM ConflictStakeholders
+                        WHERE conflict_id = $1 AND npc_id = $2
+                    """, conflict_id, npc_id)
+                    
+                    if not existing:
+                        await conn.execute("""
+                            INSERT INTO ConflictStakeholders (
+                                conflict_id, npc_id, faction_id, faction_name,
+                                public_motivation, private_motivation, desired_outcome,
+                                involvement_level, leadership_ambition, faction_standing
+                            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                        """,
+                        conflict_id, npc_id, 
+                        stakeholder.get("faction_id"), stakeholder.get("faction_name"),
+                        stakeholder["public_motivation"], stakeholder["private_motivation"],
+                        stakeholder["desired_outcome"], stakeholder.get("involvement_level", 5),
+                        stakeholder.get("leadership_ambition", 50),
+                        stakeholder.get("faction_standing", 50)
+                        )
+                    
+                    # Handle secrets canonically
                     for secret in stakeholder.get("secrets", []):
+                        # If secret references another NPC, ensure they exist
+                        target_npc_id = None
+                        if secret.get("target_npc_name"):
+                            target_npc_id = await canon.find_or_create_npc(
+                                ctx, conn,
+                                npc_name=secret["target_npc_name"]
+                            )
+                        
                         await conn.execute("""
                             INSERT INTO StakeholderSecrets (
                                 conflict_id, npc_id, secret_id, secret_type,
                                 content, target_npc_id
                             ) VALUES ($1, $2, $3, $4, $5, $6)
                         """,
-                        conflict_id, stakeholder["npc_id"],
-                        f"secret_{conflict_id}_{stakeholder['npc_id']}_{secret.get('type', 'unknown')}",
+                        conflict_id, npc_id,
+                        f"secret_{conflict_id}_{npc_id}_{secret.get('type', 'unknown')}",
                         secret.get("type", "personal"),
                         secret["content"],
-                        secret.get("target_npc_id")
+                        target_npc_id or secret.get("target_npc_id")
                         )
                 
                 # Create resolution paths
@@ -678,6 +695,7 @@ class ConflictSystemIntegration:
                     significance=8
                 )
                 
+                # Create conflict memory event
                 await conn.execute("""
                     INSERT INTO ConflictMemoryEvents (
                         conflict_id, memory_text, significance,
