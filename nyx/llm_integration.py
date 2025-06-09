@@ -288,7 +288,7 @@ async def generate_embedding(text: str) -> List[float]:
 
 # Add these functions to the existing llm_integration.py file
 
-async def get_text_embedding(text: str) -> np.ndarray:
+async def get_text_embedding(text: str) -> List[float]:
     """
     Get embedding vector for text.
     
@@ -296,7 +296,7 @@ async def get_text_embedding(text: str) -> np.ndarray:
         text: Text to get embedding for
         
     Returns:
-        numpy array with embedding vector
+        List of embedding vector values
     """
     try:
         # In production, this would call an actual LLM API
@@ -309,7 +309,6 @@ async def get_text_embedding(text: str) -> np.ndarray:
         
         # For this implementation, we'll use a simpler approach
         # This is a placeholder - not for production use
-        import numpy as np
         from sklearn.feature_extraction.text import TfidfVectorizer
         
         # Create a simple embedding based on TF-IDF

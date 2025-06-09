@@ -14,8 +14,10 @@ import socket
 import time
 
 from main import create_quart_app
+from nyx.core.orchestrator import start_background
 
 # ensure Hypercorn sees PORT
 os.environ.setdefault("PORT", os.getenv("PORT", "8080"))
 
 app = create_quart_app()
+start_background()
