@@ -1312,6 +1312,24 @@ class StorytellerAgent:
                 
                 # Add memories to NPC data
                 nearby_npcs[i]["interaction_history"] = memory_content
+
+            if nearby_npcs:
+                # Get active conflicts from context
+                comprehensive_context = await self.get_comprehensive_context(ctx, user_input)
+                active_conflicts = comprehensive_context.get("conflicts", [])
+                
+                # Enhance NPC data with conflict roles
+                for npc in nearby_npcs:
+                    npc['conflict_roles'] = []
+                    
+                    for conflict in active_conflicts:
+                        for stakeholder in conflict.get('stakeholders', []):
+                            if stakeholder.get('npc_id') == npc['npc_id']:
+                                npc['conflict_roles'].append({
+                                    'conflict_name': conflict.get('conflict_name'),
+                                    'motivation': stakeholder.get('public_motivation'),
+                                    'involvement': stakeholder.get('involvement_level', 0)
+                                })
             
             # Create prompt for the NPC handler
             prompt = f"""
@@ -1324,9 +1342,14 @@ class StorytellerAgent:
             
             Each response should:
             - Match the NPC's personality and stats (dominance, cruelty)
-            - Relate to the player's input or activity
+            - React naturally to the player's input or activity
+            - If the NPC has conflict_roles, subtly reflect their motivations
+            - Maintain character consistency
             - Include subtle hints of control where appropriate
             - Consider the NPC's recent memories and interaction history
+
+            NPCs involved in conflicts should have their responses colored by their stakes,
+            but don't make it heavy-handed or exposition-heavy.
             """
             
             # Run the NPC handler
