@@ -2,7 +2,7 @@ import os
 import json
 import datetime
 import asyncio
-from reflection.reflection_agent import log_buffer, schedule_reflection
+
 
 LOG_DIR = "/mnt/nyx_logs"
 
@@ -13,8 +13,14 @@ async def log_event(event: dict) -> None:
     path = os.path.join(LOG_DIR, f"{date}.jsonl")
     line = json.dumps(event)
     await asyncio.to_thread(_append_line, path, line)
-    log_buffer.append(event)
-    await schedule_reflection()
+
+    try:
+        from reflection import reflection_agent as ra
+    except Exception:
+        return
+
+    ra.log_buffer.append(event)
+    await ra.schedule_reflection()
 
 
 def _append_line(path: str, line: str) -> None:
