@@ -983,7 +983,7 @@ class NPCAgentCoordinator:
             result = await Runner.run(coordinator, input_data)
             return result.final_output
 
-    @function_tool
+    @function_tool(strict_mode=False)
     async def _process_player_action_for_npcs(
         self,
         player_action: Dict[str, Any],
