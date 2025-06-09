@@ -41,6 +41,10 @@ from logic.conflict_system.hooks import (
 )
 from logic.conflict_system.dynamic_stakeholder_agents import process_conflict_stakeholder_turns
 from logic.conflict_system.enhanced_conflict_generation import analyze_conflict_pressure
+from logic.conflict_system.conflict_integration import ConflictSystemIntegration
+from logic.conflict_system.enhanced_conflict_generation import generate_organic_conflict
+from logic.conflict_system.dynamic_stakeholder_agents import force_stakeholder_action
+
 
 # Configure structured logging
 logger = logging.getLogger(__name__)
@@ -552,6 +556,89 @@ class StoryDirectorContext:
         except Exception as e:
             logger.error(f"Error getting relevant memories: {e}", exc_info=True)
             return []
+
+    @function_tool
+    async def check_for_conflict_opportunity(ctx: RunContextWrapper[StoryDirectorContext]) -> Dict[str, Any]:
+        """
+        Check if the current narrative state suggests a conflict should emerge.
+        This is called by the agent when it thinks a conflict might be appropriate.
+        """
+        context = ctx.context
+        
+        # Get world state analysis
+        conflict_system = await ConflictSystemIntegration.get_instance(
+            context.user_id, 
+            context.conversation_id
+        )
+        
+        # Analyze current pressure
+        from logic.conflict_system.enhanced_conflict_generation import analyze_conflict_pressure
+        pressure_analysis = await analyze_conflict_pressure(ctx)
+        
+        # Get current conflicts to avoid oversaturation
+        active_conflicts = await conflict_system.get_active_conflicts()
+        
+        return {
+            "pressure_analysis": pressure_analysis,
+            "active_conflicts": len(active_conflicts),
+            "recommendation": pressure_analysis.get("recommended_action", ""),
+            "pressure_score": pressure_analysis.get("total_pressure", 0)
+        }
+    
+    @function_tool
+    async def generate_conflict(
+        ctx: RunContextWrapper[StoryDirectorContext], 
+        conflict_type: str = None,
+        reason: str = ""
+    ) -> Dict[str, Any]:
+        """
+        Generate a new conflict when the narrative calls for it.
+        """
+        context = ctx.context
+        
+        # Use the conflict system to generate
+        conflict_system = await ConflictSystemIntegration.get_instance(
+            context.user_id, 
+            context.conversation_id
+        )
+        
+        result = await conflict_system.generate_conflict(conflict_type)
+        
+        if result.get("success"):
+            # Add to narrative memory
+            await context.add_narrative_memory(
+                f"New conflict emerged: {result.get('conflict_details', {}).get('conflict_name', 'Unknown')} - {reason}",
+                "conflict_generation",
+                0.8
+            )
+        
+        return result
+    
+    @function_tool  
+    async def advance_conflict_naturally(
+        ctx: RunContextWrapper[StoryDirectorContext],
+        conflict_id: int,
+        narrative_development: str
+    ) -> Dict[str, Any]:
+        """
+        Advance a conflict based on narrative developments.
+        """
+        context = ctx.context
+        
+        conflict_system = await ConflictSystemIntegration.get_instance(
+            context.user_id, 
+            context.conversation_id
+        )
+        
+        # Handle the narrative development's impact on the conflict
+        result = await conflict_system.handle_story_beat(
+            conflict_id,
+            "narrative", # path_id
+            narrative_development,
+            [] # involved NPCs will be determined by the system
+        )
+        
+        return result
 
     @function_tool
     async def monitor_conflicts(ctx: RunContextWrapper[StoryDirectorContext]) -> Dict[str, Any]:
