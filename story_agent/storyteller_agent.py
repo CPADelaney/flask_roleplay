@@ -1660,7 +1660,19 @@ class StorytellerAgent:
             # Build aggregator text
             context_summary = aggregator_data.get("aggregator_text", build_aggregator_text(aggregator_data))
             
-            # Create prompt for the narrator
+            # Add conflict context to the prompt
+            conflict_text = ""
+            if "active_conflicts" in aggregator_data:
+                conflict_text = "Active conflicts affecting the scene:\n"
+                for conflict in aggregator_data["active_conflicts"]:
+                    conflict_text += f"- {conflict['name']}: {conflict['description']}\n"
+                    conflict_text += f"  Phase: {conflict['phase']}, Your role: {conflict['player_role']}\n"
+                    if conflict['key_players']:
+                        present_players = [p['name'] for p in conflict['key_players'] if p['name'] in npc_response_text]
+                        if present_players:
+                            conflict_text += f"  Present stakeholders: {', '.join(present_players)}\n"
+            
+            # Update the prompt to include conflict context
             prompt = f"""
             Player input: "{user_input}"
             
@@ -1669,6 +1681,8 @@ class StorytellerAgent:
             
             Game context:
             {context_summary}
+            
+            {conflict_text}
             
             NPC Responses:
             {npc_response_text}
@@ -1687,9 +1701,13 @@ class StorytellerAgent:
             Generate an immersive, atmospheric narrative response that:
             1. Acknowledges and responds to the player's input
             2. Incorporates relevant NPC responses
-            3. Reflects any time advancement
-            4. Maintains the subtle femdom tone and atmosphere
-            5. Suggests whether an image should be generated for this scene
+            3. Subtly reflects any active conflicts and their tensions
+            4. Weaves in conflict dynamics if relevant stakeholders are present
+            5. Reflects any time advancement
+            6. Maintains the subtle femdom tone and atmosphere
+            7. Suggests whether an image should be generated for this scene
+            
+            If conflicts are active, subtly incorporate their influence without being heavy-handed.
             
             Your response should blend velvet darkness and subtle dominance—intimate yet commanding.
             
