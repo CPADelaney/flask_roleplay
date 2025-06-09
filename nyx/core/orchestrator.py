@@ -1,4 +1,9 @@
 from nyx.core.memory.memory_manager import MemoryManager
+import asyncio
+import datetime
+import logging
+from nyx.core.logging.summarizer import nightly_rollup
+from reflection.reflection_agent import schedule_reflection
 
 async def prepare_context(ctx: str, user_msg: str) -> str:
     """Prepend relevant memories to context.
@@ -29,20 +34,18 @@ async def prepare_context(ctx: str, user_msg: str) -> str:
     )
     return f"{knowledge}{comments}\n{ctx}"
 
-import asyncio
-import datetime
-import logging
-from nyx.core.logging.summarizer import nightly_rollup
-
 logger = logging.getLogger(__name__)
 _background_task = None
+_reflection_task = None
 
 
 def start_background() -> None:
     """Start orchestrator background jobs."""
-    global _background_task
+    global _background_task, _reflection_task
     if _background_task is None:
         _background_task = asyncio.create_task(_rollup_loop())
+    if _reflection_task is None:
+        _reflection_task = asyncio.create_task(_reflection_loop())
 
 
 async def _rollup_loop() -> None:
@@ -57,3 +60,13 @@ async def _rollup_loop() -> None:
             await nightly_rollup(date)
         except Exception:
             logger.exception("Nightly rollup failed")
+
+
+async def _reflection_loop() -> None:
+    """Periodically check if reflection should run."""
+    while True:
+        await asyncio.sleep(60)
+        try:
+            await schedule_reflection()
+        except Exception:
+            logger.exception("Reflection scheduling failed")
