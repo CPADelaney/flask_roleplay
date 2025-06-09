@@ -11,6 +11,9 @@ from typing import Dict, Any
 from agents import Agent, Runner, function_tool, GuardrailFunctionOutput, InputGuardrail
 from pydantic import BaseModel, Field
 
+from logic.memory_system import MemorySystem
+from logic.stats_logic import insert_default_player_stats_chase
+
 # Import your existing modules
 from logic.calendar import update_calendar_names
 from logic.aggregator_sdk import get_aggregated_roleplay_context
@@ -233,20 +236,13 @@ class NewGameAgent:
     )
     async def generate_environment(self, ctx, mega_name, mega_desc, env_components=None, enhanced_features=None, stat_modifiers=None):
         """
-        Generate the game environment data.
-        
-        Args:
-            mega_name: Name of the merged setting
-            mega_desc: Description of the merged setting
-            env_components: List of environment components
-            enhanced_features: List of enhanced features
-            stat_modifiers: Dictionary of stat modifiers
-            
-        Returns:
-            EnvironmentData object
+        Generate the game environment data using canonical functions.
         """
         user_id = ctx.context["user_id"]
         conversation_id = ctx.context["conversation_id"]
+        
+        # Import canon functions
+        from lore.core import canon
         
         env_comp_text = "\n".join(env_components) if env_components else "No components provided"
         enh_feat_text = ", ".join(enhanced_features) if enhanced_features else "No enhanced features"
@@ -255,12 +251,12 @@ class NewGameAgent:
         # Create prompt for the environment agent
         prompt = f"""
         You are setting up a new daily-life sim environment with subtle, hidden layers of femdom and intrigue.
-
+    
         Below is a merged environment concept:
         Mega Setting Name: {mega_name}
         Mega Description:
         {mega_desc}
-
+    
         Using this as inspiration, create a cohesive environment with:
         - A creative setting name
         - A vivid environment description (1-3 paragraphs)
@@ -269,7 +265,7 @@ class NewGameAgent:
         - At least 10 distinct locations
         - A scenario name
         - Initial quest data
-
+    
         Reference these details:
         Environment components: {env_comp_text}
         Enhanced features: {enh_feat_text}
@@ -286,88 +282,61 @@ class NewGameAgent:
         # Get calendar data
         calendar_data = await self.create_calendar(ctx, result.final_output.environment_desc)
         
-        # Store environment data in database
+        # Store environment data canonically
         async with get_db_connection_context() as conn:
-            # Store environment description
-            await conn.execute("""
-                INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
-                VALUES($1, $2, 'EnvironmentDesc', $3)
-                ON CONFLICT (user_id, conversation_id, key)
-                DO UPDATE SET value=EXCLUDED.value
-            """, user_id, conversation_id, result.final_output.environment_desc + "\n\nHistory: " + result.final_output.environment_history)
-            
-            # Store setting name
-            await conn.execute("""
-                INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
-                VALUES($1, $2, 'CurrentSetting', $3)
-                ON CONFLICT (user_id, conversation_id, key)
-                DO UPDATE SET value=EXCLUDED.value
-            """, user_id, conversation_id, result.final_output.setting_name)
-            
-            # Insert events
-            for event in result.final_output.events:
-                await conn.execute("""
-                    INSERT INTO Events (
-                        user_id, conversation_id,
-                        event_name, description, start_time, end_time, location,
-                        year, month, day, time_of_day
+            async with conn.transaction():
+                # Create context object for canon functions
+                canon_ctx = type('obj', (object,), {
+                    'user_id': user_id, 
+                    'conversation_id': conversation_id
+                })
+                
+                # Store game setting
+                await canon.create_game_setting(
+                    canon_ctx, conn, 
+                    result.final_output.setting_name,
+                    environment_desc=result.final_output.environment_desc,
+                    environment_history=result.final_output.environment_history,
+                    calendar_data=calendar_data,
+                    scenario_name=result.final_output.scenario_name
+                )
+                
+                # Create events canonically
+                for event in result.final_output.events:
+                    await canon.find_or_create_event(
+                        canon_ctx, conn,
+                        event.get("name", "Unnamed Event"),
+                        description=event.get("description", ""),
+                        start_time=event.get("start_time", "TBD"),
+                        end_time=event.get("end_time", "TBD"),
+                        location=event.get("location", "Unknown"),
+                        year=event.get("year", 1),
+                        month=event.get("month", 1),
+                        day=event.get("day", 1),
+                        time_of_day=event.get("time_of_day", "Morning")
                     )
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-                """,
-                    user_id, conversation_id,
-                    event.get("name", "Unnamed Event"),
-                    event.get("description", ""),
-                    event.get("start_time", "TBD Start"),
-                    event.get("end_time", "TBD End"),
-                    event.get("location", "Unknown"),
-                    event.get("year", 1),
-                    event.get("month", 1),
-                    event.get("day", 1),
-                    event.get("time_of_day", "Morning")
+                
+                # Create locations canonically
+                for location in result.final_output.locations:
+                    await canon.find_or_create_location(
+                        canon_ctx, conn,
+                        location.get("location_name", "Unnamed"),
+                        description=location.get("description", ""),
+                        location_type=location.get("type", "settlement"),
+                        notable_features=location.get("features", []),
+                        open_hours=location.get("open_hours", {})
+                    )
+                
+                # Create main quest canonically
+                quest_data = result.final_output.quest_data
+                await canon.find_or_create_quest(
+                    canon_ctx, conn,
+                    quest_data.get("quest_name", "Unnamed Quest"),
+                    progress_detail=quest_data.get("quest_description", "Quest summary"),
+                    status="In Progress"
                 )
-            
-            # Insert locations
-            for location in result.final_output.locations:
-                await conn.execute("""
-                    INSERT INTO Locations (user_id, conversation_id, location_name, description, open_hours)
-                    VALUES($1, $2, $3, $4, $5)
-                """, 
-                    user_id, 
-                    conversation_id, 
-                    location.get("location_name", "Unnamed"),
-                    location.get("description", ""),
-                    json.dumps(location.get("open_hours", []))
-                )
-            
-            # Insert main quest
-            quest_data = result.final_output.quest_data
-            await conn.execute("""
-                INSERT INTO Quests (user_id, conversation_id, quest_name, status, progress_detail, quest_giver, reward)
-                VALUES($1, $2, $3, 'In Progress', $4, '', '')
-            """, 
-                user_id, 
-                conversation_id, 
-                quest_data.get("quest_name", "Unnamed Quest"),
-                quest_data.get("quest_description", "Quest summary")
-            )
-            
-            # Update conversation name
-            await conn.execute("""
-                UPDATE conversations
-                SET conversation_name=$1
-                WHERE id=$2 AND user_id=$3
-            """, result.final_output.scenario_name, conversation_id, user_id)
-            
-            # Store calendar names
-            await conn.execute("""
-                INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
-                VALUES($1, $2, 'CalendarNames', $3)
-                ON CONFLICT (user_id, conversation_id, key)
-                DO UPDATE SET value=EXCLUDED.value
-            """, user_id, conversation_id, json.dumps(calendar_data))
         
         return result.final_output
-    
     @with_governance_permission(AgentType.UNIVERSAL_UPDATER, "spawn_npcs")
     async def spawn_npcs(self, ctx, environment_desc, day_names, count=5):
         """
@@ -458,16 +427,12 @@ class NewGameAgent:
     )
     async def create_npcs_and_schedules(self, ctx, environment_data):
         """
-        Create NPCs and schedules for the game world.
-        
-        Args:
-            environment_data: Environment data from generate_environment
-            
-        Returns:
-            Dictionary with NPC IDs and Chase's schedule
+        Create NPCs and schedules for the game world using canonical functions.
         """
         user_id = ctx.context["user_id"]
         conversation_id = ctx.context["conversation_id"]
+        
+        from lore.core import canon
         
         # Get calendar data for day names
         async with get_db_connection_context() as conn:
@@ -480,21 +445,25 @@ class NewGameAgent:
             calendar_data = json.loads(row["value"]) if row else {}
             day_names = calendar_data.get("days", ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"])
         
-        # Create NPCs
+        # Create NPCs (they should already use canonical creation through NPCCreationHandler)
         environment_desc = environment_data.get("environment_desc", "") + "\n\n" + environment_data.get("environment_history", "")
         npc_ids = await self.spawn_npcs(ctx, environment_desc, day_names)
         
         # Create Chase's schedule
         chase_schedule = await self.create_chase_schedule(ctx, environment_desc, day_names)
         
-        # Store Chase's schedule
+        # Store Chase's schedule canonically
         async with get_db_connection_context() as conn:
-            await conn.execute("""
-                INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
-                VALUES($1, $2, 'ChaseSchedule', $3)
-                ON CONFLICT (user_id, conversation_id, key)
-                DO UPDATE SET value=EXCLUDED.value
-            """, user_id, conversation_id, json.dumps(chase_schedule))
+            canon_ctx = type('obj', (object,), {
+                'user_id': user_id, 
+                'conversation_id': conversation_id
+            })
+            
+            await canon.store_player_schedule(
+                canon_ctx, conn,
+                "Chase",
+                chase_schedule
+            )
         
         return {
             "npc_ids": npc_ids,
@@ -508,17 +477,12 @@ class NewGameAgent:
     )
     async def create_opening_narrative(self, ctx, environment_data, npc_schedule_data):
         """
-        Create the opening narrative for the game.
-        
-        Args:
-            environment_data: Environment data from generate_environment
-            npc_schedule_data: NPC and schedule data from create_npcs_and_schedules
-            
-        Returns:
-            String with the opening narrative
+        Create the opening narrative for the game using canonical functions.
         """
         user_id = ctx.context["user_id"]
         conversation_id = ctx.context["conversation_id"]
+        
+        from lore.core import canon
         from routes.story_routes import build_aggregator_text 
         
         # Get aggregator data
@@ -545,7 +509,7 @@ class NewGameAgent:
         Your prose is a slow graze across skin—intimate, lingering, stirring shivers he can't place, each phrase a pull into my shadowed embrace. 
         Structure this descent as a gentle drift into dusk, transitions seamless as a held breath, folding him into the tale without a crack. 
         Address Chase as 'you,' drawing him through the veil with no whisper of retreat:
-
+    
         {aggregator_text}
 
         As {first_day_name} unfurls like a soft tide across the expanse, unveil Chase's world through a haze of everyday ease—a place where the ordinary cloaks a deeper pulse. 
@@ -567,12 +531,18 @@ class NewGameAgent:
         
         opening_narrative = result.final_output
         
-        # Store the opening narrative
+        # Store the opening narrative canonically
         async with get_db_connection_context() as conn:
-            await conn.execute("""
-                INSERT INTO messages (conversation_id, sender, content)
-                VALUES($1, $2, $3)
-            """, conversation_id, "Nyx", opening_narrative)
+            canon_ctx = type('obj', (object,), {
+                'user_id': user_id, 
+                'conversation_id': conversation_id
+            })
+            
+            await canon.create_opening_message(
+                canon_ctx, conn,
+                "Nyx",
+                opening_narrative
+            )
         
         return opening_narrative
     
@@ -584,18 +554,19 @@ class NewGameAgent:
     async def finalize_game_setup(self, ctx, opening_narrative):
         """
         Finalize game setup including lore generation, conflict generation and image generation.
-        
-        Args:
-            opening_narrative: The opening narrative
-            
-        Returns:
-            Dictionary with finalization results
         """
         user_id = ctx.context["user_id"]
         conversation_id = ctx.context["conversation_id"]
         
+        from lore.core import canon
+        
         # Mark conversation as ready
         async with get_db_connection_context() as conn:
+            canon_ctx = type('obj', (object,), {
+                'user_id': user_id, 
+                'conversation_id': conversation_id
+            })
+            
             # Get the environment description for lore generation
             row = await conn.fetchrow("""
                 SELECT value FROM CurrentRoleplay
@@ -634,6 +605,15 @@ class NewGameAgent:
                 await lore_system.integrate_lore_with_npcs(npc_ids)
                 
             lore_summary = f"Generated {len(lore_result.get('factions', []))} factions, {len(lore_result.get('cultural_elements', []))} cultural elements, and {len(lore_result.get('locations', []))} locations"
+            
+            # Store lore summary canonically
+            async with get_db_connection_context() as conn:
+                await canon.update_current_roleplay(
+                    canon_ctx, conn,
+                    user_id, conversation_id,
+                    'LoreSummary', lore_summary
+                )
+                
             logging.info(f"Lore generation complete: {lore_summary}")
         except Exception as e:
             logging.error(f"Error generating lore: {e}", exc_info=True)
@@ -641,7 +621,6 @@ class NewGameAgent:
         
         # Generate initial conflict
         try:
-            # MODIFIED: Import ConflictSystemIntegration only when needed
             from logic.conflict_system.conflict_integration import ConflictSystemIntegration
             
             conflict_integration = ConflictSystemIntegration(user_id, conversation_id)
@@ -655,11 +634,26 @@ class NewGameAgent:
             logging.error(f"Error generating initial conflict: {e}")
             conflict_name = "Failed to generate conflict"
         
-        # Generate currency system
+        # Generate currency system canonically
         try:
             from logic.currency_generator import CurrencyGenerator
             currency_gen = CurrencyGenerator(user_id, conversation_id)
             currency_system = await currency_gen.get_currency_system()
+            
+            # Create currency canonically
+            async with get_db_connection_context() as conn:
+                await canon.find_or_create_currency_system(
+                    canon_ctx, conn,
+                    currency_name=currency_system['currency_name'],
+                    currency_plural=currency_system['currency_plural'],
+                    minor_currency_name=currency_system.get('minor_currency_name'),
+                    minor_currency_plural=currency_system.get('minor_currency_plural'),
+                    exchange_rate=currency_system.get('exchange_rate', 100),
+                    currency_symbol=currency_system.get('currency_symbol', '$'),
+                    description=currency_system.get('description', ''),
+                    setting_context=currency_system.get('setting_context', '')
+                )
+                
             currency_name = f"{currency_system['currency_name']} / {currency_system['currency_plural']}"
         except Exception as e:
             logging.error(f"Error generating currency system: {e}")
@@ -696,14 +690,13 @@ class NewGameAgent:
         if image_result and "image_urls" in image_result and image_result["image_urls"]:
             welcome_image_url = image_result["image_urls"][0]
             
-            # Store the image URL
+            # Store the image URL canonically
             async with get_db_connection_context() as conn:
-                await conn.execute("""
-                    INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
-                    VALUES($1, $2, 'WelcomeImageUrl', $3)
-                    ON CONFLICT (user_id, conversation_id, key)
-                    DO UPDATE SET value=EXCLUDED.value
-                """, user_id, conversation_id, welcome_image_url)
+                await canon.update_current_roleplay(
+                    canon_ctx, conn,
+                    user_id, conversation_id,
+                    'WelcomeImageUrl', welcome_image_url
+                )
         
         return {
             "status": "ready",
