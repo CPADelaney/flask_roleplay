@@ -826,9 +826,9 @@ class NPCHandler:
                 "results": results
             }
             
-    except Exception as e:
-        logger.error(f"Error processing daily activities: {e}")
-        return {"error": str(e), "results": []}
+        except Exception as e:  # This line should align with 'try:'
+            logger.error(f"Error processing daily activities: {e}")
+            return {"error": str(e), "results": []}
 
     async def _update_npc_relationship(self, ctx, conn, npc1_id: int, npc2_id: int) -> None:
         """
