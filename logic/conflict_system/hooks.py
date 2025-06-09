@@ -9,7 +9,6 @@ from typing import Dict, List, Any, Optional
 from agents import RunContextWrapper
 from db.connection import get_db_connection_context
 
-from logic.conflict_system.canonical_conflict_integration import CanonicalConflictSystem
 from logic.conflict_system.enhanced_conflict_generation import (
     generate_organic_conflict, analyze_conflict_pressure
 )
