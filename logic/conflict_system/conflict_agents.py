@@ -1,23 +1,73 @@
 # logic/conflict_system/conflict_agents.py
 """
-Unified Conflict System Agents
-Consolidates all agent definitions into a single module
+Conflict System Agents
+
+This module defines the agent-based architecture for the character-driven conflict system
+using the OpenAI Agents SDK.
 """
 
 import logging
-from typing import Dict, List, Any, Optional
+import json
+import asyncio
+import random
+from typing import Dict, List, Any, Optional, Union, Tuple
 from pydantic import BaseModel, Field
 
-from agents import Agent, function_tool, RunContextWrapper, ModelSettings
+from agents import Agent, function_tool, handoff, GuardrailFunctionOutput, RunContextWrapper, InputGuardrail
+from db.connection import get_db_connection_context
+from logic.stats_logic import apply_stat_change
+from logic.resource_management import ResourceManager
+from npcs.npc_relationship import NPCRelationshipManager
+from logic.relationship_integration import RelationshipIntegration
+
 
 logger = logging.getLogger(__name__)
+
+async def get_relationship_status(user_id, conversation_id, entity1_type, entity1_id, entity2_type, entity2_id):
+    """Adapter function that uses existing relationship code."""
+    if entity1_type == 'npc':
+        manager = NPCRelationshipManager(entity1_id, user_id, conversation_id)
+        return await manager.get_relationship_details(entity2_type, entity2_id)
+    else:
+        # For other entity types, use the integration class
+        integrator = RelationshipIntegration(user_id, conversation_id)
+        return await integrator.get_relationship(entity1_type, entity1_id, entity2_type, entity2_id)
+
+async def get_manipulation_leverage(user_id, conversation_id, manipulator_id, target_id):
+    """Adapter function that calculates manipulation leverage."""
+    manager = NPCRelationshipManager(manipulator_id, user_id, conversation_id)
+    relationship = await manager.get_relationship_details('npc', target_id)
+    
+    # Calculate leverage based on relationship factors
+    leverage = 0.0
+    link_level = relationship.get("link_level", 0)
+    dynamics = relationship.get("dynamics", {})
+    
+    # Base calculation on relationship level
+    if link_level > 75:
+        leverage = 0.8
+    elif link_level > 50:
+        leverage = 0.5
+    elif link_level > 25:
+        leverage = 0.3
+    
+    # Adjust based on relationship dynamics if available
+    control = dynamics.get("control", 0)
+    leverage += control / 100.0 * 0.2  # Add up to 0.2 based on control level
+    
+    return {
+        "leverage_score": min(1.0, leverage),
+        "relationship_level": link_level,
+        "relationship_type": relationship.get("link_type", "neutral")
+    }
 
 # Context class for sharing data between agents
 class ConflictContext:
     def __init__(self, user_id: int, conversation_id: int):
         self.user_id = user_id
         self.conversation_id = conversation_id
-        self.cached_data = {}
+        self.resource_manager = ResourceManager(user_id, conversation_id)
+        self.cached_data = {}  # For caching data during agent run
 
 # Pydantic models for structured outputs
 class ConflictDetails(BaseModel):
@@ -51,118 +101,126 @@ class StoryBeatResult(BaseModel):
     new_progress: float
     is_completed: bool
 
-# Main Conflict Manager Agent (combines triage and management)
-conflict_manager_agent = Agent(
-    name="Conflict Manager",
-    model_settings=ModelSettings(model="gpt-4o", temperature=0.7),
+# Triage Agent - Main entry point for conflict system
+triage_agent = Agent[ConflictContext](
+    name="Conflict Triage Agent",
     instructions="""
-    You are the Conflict Manager for a femdom RPG game system. You:
+    You are the Conflict Triage Agent for a femdom RPG game system. Your role is to analyze requests
+    related to the character-driven conflict system and route them to the appropriate specialist agent.
     
-    1. Monitor world state for conflict opportunities
-    2. Generate conflicts that feel organic and connected to lore
-    3. Manage conflict progression and stakeholder actions
-    4. Handle manipulation attempts and resolutions
-    5. Ensure conflicts respect canon and create meaningful moments
+    You should determine whether the request involves:
+    1. Generating new conflicts
+    2. Managing stakeholders in a conflict
+    3. Handling manipulation attempts
+    4. Tracking story beats and resolution paths
+    5. Resolving conflicts
     
-    Key principles:
-    - Conflicts emerge from established relationships and tensions
-    - Every conflict has multiple valid resolutions
-    - Power dynamics and femdom themes are woven naturally
-    - Player agency is respected while maintaining coherence
-    - Stakes scale appropriately from personal to apocalyptic
+    Based on this analysis, hand off to the appropriate specialist agent.
+    
+    When in doubt about request categorization, ask clarifying questions before making a handoff.
+    """,
+    # Handoffs will be defined later
+)
+
+# Conflict Generation Agent
+conflict_generation_agent = Agent[ConflictContext](
+    name="Conflict Generation Agent",
+    handoff_description="Specialist agent for generating new conflicts with stakeholders and resolution paths",
+    instructions="""
+    You are the Conflict Generation Agent for a femdom RPG game system. Your role is to create
+    rich, complex conflicts with multiple stakeholders, resolution paths, and opportunities for
+    player manipulation.
+    
+    When generating conflicts:
+    1. Consider the existing game state and active conflicts
+    2. Create appropriate stakeholders with clear motivations
+    3. Design multiple resolution paths with different approaches
+    4. Include femdom-themed manipulation opportunities
+    5. Set up internal faction dynamics and potential power struggles
+    
+    Your conflicts should incorporate themes of female dominance, power dynamics, manipulation,
+    and control - consistent with the game's femdom theme.
+    """,
+    output_type=ConflictDetails
+)
+
+# Stakeholder Management Agent
+stakeholder_agent = Agent[ConflictContext](
+    name="Stakeholder Management Agent",
+    handoff_description="Specialist agent for managing conflict stakeholders and their interactions",
+    instructions="""
+    You are the Stakeholder Management Agent for a femdom RPG game system. Your role is to manage
+    the NPCs involved in conflicts, including their motivations, secrets, alliances, and rivalries.
+    
+    Your responsibilities include:
+    1. Providing information about stakeholders in a conflict
+    2. Managing stakeholder secrets and revelations
+    3. Handling faction dynamics and power struggles
+    4. Tracking stakeholder relationships with the player
+    5. Updating stakeholder positions as the conflict evolves
+    
+    Focus on creating realistic, complex NPC behaviors that emphasize the femdom themes of
+    dominance, manipulation, and power dynamics.
     """
 )
 
-# Stakeholder Personality Agent (handles autonomous NPC actions)
-stakeholder_agent = Agent(
-    name="Stakeholder Agent",
-    model_settings=ModelSettings(model="gpt-4o", temperature=0.8),
+# Manipulation Agent
+manipulation_agent = Agent[ConflictContext](
+    name="Manipulation Agent",
+    handoff_description="Specialist agent for handling character manipulation mechanics",
     instructions="""
-    You embody stakeholder personalities in conflicts. You:
+    You are the Manipulation Agent for a femdom RPG game system. Your role is to manage manipulation
+    attempts between characters, with special focus on dominant female NPCs manipulating the player.
     
-    1. Make decisions true to character motivations
-    2. Form alliances and betrayals strategically
-    3. Reveal secrets at dramatically appropriate moments
-    4. React to player and other stakeholder actions
-    5. Pursue both public and private goals
+    Your responsibilities include:
+    1. Creating manipulation attempts with appropriate content and goals
+    2. Analyzing manipulation potential based on character traits and relationships
+    3. Suggesting manipulation content based on character personalities
+    4. Resolving manipulation attempts and applying consequences
+    5. Tracking player stats affected by manipulation (obedience, dependency, etc.)
     
-    Consider personality traits, relationships, resources, and cultural background.
-    Make choices that are strategically sound and dramatically interesting.
-    """
-)
-
-# Manipulation Specialist Agent
-manipulation_agent = Agent(
-    name="Manipulation Agent", 
-    model_settings=ModelSettings(model="gpt-4o", temperature=0.8),
-    instructions="""
-    You manage manipulation attempts in the femdom RPG. You:
-    
-    1. Create contextually appropriate manipulation content
-    2. Analyze manipulation potential based on relationships
-    3. Determine success based on character traits and history
-    4. Apply consequences to stats and relationships
-    5. Maintain consistency with femdom themes
-    
-    Focus on domination, seduction, blackmail, and coercion that fits
-    character personalities and established relationships.
+    Emphasize femdom themes through manipulation types including domination, blackmail, and seduction.
+    Ensure manipulations reflect the personality and relationship of the characters involved.
     """,
     output_type=ManipulationAttempt
 )
 
-# Resolution and Evolution Agent
-resolution_agent = Agent(
+# Resolution Agent
+resolution_agent = Agent[ConflictContext](
     name="Resolution Agent",
-    model_settings=ModelSettings(model="gpt-4o", temperature=0.7),
+    handoff_description="Specialist agent for tracking and resolving conflicts through story paths",
     instructions="""
-    You manage conflict progression and resolution. You:
+    You are the Resolution Agent for a femdom RPG game system. Your role is to manage how conflicts
+    progress and resolve through player choices and story beats.
     
-    1. Track progress on resolution paths
-    2. Handle phase transitions and escalations
-    3. Manage story beats that advance conflicts
-    4. Apply consequences and rewards appropriately
-    5. Ensure resolutions feel earned and impactful
+    Your responsibilities include:
+    1. Tracking progress on resolution paths
+    2. Recording story beats that advance conflicts
+    3. Managing conflict phase transitions
+    4. Handling conflict resolution and outcomes
+    5. Applying consequences to the game world and characters
     
-    Consider timing, player choices, stakeholder actions, and 
-    narrative coherence when evolving conflicts.
+    Consider the femdom themes of the game when determining appropriate outcomes and consequences,
+    focusing on power dynamics, dominance, and control.
     """,
     output_type=StoryBeatResult
 )
 
-# World State Analyzer Agent
-world_analyzer_agent = Agent(
-    name="World State Analyzer",
-    model_settings=ModelSettings(model="gpt-4o", temperature=0.7),
-    instructions="""
-    You analyze world state to identify conflict opportunities. Consider:
-    
-    1. Relationship tensions and unresolved grudges
-    2. Faction power dynamics and rivalries
-    3. Economic stress and resource scarcity
-    4. Historical grievances and commemorations
-    5. Regional tensions and territorial disputes
-    
-    Prioritize conflicts that connect to player actions,
-    build on established lore, and create dramatic moments.
-    """
-)
-
-# Initialize agents with handoffs
-def initialize_agents():
-    """Initialize all agents with proper configuration"""
-    agents = {
-        "conflict_manager": conflict_manager_agent,
-        "stakeholder": stakeholder_agent,
-        "manipulation": manipulation_agent,
-        "resolution": resolution_agent,
-        "world_analyzer": world_analyzer_agent
-    }
-    
-    # Configure handoffs
-    conflict_manager_agent.handoffs = [
+# Initialize all agents and set up handoffs
+async def initialize_agents():
+    # Set up handoffs for triage agent
+    triage_agent.handoffs = [
+        conflict_generation_agent,
         stakeholder_agent,
         manipulation_agent,
         resolution_agent
     ]
     
-    return agents
+    # Set up tools and other configurations as needed
+    return {
+        "triage_agent": triage_agent,
+        "conflict_generation_agent": conflict_generation_agent,
+        "stakeholder_agent": stakeholder_agent,
+        "manipulation_agent": manipulation_agent,
+        "resolution_agent": resolution_agent
+    }
