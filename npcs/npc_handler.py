@@ -171,79 +171,105 @@ class NPCHandler:
 
     async def _store_interaction_memory(self, npc_id: int, player_input: str, response: str) -> None:
         """
-        Store an interaction in the NPC's memory.
+        Store an interaction in the NPC's memory using canon system.
         
         Args:
             npc_id: ID of the NPC
             player_input: Player's input
             response: NPC's response
         """
-        async with get_db_connection_context() as conn:
+        try:
+            # Create unified memory entry (allowed)
             memory_text = f"Interaction with player: {player_input} - Response: {response}"
+            memory_system = await MemorySystem.get_instance(self.user_id, self.conversation_id)
             
-            # Add memory to NPCStats
-            row = await conn.fetchrow("""
-                SELECT memory
-                FROM NPCStats
-                WHERE user_id=$1 AND conversation_id=$2 AND npc_id=$3
-                LIMIT 1
-            """, self.user_id, self.conversation_id, npc_id)
+            await memory_system.remember(
+                entity_type="npc",
+                entity_id=npc_id,
+                memory_text=memory_text,
+                importance="medium",
+                tags=["interaction", "player_interaction"],
+                emotional=True
+            )
             
-            existing_memory = []
-            if row and row["memory"]:
-                try:
-                    if isinstance(row["memory"], str):
-                        existing_memory = json.loads(row["memory"])
-                    else:
-                        existing_memory = row["memory"]
-                except (json.JSONDecodeError, TypeError):
-                    pass
-            
-            existing_memory.append(memory_text)
-            
-            await conn.execute("""
-                UPDATE NPCStats
-                SET memory = $1
-                WHERE user_id=$2 AND conversation_id=$3 AND npc_id=$4
-            """, json.dumps(existing_memory), self.user_id, self.conversation_id, npc_id)
-            
-            # Also add to unified_memories for better compatibility
-            await conn.execute("""
-                INSERT INTO unified_memories (
-                    entity_type, entity_id, user_id, conversation_id,
-                    memory_text, memory_type, significance, emotional_intensity
+            # Also store in unified_memories table for compatibility
+            async with get_db_connection_context() as conn:
+                # Create context for canon
+                ctx = type('obj', (object,), {
+                    'user_id': self.user_id,
+                    'conversation_id': self.conversation_id,
+                    'npc_id': npc_id
+                })
+                
+                # Use canon to create memory entry
+                await canon.create_journal_entry(
+                    ctx, conn,
+                    entry_type="npc_interaction",
+                    entry_text=memory_text,
+                    tags=["interaction", "npc", f"npc_{npc_id}"],
+                    importance=0.5
                 )
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-            """, "npc", npc_id, self.user_id, self.conversation_id, memory_text, "interaction", 3, 30)
+                
+        except Exception as e:
+            logger.error(f"Error storing interaction memory: {e}")
 
     async def _apply_stat_changes(self, npc_id: int, stat_changes: Dict[str, int]) -> None:
         """
-        Apply stat changes to an NPC.
+        Apply stat changes to an NPC using LoreSystem.
         
         Args:
             npc_id: ID of the NPC
             stat_changes: Dictionary of stat changes
         """
-        async with get_db_connection_context() as conn:
+        try:
+            # Get LoreSystem instance
+            from lore.lore_system import LoreSystem
+            lore_system = await LoreSystem.get_instance(self.user_id, self.conversation_id)
+            
+            # Create context for governance
+            ctx = type('obj', (object,), {
+                'user_id': self.user_id,
+                'conversation_id': self.conversation_id,
+                'npc_id': npc_id
+            })
+            
+            # Get current stats first
+            async with get_db_connection_context() as conn:
+                current_stats = {}
+                valid_stats = ["dominance", "cruelty", "closeness", "trust", "respect", "intensity"]
+                
+                for stat in valid_stats:
+                    if stat in stat_changes:
+                        row = await conn.fetchrow(
+                            f"SELECT {stat} FROM NPCStats WHERE user_id=$1 AND conversation_id=$2 AND npc_id=$3",
+                            self.user_id, self.conversation_id, npc_id
+                        )
+                        if row:
+                            current_stats[stat] = row[stat]
+            
+            # Calculate new values and prepare updates
+            updates = {}
             for stat, change in stat_changes.items():
-                if stat in ["dominance", "cruelty", "closeness", "trust", "respect", "intensity"]:
-                    # Get current value
-                    row = await conn.fetchrow(f"""
-                        SELECT {stat}
-                        FROM NPCStats
-                        WHERE user_id=$1 AND conversation_id=$2 AND npc_id=$3
-                        LIMIT 1
-                    """, self.user_id, self.conversation_id, npc_id)
+                if stat in current_stats:
+                    new_value = max(0, min(100, current_stats[stat] + change))
+                    if new_value != current_stats[stat]:
+                        updates[stat] = new_value
+            
+            # Apply updates if any
+            if updates:
+                result = await lore_system.propose_and_enact_change(
+                    ctx=ctx,
+                    entity_type="NPCStats",
+                    entity_identifier={"npc_id": npc_id},
+                    updates=updates,
+                    reason=f"Interaction caused stat changes: {stat_changes}"
+                )
+                
+                if result.get("status") != "committed":
+                    logger.error(f"Failed to apply stat changes: {result}")
                     
-                    if row:
-                        current_value = row[stat]
-                        new_value = max(0, min(100, current_value + change))
-                        
-                        await conn.execute(f"""
-                            UPDATE NPCStats
-                            SET {stat} = $1
-                            WHERE user_id=$2 AND conversation_id=$3 AND npc_id=$4
-                        """, new_value, self.user_id, self.conversation_id, npc_id)
+        except Exception as e:
+            logger.error(f"Error applying stat changes: {e}")
 
     async def get_npc_details(self, npc_id: int) -> Dict[str, Any]:
         """
@@ -600,111 +626,124 @@ class NPCHandler:
 
     async def process_daily_npc_activities(self) -> Dict[str, Any]:
         """
-        Process daily activities for all NPCs.
+        Process daily activities for all NPCs using canon system.
         Update locations, create memories, and handle NPC interactions.
         
         Returns:
             Dictionary with processing results
         """
-        async with get_db_connection_context() as conn:
-            year, month, day, time_of_day = 1, 1, 1, "Morning"
+        try:
+            # Get LoreSystem instance
+            from lore.lore_system import LoreSystem
+            lore_system = await LoreSystem.get_instance(self.user_id, self.conversation_id)
             
-            for key in ["CurrentYear", "CurrentMonth", "CurrentDay", "TimeOfDay"]:
-                row = await conn.fetchrow("""
-                    SELECT value
-                    FROM CurrentRoleplay
-                    WHERE user_id=$1 AND conversation_id=$2 AND key=$3
-                """, self.user_id, self.conversation_id, key)
+            # Create context for governance
+            ctx = type('obj', (object,), {
+                'user_id': self.user_id,
+                'conversation_id': self.conversation_id
+            })
+            
+            async with get_db_connection_context() as conn:
+                # Get current time data
+                year, month, day, time_of_day = 1, 1, 1, "Morning"
                 
+                for key in ["CurrentYear", "CurrentMonth", "CurrentDay", "TimeOfDay"]:
+                    row = await conn.fetchrow(
+                        "SELECT value FROM CurrentRoleplay WHERE user_id=$1 AND conversation_id=$2 AND key=$3",
+                        self.user_id, self.conversation_id, key
+                    )
+                    
+                    if row:
+                        if key == "CurrentYear":
+                            year = int(row["value"]) if row["value"].isdigit() else 1
+                        elif key == "CurrentMonth":
+                            month = int(row["value"]) if row["value"].isdigit() else 1
+                        elif key == "CurrentDay":
+                            day = int(row["value"]) if row["value"].isdigit() else 1
+                        elif key == "TimeOfDay":
+                            time_of_day = row["value"]
+                
+                # Get day name
+                row = await conn.fetchrow(
+                    "SELECT value FROM CurrentRoleplay WHERE user_id=$1 AND conversation_id=$2 AND key='CalendarNames'",
+                    self.user_id, self.conversation_id
+                )
+                
+                day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
                 if row:
-                    if key == "CurrentYear":
-                        year = int(row["value"]) if row["value"].isdigit() else 1
-                    elif key == "CurrentMonth":
-                        month = int(row["value"]) if row["value"].isdigit() else 1
-                    elif key == "CurrentDay":
-                        day = int(row["value"]) if row["value"].isdigit() else 1
-                    elif key == "TimeOfDay":
-                        time_of_day = row["value"]
-            
-            # Get day name
-            row = await conn.fetchrow("""
-                SELECT value
-                FROM CurrentRoleplay
-                WHERE user_id=$1 AND conversation_id=$2 AND key='CalendarNames'
-                LIMIT 1
-            """, self.user_id, self.conversation_id)
-            
-            day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-            if row:
-                try:
-                    calendar_data = json.loads(row["value"])
-                    if "days" in calendar_data:
-                        day_names = calendar_data["days"]
-                except (json.JSONDecodeError, TypeError):
-                    pass
-            
-            day_of_week = day_names[day % len(day_names)]
-            
-            # Get all NPCs
-            rows = await conn.fetch("""
-                SELECT npc_id, npc_name, schedule, current_location
-                FROM NPCStats
-                WHERE user_id=$1 AND conversation_id=$2
-            """, self.user_id, self.conversation_id)
-            
-            results = []
-            
-            for row in rows:
-                npc_id = row["npc_id"]
-                npc_name = row["npc_name"]
-                schedule = row["schedule"]
-                current_location = row["current_location"]
-                
-                # Parse schedule
-                if schedule:
                     try:
-                        if isinstance(schedule, str):
-                            schedule_data = json.loads(schedule)
-                        else:
-                            schedule_data = schedule
-                        
-                        # Check if this day is in the schedule
-                        if day_of_week in schedule_data:
-                            day_schedule = schedule_data[day_of_week]
-                            
-                            # Check if the current time period is in the schedule
-                            if time_of_day in day_schedule:
-                                new_location = day_schedule[time_of_day]
-                                
-                                # Update location if different
-                                if new_location and new_location != current_location:
-                                    await conn.execute("""
-                                        UPDATE NPCStats
-                                        SET current_location=$1
-                                        WHERE npc_id=$2
-                                    """, new_location, npc_id)
-                                    
-                                    # Create memory of location change
-                                    memory_text = f"Moved to {new_location} during {time_of_day} on {day_of_week}."
-                                    
-                                    # Add to unified_memories
-                                    await conn.execute("""
-                                        INSERT INTO unified_memories (
-                                            entity_type, entity_id, user_id, conversation_id,
-                                            memory_text, memory_type, significance, emotional_intensity
-                                        )
-                                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-                                    """, "npc", npc_id, self.user_id, self.conversation_id, memory_text, "movement", 2, 10)
-                                    
-                                    results.append({
-                                        "npc_id": npc_id,
-                                        "npc_name": npc_name,
-                                        "action": "moved",
-                                        "old_location": current_location,
-                                        "new_location": new_location
-                                    })
+                        calendar_data = json.loads(row["value"])
+                        if "days" in calendar_data:
+                            day_names = calendar_data["days"]
                     except (json.JSONDecodeError, TypeError):
                         pass
+                
+                day_of_week = day_names[day % len(day_names)]
+                
+                # Get all NPCs
+                rows = await conn.fetch(
+                    "SELECT npc_id, npc_name, schedule, current_location FROM NPCStats WHERE user_id=$1 AND conversation_id=$2",
+                    self.user_id, self.conversation_id
+                )
+                
+                results = []
+                
+                for row in rows:
+                    npc_id = row["npc_id"]
+                    npc_name = row["npc_name"]
+                    schedule = row["schedule"]
+                    current_location = row["current_location"]
+                    
+                    # Parse schedule
+                    if schedule:
+                        try:
+                            if isinstance(schedule, str):
+                                schedule_data = json.loads(schedule)
+                            else:
+                                schedule_data = schedule
+                            
+                            # Check if this day is in the schedule
+                            if day_of_week in schedule_data:
+                                day_schedule = schedule_data[day_of_week]
+                                
+                                # Check if the current time period is in the schedule
+                                if time_of_day in day_schedule:
+                                    new_location = day_schedule[time_of_day]
+                                    
+                                    # Update location if different using LoreSystem
+                                    if new_location and new_location != current_location:
+                                        # Update context for this NPC
+                                        ctx.npc_id = npc_id
+                                        
+                                        result = await lore_system.propose_and_enact_change(
+                                            ctx=ctx,
+                                            entity_type="NPCStats",
+                                            entity_identifier={"npc_id": npc_id},
+                                            updates={"current_location": new_location},
+                                            reason=f"Scheduled movement to {new_location} during {time_of_day} on {day_of_week}"
+                                        )
+                                        
+                                        if result.get("status") == "committed":
+                                            # Create memory of location change using canon
+                                            memory_text = f"Moved to {new_location} during {time_of_day} on {day_of_week}."
+                                            
+                                            await canon.create_journal_entry(
+                                                ctx, conn,
+                                                entry_type="movement",
+                                                entry_text=memory_text,
+                                                tags=["movement", "location_change", f"npc_{npc_id}"],
+                                                importance=0.2
+                                            )
+                                            
+                                            results.append({
+                                                "npc_id": npc_id,
+                                                "npc_name": npc_name,
+                                                "action": "moved",
+                                                "old_location": current_location,
+                                                "new_location": new_location
+                                            })
+                        except (json.JSONDecodeError, TypeError):
+                            pass
             
             # Handle NPC interactions
             # Get NPCs at the same location
@@ -774,6 +813,10 @@ class NPCHandler:
                 "day_of_week": day_of_week,
                 "results": results
             }
+            
+    except Exception as e:
+        logger.error(f"Error processing daily activities: {e}")
+        return {"error": str(e), "results": []}
 
     async def _update_npc_relationship(self, npc1_id: int, npc2_id: int) -> None:
         """
