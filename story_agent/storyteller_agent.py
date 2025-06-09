@@ -2087,16 +2087,28 @@ class StorytellerAgent:
             tracker.end_phase()
 
             # 5.5 Check for active conflicts and include in context
-            tracker.start_phase("check_conflicts")
-            conflict_system = await ConflictSystemIntegration.get_instance(user_id, conversation_id)
-            active_conflicts = await conflict_system.get_conflicts_with_context(user_input)
+            tracker.start_phase("conflict_context")
             
-            # Add conflict summaries to comprehensive context
+            # Get active conflicts from the comprehensive context
+            active_conflicts = comprehensive_context.get("conflicts", [])
+            
+            # Check if any NPCs in the current scene are conflict stakeholders
+            conflict_context = []
             if active_conflicts:
-                comprehensive_context["active_conflicts"] = []
-                for conflict in active_conflicts[:3]:  # Limit to top 3 relevant conflicts
-                    summary = await get_conflict_summary(user_id, conversation_id, conflict['conflict_id'])
-                    comprehensive_context["active_conflicts"].append(summary)
+                for conflict in active_conflicts:
+                    # See if this conflict is relevant to the current scene
+                    stakeholder_names = [s.get('npc_name', '') for s in conflict.get('stakeholders', [])]
+                    scene_npcs = [npc.get('npc_name', '') for npc in comprehensive_context.get('introduced_npcs', [])]
+                    
+                    if any(name in scene_npcs for name in stakeholder_names):
+                        conflict_context.append({
+                            'conflict_name': conflict.get('conflict_name'),
+                            'phase': conflict.get('phase'),
+                            'relevant_stakeholders': [n for n in stakeholder_names if n in scene_npcs]
+                        })
+            
+            # Add conflict context to comprehensive_context for narrator
+            comprehensive_context['relevant_conflicts'] = conflict_context
             tracker.end_phase()
             
             # 6. Process NPC responses
