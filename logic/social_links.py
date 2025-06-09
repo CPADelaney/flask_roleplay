@@ -1685,7 +1685,7 @@ async def get_relationship_summary_tool(
     return summary
 
 
-@function_tool
+@function_tool(strict_mode=False)
 async def update_relationships_from_conflict(
     ctx: RunContextWrapper,
     conflict_id: int,
@@ -1760,7 +1760,7 @@ async def update_relationships_from_conflict(
         return {"success": False, "error": str(e)}
 
 
-@function_tool
+@function_tool(strict_mode=False)
 async def update_relationship_context(
     ctx: RunContextWrapper,
     entity1_type: str,
