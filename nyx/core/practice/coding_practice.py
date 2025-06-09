@@ -12,6 +12,7 @@ from openai import OpenAIError
 from agents import Runner
 from nyx.nyx_agent_sdk import nyx_main_agent
 from nyx.core.tools import code_executor
+from strategy import update_tool_bias
 from nyx.core.reward import evaluator as reward
 
 try:
@@ -125,11 +126,14 @@ async def autoloop():
             tests = _strip_md(tests)
             try:
                 exec_res = await asyncio.wait_for(
-                    code_executor.execute_python(code, tests), timeout=_ITERATION_LIMIT
+                    code_executor.execute_python(code, tests),
+                    timeout=_ITERATION_LIMIT
                 )
-                event_type = 'unit_test_passed' if exec_res.get('passed') else 'unit_test_failed'
+                success = bool(exec_res.get('passed'))
+                event_type = 'unit_test_passed' if success else 'unit_test_failed'
             except asyncio.TimeoutError:
                 logger.warning("Practice execution timed out")
+                success = False
                 event_type = 'unit_test_failed'
             if cs:
                 try:
@@ -139,6 +143,7 @@ async def autoloop():
                     reward.evaluate(event_type)
             else:
                 reward.evaluate(event_type)
+            update_tool_bias("execute_python", 1.0 if success else 0.0)
             logger.info("Practice %s: %s", problem.get('title'), event_type)
         except Exception:
             logger.exception("Error in coding practice loop")

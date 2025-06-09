@@ -3,7 +3,6 @@ import json
 import datetime
 import asyncio
 
-
 LOG_DIR = "/mnt/nyx_logs"
 
 async def log_event(event: dict) -> None:
