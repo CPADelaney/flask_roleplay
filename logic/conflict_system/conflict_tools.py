@@ -1032,6 +1032,7 @@ async def _internal_add_conflict_to_narrative_logic(ctx: RunContextWrapper, narr
         "stakeholders": [npc["npc_name"] for npc in stakeholder_npcs_details],
         "analysis": conflict_analysis
     }
+
 # Helper Functions
 
 async def _internal_get_npc_details_logic(ctx: RunContextWrapper, npc_id: int) -> Dict[str, Any]:
@@ -1101,16 +1102,6 @@ async def _internal_check_stakeholder_manipulates_player_logic(ctx: RunContextWr
         logger.error(f"Error checking if stakeholder manipulates player: {e}", exc_info=True)
         return False
 
-async def _internal_create_conflict_memory_logic(ctx: RunContextWrapper, conflict_id: int, memory_text: str, significance: int = 5) -> int:
-    context = ctx.context
-    try:
-        async with get_db_connection_context() as conn:
-            memory_id = await conn.fetchval("INSERT INTO ConflictMemoryEvents (conflict_id, memory_text, significance, entity_type, entity_id, user_id, conversation_id) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id", conflict_id, memory_text, significance, "conflict", conflict_id, context.user_id, context.conversation_id)
-            return memory_id if memory_id else 0 # Ensure return value or handle None
-    except Exception as e:
-        logger.error(f"Error creating conflict memory: {e}", exc_info=True)
-        return 0
-
 async def _internal_check_conflict_advancement_logic(ctx: RunContextWrapper, conflict_id: int) -> None:
     context = ctx.context
     try:
@@ -1168,48 +1159,6 @@ async def _internal_get_faction_members_logic(ctx: RunContextWrapper, faction_id
         logger.error(f"Error getting faction members: {e}", exc_info=True)
         return []
 
-async def _internal_extract_npcs_from_narrative_logic(ctx: RunContextWrapper, narrative_text: str) -> List[int]:
-    context = ctx.context
-    try:
-        async with get_db_connection_context() as conn:
-            npc_rows = await conn.fetch("SELECT npc_id, npc_name FROM NPCStats WHERE user_id = $1 AND conversation_id = $2 AND introduced = TRUE", context.user_id, context.conversation_id)
-            return [row["npc_id"] for row in npc_rows if row["npc_name"] in narrative_text]
-    except Exception as e:
-        logger.error(f"Error extracting NPCs from narrative: {e}", exc_info=True)
-        return []
-
-async def _internal_create_conflict_record_logic(ctx: RunContextWrapper, conflict_data: Dict[str, Any], current_day: int) -> int:
-    context = ctx.context
-    try:
-        async with get_db_connection_context() as conn:
-            success_rate = {"minor": 0.75, "standard": 0.5, "major": 0.25, "catastrophic": 0.1}.get(conflict_data.get("conflict_type", "standard"), 0.5)
-            conflict_id = await conn.fetchval("INSERT INTO Conflicts (user_id, conversation_id, conflict_name, conflict_type, description, progress, phase, start_day, estimated_duration, success_rate, outcome, is_active) VALUES ($1, $2, $3, $4, $5, 0.0, 'brewing', $6, $7, $8, 'pending', TRUE) RETURNING conflict_id", context.user_id, context.conversation_id, conflict_data.get("conflict_name", "Unnamed"), conflict_data.get("conflict_type", "standard"), conflict_data.get("description", "Desc"), current_day, conflict_data.get("estimated_duration", 7), success_rate)
-            return conflict_id if conflict_id else 0
-    except Exception as e:
-        logger.error(f"Error creating conflict record: {e}", exc_info=True)
-        raise
-        
-async def _internal_create_stakeholders_logic(ctx: RunContextWrapper, conflict_id: int, conflict_data: Dict[str, Any], stakeholder_npcs: List[Dict[str, Any]]) -> None:
-    context = ctx.context
-    try:
-        async with get_db_connection_context() as conn:
-            stakeholders_to_insert = conflict_data.get("stakeholders", [])
-            if not stakeholders_to_insert:
-                stakeholders_to_insert = [{"npc_id": npc["npc_id"], "public_motivation": f"{npc['npc_name']} wants peace.", "private_motivation": f"{npc['npc_name']} wants power.", "desired_outcome": "Win.", "faction_id": (npc.get("faction_affiliations", [{}])[0].get("faction_id") if npc.get("faction_affiliations") else None), "faction_name": (npc.get("faction_affiliations", [{}])[0].get("faction_name") if npc.get("faction_affiliations") else None), "involvement_level": 7 - i} for i, npc in enumerate(stakeholder_npcs)]
-            async with conn.transaction():
-                for sh in stakeholders_to_insert:
-                    npc_id = sh.get("npc_id")
-                    npc = next((n for n in stakeholder_npcs if n["npc_id"] == npc_id), None)
-                    if not npc: continue
-                    faction_id, faction_name = sh.get("faction_id"), sh.get("faction_name")
-                    if not faction_id and npc.get("faction_affiliations"): faction_id, faction_name = (npc["faction_affiliations"][0].get("faction_id"), npc["faction_affiliations"][0].get("faction_name"))
-                    await conn.execute("INSERT INTO ConflictStakeholders (conflict_id, npc_id, faction_id, faction_name, faction_position, public_motivation, private_motivation, desired_outcome, involvement_level, alliances, rivalries, leadership_ambition, faction_standing, willing_to_betray_faction) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)", conflict_id, npc_id, faction_id, faction_name, sh.get("faction_position", "Member"), sh.get("public_motivation", "Resolve favorably"), sh.get("private_motivation", "Gain advantage"), sh.get("desired_outcome", "Success"), sh.get("involvement_level", 5), json.dumps(sh.get("alliances", {})), json.dumps(sh.get("rivalries", {})), sh.get("leadership_ambition", npc.get("dominance", 50) // 10), sh.get("faction_standing", 50), sh.get("willing_to_betray_faction", npc.get("cruelty", 20) > 60))
-                    if "secrets" in sh:
-                        for secret in sh["secrets"]: await conn.execute("INSERT INTO StakeholderSecrets (conflict_id, npc_id, secret_id, secret_type, content, target_npc_id, is_revealed, revealed_to, is_public) VALUES ($1, $2, $3, $4, $5, $6, FALSE, NULL, FALSE)", conflict_id, npc_id, secret.get("secret_id", f"secret_{npc_id}_{random.randint(1000,9999)}"), secret.get("secret_type", "personal"), secret.get("content", "A secret"), secret.get("target_npc_id"))
-    except Exception as e:
-        logger.error(f"Error creating stakeholders: {e}", exc_info=True)
-        raise
-        
 async def _internal_create_resolution_paths_logic(ctx: RunContextWrapper, conflict_id: int, conflict_data: Dict[str, Any]) -> None:
     context = ctx.context
     try:
@@ -1236,25 +1185,6 @@ async def _internal_create_internal_faction_conflicts_logic(ctx: RunContextWrapp
     except Exception as e:
         logger.error(f"Error creating internal faction conflicts: {e}", exc_info=True)
         raise
-
-async def _internal_generate_player_manipulation_attempts_logic(ctx: RunContextWrapper, conflict_id: int, stakeholder_npcs: List[Dict[str, Any]]) -> None:
-    context = ctx.context
-    eligible_npcs = [npc for npc in stakeholder_npcs if npc.get("sex", "female") == "female" and (npc.get("dominance", 0) > 70 or npc.get("relationship_with_player", {}).get("closeness", 0) > 70)]
-    if not eligible_npcs: return
-    manipulation_types, involvement_levels, factions = ["domination", "blackmail", "seduction", "coercion", "bribery"], ["observing", "participating", "leading"], ["a", "b", "neutral"]
-    for npc in eligible_npcs[:2]:
-        if random.random() > 0.7: continue
-        manip_type = "domination" if npc.get("dominance", 0) > 80 else ("blackmail" if npc.get("cruelty", 0) > 70 else ("seduction" if npc.get("relationship_with_player", {}).get("closeness", 0) > 80 else random.choice(manipulation_types)))
-        involvement, faction_choice = random.choice(involvement_levels), random.choice(factions)
-        content = ""
-        if manip_type == "domination": content = generate_domination_content(npc, npc.get("relationship_with_player", {}), {"faction": faction_choice, "involvement_level": involvement}, {})
-        elif manip_type == "seduction": content = generate_seduction_content(npc, npc.get("relationship_with_player", {}), {"faction": faction_choice, "involvement_level": involvement}, {})
-        elif manip_type == "blackmail": content = generate_blackmail_content(npc, npc.get("relationship_with_player", {}), {"faction": faction_choice, "involvement_level": involvement}, {}, []) # Assuming leverage can be empty
-        else: content = generate_generic_manipulation_content(npc, npc.get("relationship_with_player", {}), {"faction": faction_choice, "involvement_level": involvement}, {})
-        goal = {"faction": faction_choice, "involvement_level": involvement, "specific_actions": random.choice(["Spy", "Convince", "Sabotage", "Gather info"])}
-        leverage = generate_leverage(npc, npc.get("relationship_with_player", {}), manip_type)
-        intimacy = calculate_intimacy_level(npc, npc.get("relationship_with_player", {}), manip_type)
-        await _internal_create_manipulation_attempt_logic(ctx, conflict_id, npc["npc_id"], manip_type, content, goal, leverage, intimacy)
 
 async def _internal_calculate_coup_success_chance_logic(ctx: RunContextWrapper, struggle_id: int, approach: str, supporting_npcs: List[int], resources_committed: Dict[str, int]) -> float:
     context = ctx.context
@@ -1407,53 +1337,769 @@ async def _internal_resolve_internal_conflict_logic(ctx: RunContextWrapper, stru
         logger.error(f"Error resolving internal faction struggle {struggle_id}: {e}", exc_info=True)
         return {"success": False, "error": str(e)}
 
-@function_tool
+# Additional internal logic functions for the public functions
+
+async def _internal_get_resolution_paths_logic(ctx: RunContextWrapper, conflict_id: int) -> List[Dict[str, Any]]:
+    context = ctx.context
+    try:
+        async with get_db_connection_context() as conn:
+            paths_rows = await conn.fetch("""
+                SELECT path_id, name, description, approach_type, difficulty, 
+                       requirements, stakeholders_involved, key_challenges, 
+                       progress, is_completed
+                FROM ResolutionPaths
+                WHERE conflict_id = $1
+            """, conflict_id)
+            
+            paths = []
+            for row in paths_rows:
+                path = dict(row)
+                path['requirements'] = json.loads(path['requirements']) if path['requirements'] else {}
+                path['stakeholders_involved'] = json.loads(path['stakeholders_involved']) if path['stakeholders_involved'] else []
+                path['key_challenges'] = json.loads(path['key_challenges']) if path['key_challenges'] else []
+                paths.append(path)
+            
+            return paths
+    except Exception as e:
+        logger.error(f"Error getting resolution paths: {e}", exc_info=True)
+        return []
+
+async def _internal_update_conflict_progress_logic(ctx: RunContextWrapper, conflict_id: int, progress_increment: float) -> Dict[str, Any]:
+    context = ctx.context
+    try:
+        async with get_db_connection_context() as conn:
+            async with conn.transaction():
+                current_progress = await conn.fetchval("""
+                    SELECT progress FROM Conflicts
+                    WHERE conflict_id = $1 AND user_id = $2 AND conversation_id = $3
+                """, conflict_id, context.user_id, context.conversation_id)
+                
+                if current_progress is None:
+                    return {"success": False, "error": "Conflict not found"}
+                
+                new_progress = min(100.0, current_progress + progress_increment)
+                
+                await conn.execute("""
+                    UPDATE Conflicts
+                    SET progress = $1, updated_at = CURRENT_TIMESTAMP
+                    WHERE conflict_id = $2 AND user_id = $3 AND conversation_id = $4
+                """, new_progress, conflict_id, context.user_id, context.conversation_id)
+                
+                # Check for phase advancement
+                await _internal_check_conflict_advancement_logic(ctx, conflict_id)
+                
+                return {
+                    "success": True,
+                    "conflict_id": conflict_id,
+                    "old_progress": current_progress,
+                    "new_progress": new_progress
+                }
+    except Exception as e:
+        logger.error(f"Error updating conflict progress: {e}", exc_info=True)
+        return {"success": False, "error": str(e)}
+
+async def _internal_get_active_conflicts_logic(ctx: RunContextWrapper) -> List[Dict[str, Any]]:
+    context = ctx.context
+    try:
+        async with get_db_connection_context() as conn:
+            conflicts_rows = await conn.fetch("""
+                SELECT conflict_id, conflict_name, conflict_type, description,
+                       progress, phase, start_day, estimated_duration
+                FROM Conflicts
+                WHERE user_id = $1 AND conversation_id = $2 AND is_active = TRUE
+                ORDER BY start_day DESC
+            """, context.user_id, context.conversation_id)
+            
+            return [dict(row) for row in conflicts_rows]
+    except Exception as e:
+        logger.error(f"Error getting active conflicts: {e}", exc_info=True)
+        return []
+
+async def _internal_update_stakeholder_status_logic(ctx: RunContextWrapper, conflict_id: int, npc_id: int, status: StakeholderStatusUpdate) -> Dict[str, Any]:
+    context = ctx.context
+    try:
+        async with get_db_connection_context() as conn:
+            # Build update query dynamically based on provided fields
+            update_fields = []
+            values = []
+            param_count = 1
+            
+            for field, value in status.dict(exclude_none=True).items():
+                update_fields.append(f"{field} = ${param_count}")
+                values.append(value)
+                param_count += 1
+            
+            if not update_fields:
+                return {"success": False, "error": "No fields to update"}
+            
+            values.extend([conflict_id, npc_id])
+            
+            await conn.execute(f"""
+                UPDATE ConflictStakeholders
+                SET {', '.join(update_fields)}
+                WHERE conflict_id = ${param_count} AND npc_id = ${param_count + 1}
+            """, *values)
+            
+            return {
+                "success": True,
+                "conflict_id": conflict_id,
+                "npc_id": npc_id,
+                "updated_fields": list(status.dict(exclude_none=True).keys())
+            }
+    except Exception as e:
+        logger.error(f"Error updating stakeholder status: {e}", exc_info=True)
+        return {"success": False, "error": str(e)}
+
+async def _internal_get_player_involvement_logic(ctx: RunContextWrapper, conflict_id: int) -> Dict[str, Any]:
+    context = ctx.context
+    try:
+        async with get_db_connection_context() as conn:
+            involvement_row = await conn.fetchrow("""
+                SELECT involvement_level, faction, money_committed, 
+                       supplies_committed, influence_committed, actions_taken, 
+                       manipulated_by
+                FROM PlayerConflictInvolvement
+                WHERE conflict_id = $1 AND user_id = $2 AND conversation_id = $3
+            """, conflict_id, context.user_id, context.conversation_id)
+            
+            if not involvement_row:
+                return {
+                    "involved": False,
+                    "conflict_id": conflict_id
+                }
+            
+            result = dict(involvement_row)
+            result['involved'] = True
+            result['conflict_id'] = conflict_id
+            result['actions_taken'] = json.loads(result['actions_taken']) if result['actions_taken'] else []
+            result['manipulated_by'] = json.loads(result['manipulated_by']) if result['manipulated_by'] else None
+            
+            return result
+    except Exception as e:
+        logger.error(f"Error getting player involvement: {e}", exc_info=True)
+        return {"involved": False, "conflict_id": conflict_id, "error": str(e)}
+
+async def _internal_get_conflict_details_logic(ctx: RunContextWrapper, conflict_id: int) -> Dict[str, Any]:
+    context = ctx.context
+    try:
+        async with get_db_connection_context() as conn:
+            conflict_row = await conn.fetchrow("""
+                SELECT conflict_name, conflict_type, description, progress, phase,
+                       start_day, estimated_duration, success_rate, outcome, 
+                       resolution_description, is_active
+                FROM Conflicts
+                WHERE conflict_id = $1 AND user_id = $2 AND conversation_id = $3
+            """, conflict_id, context.user_id, context.conversation_id)
+            
+            if not conflict_row:
+                return {"error": "Conflict not found"}
+            
+            details = dict(conflict_row)
+            details['conflict_id'] = conflict_id
+            
+            # Get stakeholders count
+            stakeholder_count = await conn.fetchval("""
+                SELECT COUNT(*) FROM ConflictStakeholders
+                WHERE conflict_id = $1
+            """, conflict_id)
+            details['stakeholder_count'] = stakeholder_count
+            
+            # Get resolution paths count
+            paths_count = await conn.fetchval("""
+                SELECT COUNT(*) FROM ResolutionPaths
+                WHERE conflict_id = $1
+            """, conflict_id)
+            details['resolution_paths_count'] = paths_count
+            
+            # Get completed paths count
+            completed_paths = await conn.fetchval("""
+                SELECT COUNT(*) FROM ResolutionPaths
+                WHERE conflict_id = $1 AND is_completed = TRUE
+            """, conflict_id)
+            details['completed_paths_count'] = completed_paths
+            
+            return details
+    except Exception as e:
+        logger.error(f"Error getting conflict details: {e}", exc_info=True)
+        return {"error": str(e)}
+
+async def _internal_get_conflict_stakeholders_logic(ctx: RunContextWrapper, conflict_id: int) -> List[Dict[str, Any]]:
+    context = ctx.context
+    try:
+        async with get_db_connection_context() as conn:
+            stakeholders_rows = await conn.fetch("""
+                SELECT cs.npc_id, cs.faction_id, cs.faction_name, cs.faction_position,
+                       cs.public_motivation, cs.private_motivation, cs.desired_outcome,
+                       cs.involvement_level, cs.alliances, cs.rivalries, 
+                       cs.leadership_ambition, cs.faction_standing, 
+                       cs.willing_to_betray_faction,
+                       n.npc_name, n.dominance, n.cruelty
+                FROM ConflictStakeholders cs
+                JOIN NPCStats n ON cs.npc_id = n.npc_id 
+                    AND n.user_id = $2 AND n.conversation_id = $3
+                WHERE cs.conflict_id = $1
+                ORDER BY cs.involvement_level DESC
+            """, conflict_id, context.user_id, context.conversation_id)
+            
+            stakeholders = []
+            for row in stakeholders_rows:
+                stakeholder = dict(row)
+                stakeholder['alliances'] = json.loads(stakeholder['alliances']) if stakeholder['alliances'] else {}
+                stakeholder['rivalries'] = json.loads(stakeholder['rivalries']) if stakeholder['rivalries'] else {}
+                stakeholders.append(stakeholder)
+            
+            return stakeholders
+    except Exception as e:
+        logger.error(f"Error getting conflict stakeholders: {e}", exc_info=True)
+        return []
+
+async def _internal_get_player_manipulation_attempts_logic(ctx: RunContextWrapper, conflict_id: int) -> List[Dict[str, Any]]:
+    context = ctx.context
+    try:
+        async with get_db_connection_context() as conn:
+            attempts_rows = await conn.fetch("""
+                SELECT pma.attempt_id, pma.npc_id, pma.manipulation_type, 
+                       pma.content, pma.goal, pma.leverage_used, pma.intimacy_level,
+                       pma.success, pma.player_response, pma.is_resolved,
+                       pma.created_at, n.npc_name
+                FROM PlayerManipulationAttempts pma
+                JOIN NPCStats n ON pma.npc_id = n.npc_id 
+                    AND n.user_id = $2 AND n.conversation_id = $3
+                WHERE pma.conflict_id = $1 AND pma.user_id = $2 
+                    AND pma.conversation_id = $3
+                ORDER BY pma.created_at DESC
+            """, conflict_id, context.user_id, context.conversation_id)
+            
+            attempts = []
+            for row in attempts_rows:
+                attempt = dict(row)
+                attempt['goal'] = json.loads(attempt['goal']) if isinstance(attempt['goal'], str) else attempt['goal']
+                attempt['leverage_used'] = json.loads(attempt['leverage_used']) if isinstance(attempt['leverage_used'], str) else attempt['leverage_used']
+                attempts.append(attempt)
+            
+            return attempts
+    except Exception as e:
+        logger.error(f"Error getting player manipulation attempts: {e}", exc_info=True)
+        return []
+
+async def _internal_generate_conflict_logic(ctx: RunContextWrapper, conflict_type: Optional[str] = None) -> Dict[str, Any]:
+    context = ctx.context
+    try:
+        # Get current day
+        current_day = await _internal_get_current_day_logic(ctx)
+        
+        # Get available NPCs
+        available_npcs = await _internal_get_available_npcs_logic(ctx)
+        
+        if len(available_npcs) < 3:
+            return {
+                "success": False,
+                "error": "Not enough NPCs available for conflict. Need at least 3 introduced NPCs."
+            }
+        
+        # Select NPCs for the conflict
+        selected_npcs = random.sample(available_npcs, min(6, len(available_npcs)))
+        
+        # Determine conflict type if not specified
+        if not conflict_type:
+            conflict_types = ["minor", "standard", "major"]
+            weights = [0.4, 0.4, 0.2]  # More likely to get minor/standard conflicts
+            conflict_type = random.choices(conflict_types, weights=weights)[0]
+        
+        # Generate conflict details
+        conflict_details = await _internal_generate_conflict_details_logic(
+            ctx, conflict_type, selected_npcs, current_day
+        )
+        
+        # Create the conflict
+        conflict_id = await _internal_create_conflict_record_logic(
+            ctx, conflict_details, current_day
+        )
+        
+        if not conflict_id:
+            return {"success": False, "error": "Failed to create conflict record"}
+        
+        # Create stakeholders
+        await _internal_create_stakeholders_logic(
+            ctx, conflict_id, conflict_details, selected_npcs
+        )
+        
+        # Create resolution paths
+        await _internal_create_resolution_paths_logic(
+            ctx, conflict_id, conflict_details
+        )
+        
+        # Create internal faction conflicts if applicable
+        if "internal_faction_conflicts" in conflict_details:
+            await _internal_create_internal_faction_conflicts_logic(
+                ctx, conflict_id, conflict_details
+            )
+        
+        # Generate player manipulation attempts
+        await _internal_generate_player_manipulation_attempts_logic(
+            ctx, conflict_id, selected_npcs
+        )
+        
+        return {
+            "success": True,
+            "conflict_id": conflict_id,
+            "conflict_name": conflict_details.get("conflict_name", "Unnamed Conflict"),
+            "conflict_type": conflict_type,
+            "description": conflict_details.get("description", ""),
+            "stakeholders": len(selected_npcs),
+            "resolution_paths": len(conflict_details.get("resolution_paths", []))
+        }
+    except Exception as e:
+        logger.error(f"Error generating conflict: {e}", exc_info=True)
+        return {"success": False, "error": str(e)}
+
+async def _internal_get_internal_conflicts_logic(ctx: RunContextWrapper, conflict_id: int) -> List[Dict[str, Any]]:
+    context = ctx.context
+    try:
+        async with get_db_connection_context() as conn:
+            internal_rows = await conn.fetch("""
+                SELECT struggle_id, faction_id, conflict_name, description,
+                       primary_npc_id, target_npc_id, prize, approach,
+                       public_knowledge, current_phase, progress
+                FROM InternalFactionConflicts
+                WHERE parent_conflict_id = $1
+                ORDER BY struggle_id
+            """, conflict_id)
+            
+            internal_conflicts = []
+            for row in internal_rows:
+                conflict = dict(row)
+                
+                # Get faction name
+                conflict['faction_name'] = await _internal_get_faction_name_logic(ctx, conflict['faction_id'])
+                
+                # Get NPC names
+                conflict['primary_npc_name'] = await _internal_get_npc_name_logic(ctx, conflict['primary_npc_id'])
+                conflict['target_npc_name'] = await _internal_get_npc_name_logic(ctx, conflict['target_npc_id'])
+                
+                internal_conflicts.append(conflict)
+            
+            return internal_conflicts
+    except Exception as e:
+        logger.error(f"Error getting internal conflicts: {e}", exc_info=True)
+        return []
+
+async def _internal_get_current_day_logic(ctx: RunContextWrapper) -> int:
+    context = ctx.context
+    try:
+        async with get_db_connection_context() as conn:
+            current_day = await conn.fetchval("""
+                SELECT current_day FROM GameState
+                WHERE user_id = $1 AND conversation_id = $2
+            """, context.user_id, context.conversation_id)
+            
+            return current_day if current_day is not None else 1
+    except Exception as e:
+        logger.error(f"Error getting current day: {e}", exc_info=True)
+        return 1
+
+async def _internal_get_available_npcs_logic(ctx: RunContextWrapper) -> List[Dict[str, Any]]:
+    context = ctx.context
+    try:
+        async with get_db_connection_context() as conn:
+            npc_rows = await conn.fetch("""
+                SELECT npc_id, npc_name, dominance, cruelty, closeness, 
+                       trust, respect, intensity, sex, faction_affiliations
+                FROM NPCStats
+                WHERE user_id = $1 AND conversation_id = $2 AND introduced = TRUE
+                ORDER BY dominance DESC
+            """, context.user_id, context.conversation_id)
+            
+            npcs = []
+            for row in npc_rows:
+                npc = dict(row)
+                # Parse faction affiliations if stored as JSON string
+                if isinstance(npc['faction_affiliations'], str):
+                    try:
+                        npc['faction_affiliations'] = json.loads(npc['faction_affiliations'])
+                    except:
+                        npc['faction_affiliations'] = []
+                npcs.append(npc)
+            
+            return npcs
+    except Exception as e:
+        logger.error(f"Error getting available NPCs: {e}", exc_info=True)
+        return []
+
+async def _internal_get_npc_relationship_with_player_logic(ctx: RunContextWrapper, npc_id: int) -> Dict[str, Any]:
+    context = ctx.context
+    try:
+        async with get_db_connection_context() as conn:
+            relationship_row = await conn.fetchrow("""
+                SELECT closeness, trust, respect, intensity
+                FROM NPCStats
+                WHERE npc_id = $1 AND user_id = $2 AND conversation_id = $3
+            """, npc_id, context.user_id, context.conversation_id)
+            
+            if not relationship_row:
+                return {
+                    "npc_id": npc_id,
+                    "closeness": 0,
+                    "trust": 0,
+                    "respect": 0,
+                    "intensity": 0
+                }
+            
+            result = dict(relationship_row)
+            result['npc_id'] = npc_id
+            
+            return result
+    except Exception as e:
+        logger.error(f"Error getting NPC relationship: {e}", exc_info=True)
+        return {
+            "npc_id": npc_id,
+            "closeness": 0,
+            "trust": 0,
+            "respect": 0,
+            "intensity": 0,
+            "error": str(e)
+        }
+
+async def _internal_generate_conflict_details_logic(ctx: RunContextWrapper, conflict_type: str, stakeholder_npcs: List[Dict[str, Any]], current_day: int) -> Dict[str, Any]:
+    context = ctx.context
+    
+    # Create a detailed prompt for ChatGPT
+    npc_descriptions = []
+    for npc in stakeholder_npcs:
+        desc = f"- {npc['npc_name']}: Dominance {npc.get('dominance', 50)}, Cruelty {npc.get('cruelty', 20)}"
+        if npc.get('faction_affiliations'):
+            affiliations = npc['faction_affiliations']
+            if affiliations and len(affiliations) > 0:
+                desc += f", Affiliated with {affiliations[0].get('faction_name', 'Unknown')}"
+        npc_descriptions.append(desc)
+    
+    prompt = f"""
+    Generate a {conflict_type} conflict for a femdom-themed game.
+    
+    Current game day: {current_day}
+    
+    Available NPCs:
+    {chr(10).join(npc_descriptions)}
+    
+    Create a conflict that:
+    1. Involves power dynamics and femdom themes
+    2. Has clear stakes and consequences
+    3. Provides multiple resolution paths
+    4. Could involve faction politics or personal rivalries
+    5. Fits the {conflict_type} severity level
+    
+    Provide the response in JSON format with:
+    - conflict_name: A descriptive name
+    - description: 2-3 sentence description
+    - resolution_paths: Array of at least 3 different approaches
+    - stakeholders: Array mapping NPCs to roles and motivations
+    - internal_faction_conflicts: Optional array of faction power struggles
+    """
+    
+    response = await get_chatgpt_response(context.conversation_id, "conflict_generation", prompt)
+    
+    # Parse the response
+    if response and "function_args" in response:
+        conflict_data = response["function_args"]
+    else:
+        # Fallback to default conflict structure
+        conflict_data = {
+            "conflict_name": f"Power Struggle on Day {current_day}",
+            "conflict_type": conflict_type,
+            "description": f"A {conflict_type} conflict emerges between powerful women vying for control.",
+            "estimated_duration": {"minor": 3, "standard": 5, "major": 7, "catastrophic": 10}.get(conflict_type, 5),
+            "resolution_paths": [
+                {
+                    "name": "Diplomatic Resolution",
+                    "description": "Negotiate a peaceful solution",
+                    "approach_type": "social",
+                    "difficulty": 5
+                },
+                {
+                    "name": "Domination Path",
+                    "description": "Submit to the stronger party",
+                    "approach_type": "submission",
+                    "difficulty": 4
+                },
+                {
+                    "name": "Manipulation Route",
+                    "description": "Use cunning and leverage",
+                    "approach_type": "intrigue",
+                    "difficulty": 6
+                }
+            ]
+        }
+    
+    # Ensure required fields exist
+    conflict_data["conflict_type"] = conflict_type
+    conflict_data["estimated_duration"] = conflict_data.get("estimated_duration", 
+        {"minor": 3, "standard": 5, "major": 7, "catastrophic": 10}.get(conflict_type, 5))
+    
+    return conflict_data
+
+async def _internal_suggest_manipulation_content_logic(ctx: RunContextWrapper, npc_id: int, conflict_id: int, manipulation_type: str, goal: Dict[str, Any]) -> Dict[str, Any]:
+    context = ctx.context
+    try:
+        # Get NPC details
+        npc = await _internal_get_npc_details_logic(ctx, npc_id)
+        if not npc:
+            return {"error": "NPC not found"}
+        
+        # Get relationship with player
+        relationship = await _internal_get_npc_relationship_with_player_logic(ctx, npc_id)
+        
+        # Get conflict details for context
+        conflict_details = await _internal_get_conflict_details_logic(ctx, conflict_id)
+        
+        # Generate appropriate content based on manipulation type
+        if manipulation_type == "domination":
+            content = generate_domination_content(npc, relationship, goal, conflict_details)
+        elif manipulation_type == "seduction":
+            content = generate_seduction_content(npc, relationship, goal, conflict_details)
+        elif manipulation_type == "blackmail":
+            # Get secrets if available
+            secrets = await _internal_get_stakeholder_secrets_logic(ctx, conflict_id, npc_id)
+            content = generate_blackmail_content(npc, relationship, goal, conflict_details, secrets)
+        else:
+            content = generate_generic_manipulation_content(npc, relationship, goal, conflict_details)
+        
+        # Generate leverage
+        leverage = generate_leverage(npc, relationship, manipulation_type)
+        
+        # Calculate intimacy level
+        intimacy = calculate_intimacy_level(npc, relationship, manipulation_type)
+        
+        return {
+            "npc_id": npc_id,
+            "npc_name": npc["npc_name"],
+            "manipulation_type": manipulation_type,
+            "suggested_content": content,
+            "leverage": leverage,
+            "intimacy_level": intimacy,
+            "success_factors": {
+                "npc_dominance": npc.get("dominance", 50),
+                "relationship_closeness": relationship.get("closeness", 0),
+                "manipulation_fit": 80 if manipulation_type in ["domination", "seduction"] else 60
+            }
+        }
+    except Exception as e:
+        logger.error(f"Error suggesting manipulation content: {e}", exc_info=True)
+        return {"error": str(e)}
+
+async def _internal_analyze_manipulation_potential_logic(ctx: RunContextWrapper, npc_id: int, player_stats: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    context = ctx.context
+    try:
+        # Get NPC details
+        npc = await _internal_get_npc_details_logic(ctx, npc_id)
+        if not npc:
+            return {"error": "NPC not found"}
+        
+        # Get relationship
+        relationship = await _internal_get_npc_relationship_with_player_logic(ctx, npc_id)
+        
+        # Get player stats if not provided
+        if not player_stats:
+            player_stats = await _internal_get_player_stats_logic(ctx)
+        
+        # Analyze potential for different manipulation types
+        analysis = {
+            "npc_id": npc_id,
+            "npc_name": npc["npc_name"],
+            "manipulation_types": {}
+        }
+        
+        # Domination potential
+        dom_score = npc.get("dominance", 50) - player_stats.get("willpower", 50)
+        dom_score += 20 if npc.get("sex", "female") == "female" else -10
+        analysis["manipulation_types"]["domination"] = {
+            "score": max(0, min(100, 50 + dom_score)),
+            "factors": {
+                "npc_dominance": npc.get("dominance", 50),
+                "player_willpower": player_stats.get("willpower", 50),
+                "gender_dynamic": "favorable" if npc.get("sex", "female") == "female" else "unfavorable"
+            }
+        }
+        
+        # Seduction potential
+        sed_score = relationship.get("closeness", 0) * 0.5 + relationship.get("intensity", 0) * 0.3
+        sed_score -= player_stats.get("mental_resilience", 50) * 0.2
+        analysis["manipulation_types"]["seduction"] = {
+            "score": max(0, min(100, sed_score)),
+            "factors": {
+                "relationship_closeness": relationship.get("closeness", 0),
+                "relationship_intensity": relationship.get("intensity", 0),
+                "player_resilience": player_stats.get("mental_resilience", 50)
+            }
+        }
+        
+        # Blackmail potential
+        black_score = npc.get("cruelty", 20) * 0.7
+        black_score += 30 if relationship.get("trust", 0) < 30 else 0
+        analysis["manipulation_types"]["blackmail"] = {
+            "score": max(0, min(100, black_score)),
+            "factors": {
+                "npc_cruelty": npc.get("cruelty", 20),
+                "low_trust": relationship.get("trust", 0) < 30
+            }
+        }
+        
+        # Overall assessment
+        best_type = max(analysis["manipulation_types"].items(), key=lambda x: x[1]["score"])
+        analysis["recommended_type"] = best_type[0]
+        analysis["success_likelihood"] = best_type[1]["score"]
+        
+        return analysis
+    except Exception as e:
+        logger.error(f"Error analyzing manipulation potential: {e}", exc_info=True)
+        return {"error": str(e)}
+
+async def _internal_track_story_beat_logic(ctx: RunContextWrapper, conflict_id: int, path_id: str, beat_description: str, involved_npcs: List[int], progress_value: float) -> Dict[str, Any]:
+    context = ctx.context
+    try:
+        async with get_db_connection_context() as conn:
+            async with conn.transaction():
+                # Update path progress
+                current_progress = await conn.fetchval("""
+                    SELECT progress FROM ResolutionPaths
+                    WHERE conflict_id = $1 AND path_id = $2
+                """, conflict_id, path_id)
+                
+                if current_progress is None:
+                    return {"error": "Resolution path not found"}
+                
+                new_progress = min(100.0, current_progress + progress_value)
+                is_completed = new_progress >= 100.0
+                
+                await conn.execute("""
+                    UPDATE ResolutionPaths
+                    SET progress = $1, is_completed = $2
+                    WHERE conflict_id = $3 AND path_id = $4
+                """, new_progress, is_completed, conflict_id, path_id)
+                
+                # Create story beat record
+                beat_id = await conn.fetchval("""
+                    INSERT INTO StoryBeats
+                    (conflict_id, path_id, description, involved_npcs, 
+                     progress_contribution, user_id, conversation_id)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7)
+                    RETURNING beat_id
+                """, conflict_id, path_id, beat_description, json.dumps(involved_npcs),
+                progress_value, context.user_id, context.conversation_id)
+                
+                # Update overall conflict progress
+                avg_progress = await conn.fetchval("""
+                    SELECT AVG(progress) FROM ResolutionPaths
+                    WHERE conflict_id = $1
+                """, conflict_id)
+                
+                await conn.execute("""
+                    UPDATE Conflicts
+                    SET progress = $1
+                    WHERE conflict_id = $2 AND user_id = $3 AND conversation_id = $4
+                """, avg_progress, conflict_id, context.user_id, context.conversation_id)
+                
+                # Create memory event
+                await _internal_create_conflict_memory_logic(
+                    ctx, conflict_id, 
+                    f"Story development: {beat_description[:100]}...",
+                    significance=6
+                )
+                
+                # Check for conflict advancement
+                await _internal_check_conflict_advancement_logic(ctx, conflict_id)
+                
+                return {
+                    "beat_id": beat_id,
+                    "conflict_id": conflict_id,
+                    "path_id": path_id,
+                    "path_progress": new_progress,
+                    "path_completed": is_completed,
+                    "overall_progress": avg_progress
+                }
+    except Exception as e:
+        logger.error(f"Error tracking story beat: {e}", exc_info=True)
+        return {"error": str(e)}
+
+async def _internal_initiate_faction_power_struggle_logic(ctx: RunContextWrapper, conflict_id: int, faction_id: int, challenger_npc_id: int, target_npc_id: int, prize: str, approach: str, is_public: bool = False) -> Dict[str, Any]:
+    context = ctx.context
+    try:
+        # Generate struggle details
+        struggle_details = await _internal_generate_struggle_details_logic(
+            ctx, faction_id, challenger_npc_id, target_npc_id, prize, approach
+        )
+        
+        # Create internal conflict
+        internal_conflict_data = {
+            "faction_id": faction_id,
+            "conflict_name": struggle_details["conflict_name"],
+            "description": struggle_details["description"],
+            "primary_npc_id": challenger_npc_id,
+            "target_npc_id": target_npc_id,
+            "prize": prize,
+            "approach": approach,
+            "public_knowledge": is_public,
+            "faction_members": struggle_details.get("faction_members", []),
+            "ideological_differences": struggle_details.get("ideological_differences", [])
+        }
+        
+        result = await _internal_add_internal_conflict_logic(
+            ctx, conflict_id, internal_conflict_data
+        )
+        
+        return result
+    except Exception as e:
+        logger.error(f"Error initiating faction power struggle: {e}", exc_info=True)
+        return {"success": False, "error": str(e)}
+
+# Now add all the function_tool decorated functions with strict_mode=False
+
+@function_tool(strict_mode=False)
 async def get_resolution_paths(ctx: RunContextWrapper, conflict_id: int) -> List[Dict[str, Any]]:
     """Get all resolution paths for a specific conflict."""
     return await _internal_get_resolution_paths_logic(ctx, conflict_id)
 
-@function_tool
+@function_tool(strict_mode=False)
 @track_performance("update_conflict_progress")
 async def update_conflict_progress(ctx: RunContextWrapper, conflict_id: int, progress_increment: float) -> Dict[str, Any]:
     """Update the progress of a conflict."""
     return await _internal_update_conflict_progress_logic(ctx, conflict_id, progress_increment)
 
-@function_tool
+@function_tool(strict_mode=False)
 async def get_active_conflicts(ctx: RunContextWrapper) -> List[Dict[str, Any]]:
     """Get all active conflicts for the current user and conversation."""
     return await _internal_get_active_conflicts_logic(ctx)
 
-@function_tool
+@function_tool(strict_mode=False)
 async def update_stakeholder_status(ctx: RunContextWrapper, conflict_id: int, npc_id: int, status: StakeholderStatusUpdate) -> Dict[str, Any]:
     """Update the status of a stakeholder in a conflict."""
     return await _internal_update_stakeholder_status_logic(ctx, conflict_id, npc_id, status)
 
-@function_tool
+@function_tool(strict_mode=False)
 async def get_player_involvement(ctx: RunContextWrapper, conflict_id: int) -> Dict[str, Any]:
     """Get player's involvement in a specific conflict."""
     return await _internal_get_player_involvement_logic(ctx, conflict_id)
 
-@function_tool
+@function_tool(strict_mode=False)
 async def get_conflict_details(ctx: RunContextWrapper, conflict_id: int) -> Dict[str, Any]:
     """Get detailed information about a specific conflict."""
     return await _internal_get_conflict_details_logic(ctx, conflict_id)
 
-@function_tool
+@function_tool(strict_mode=False)
 async def get_conflict_stakeholders(ctx: RunContextWrapper, conflict_id: int) -> List[Dict[str, Any]]:
     """Get all stakeholders for a specific conflict."""
     return await _internal_get_conflict_stakeholders_logic(ctx, conflict_id)
 
-@function_tool
+@function_tool(strict_mode=False)
 async def get_player_manipulation_attempts(ctx: RunContextWrapper, conflict_id: int) -> List[Dict[str, Any]]:
     """Get all manipulation attempts targeted at the player for a specific conflict."""
     return await _internal_get_player_manipulation_attempts_logic(ctx, conflict_id)
 
-@function_tool
+@function_tool(strict_mode=False)
 async def generate_conflict(ctx: RunContextWrapper, conflict_type: Optional[str] = None) -> Dict[str, Any]:
     """Generate a new conflict with stakeholders and resolution paths."""
     return await _internal_generate_conflict_logic(ctx, conflict_type)
 
-@function_tool
+@function_tool(strict_mode=False)
 async def get_internal_conflicts(ctx: RunContextWrapper, conflict_id: int) -> List[Dict[str, Any]]:
     """Get internal faction conflicts for a specific conflict."""
     return await _internal_get_internal_conflicts_logic(ctx, conflict_id)
@@ -1463,12 +2109,12 @@ async def get_current_day(ctx: RunContextWrapper) -> int:
     """Get the current in-game day."""
     return await _internal_get_current_day_logic(ctx)
 
-@function_tool
+@function_tool(strict_mode=False)
 async def get_available_npcs(ctx: RunContextWrapper) -> List[Dict[str, Any]]:
     """Get available NPCs that could be involved in conflicts."""
     return await _internal_get_available_npcs_logic(ctx)
 
-@function_tool
+@function_tool(strict_mode=False)
 async def get_npc_relationship_with_player(ctx: RunContextWrapper, npc_id: int) -> Dict[str, Any]:
     """Get an NPC's relationship with the player."""
     return await _internal_get_npc_relationship_with_player_logic(ctx, npc_id)
@@ -1478,52 +2124,52 @@ async def generate_conflict_details(ctx: RunContextWrapper, conflict_type: str, 
     """Generate conflict details using the AI."""
     return await _internal_generate_conflict_details_logic(ctx, conflict_type, stakeholder_npcs, current_day)
 
-@function_tool
+@function_tool(strict_mode=False)
 async def create_manipulation_attempt(ctx: RunContextWrapper, conflict_id: int, npc_id: int, manipulation_type: str, content: str, goal: Dict[str, Any], leverage_used: Dict[str, Any], intimacy_level: int = 0) -> Dict[str, Any]:
     """Create a manipulation attempt by an NPC targeted at the player."""
     return await _internal_create_manipulation_attempt_logic(ctx, conflict_id, npc_id, manipulation_type, content, goal, leverage_used, intimacy_level)
 
-@function_tool
+@function_tool(strict_mode=False)
 async def resolve_manipulation_attempt(ctx: RunContextWrapper, attempt_id: int, success: bool, player_response: str) -> Dict[str, Any]:
     """Resolve a manipulation attempt by the player."""
     return await _internal_resolve_manipulation_attempt_logic(ctx, attempt_id, success, player_response)
 
-@function_tool
+@function_tool(strict_mode=False)
 async def suggest_manipulation_content(ctx: RunContextWrapper, npc_id: int, conflict_id: int, manipulation_type: str, goal: Dict[str, Any]) -> Dict[str, Any]:
     """Suggest manipulation content for an NPC."""
     return await _internal_suggest_manipulation_content_logic(ctx, npc_id, conflict_id, manipulation_type, goal)
 
-@function_tool
+@function_tool(strict_mode=False)
 async def analyze_manipulation_potential(ctx: RunContextWrapper, npc_id: int, player_stats: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Analyze an NPC's potential to manipulate the player."""
     return await _internal_analyze_manipulation_potential_logic(ctx, npc_id, player_stats)
 
-@function_tool
+@function_tool(strict_mode=False)
 async def track_story_beat(ctx: RunContextWrapper, conflict_id: int, path_id: str, beat_description: str, involved_npcs: List[int], progress_value: float) -> Dict[str, Any]:
     """Track a story beat for a resolution path, advancing progress."""
     return await _internal_track_story_beat_logic(ctx, conflict_id, path_id, beat_description, involved_npcs, progress_value)
 
-@function_tool
+@function_tool(strict_mode=False)
 async def resolve_conflict(ctx: RunContextWrapper, conflict_id: int) -> Dict[str, Any]:
     """Resolve a conflict and apply consequences."""
     return await _internal_resolve_conflict_logic(ctx, conflict_id)
 
-@function_tool
+@function_tool(strict_mode=False)
 async def initiate_faction_power_struggle(ctx: RunContextWrapper, conflict_id: int, faction_id: int, challenger_npc_id: int, target_npc_id: int, prize: str, approach: str, is_public: bool = False) -> Dict[str, Any]:
     """Initiate a power struggle within a faction."""
     return await _internal_initiate_faction_power_struggle_logic(ctx, conflict_id, faction_id, challenger_npc_id, target_npc_id, prize, approach, is_public)
 
-@function_tool
+@function_tool(strict_mode=False)
 async def attempt_faction_coup(ctx: RunContextWrapper, struggle_id: int, approach: str, supporting_npcs: List[int], resources_committed: Dict[str, int]) -> Dict[str, Any]:
     """Attempt a coup within a faction to forcefully resolve a power struggle."""
     return await _internal_attempt_faction_coup_logic(ctx, struggle_id, approach, supporting_npcs, resources_committed)
 
-@function_tool
+@function_tool(strict_mode=False)
 async def add_conflict_to_narrative(ctx: RunContextWrapper, narrative_text: str) -> Dict[str, Any]:
     """OpenAI Agent Tool: Analyzes narrative text to identify and add conflicts."""
-    return await _internal_add_conflict_to_narrative_logic(ctx, narrative_text) # This one was already correct
+    return await _internal_add_conflict_to_narrative_logic(ctx, narrative_text)
 
-@function_tool
+@function_tool(strict_mode=False)
 async def get_npc_details(ctx: RunContextWrapper, npc_id: int) -> Dict[str, Any]:
     """Get details for an NPC."""
     return await _internal_get_npc_details_logic(ctx, npc_id)
@@ -1538,12 +2184,12 @@ async def get_faction_name(ctx: RunContextWrapper, faction_id: int) -> str:
     """Get a faction's name by ID."""
     return await _internal_get_faction_name_logic(ctx, faction_id)
 
-@function_tool
+@function_tool(strict_mode=False)
 async def get_player_stats(ctx: RunContextWrapper) -> Dict[str, Any]:
     """Get player stats."""
     return await _internal_get_player_stats_logic(ctx)
 
-@function_tool
+@function_tool(strict_mode=False)
 async def get_stakeholder_secrets(ctx: RunContextWrapper, conflict_id: int, npc_id: int) -> List[Dict[str, Any]]:
     """Get secrets for a stakeholder in a conflict."""
     return await _internal_get_stakeholder_secrets_logic(ctx, conflict_id, npc_id)
@@ -1561,14 +2207,14 @@ async def create_conflict_memory(ctx: RunContextWrapper, conflict_id: int, memor
 @function_tool
 async def check_conflict_advancement(ctx: RunContextWrapper, conflict_id: int) -> None:
     """Check if a conflict should advance to the next phase."""
-    await _internal_check_conflict_advancement_logic(ctx, conflict_id) # No return needed for None
+    await _internal_check_conflict_advancement_logic(ctx, conflict_id)
 
-@function_tool
+@function_tool(strict_mode=False)
 async def generate_struggle_details(ctx: RunContextWrapper, faction_id: int, challenger_npc_id: int, target_npc_id: int, prize: str, approach: str) -> Dict[str, Any]:
     """Generate details for a faction power struggle."""
     return await _internal_generate_struggle_details_logic(ctx, faction_id, challenger_npc_id, target_npc_id, prize, approach)
 
-@function_tool
+@function_tool(strict_mode=False)
 async def get_faction_members(ctx: RunContextWrapper, faction_id: int) -> List[Dict[str, Any]]:
     """Get members of a faction."""
     return await _internal_get_faction_members_logic(ctx, faction_id)
@@ -1578,57 +2224,113 @@ async def extract_npcs_from_narrative(ctx: RunContextWrapper, narrative_text: st
     """Extract NPC IDs mentioned in a narrative text."""
     return await _internal_extract_npcs_from_narrative_logic(ctx, narrative_text)
 
-@function_tool
+@function_tool(strict_mode=False)
 async def create_conflict_record(ctx: RunContextWrapper, conflict_data: Dict[str, Any], current_day: int) -> int:
     """Create a conflict record in the database."""
     return await _internal_create_conflict_record_logic(ctx, conflict_data, current_day)
 
-@function_tool
+@function_tool(strict_mode=False)
 async def create_stakeholders(ctx: RunContextWrapper, conflict_id: int, conflict_data: Dict[str, Any], stakeholder_npcs: List[Dict[str, Any]]) -> None:
     """Create stakeholders for a conflict."""
-    await _internal_create_stakeholders_logic(ctx, conflict_id, conflict_data, stakeholder_npcs) # No return
+    await _internal_create_stakeholders_logic(ctx, conflict_id, conflict_data, stakeholder_npcs)
 
-@function_tool
+@function_tool(strict_mode=False)
 async def create_resolution_paths(ctx: RunContextWrapper, conflict_id: int, conflict_data: Dict[str, Any]) -> None:
     """Create resolution paths for a conflict."""
-    await _internal_create_resolution_paths_logic(ctx, conflict_id, conflict_data) # No return
+    await _internal_create_resolution_paths_logic(ctx, conflict_id, conflict_data)
 
-@function_tool
+@function_tool(strict_mode=False)
 async def create_internal_faction_conflicts(ctx: RunContextWrapper, conflict_id: int, conflict_data: Dict[str, Any]) -> None:
     """Create internal faction conflicts for a main conflict."""
-    await _internal_create_internal_faction_conflicts_logic(ctx, conflict_id, conflict_data) # No return
+    await _internal_create_internal_faction_conflicts_logic(ctx, conflict_id, conflict_data)
 
-@function_tool
+@function_tool(strict_mode=False)
 async def generate_player_manipulation_attempts(ctx: RunContextWrapper, conflict_id: int, stakeholder_npcs: List[Dict[str, Any]]) -> None:
     """Generate manipulation attempts targeted at the player."""
-    await _internal_generate_player_manipulation_attempts_logic(ctx, conflict_id, stakeholder_npcs) # No return
+    await _internal_generate_player_manipulation_attempts_logic(ctx, conflict_id, stakeholder_npcs)
 
-@function_tool
-async def calculate_coup_success_chance(ctx: RunContextWrapper, struggle_id: int, approach: str, supporting_npcs: List[int], resources_committed: Dict[str, Any]) -> float:
+@function_tool(strict_mode=False)
+async def calculate_coup_success_chance(ctx: RunContextWrapper, struggle_id: int, approach: str, supporting_npcs: List[int], resources_committed: Dict[str, int]) -> float:
     """Calculate the success chance of a coup attempt."""
     return await _internal_calculate_coup_success_chance_logic(ctx, struggle_id, approach, supporting_npcs, resources_committed)
 
-@function_tool
+@function_tool(strict_mode=False)
 async def add_resolution_path(ctx: RunContextWrapper, conflict_id: int, path_data: Dict[str, Any]) -> Dict[str, Any]:
     """Add a new resolution path to an existing conflict."""
     return await _internal_add_resolution_path_logic(ctx, conflict_id, path_data)
 
-@function_tool
+@function_tool(strict_mode=False)
 async def update_player_involvement(ctx: RunContextWrapper, conflict_id: int, involvement_data: Dict[str, Any]) -> Dict[str, Any]:
     """Update player's involvement in a conflict."""
     return await _internal_update_player_involvement_logic(ctx, conflict_id, involvement_data)
 
-@function_tool
+@function_tool(strict_mode=False)
 async def add_internal_conflict(ctx: RunContextWrapper, conflict_id: int, internal_conflict_data: Dict[str, Any]) -> Dict[str, Any]:
     """Add an internal faction conflict to a main conflict."""
     return await _internal_add_internal_conflict_logic(ctx, conflict_id, internal_conflict_data)
 
-@function_tool
+@function_tool(strict_mode=False)
 async def resolve_internal_conflict(ctx: RunContextWrapper, struggle_id: int, resolution_data: Dict[str, Any]) -> Dict[str, Any]:
     """Resolve an internal faction conflict."""
     return await _internal_resolve_internal_conflict_logic(ctx, struggle_id, resolution_data)
 
+# Governance System Integration
+@function_tool(strict_mode=False)
+async def register_with_governance(ctx: RunContextWrapper, user_id: int, conversation_id: int) -> Dict[str, Any]:
+    """
+    Register conflict system with governance system.
+    
+    Args:
+        user_id: User ID
+        conversation_id: Conversation ID
         
+    Returns:
+        Registration result
+    """
+    from nyx.integrate import get_central_governance
+    context = ctx.context
+    
+    try:
+        # Get central governance system
+        governance = await get_central_governance(user_id, conversation_id)
+        
+        # Register as a conflict analyst agent
+        registration_result = await governance.register_agent(
+            agent_type=AgentType.CONFLICT_ANALYST, 
+            agent_instance="conflict_manager", 
+            agent_id="conflict_manager"
+        )
+        
+        # Issue directive for conflict analysis
+        directive_result = await governance.issue_directive(
+            agent_type=AgentType.CONFLICT_ANALYST,
+            agent_id="conflict_manager",
+            directive_type=DirectiveType.ACTION,
+            directive_data={
+                "instruction": "Manage conflicts and their progression in the game world",
+                "scope": "game"
+            },
+            priority=DirectivePriority.MEDIUM,
+            duration_minutes=24*60  # 24 hours
+        )
+        
+        logger.info("Conflict System registered with Nyx governance")
+        
+        return {
+            "success": True,
+            "registration_result": registration_result,
+            "directive_result": directive_result,
+            "message": "Conflict System successfully registered with governance"
+        }
+    except Exception as e:
+        logger.error(f"Error registering with governance: {e}", exc_info=True)
+        return {
+            "success": False,
+            "error": str(e),
+            "message": "Failed to register Conflict System with governance"
+        }
+
+# Helper function content generation functions remain unchanged
 def generate_domination_content(
     npc: Dict[str, Any],
     relationship: Dict[str, Any],
@@ -2155,508 +2857,4 @@ def generate_special_reward(resolution_style: str, conflict_type: str, impact_le
             "category": "unique_conflict_reward",
             "resolution_style": resolution_style
         }
-    }
-
-# Governance System Integration (Added based on review)
-
-@function_tool
-async def register_with_governance(ctx: RunContextWrapper, user_id: int, conversation_id: int) -> Dict[str, Any]:
-    """
-    Register conflict system with governance system.
-    
-    Args:
-        user_id: User ID
-        conversation_id: Conversation ID
-        
-    Returns:
-        Registration result
-    """
-    from nyx.integrate import get_central_governance
-    context = ctx.context
-    
-    try:
-        # Get central governance system
-        governance = await get_central_governance(user_id, conversation_id)
-        
-        # Register as a conflict analyst agent
-        registration_result = await governance.register_agent(
-            agent_type=AgentType.CONFLICT_ANALYST, 
-            agent_instance="conflict_manager", 
-            agent_id="conflict_manager"
-        )
-        
-        # Issue directive for conflict analysis
-        directive_result = await governance.issue_directive(
-            agent_type=AgentType.CONFLICT_ANALYST,
-            agent_id="conflict_manager",
-            directive_type=DirectiveType.ACTION,
-            directive_data={
-                "instruction": "Manage conflicts and their progression in the game world",
-                "scope": "game"
-            },
-            priority=DirectivePriority.MEDIUM,
-            duration_minutes=24*60  # 24 hours
-        )
-        
-        logger.info("Conflict System registered with Nyx governance")
-        
-        return {
-            "success": True,
-            "registration_result": registration_result,
-            "directive_result": directive_result,
-            "message": "Conflict System successfully registered with governance"
-        }
-    except Exception as e:
-        logger.error(f"Error registering with governance: {e}", exc_info=True)
-        return {
-            "success": False,
-            "error": str(e),
-            "message": "Failed to register Conflict System with governance"
-        }
-
-@function_tool
-async def calculate_coup_success_chance(
-    ctx: RunContextWrapper,
-    struggle_id: int,
-    approach: str,
-    supporting_npcs: List[int],
-    resources_committed: Dict[str, int]
-) -> float:
-    """
-    Calculate the success chance of a coup attempt.
-    
-    Args:
-        struggle_id: ID of the internal faction struggle
-        approach: The approach used
-        supporting_npcs: List of supporting NPC IDs
-        resources_committed: Resources committed
-        
-    Returns:
-        Success chance (0-100)
-    """
-    context = ctx.context
-    
-    try:
-        async with get_db_connection_context() as conn:
-            # Get struggle details
-            struggle_row = await conn.fetchrow("""
-                SELECT primary_npc_id, target_npc_id
-                FROM InternalFactionConflicts
-                WHERE struggle_id = $1
-            """, struggle_id)
-            
-            if not struggle_row:
-                return 0
-            
-            primary_npc_id = struggle_row["primary_npc_id"]
-            target_npc_id = struggle_row["target_npc_id"]
-            
-            # Get challenger and target stats
-            challenger = await get_npc_details(ctx, primary_npc_id)
-            target = await get_npc_details(ctx, target_npc_id)
-            
-            # Base success chance based on challenger vs target
-            base_chance = 50 + (challenger.get("dominance", 50) - target.get("dominance", 50)) / 5
-            
-            # Adjust based on approach
-            approach_modifiers = {
-                "direct": 0,       # Neutral modifier
-                "subtle": 10,      # Subtle approaches have advantage
-                "force": -5,       # Force is risky
-                "blackmail": 15    # Blackmail has high success chance
-            }
-            base_chance += approach_modifiers.get(approach, 0)
-            
-            # Adjust for supporting NPCs
-            support_power = 0
-            for npc_id in supporting_npcs:
-                npc = await get_npc_details(ctx, npc_id)
-                support_power += npc.get("dominance", 50) / 10
-            
-            base_chance += min(25, support_power)  # Cap at +25
-            
-            # Adjust for resources committed
-            resource_total = sum(resources_committed.values())
-            resource_modifier = min(15, resource_total / 10)  # Cap at +15
-            base_chance += resource_modifier
-            
-            # Get faction members and their loyalty to incumbent
-            faction_members = await conn.fetch("""
-                SELECT npc_id, loyalty_strength
-                FROM FactionStruggleMembers
-                WHERE struggle_id = $1 AND side = 'incumbent'
-            """, struggle_id)
-            
-            total_loyalty = 0
-            for row in faction_members:
-                total_loyalty += row["loyalty_strength"]
-            
-            # Loyalty to incumbent reduces success chance
-            loyalty_modifier = min(30, total_loyalty / 20)  # Cap at -30
-            base_chance -= loyalty_modifier
-            
-            # Ensure chance is between 5 and 95
-            return max(5, min(95, base_chance))
-    except Exception as e:
-        logger.error(f"Error calculating coup success chance: {e}", exc_info=True)
-        return 30  # Default moderate chance on error
-
-@function_tool
-async def add_resolution_path(
-    ctx: RunContextWrapper,
-    conflict_id: int,
-    path_data: Dict[str, Any]
-) -> Dict[str, Any]:
-    """
-    Add a new resolution path to an existing conflict.
-    
-    Args:
-        ctx: RunContextWrapper with user context
-        conflict_id: ID of the conflict
-        path_data: Dictionary with path details
-        
-    Returns:
-        Dictionary with the created resolution path
-    """
-    context = ctx.context
-    
-    try:
-        async with get_db_connection_context() as conn:
-            # Check if conflict exists
-            exists = await conn.fetchval("""
-                SELECT 1 FROM Conflicts
-                WHERE conflict_id = $1 AND user_id = $2 AND conversation_id = $3
-            """, conflict_id, context.user_id, context.conversation_id)
-            
-            if not exists:
-                return {
-                    "success": False,
-                    "error": f"Conflict with ID {conflict_id} not found"
-                }
-            
-            # Generate path_id if not provided
-            path_id = path_data.get("path_id", f"path_{random.randint(1000, 9999)}")
-            
-            # Insert the new path
-            await conn.execute("""
-                INSERT INTO ResolutionPaths
-                (conflict_id, path_id, name, description, approach_type,
-                 difficulty, requirements, stakeholders_involved, key_challenges,
-                 progress, is_completed)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-            """, 
-            conflict_id, 
-            path_id,
-            path_data.get("name", "Unnamed Path"),
-            path_data.get("description", "A path to resolve the conflict"),
-            path_data.get("approach_type", "standard"),
-            path_data.get("difficulty", 5),
-            json.dumps(path_data.get("requirements", {})),
-            json.dumps(path_data.get("stakeholders_involved", [])),
-            json.dumps(path_data.get("key_challenges", [])),
-            0.0,  # Initial progress
-            False  # Not completed
-            )
-            
-            # Create a memory for this new path
-            await create_conflict_memory(
-                ctx,
-                conflict_id,
-                f"A new resolution path '{path_data.get('name', 'Unnamed Path')}' has been added to the conflict.",
-                significance=6
-            )
-            
-            return {
-                "success": True,
-                "conflict_id": conflict_id,
-                "path_id": path_id,
-                "name": path_data.get("name", "Unnamed Path"),
-                "description": path_data.get("description", "A path to resolve the conflict")
-            }
-    except Exception as e:
-        logger.error(f"Error adding resolution path to conflict {conflict_id}: {e}", exc_info=True)
-        return {
-            "success": False,
-            "error": str(e)
-        }
-
-@function_tool
-async def update_player_involvement(
-    ctx: RunContextWrapper,
-    conflict_id: int,
-    involvement_data: Dict[str, Any]
-) -> Dict[str, Any]:
-    """
-    Update player's involvement in a conflict.
-    
-    Args:
-        ctx: RunContextWrapper with user context
-        conflict_id: ID of the conflict
-        involvement_data: Dictionary with involvement details
-        
-    Returns:
-        Dictionary with update result
-    """
-    context = ctx.context
-    
-    try:
-        async with get_db_connection_context() as conn:
-            # Check if player involvement already exists
-            involvement_exists = await conn.fetchval("""
-                SELECT 1 FROM PlayerConflictInvolvement
-                WHERE conflict_id = $1 AND user_id = $2 AND conversation_id = $3
-            """, conflict_id, context.user_id, context.conversation_id)
-            
-            # Extract values from involvement_data
-            involvement_level = involvement_data.get("involvement_level", "observing")
-            faction = involvement_data.get("faction", "neutral")
-            money_committed = involvement_data.get("resources_committed", {}).get("money", 0)
-            supplies_committed = involvement_data.get("resources_committed", {}).get("supplies", 0)
-            influence_committed = involvement_data.get("resources_committed", {}).get("influence", 0)
-            actions_taken = json.dumps(involvement_data.get("actions_taken", []))
-            manipulated_by = json.dumps(involvement_data.get("manipulated_by")) if involvement_data.get("manipulated_by") else None
-            
-            if involvement_exists:
-                # Update existing involvement
-                await conn.execute("""
-                    UPDATE PlayerConflictInvolvement
-                    SET involvement_level = $1, faction = $2,
-                        money_committed = $3, supplies_committed = $4,
-                        influence_committed = $5, actions_taken = $6,
-                        manipulated_by = $7
-                    WHERE conflict_id = $8 AND user_id = $9 AND conversation_id = $10
-                """, 
-                involvement_level, faction, money_committed, supplies_committed, 
-                influence_committed, actions_taken, manipulated_by,
-                conflict_id, context.user_id, context.conversation_id)
-            else:
-                # Insert new involvement
-                await conn.execute("""
-                    INSERT INTO PlayerConflictInvolvement
-                    (conflict_id, user_id, conversation_id, player_name, involvement_level,
-                     faction, money_committed, supplies_committed, influence_committed,
-                     actions_taken, manipulated_by)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-                """, 
-                conflict_id, context.user_id, context.conversation_id, "Player",
-                involvement_level, faction, money_committed, supplies_committed,
-                influence_committed, actions_taken, manipulated_by)
-            
-            # Create a memory for this involvement update
-            await create_conflict_memory(
-                ctx,
-                conflict_id,
-                f"Player's involvement in the conflict has changed to {involvement_level} with {faction} faction.",
-                significance=7
-            )
-            
-            return {
-                "success": True,
-                "conflict_id": conflict_id,
-                "involvement_level": involvement_level,
-                "faction": faction,
-                "resources_committed": {
-                    "money": money_committed,
-                    "supplies": supplies_committed,
-                    "influence": influence_committed
-                }
-            }
-    except Exception as e:
-        logger.error(f"Error updating player involvement in conflict {conflict_id}: {e}", exc_info=True)
-        return {
-            "success": False,
-            "error": str(e)
-        }
-
-@function_tool
-async def add_internal_conflict(
-    ctx: RunContextWrapper,
-    conflict_id: int,
-    internal_conflict_data: Dict[str, Any]
-) -> Dict[str, Any]:
-    """
-    Add an internal faction conflict to a main conflict.
-    
-    Args:
-        ctx: RunContextWrapper with user context
-        conflict_id: ID of the parent conflict
-        internal_conflict_data: Dictionary with internal conflict details
-        
-    Returns:
-        Dictionary with the created internal conflict
-    """
-    context = ctx.context
-    
-    try:
-        async with get_db_connection_context() as conn:
-            # Extract values from internal_conflict_data
-            faction_id = internal_conflict_data.get("faction_id", 0)
-            conflict_name = internal_conflict_data.get("conflict_name", "Internal Faction Struggle")
-            description = internal_conflict_data.get("description", "A power struggle within the faction")
-            primary_npc_id = internal_conflict_data.get("primary_npc_id", 0)
-            target_npc_id = internal_conflict_data.get("target_npc_id", 0)
-            prize = internal_conflict_data.get("prize", "Leadership")
-            approach = internal_conflict_data.get("approach", "subtle")
-            public_knowledge = internal_conflict_data.get("public_knowledge", False)
-            current_phase = internal_conflict_data.get("current_phase", "brewing")
-            progress = internal_conflict_data.get("progress", 10)
-            
-            # Create the internal conflict
-            struggle_id = await conn.fetchval("""
-                INSERT INTO InternalFactionConflicts
-                (faction_id, conflict_name, description, primary_npc_id, target_npc_id,
-                 prize, approach, public_knowledge, current_phase, progress, parent_conflict_id)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-                RETURNING struggle_id
-            """, 
-            faction_id, conflict_name, description, primary_npc_id, target_npc_id,
-            prize, approach, public_knowledge, current_phase, progress, conflict_id)
-            
-            # Get faction name
-            faction_name = await get_faction_name(ctx, faction_id)
-            
-            # Get NPC names
-            primary_npc_name = await get_npc_name(ctx, primary_npc_id)
-            target_npc_name = await get_npc_name(ctx, target_npc_id)
-            
-            # Create faction members if provided
-            if "faction_members" in internal_conflict_data:
-                for member in internal_conflict_data["faction_members"]:
-                    await conn.execute("""
-                        INSERT INTO FactionStruggleMembers
-                        (struggle_id, npc_id, position, side, standing, 
-                         loyalty_strength, reason)
-                        VALUES ($1, $2, $3, $4, $5, $6, $7)
-                    """, 
-                    struggle_id,
-                    member.get("npc_id", 0),
-                    member.get("position", "Member"),
-                    member.get("side", "neutral"),
-                    member.get("standing", 50),
-                    member.get("loyalty_strength", 50),
-                    member.get("reason", ""))
-            
-            # Create a memory for this internal conflict
-            await create_conflict_memory(
-                ctx,
-                conflict_id,
-                f"An internal power struggle has emerged in {faction_name} between {primary_npc_name} and {target_npc_name}.",
-                significance=7
-            )
-            
-            return {
-                "success": True,
-                "struggle_id": struggle_id,
-                "conflict_id": conflict_id,
-                "faction_id": faction_id,
-                "faction_name": faction_name,
-                "conflict_name": conflict_name,
-                "primary_npc_name": primary_npc_name,
-                "target_npc_name": target_npc_name
-            }
-    except Exception as e:
-        logger.error(f"Error adding internal conflict to conflict {conflict_id}: {e}", exc_info=True)
-        return {
-            "success": False,
-            "error": str(e)
-        }
-
-
-@function_tool
-async def resolve_internal_conflict(
-    ctx: RunContextWrapper,
-    struggle_id: int,
-    resolution_data: Dict[str, Any]
-) -> Dict[str, Any]:
-    """
-    Resolve an internal faction conflict.
-    
-    Args:
-        ctx: RunContextWrapper with user context
-        struggle_id: ID of the internal faction struggle
-        resolution_data: Dictionary with resolution details
-        
-    Returns:
-        Dictionary with resolution result
-    """
-    context = ctx.context
-    
-    try:
-        async with get_db_connection_context() as conn:
-            # Check if struggle exists
-            struggle_row = await conn.fetchrow("""
-                SELECT faction_id, conflict_name, primary_npc_id, target_npc_id, parent_conflict_id
-                FROM InternalFactionConflicts
-                WHERE struggle_id = $1
-            """, struggle_id)
-            
-            if not struggle_row:
-                return {
-                    "success": False,
-                    "error": f"Internal faction struggle with ID {struggle_id} not found"
-                }
-            
-            faction_id = struggle_row["faction_id"]
-            conflict_name = struggle_row["conflict_name"]
-            primary_npc_id = struggle_row["primary_npc_id"]
-            target_npc_id = struggle_row["target_npc_id"]
-            parent_conflict_id = struggle_row["parent_conflict_id"]
-            
-            # Get faction name
-            faction_name = await get_faction_name(ctx, faction_id)
-            
-            # Get NPC names
-            primary_npc_name = await get_npc_name(ctx, primary_npc_id)
-            target_npc_name = await get_npc_name(ctx, target_npc_id)
-            
-            # Extract resolution details
-            winner_npc_id = resolution_data.get("winner_npc_id")
-            resolution_type = resolution_data.get("resolution_type", "negotiated")
-            resolution_description = resolution_data.get("description", f"The internal conflict in {faction_name} has been resolved.")
-            
-            # Determine winner and loser
-            winner_npc_id = winner_npc_id or primary_npc_id
-            loser_npc_id = target_npc_id if winner_npc_id == primary_npc_id else primary_npc_id
-            
-            winner_name = await get_npc_name(ctx, winner_npc_id)
-            loser_name = await get_npc_name(ctx, loser_npc_id)
-            
-            # Update the struggle
-            await conn.execute("""
-                UPDATE InternalFactionConflicts
-                SET current_phase = 'resolved', progress = 100,
-                    resolution_type = $1, resolution_description = $2,
-                    winner_npc_id = $3, loser_npc_id = $4,
-                    resolved_at = CURRENT_TIMESTAMP
-                WHERE struggle_id = $5
-            """, 
-            resolution_type, resolution_description, 
-            winner_npc_id, loser_npc_id, struggle_id)
-            
-            # Create a memory for this resolution
-            memory_text = f"The internal conflict in {faction_name} has been resolved. {winner_name} has emerged victorious over {loser_name}."
-            
-            await create_conflict_memory(
-                ctx,
-                parent_conflict_id,
-                memory_text,
-                significance=8
-            )
-            
-            return {
-                "success": True,
-                "struggle_id": struggle_id,
-                "faction_name": faction_name,
-                "winner_name": winner_name,
-                "loser_name": loser_name,
-                "resolution_type": resolution_type,
-                "description": resolution_description
-            }
-    except Exception as e:
-        logger.error(f"Error resolving internal faction struggle {struggle_id}: {e}", exc_info=True)
-        return {
-            "success": False,
-            "error": str(e)
-        }
-
-    
+    }str, Any]) -> Dict[
