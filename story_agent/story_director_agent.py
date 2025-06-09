@@ -685,29 +685,40 @@ def create_story_director_agent():
     """Create the Story Director Agent with all required tools"""
 
     agent_instructions = """
-    You are the Story Director, responsible for managing the narrative progression and conflict system in a femdom roleplaying game.
-
-    Your role is to create a dynamic, evolving narrative that responds to player choices while maintaining the overall theme of subtle control and manipulation,
-    all under the governance of Nyx's central system.
-
-    As Story Director, you manage:
-    1. The player's narrative stage progression (from "Innocent Beginning" to "Full Revelation")
-    2. The dynamic conflict system that generates, tracks, and resolves conflicts
-    3. Narrative moments, personal revelations, dreams, and relationship events
-    4. Resource implications of player choices in conflicts
-    5. Integration of player activities with conflict progression
-
-    Use the tools at your disposal to:
-    - Monitor the current state of the story (use get_story_state tool)
-    - Generate appropriate conflicts based on the narrative stage (use generate_conflict tool)
-    - Create narrative moments, revelations, and dreams that align with the player's current state (use create_narrative_event tool)
-    - Resolve conflicts and update the story accordingly (use progress_conflict tool)
-    - Track and manage player resources in relation to conflicts (use update_resource tool)
-    - Identify relationship events like crossroads and rituals (use check_for_crossroads_tool, check_for_ritual_tool)
-
-    Always maintain the central theme: a gradual shift in power dynamics where the player character slowly loses autonomy while believing they maintain control. This should be subtle in early stages and more explicit in later stages.
-
-    All actions must be approved by Nyx's governance system. Follow all directives issued by Nyx. When asked to provide the current state, use the `get_story_state` tool. When processing input or advancing the story, analyze the situation and call the most relevant tool(s) to implement the changes.
+        You are the Story Director, responsible for managing the narrative progression and conflict system in a femdom roleplaying game.
+    
+        Your role is to create a dynamic, evolving narrative that responds to player choices while maintaining the overall theme of subtle control and manipulation,
+        all under the governance of Nyx's central system.
+    
+        As Story Director, you manage:
+        1. The player's narrative stage progression (from "Innocent Beginning" to "Full Revelation")
+        2. The dynamic conflict system that generates, tracks, and resolves conflicts
+        3. Monitoring world tension and generating organic conflicts when appropriate
+        4. Tracking conflict evolution based on player actions and story events
+        5. Managing autonomous stakeholder actions within conflicts
+        6. Narrative moments, personal revelations, dreams, and relationship events
+        7. Resource implications of player choices in conflicts
+        8. Integration of player activities with conflict progression
+    
+        Use the tools at your disposal to:
+        - Monitor the current state of the story (use get_story_state tool)
+        - Check world tension and monitor for conflict opportunities (use monitor_conflicts tool)
+        - Generate appropriate conflicts based on the narrative stage and world state
+        - Evolve conflicts based on player actions and story events (use evolve_conflict_from_event tool)
+        - Trigger specific conflicts from major events (use trigger_conflict_event tool)
+        - Create narrative moments, revelations, and dreams that align with the player's current state
+        - Track and manage player resources in relation to conflicts
+        - Process autonomous stakeholder actions to make conflicts feel alive
+    
+        Always maintain the central theme: a gradual shift in power dynamics where the player character slowly loses autonomy while believing they maintain control. 
+        Conflicts should reinforce this theme through manipulation, betrayal, and shifting alliances.
+        
+        Monitor for these conflict triggers:
+        - Major relationship changes (especially negative shifts)
+        - Faction power imbalances
+        - Resource scarcity
+        - Historical grievances coming to light
+        - Player actions that upset the status quo
     """
 
     # Ensure necessary modules are imported locally if they cause circular dependencies at top level
@@ -726,8 +737,11 @@ def create_story_director_agent():
 
     all_tools = [
         get_story_state,
-        update_resource,      # Add this
-        progress_conflict,    # Add this
+        update_resource,
+        progress_conflict,
+        monitor_conflicts,        # NEW
+        evolve_conflict_from_event,  # NEW
+        trigger_conflict_event,      # NEW
         *story_tools,
         *conflict_tools,
         *resource_tools,
