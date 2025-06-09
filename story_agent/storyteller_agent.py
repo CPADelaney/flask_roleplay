@@ -68,6 +68,14 @@ from story_agent.progressive_summarization import (
     RPGNarrativeManager
 )
 
+from logic.conflict_system.hooks import (
+    on_player_major_action,
+    get_player_conflicts,
+    get_conflict_summary,
+    advance_conflict_story
+)
+from logic.conflict_system.conflict_integration import ConflictSystemIntegration
+
 # Define DB_DSN
 DB_DSN = os.getenv("DB_DSN")
 
@@ -2036,11 +2044,57 @@ class StorytellerAgent:
             tracker.start_phase("get_context")
             comprehensive_context = await self.get_comprehensive_context(ctx, user_input)
             tracker.end_phase()
+
+            # 5.5 Check for active conflicts and include in context
+            tracker.start_phase("check_conflicts")
+            conflict_system = await ConflictSystemIntegration.get_instance(user_id, conversation_id)
+            active_conflicts = await conflict_system.get_conflicts_with_context(user_input)
+            
+            # Add conflict summaries to comprehensive context
+            if active_conflicts:
+                comprehensive_context["active_conflicts"] = []
+                for conflict in active_conflicts[:3]:  # Limit to top 3 relevant conflicts
+                    summary = await get_conflict_summary(user_id, conversation_id, conflict['conflict_id'])
+                    comprehensive_context["active_conflicts"].append(summary)
+            tracker.end_phase()
             
             # 6. Process NPC responses
             tracker.start_phase("npc_responses")
             current_location = comprehensive_context.get("current_location")
             npc_responses = await self.process_npc_responses(ctx, user_input, "conversation", current_location)
+            tracker.end_phase()
+
+            # 6.5 Process conflict stakeholder reactions
+            tracker.start_phase("stakeholder_reactions")
+            stakeholder_reactions = []
+            if active_conflicts:
+                for conflict in active_conflicts:
+                    # Check if any NPCs in the scene are stakeholders
+                    conflict_stakeholders = {s['npc_id']: s for s in conflict.get('stakeholders', [])}
+                    scene_npcs = {npc['npc_id'] for npc in comprehensive_context.get('introduced_npcs', [])}
+                    
+                    # Find intersection
+                    present_stakeholders = scene_npcs & set(conflict_stakeholders.keys())
+                    
+                    if present_stakeholders:
+                        # These stakeholders might react to the player's input
+                        for npc_id in present_stakeholders:
+                            stakeholder = conflict_stakeholders[npc_id]
+                            # Add stakeholder context to NPC responses
+                            stakeholder_reactions.append({
+                                'npc_id': npc_id,
+                                'conflict_role': stakeholder.get('faction_position', 'Independent'),
+                                'motivation': stakeholder.get('public_motivation', ''),
+                                'conflict_name': conflict['conflict_name']
+                            })
+            
+            # Merge stakeholder reactions into NPC responses
+            if stakeholder_reactions:
+                for i, npc_response in enumerate(npc_responses):
+                    for reaction in stakeholder_reactions:
+                        if npc_response.npc_id == reaction['npc_id']:
+                            # Enhance the NPC response with conflict context
+                            npc_responses[i].response += f"\n[{reaction['conflict_role']} in {reaction['conflict_name']}]"
             tracker.end_phase()
             
             # 7. Process time advancement
@@ -2058,6 +2112,22 @@ class StorytellerAgent:
                 npc_responses,
                 time_result
             )
+            tracker.end_phase()
+
+            # 8.5 Process conflict evolution based on player action
+            tracker.start_phase("conflict_evolution")
+            if active_conflicts:
+                # Notify conflict system of player action
+                await on_player_major_action(
+                    user_id,
+                    conversation_id,
+                    "player_input",  # action type
+                    {
+                        "description": user_input,
+                        "involved_npcs": [resp.npc_id for resp in npc_responses],
+                        "location": current_location
+                    }
+                )
             tracker.end_phase()
 
             # 9. Apply emergent addiction analysis
