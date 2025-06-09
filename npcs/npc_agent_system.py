@@ -37,8 +37,8 @@ class PlayerAction(BaseModel):
     target_location: Optional[str] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
     
-    class Config:
-        extra = "allow"  # Allow additional fields for flexibility
+    # Removed extra = "allow" to comply with strict mode
+    # If you need additional fields, you can add them explicitly
 
 class ActionContext(BaseModel):
     """Model for action context."""
@@ -54,8 +54,7 @@ class ActionContext(BaseModel):
     mask_states: Dict[int, Dict[str, Any]] = Field(default_factory=dict)
     metadata: Dict[str, Any] = Field(default_factory=dict)
     
-    class Config:
-        extra = "allow"  # Allow additional fields
+    # Removed extra = "allow" to comply with strict mode
 
 class NPCResponse(BaseModel):
     """Model for NPC response."""
@@ -88,8 +87,7 @@ class BatchUpdateData(BaseModel):
     # For any other update type
     data: Dict[str, Any] = Field(default_factory=dict)
     
-    class Config:
-        extra = "allow"
+    # Removed extra = "allow" to comply with strict mode
 
 class BatchUpdateResult(BaseModel):
     """Result from batch update."""
@@ -316,12 +314,12 @@ class NPCAgentSystem:
                 model="gpt-4.1-nano",
                 model_settings=ModelSettings(temperature=0.2),
                 tools=[
-                    function_tool(self.handle_player_action),
-                    function_tool(self.process_npc_scheduled_activities),
-                    function_tool(self.run_memory_maintenance),
-                    function_tool(self.initialize_agents),
-                    function_tool(self.batch_update_npcs),
-                    function_tool(self.generate_npc_flashback)
+                    function_tool(self.handle_player_action, strict_mode=False),
+                    function_tool(self.process_npc_scheduled_activities, strict_mode=False),
+                    function_tool(self.run_memory_maintenance, strict_mode=False),
+                    function_tool(self.initialize_agents, strict_mode=False),
+                    function_tool(self.batch_update_npcs, strict_mode=False),
+                    function_tool(self.generate_npc_flashback, strict_mode=False)
                 ],
                 input_guardrails=[input_guardrail(moderation_guardrail)],
                 output_type=SystemOutput
@@ -329,7 +327,7 @@ class NPCAgentSystem:
         
         return self._system_agent
 
-    @function_tool
+    @function_tool(strict_mode=False)
     async def initialize_agents(self, npc_ids: Optional[List[int]] = None) -> InitializeAgentsResult:
         """
         Initialize NPCAgent objects for specified NPCs or all NPCs in the conversation.
@@ -376,7 +374,7 @@ class NPCAgentSystem:
             initialized_ids=list(self.npc_agents.keys())
         )
         
-    @function_tool
+    @function_tool(strict_mode=False)
     async def handle_player_action(
         self,
         player_action: PlayerAction,
@@ -560,7 +558,7 @@ class NPCAgentSystem:
         return []
 
 
-    @function_tool
+    @function_tool(strict_mode=False)
     async def batch_update_npcs(
         self,
         npc_ids: List[int],
@@ -753,7 +751,7 @@ class NPCAgentSystem:
         
         return {"npc_responses": npc_responses}
 
-    @function_tool
+    @function_tool(strict_mode=False)
     async def get_current_game_time(self) -> GameTime:
         """
         Get the current in-game time information.
@@ -796,7 +794,7 @@ class NPCAgentSystem:
             time_of_day=time_of_day or "afternoon"
         )
 
-    @function_tool
+    @function_tool(strict_mode=False)
     async def process_npc_scheduled_activities(self) -> ScheduledActivitiesResult:
         """
         Process scheduled activities for all NPCs using the agent system.
@@ -906,7 +904,7 @@ class NPCAgentSystem:
             raise NPCSystemError(error_msg)
 
 
-    @function_tool
+    @function_tool(strict_mode=False)
     async def run_memory_maintenance(self) -> MaintenanceResult:
         """
         Run comprehensive maintenance tasks on all NPCs' memory systems.
@@ -1078,7 +1076,7 @@ class NPCAgentSystem:
 
         return results
 
-    @function_tool
+    @function_tool(strict_mode=False)
     async def generate_npc_flashback(
         self, 
         npc_id: int, 
@@ -1202,6 +1200,7 @@ class NPCAgentSystem:
             
             # Return the result
             return result.final_output.result
+            
     async def get_npc_name(self, npc_id: int) -> str:
         """
         Get the name of an NPC by ID.
