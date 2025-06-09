@@ -1473,7 +1473,7 @@ async def get_npc_relationship_with_player(ctx: RunContextWrapper, npc_id: int) 
     """Get an NPC's relationship with the player."""
     return await _internal_get_npc_relationship_with_player_logic(ctx, npc_id)
 
-@function_tool
+@function_tool(strict_mode=False)
 async def generate_conflict_details(ctx: RunContextWrapper, conflict_type: str, stakeholder_npcs: List[Dict[str, Any]], current_day: int) -> Dict[str, Any]:
     """Generate conflict details using the AI."""
     return await _internal_generate_conflict_details_logic(ctx, conflict_type, stakeholder_npcs, current_day)
