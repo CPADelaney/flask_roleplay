@@ -844,7 +844,7 @@ async def get_response_guidance_for_user(
         "custom_guidance": guidance.custom_guidance
     }
 
-@function_tool
+@function_tool(strict_mode=False)
 async def track_conversation_response(
     ctx,
     user_message: str,
@@ -904,7 +904,7 @@ async def track_conversation_response(
     
     return f"Tracked conversation response for user {user_id}"
 
-@function_tool
+@function_tool(strict_mode=False)
 async def analyze_user_revelations(
     ctx,
     user_message: str,
