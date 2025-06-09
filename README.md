@@ -78,6 +78,9 @@ export PIP_DISABLE_PIP_VERSION_CHECK=1
 pip install -r requirements.txt
 ```
 
+The first run downloads about **1&nbsp;GB** of transformer weights for the
+sentence encoder.
+
 4. Set up environment variables:
 ```bash
 cp .env.example .env

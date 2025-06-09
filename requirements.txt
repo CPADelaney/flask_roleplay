@@ -53,11 +53,11 @@ langsmith==0.3.42
 chromadb==1.0.8
 qdrant-client==1.7.0
 pgvector==0.4.1
-faiss-cpu==1.10.0
+faiss-cpu>=1.7.4
 
 # ML and NLP
 spacy==3.8.2
-sentence-transformers==2.3.1
+sentence-transformers>=2.2
 transformers==4.47.0
 scikit-learn==1.6.1
 
