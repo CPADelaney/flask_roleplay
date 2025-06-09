@@ -634,6 +634,7 @@ class NPCHandler:
         """
         try:
             # Get LoreSystem instance
+            from lore.core import canon
             from lore.lore_system import LoreSystem
             lore_system = await LoreSystem.get_instance(self.user_id, self.conversation_id)
             
@@ -771,32 +772,43 @@ class NPCHandler:
                     for _ in range(min(3, len(npcs))):
                         npc1, npc2 = random.sample(npcs, 2)
                         
-                        # Create a memory of their interaction
-                        interaction_text = f"Interacted with {npc2['npc_name']} at {location} during {time_of_day}."
-                        
-                        # Add to unified_memories for both NPCs
-                        await conn.execute("""
-                            INSERT INTO unified_memories (
-                                entity_type, entity_id, user_id, conversation_id,
-                                memory_text, memory_type, significance, emotional_intensity
-                            )
-                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-                        """, "npc", npc1["npc_id"], self.user_id, self.conversation_id, interaction_text, "interaction", 2, 20)
-                        
+                        # Create memories of their interaction using canon
+                        interaction_text1 = f"Interacted with {npc2['npc_name']} at {location} during {time_of_day}."
                         interaction_text2 = f"Interacted with {npc1['npc_name']} at {location} during {time_of_day}."
                         
-                        await conn.execute("""
-                            INSERT INTO unified_memories (
-                                entity_type, entity_id, user_id, conversation_id,
-                                memory_text, memory_type, significance, emotional_intensity
-                            )
-                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-                        """, "npc", npc2["npc_id"], self.user_id, self.conversation_id, interaction_text2, "interaction", 2, 20)
+                        # Create memory entries through canon
+                        await canon.create_journal_entry(
+                            ctx, conn,
+                            entry_type="npc_interaction",
+                            entry_text=interaction_text1,
+                            tags=["interaction", "npc", f"npc_{npc1['npc_id']}", f"with_npc_{npc2['npc_id']}"],
+                            importance=0.3,
+                            metadata={
+                                "entity_type": "npc",
+                                "entity_id": npc1["npc_id"],
+                                "target_npc_id": npc2["npc_id"],
+                                "location": location,
+                                "time_of_day": time_of_day
+                            }
+                        )
                         
-                        # Update relationship if needed
-                        # For now, using basic implementation
-                        # In a full refactor, this would call into relationship.py
-                        await self._update_npc_relationship(npc1["npc_id"], npc2["npc_id"])
+                        await canon.create_journal_entry(
+                            ctx, conn,
+                            entry_type="npc_interaction",
+                            entry_text=interaction_text2,
+                            tags=["interaction", "npc", f"npc_{npc2['npc_id']}", f"with_npc_{npc1['npc_id']}"],
+                            importance=0.3,
+                            metadata={
+                                "entity_type": "npc",
+                                "entity_id": npc2["npc_id"],
+                                "target_npc_id": npc1["npc_id"],
+                                "location": location,
+                                "time_of_day": time_of_day
+                            }
+                        )
+                        
+                        # Update relationship using canon system
+                        await self._update_npc_relationship_canonical(ctx, conn, npc1["npc_id"], npc2["npc_id"])
                         
                         results.append({
                             "type": "interaction",
@@ -818,53 +830,64 @@ class NPCHandler:
         logger.error(f"Error processing daily activities: {e}")
         return {"error": str(e), "results": []}
 
-    async def _update_npc_relationship(self, npc1_id: int, npc2_id: int) -> None:
+    async def _update_npc_relationship(self, ctx, conn, npc1_id: int, npc2_id: int) -> None:
         """
-        Update the relationship between two NPCs.
+        Update the relationship between two NPCs using the canon system.
         
         Args:
+            ctx: Context with governance info
+            conn: Database connection
             npc1_id: ID of the first NPC
             npc2_id: ID of the second NPC
         """
-        # Simple implementation - in a full refactor, this would call into npc_relationship.py
-        async with get_db_connection_context() as conn:
-            # Check if relationship exists
-            row = await conn.fetchrow("""
-                SELECT link_id, link_level
-                FROM SocialLinks
-                WHERE user_id=$1 AND conversation_id=$2
-                  AND ((entity1_type='npc' AND entity1_id=$3 AND entity2_type='npc' AND entity2_id=$4)
-                   OR  (entity1_type='npc' AND entity1_id=$4 AND entity2_type='npc' AND entity2_id=$3))
-                LIMIT 1
-            """, self.user_id, self.conversation_id, npc1_id, npc2_id)
+        from lore.core import canon
+        
+        # Check if relationship exists
+        row = await conn.fetchrow("""
+            SELECT link_id, link_level
+            FROM SocialLinks
+            WHERE user_id=$1 AND conversation_id=$2
+              AND ((entity1_type='npc' AND entity1_id=$3 AND entity2_type='npc' AND entity2_id=$4)
+               OR  (entity1_type='npc' AND entity1_id=$4 AND entity2_type='npc' AND entity2_id=$3))
+            LIMIT 1
+        """, self.user_id, self.conversation_id, npc1_id, npc2_id)
+        
+        if row:
+            # Update existing relationship
+            link_id = row["link_id"]
+            current_level = row["link_level"]
             
-            if row:
-                # Update existing relationship
-                link_id = row["link_id"]
-                current_level = row["link_level"]
-                
-                # Small random change to relationship
-                change = random.randint(-1, 2)
-                new_level = max(0, min(100, current_level + change))
-                
-                if new_level != current_level:
-                    await conn.execute("""
-                        UPDATE SocialLinks
-                        SET link_level=$1
-                        WHERE link_id=$2
-                    """, new_level, link_id)
-            else:
-                # Create new relationship
-                link_type = "neutral"
-                link_level = 50  # Default neutral starting point
-                
-                await conn.execute("""
-                    INSERT INTO SocialLinks (
-                        user_id, conversation_id, entity1_type, entity1_id,
-                        entity2_type, entity2_id, link_type, link_level
-                    )
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-                """, self.user_id, self.conversation_id, "npc", npc1_id, "npc", npc2_id, link_type, link_level)
+            # Small random change to relationship
+            change = random.randint(-1, 2)
+            new_level = max(0, min(100, current_level + change))
+            
+            if new_level != current_level:
+                await canon.update_entity_with_governance(
+                    ctx, conn, "SocialLinks", link_id,
+                    {"link_level": new_level},
+                    f"Daily interaction between NPCs adjusting relationship level",
+                    significance=2
+                )
+        else:
+            # Create new relationship through canon
+            link_id = await canon.find_or_create_social_link(
+                ctx, conn,
+                user_id=self.user_id,
+                conversation_id=self.conversation_id,
+                entity1_type="npc",
+                entity1_id=npc1_id,
+                entity2_type="npc",
+                entity2_id=npc2_id,
+                link_type="neutral",
+                link_level=50
+            )
+            
+            await canon.log_canonical_event(
+                ctx, conn,
+                f"New relationship established between NPC {npc1_id} and NPC {npc2_id}",
+                tags=["relationship", "npc_relationship", "creation"],
+                significance=4
+            )
 
     async def _record_interaction_for_learning(
         self, 
