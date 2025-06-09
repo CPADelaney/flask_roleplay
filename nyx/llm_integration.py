@@ -6,6 +6,8 @@ import json
 import asyncio
 from typing import Dict, List, Any, Optional
 import openai
+import numpy as np
+
 
 from nyx.core.orchestrator import prepare_context
 
