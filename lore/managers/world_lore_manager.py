@@ -395,7 +395,7 @@ class WorldLoreManager(BaseLoreManager):
         """Internal method to get world metadata with optional fetch function."""
         return await self.get_cached_data('world_metadata', world_id, fetch_func)
 
-    @function_tool
+    @function_tool(strict_mode=False)
     async def set_world_metadata(
         self,
         world_id: str,
@@ -422,7 +422,7 @@ class WorldLoreManager(BaseLoreManager):
         except Exception as e:
             logger.error(f"Error invalidating world metadata: {e}")
 
-    @function_tool
+    @function_tool(strict_mode=False)
     async def get_resource_stats(self) -> Dict[str, Any]:
         """Get resource usage statistics."""
         try:
@@ -447,7 +447,7 @@ class WorldLoreManager(BaseLoreManager):
         except Exception as e:
             logger.error(f"Error cleaning up resources: {e}")
 
-    @function_tool
+    @function_tool(strict_mode=False)
     async def get_world_lore(self, world_id: int) -> Dict[str, Any]:
         """
         Retrieve comprehensive world lore including cultures, religions, and history.
@@ -485,7 +485,7 @@ class WorldLoreManager(BaseLoreManager):
         await self.set_cached_data('world', cache_key, result)
         return result
 
-    @function_tool
+    @function_tool(strict_mode=False)
     async def update_world_lore(self, world_id: int, updates: Dict[str, Any]) -> bool:
         """Update world lore with new information."""
         try:
@@ -500,7 +500,7 @@ class WorldLoreManager(BaseLoreManager):
             logger.error(f"Error updating world lore: {str(e)}")
             return False
 
-    @function_tool
+    @function_tool(strict_mode=False)
     async def get_cultural_context(self, culture_id: int) -> Dict[str, Any]:
         """Get detailed cultural context including traditions, customs, and beliefs."""
         return await self._execute_db_query(
@@ -508,7 +508,7 @@ class WorldLoreManager(BaseLoreManager):
             culture_id
         )
 
-    @function_tool
+    @function_tool(strict_mode=False)
     async def get_religious_context(self, religion_id: int) -> Dict[str, Any]:
         """Get detailed religious context including beliefs, practices, and hierarchy."""
         return await self._execute_db_query(
@@ -516,7 +516,7 @@ class WorldLoreManager(BaseLoreManager):
             religion_id
         )
 
-    @function_tool
+    @function_tool(strict_mode=False)
     async def get_historical_events(self, world_id: int, time_period: Optional[str] = None) -> List[Dict[str, Any]]:
         """Retrieve historical events, optionally filtered by time period."""
         query = "SELECT * FROM historical_events WHERE world_id = $1"
@@ -2132,7 +2132,7 @@ class WorldDocumentationAgent(BaseModel):
     get_world_history: ClassVar
     get_world_data: ClassVar
     
-    @function_tool
+    @function_tool(strict_mode=False)
     async def generate_documentation(self, ctx: Optional[RunContextWrapper] = None) -> str:
         """Generate documentation for the world state and history."""
         documentation = f"# World Documentation: {self.world_id}\n\n"
@@ -2288,7 +2288,7 @@ class InconsistencyResolutionAgent(BaseModel):
     identify_inconsistencies: ClassVar
     resolve_single_inconsistency: ClassVar
     
-    @function_tool
+    @function_tool(strict_mode=False)
     async def resolve_inconsistencies(self, ctx: Optional[RunContextWrapper] = None) -> str:
         """Analyze world lore and resolve any inconsistencies."""
         inconsistencies = await self.identify_inconsistencies()
