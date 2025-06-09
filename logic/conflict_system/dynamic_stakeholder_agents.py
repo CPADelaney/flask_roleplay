@@ -511,6 +511,11 @@ class StakeholderAutonomySystem:
         target_id = action['target']
         
         async with get_db_connection_context() as conn:
+            ctx = RunContextWrapper({
+                "user_id": self.user_id,
+                "conversation_id": self.conversation_id
+            })
+            
             # Remove alliance
             await conn.execute("""
                 UPDATE ConflictStakeholders
@@ -532,7 +537,7 @@ class StakeholderAutonomySystem:
             conflict_id, target_id
             )
             
-            # Create grudge
+            # Create grudge in conflict history
             await conn.execute("""
                 INSERT INTO ConflictHistory
                 (user_id, conversation_id, conflict_id, affected_npc_id,
@@ -543,12 +548,34 @@ class StakeholderAutonomySystem:
             'betrayal', 80, f"Betrayed by {stakeholder['npc_name']}"
             )
             
+            # Update social link if it exists
+            await canon.find_or_create_social_link(
+                ctx, conn,
+                user_id=self.user_id,
+                conversation_id=self.conversation_id,
+                entity1_type='npc',
+                entity1_id=stakeholder['npc_id'],
+                entity2_type='npc', 
+                entity2_id=target_id,
+                link_type='hostile',
+                link_level=-80,
+                dynamics={'betrayal': True, 'trust': -100}
+            )
+            
             # Increase conflict tension
             await conn.execute("""
                 UPDATE Conflicts
                 SET progress = LEAST(progress + 15, 100)
                 WHERE conflict_id = $1
             """, conflict_id)
+            
+            # Log canonical event
+            await canon.log_canonical_event(
+                ctx, conn,
+                f"{stakeholder['npc_name']} betrayed {action.get('target_name', f'NPC {target_id}')} in conflict",
+                tags=["conflict", "betrayal", "relationship"],
+                significance=8
+            )
             
             return {
                 'success': True,
