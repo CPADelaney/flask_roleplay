@@ -27,6 +27,21 @@ from context.context_manager import get_context_manager, ContextDiff
 from context.context_performance import PerformanceMonitor, track_performance
 from context.unified_cache import context_cache
 
+from logic.conflict_system.hooks import (
+    check_and_generate_conflict,
+    get_player_conflicts,
+    advance_conflict_story,
+    trigger_conflict_from_event,
+    get_conflict_summary,
+    get_world_tension_level,
+    on_npc_relationship_change,
+    on_faction_power_shift,
+    on_resource_crisis,
+    on_player_major_action
+)
+from logic.conflict_system.dynamic_stakeholder_agents import process_conflict_stakeholder_turns
+from logic.conflict_system.enhanced_conflict_generation import analyze_conflict_pressure
+
 # Configure structured logging
 logger = logging.getLogger(__name__)
 
@@ -537,6 +552,109 @@ class StoryDirectorContext:
         except Exception as e:
             logger.error(f"Error getting relevant memories: {e}", exc_info=True)
             return []
+
+    @function_tool
+    async def monitor_conflicts(ctx: RunContextWrapper[StoryDirectorContext]) -> Dict[str, Any]:
+        """
+        Monitor world state and generate conflicts if appropriate.
+        """
+        context = ctx.context
+        user_id = context.user_id
+        conversation_id = context.conversation_id
+        
+        # Check world tension
+        tension_level = await get_world_tension_level(user_id, conversation_id)
+        
+        # Check and potentially generate new conflict
+        new_conflict = await check_and_generate_conflict(user_id, conversation_id)
+        
+        # Get active player conflicts
+        player_conflicts = await get_player_conflicts(user_id, conversation_id)
+        
+        # Process stakeholder turns for each active conflict
+        stakeholder_actions = {}
+        for conflict in player_conflicts:
+            conflict_id = conflict['conflict_id']
+            actions = await process_conflict_stakeholder_turns(
+                ctx, 
+                conflict_id
+            )
+            if actions:
+                stakeholder_actions[conflict_id] = actions
+        
+        return {
+            "world_tension": tension_level,
+            "new_conflict": new_conflict,
+            "active_conflicts": len(player_conflicts),
+            "stakeholder_actions": stakeholder_actions
+        }
+    
+    @function_tool
+    async def evolve_conflict_from_event(
+        ctx: RunContextWrapper[StoryDirectorContext], 
+        event_description: str,
+        event_type: str = "player_action",
+        involved_npcs: List[int] = None
+    ) -> Dict[str, Any]:
+        """
+        Evolve conflicts based on story events.
+        """
+        context = ctx.context
+        user_id = context.user_id
+        conversation_id = context.conversation_id
+        
+        # Get active conflicts
+        player_conflicts = await get_player_conflicts(user_id, conversation_id)
+        
+        results = []
+        for conflict in player_conflicts:
+            # Advance the conflict story
+            result = await advance_conflict_story(
+                user_id,
+                conversation_id,
+                conflict['conflict_id'],
+                event_description,
+                involved_npcs
+            )
+            results.append(result)
+        
+        return {
+            "conflicts_evolved": len(results),
+            "evolution_results": results
+        }
+    
+    @function_tool
+    async def trigger_conflict_event(
+        ctx: RunContextWrapper[StoryDirectorContext],
+        event_type: str,
+        event_data: Dict[str, Any]
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Trigger conflict generation from specific events.
+        """
+        context = ctx.context
+        user_id = context.user_id
+        conversation_id = context.conversation_id
+        
+        # Determine preferred scale based on event type
+        scale_map = {
+            "npc_betrayal": "personal",
+            "faction_dispute": "local", 
+            "resource_shortage": "regional",
+            "major_revelation": "world"
+        }
+        
+        preferred_scale = scale_map.get(event_type)
+        
+        new_conflict = await trigger_conflict_from_event(
+            user_id,
+            conversation_id,
+            event_type,
+            event_data,
+            preferred_scale
+        )
+        
+        return new_conflict
 
 
 async def retry_operation(operation, max_retries=MAX_RETRY_ATTEMPTS): # Use constant
