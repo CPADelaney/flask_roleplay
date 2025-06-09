@@ -1532,25 +1532,68 @@ async def generate_personal_revelation(ctx: RunContextWrapper[ContextType], npc_
         ]
     }
 
-
     try:
         revelation_templates = templates.get(revelation_type.lower(), templates["dependency"])
-        inner_monologue = random.choice(revelation_templates) # No need to format again if f-string used above
+        inner_monologue = random.choice(revelation_templates)
 
+        # Create a context object for canon
+        class RevealContext:
+            def __init__(self, user_id, conversation_id):
+                self.user_id = user_id
+                self.conversation_id = conversation_id
+        
+        canon_ctx = RevealContext(user_id, conversation_id)
+        
         async with get_db_connection_context() as conn:
             try:
-                journal_id = await conn.fetchval("INSERT INTO PlayerJournal (user_id, conversation_id, entry_type, entry_text, revelation_types, timestamp) VALUES ($1, $2, 'personal_revelation', $3, $4, CURRENT_TIMESTAMP) RETURNING id", user_id, conversation_id, inner_monologue, revelation_type)
+                # Use canon to create journal entry
+                journal_id = await canon.create_journal_entry(
+                    ctx=canon_ctx,
+                    conn=conn,
+                    entry_type='personal_revelation',
+                    entry_text=inner_monologue,
+                    revelation_types=revelation_type,
+                    narrative_moment=None,
+                    fantasy_flag=False,
+                    intensity_level=0,
+                    importance=0.8,
+                    tags=[revelation_type, "revelation", npc_name.lower().replace(" ", "_")]
+                )
 
                 if hasattr(context, 'add_narrative_memory'):
-                    await context.add_narrative_memory(f"Personal revelation about {npc_name}: {inner_monologue}", "personal_revelation", 0.8, tags=[revelation_type, "revelation", npc_name.lower().replace(" ", "_")])
+                    await context.add_narrative_memory(
+                        f"Personal revelation about {npc_name}: {inner_monologue}", 
+                        "personal_revelation", 
+                        0.8, 
+                        tags=[revelation_type, "revelation", npc_name.lower().replace(" ", "_")]
+                    )
+                    
                 if hasattr(context, 'narrative_manager') and context.narrative_manager:
-                    await context.narrative_manager.add_revelation(content=inner_monologue, revelation_type=revelation_type, importance=0.8, tags=[revelation_type, "revelation"])
+                    await context.narrative_manager.add_revelation(
+                        content=inner_monologue, 
+                        revelation_type=revelation_type, 
+                        importance=0.8, 
+                        tags=[revelation_type, "revelation"]
+                    )
 
-                return {"type": "personal_revelation", "name": f"{revelation_type.capitalize()} Awareness", "inner_monologue": inner_monologue, "journal_id": journal_id, "success": True}
-            except Exception as db_error: logger.error(f"Database error recording personal revelation: {db_error}"); raise
+                return {
+                    "type": "personal_revelation", 
+                    "name": f"{revelation_type.capitalize()} Awareness", 
+                    "inner_monologue": inner_monologue, 
+                    "journal_id": journal_id, 
+                    "success": True
+                }
+            except Exception as db_error:
+                logger.error(f"Database error recording personal revelation: {db_error}")
+                raise
     except Exception as e:
         logger.error(f"Error generating personal revelation: {str(e)}", exc_info=True)
-        return {"type": "personal_revelation", "name": f"{revelation_type.capitalize()} Awareness", "inner_monologue": f"Error generating revelation: {str(e)}", "success": False}
+        return {
+            "type": "personal_revelation", 
+            "name": f"{revelation_type.capitalize()} Awareness", 
+            "inner_monologue": f"Error generating revelation: {str(e)}", 
+            "success": False
+        }
 
 
 @function_tool
@@ -1565,7 +1608,8 @@ async def generate_dream_sequence(ctx: RunContextWrapper[ContextType], npc_names
     Returns:
         A dream sequence
     """
-    while len(npc_names) < 3: npc_names.append(f"Unknown Figure {len(npc_names) + 1}")
+    while len(npc_names) < 3: 
+        npc_names.append(f"Unknown Figure {len(npc_names) + 1}")
     npc1, npc2, npc3 = npc_names[:3]
     
     # Dream templates
@@ -1578,27 +1622,68 @@ async def generate_dream_sequence(ctx: RunContextWrapper[ContextType], npc_names
         f"You're swimming in deep water. Below you, {npc1} and {npc2} walk along the bottom, looking up at you and conversing, their voices perfectly clear despite the water. \"They still think they're above it all,\" says {npc1}, and they both laugh. You realize you can't remember how to reach the surface."
     ]
 
-
     try:
-        dream_text = random.choice(dream_templates) # Already formatted
+        dream_text = random.choice(dream_templates)
         context = ctx.context
         user_id = context.user_id
         conversation_id = context.conversation_id
 
+        # Create a context object for canon
+        class DreamContext:
+            def __init__(self, user_id, conversation_id):
+                self.user_id = user_id
+                self.conversation_id = conversation_id
+        
+        canon_ctx = DreamContext(user_id, conversation_id)
+
         async with get_db_connection_context() as conn:
             try:
-                journal_id = await conn.fetchval("INSERT INTO PlayerJournal (user_id, conversation_id, entry_type, entry_text, timestamp) VALUES ($1, $2, 'dream_sequence', $3, CURRENT_TIMESTAMP) RETURNING id", user_id, conversation_id, dream_text)
+                # Use canon to create journal entry
+                journal_id = await canon.create_journal_entry(
+                    ctx=canon_ctx,
+                    conn=conn,
+                    entry_type='dream_sequence',
+                    entry_text=dream_text,
+                    revelation_types=None,
+                    narrative_moment=True,
+                    fantasy_flag=True,
+                    intensity_level=0,
+                    importance=0.7,
+                    tags=["dream", "symbolic"] + [npc.lower().replace(" ", "_") for npc in npc_names[:3]]
+                )
 
                 if hasattr(context, 'add_narrative_memory'):
-                    await context.add_narrative_memory(f"Dream sequence: {dream_text}", "dream_sequence", 0.7, tags=["dream", "symbolic"] + [npc.lower().replace(" ", "_") for npc in npc_names[:3]])
+                    await context.add_narrative_memory(
+                        f"Dream sequence: {dream_text}", 
+                        "dream_sequence", 
+                        0.7, 
+                        tags=["dream", "symbolic"] + [npc.lower().replace(" ", "_") for npc in npc_names[:3]]
+                    )
+                    
                 if hasattr(context, 'narrative_manager') and context.narrative_manager:
-                    await context.narrative_manager.add_dream_sequence(content=dream_text, symbols=[npc1, npc2, npc3, "control", "manipulation"], importance=0.7, tags=["dream", "symbolic"])
+                    await context.narrative_manager.add_dream_sequence(
+                        content=dream_text, 
+                        symbols=[npc1, npc2, npc3, "control", "manipulation"], 
+                        importance=0.7, 
+                        tags=["dream", "symbolic"]
+                    )
 
-                return {"type": "dream_sequence", "text": dream_text, "journal_id": journal_id, "success": True}
-            except Exception as db_error: logger.error(f"Database error recording dream sequence: {db_error}"); raise
+                return {
+                    "type": "dream_sequence", 
+                    "text": dream_text, 
+                    "journal_id": journal_id, 
+                    "success": True
+                }
+            except Exception as db_error:
+                logger.error(f"Database error recording dream sequence: {db_error}")
+                raise
     except Exception as e:
         logger.error(f"Error generating dream sequence: {str(e)}", exc_info=True)
-        return {"type": "dream_sequence", "text": f"Error generating dream: {str(e)}", "success": False}
+        return {
+            "type": "dream_sequence", 
+            "text": f"Error generating dream: {str(e)}", 
+            "success": False
+        }
 
 @function_tool
 @track_performance("check_relationship_events")
