@@ -11,8 +11,8 @@ import random
 from typing import List, Dict, Any, Optional, Set, Tuple, Union
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from pydantic import BaseModel
 
+from pydantic import BaseModel, Field, validator
 from agents import Agent, Runner, function_tool, handoff, trace, ModelSettings, input_guardrail, GuardrailFunctionOutput
 
 from npcs.npc_agent import NPCAgent, ResourcePool
@@ -23,6 +23,112 @@ from lore.core import canon
 from lore.lore_system import LoreSystem
 
 logger = logging.getLogger(__name__)
+
+class InitializeAgentsResult(BaseModel):
+    """Result from initializing agents."""
+    npc_count: int
+    initialized_ids: List[int]
+
+class PlayerAction(BaseModel):
+    """Model for player actions."""
+    type: str
+    description: str
+    target_npc_id: Optional[int] = None
+    target_location: Optional[str] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    
+    class Config:
+        extra = "allow"  # Allow additional fields for flexibility
+
+class ActionContext(BaseModel):
+    """Model for action context."""
+    location: Optional[str] = None
+    time_of_day: Optional[str] = None
+    year: Optional[int] = None
+    month: Optional[str] = None
+    day: Optional[int] = None
+    activity_type: Optional[str] = None
+    is_group_interaction: bool = False
+    affected_npcs: List[int] = Field(default_factory=list)
+    emotional_states: Dict[int, Dict[str, Any]] = Field(default_factory=dict)
+    mask_states: Dict[int, Dict[str, Any]] = Field(default_factory=dict)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    
+    class Config:
+        extra = "allow"  # Allow additional fields
+
+class NPCResponse(BaseModel):
+    """Model for NPC response."""
+    npc_id: int
+    npc_name: str
+    response_type: str
+    response_text: str
+    emotional_impact: Optional[Dict[str, Any]] = None
+    stat_changes: Optional[Dict[str, Any]] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+class HandlePlayerActionResult(BaseModel):
+    """Result from handling player action."""
+    npc_responses: List[Union[NPCResponse, Dict[str, Any]]]
+
+class DetermineAffectedNPCsInput(BaseModel):
+    """Input for determine_affected_npcs."""
+    player_action: PlayerAction
+    context: ActionContext
+
+class BatchUpdateData(BaseModel):
+    """Data for batch updates."""
+    # For location changes
+    new_location: Optional[str] = None
+    # For emotional updates  
+    emotion: Optional[str] = None
+    intensity: Optional[float] = 0.5
+    # For trait updates
+    traits: Optional[Dict[str, Any]] = None
+    # For any other update type
+    data: Dict[str, Any] = Field(default_factory=dict)
+    
+    class Config:
+        extra = "allow"
+
+class BatchUpdateResult(BaseModel):
+    """Result from batch update."""
+    success_count: int = 0
+    error_count: int = 0
+    details: Dict[int, Dict[str, Any]] = Field(default_factory=dict)
+    error: Optional[str] = None
+    valid_types: Optional[List[str]] = None
+
+class GameTime(BaseModel):
+    """Game time information."""
+    year: int = 2023
+    month: str = "January"
+    day: int = 1
+    time_of_day: str = "afternoon"
+
+class ScheduledActivitiesResult(BaseModel):
+    """Result from processing scheduled activities."""
+    npc_responses: List[Dict[str, Any]] = Field(default_factory=list)
+    count: int = 0
+    time_of_day: str = "afternoon"
+
+class MaintenanceResult(BaseModel):
+    """Result from memory maintenance."""
+    player_maintenance: Optional[Dict[str, Any]] = None
+    npc_maintenance: Dict[int, Dict[str, Any]] = Field(default_factory=dict)
+    nyx_maintenance: Optional[Dict[str, Any]] = None
+    error: Optional[str] = None
+
+class FlashbackResult(BaseModel):
+    """Result from generating flashback."""
+    triggered: bool
+    reason: Optional[str] = None
+    text: Optional[str] = None
+    memory_id: Optional[str] = None
+    triggered_emotion: Optional[str] = None
+    emotion_intensity: Optional[float] = None
+    time_since_last_seconds: Optional[float] = None
+    error: Optional[str] = None
 
 class NPCSystemError(Exception):
     """Error in NPC system operations."""
@@ -224,7 +330,7 @@ class NPCAgentSystem:
         return self._system_agent
 
     @function_tool
-    async def initialize_agents(self, npc_ids: Optional[List[int]] = None) -> Dict[str, Any]:
+    async def initialize_agents(self, npc_ids: Optional[List[int]] = None) -> InitializeAgentsResult:
         """
         Initialize NPCAgent objects for specified NPCs or all NPCs in the conversation.
         This is a READ-ONLY operation - no database writes.
@@ -265,23 +371,23 @@ class NPCAgentSystem:
         npc_count = len(self.npc_agents)
         logger.info("Loaded %d NPC agents", npc_count)
         
-        return {
-            "npc_count": npc_count,
-            "initialized_ids": list(self.npc_agents.keys())
-        }
-
+        return InitializeAgentsResult(
+            npc_count=npc_count,
+            initialized_ids=list(self.npc_agents.keys())
+        )
+        
     @function_tool
     async def handle_player_action(
         self,
-        player_action: Dict[str, Any],
-        context: Optional[Dict[str, Any]] = None
-    ) -> Dict[str, Any]:
+        player_action: PlayerAction,
+        context: Optional[ActionContext] = None
+    ) -> HandlePlayerActionResult:
         """
         Handle a player action and determine NPC responses with memory integration.
         This creates memories but doesn't modify core NPC state directly.
         """
         if context is None:
-            context = {}
+            context = ActionContext()
     
         # Create trace for debugging and monitoring
         with trace(
@@ -292,11 +398,10 @@ class NPCAgentSystem:
             memory_system = await self._get_memory_system()
     
             # Create a memory of this action from the player's perspective
-            player_memory_text = f"I {player_action.get('description', 'did something')}"
+            player_memory_text = f"I {player_action.description}"
     
             # Determine emotional content based on action type
-            action_type = player_action.get("type", "unknown")
-            is_emotional = action_type in ["express_emotion", "shout", "cry", "laugh", "threaten"]
+            is_emotional = player_action.type in ["express_emotion", "shout", "cry", "laugh", "threaten"]
     
             # Add memory with appropriate tags
             await memory_system.remember(
@@ -305,24 +410,38 @@ class NPCAgentSystem:
                 memory_text=player_memory_text,
                 importance="medium",
                 emotional=is_emotional,
-                tags=["player_action", action_type]
+                tags=["player_action", player_action.type]
             )
     
             # Determine which NPCs are affected by the action
-            affected_npcs = await self.determine_affected_npcs(player_action, context)
+            # Convert models to dicts for compatibility with existing code
+            affected_npcs = await self.determine_affected_npcs(
+                player_action.model_dump(), 
+                context.model_dump()
+            )
             if not affected_npcs:
                 logger.debug("No NPCs were affected by this action: %s", player_action)
-                return {"npc_responses": []}
+                return HandlePlayerActionResult(npc_responses=[])
     
             # Single NPC path
             if len(affected_npcs) == 1:
                 npc_id = affected_npcs[0]
-                return await self.handle_single_npc_interaction(npc_id, player_action, context)
+                result = await self.handle_single_npc_interaction(
+                    npc_id, 
+                    player_action.model_dump(), 
+                    context.model_dump()
+                )
+                return HandlePlayerActionResult(npc_responses=result.get("npc_responses", []))
     
             # Multiple NPCs => group logic
-            return await self.handle_group_npc_interaction(affected_npcs, player_action, context)
+            result = await self.handle_group_npc_interaction(
+                affected_npcs, 
+                player_action.model_dump(), 
+                context.model_dump()
+            )
+            return HandlePlayerActionResult(npc_responses=result.get("npc_responses", []))
 
-    @function_tool
+    @function_tool(strict_mode=False)
     async def determine_affected_npcs(
         self,
         player_action: Dict[str, Any],
@@ -332,6 +451,7 @@ class NPCAgentSystem:
         Figure out which NPCs are affected by a given player action.
         This is a READ-ONLY operation.
         """
+        # [Keep the existing implementation as-is]
         target_npc_id = player_action.get("target_npc_id")
         if target_npc_id:
             return [target_npc_id]
@@ -439,31 +559,28 @@ class NPCAgentSystem:
 
         return []
 
+
     @function_tool
     async def batch_update_npcs(
         self,
         npc_ids: List[int],
         update_type: str,
-        update_data: Dict[str, Any]
-    ) -> Dict[str, Any]:
+        update_data: BatchUpdateData
+    ) -> BatchUpdateResult:
         """
         Update multiple NPCs in a single batch operation.
         REFACTORED: Now uses LoreSystem for updates instead of direct DB writes.
         """
-        results = {
-            "success_count": 0,
-            "error_count": 0,
-            "details": {}
-        }
+        results = BatchUpdateResult()
 
         try:
             # Get the lore system
             lore_system = await self._get_lore_system()
             
             if update_type == "location_change":
-                new_location = update_data.get("new_location")
-                if not new_location:
-                    return {"error": "No location specified"}
+                if not update_data.new_location:
+                    results.error = "No location specified"
+                    return results
                 
                 # Create context for governance
                 ctx = type('obj', (object,), {
@@ -478,27 +595,25 @@ class NPCAgentSystem:
                             ctx=ctx,
                             entity_type="NPCStats",
                             entity_identifier={"npc_id": npc_id},
-                            updates={"current_location": new_location},
-                            reason=f"Batch location update to {new_location}"
+                            updates={"current_location": update_data.new_location},
+                            reason=f"Batch location update to {update_data.new_location}"
                         )
                         
                         if result.get("status") == "committed":
-                            results["success_count"] += 1
-                            results["details"][npc_id] = {"success": True}
+                            results.success_count += 1
+                            results.details[npc_id] = {"success": True}
                         else:
-                            results["error_count"] += 1
-                            results["details"][npc_id] = {"error": result.get("message", "Update failed")}
+                            results.error_count += 1
+                            results.details[npc_id] = {"error": result.get("message", "Update failed")}
                     except Exception as e:
-                        results["error_count"] += 1
-                        results["details"][npc_id] = {"error": str(e)}
+                        results.error_count += 1
+                        results.details[npc_id] = {"error": str(e)}
                 
             elif update_type == "emotional_update":
                 # Emotional updates through memory system (which is allowed)
-                emotion = update_data.get("emotion")
-                intensity = update_data.get("intensity", 0.5)
-                
-                if not emotion:
-                    return {"error": "No emotion specified"}
+                if not update_data.emotion:
+                    results.error = "No emotion specified"
+                    return results
                     
                 # Get memory system
                 memory_system = await self._get_memory_system()
@@ -513,8 +628,8 @@ class NPCAgentSystem:
                     for npc_id in batch:
                         task = memory_system.update_npc_emotion(
                             npc_id=npc_id,
-                            emotion=emotion,
-                            intensity=intensity
+                            emotion=update_data.emotion,
+                            intensity=update_data.intensity
                         )
                         batch_tasks.append(task)
                         
@@ -524,11 +639,11 @@ class NPCAgentSystem:
                     # Process results
                     for npc_id, result in zip(batch, batch_results):
                         if isinstance(result, Exception):
-                            results["error_count"] += 1
-                            results["details"][npc_id] = {"error": str(result)}
+                            results.error_count += 1
+                            results.details[npc_id] = {"error": str(result)}
                         else:
-                            results["success_count"] += 1
-                            results["details"][npc_id] = {"success": True}
+                            results.success_count += 1
+                            results.details[npc_id] = {"success": True}
                     
                     # Small delay between batches
                     if i + batch_size < len(npc_ids):
@@ -536,23 +651,19 @@ class NPCAgentSystem:
             
             # Additional update types would be implemented here
             else:
-                return {
-                    "error": f"Unknown update type: {update_type}",
-                    "valid_types": [
-                        "location_change", "emotional_update"
-                    ]
-                }
+                results.error = f"Unknown update type: {update_type}"
+                results.valid_types = [
+                    "location_change", "emotional_update"
+                ]
             
             return results
                 
         except Exception as e:
             logger.error(f"Error in batch update: {e}")
-            return {
-                "error": str(e),
-                "success_count": 0,
-                "error_count": len(npc_ids)
-            }
-
+            results.error = str(e)
+            results.error_count = len(npc_ids)
+            return results
+            
     async def _fetch_current_location(self) -> Optional[str]:
         """
         Attempt to retrieve the current location from the CurrentRoleplay table.
@@ -643,7 +754,7 @@ class NPCAgentSystem:
         return {"npc_responses": npc_responses}
 
     @function_tool
-    async def get_current_game_time(self) -> Dict[str, Any]:
+    async def get_current_game_time(self) -> GameTime:
         """
         Get the current in-game time information.
         READ-ONLY operation.
@@ -666,33 +777,27 @@ class NPCAgentSystem:
                     key = row["key"]
                     value = row["value"]
                     if key == "CurrentYear":
-                        year = int(value) if value.isdigit() else value
+                        year = int(value) if value.isdigit() else 2023
                     elif key == "CurrentMonth":
                         month = value
                     elif key == "CurrentDay":
-                        day = int(value) if value.isdigit() else value
+                        day = int(value) if value.isdigit() else 1
                     elif key == "TimeOfDay":
                         time_of_day = value
 
-                # Set defaults if values are missing
-                if year is None:
-                    year = 2023
-                if month is None:
-                    month = "January"
-                if day is None:
-                    day = 1
-                if time_of_day is None:
-                    time_of_day = "afternoon"
-
         except Exception as e:
             logger.error(f"Error getting game time: {e}")
-            # Return defaults if query fails
-            return {"year": 2023, "month": "January", "day": 1, "time_of_day": "afternoon"}
 
-        return {"year": year, "month": month, "day": day, "time_of_day": time_of_day}
+        # Return with defaults
+        return GameTime(
+            year=year or 2023,
+            month=month or "January",
+            day=day or 1,
+            time_of_day=time_of_day or "afternoon"
+        )
 
     @function_tool
-    async def process_npc_scheduled_activities(self) -> Dict[str, Any]:
+    async def process_npc_scheduled_activities(self) -> ScheduledActivitiesResult:
         """
         Process scheduled activities for all NPCs using the agent system.
         This doesn't directly update NPC state but processes activities.
@@ -703,10 +808,10 @@ class NPCAgentSystem:
             # Get current game time
             time_data = await self.get_current_game_time()
             base_context = {
-                "year": time_data["year"],
-                "month": time_data["month"],
-                "day": time_data["day"],
-                "time_of_day": time_data["time_of_day"],
+                "year": time_data.year,
+                "month": time_data.month,
+                "day": time_data.day,
+                "time_of_day": time_data.time_of_day,
                 "activity_type": "scheduled"
             }
 
@@ -742,7 +847,11 @@ class NPCAgentSystem:
 
             total_npcs = len(npc_data)
             if total_npcs == 0:
-                return {"npc_responses": [], "count": 0}
+                return ScheduledActivitiesResult(
+                    npc_responses=[], 
+                    count=0,
+                    time_of_day=time_data.time_of_day
+                )
 
             logger.info(f"Processing scheduled activities for {total_npcs} NPCs")
 
@@ -785,34 +894,34 @@ class NPCAgentSystem:
                 if i + batch_size < total_npcs:
                     await asyncio.sleep(0.1)
 
-            return {
-                "npc_responses": npc_responses,
-                "count": len(npc_responses),
-                "time_of_day": time_data["time_of_day"]
-            }
+            return ScheduledActivitiesResult(
+                npc_responses=npc_responses,
+                count=len(npc_responses),
+                time_of_day=time_data.time_of_day
+            )
 
         except Exception as e:
             error_msg = f"Error processing NPC scheduled activities: {e}"
             logger.error(error_msg)
             raise NPCSystemError(error_msg)
 
+
     @function_tool
-    async def run_memory_maintenance(self) -> Dict[str, Any]:
+    async def run_memory_maintenance(self) -> MaintenanceResult:
         """
         Run comprehensive maintenance tasks on all NPCs' memory systems.
         This includes consolidation, decay, schema formation, and belief updates.
         Memory operations are allowed as they don't modify core game state.
         """
-        results = {}
+        results = MaintenanceResult()
         try:
             memory_system = await self._get_memory_system()
 
             # Player memory maintenance
-            player_result = await memory_system.maintain(
+            results.player_maintenance = await memory_system.maintain(
                 entity_type="player",
                 entity_id=self.user_id
             )
-            results["player_maintenance"] = player_result
 
             # NPC maintenance
             npc_results = {}
@@ -823,15 +932,14 @@ class NPCAgentSystem:
                 except Exception as e:
                     logger.error(f"Error in memory maintenance for NPC {npc_id}: {e}")
                     npc_results[npc_id] = {"error": str(e)}
-            results["npc_maintenance"] = npc_results
+            results.npc_maintenance = npc_results
 
             # DM (Nyx) memory
             try:
-                nyx_result = await memory_system.maintain(entity_type="nyx", entity_id=0)
-                results["nyx_maintenance"] = nyx_result
+                results.nyx_maintenance = await memory_system.maintain(entity_type="nyx", entity_id=0)
             except Exception as e:
                 logger.error(f"Error in Nyx memory maintenance: {e}")
-                results["nyx_maintenance"] = {"error": str(e)}
+                results.nyx_maintenance = {"error": str(e)}
 
             # Update last maintenance time
             self._last_memory_maintenance = datetime.now()
@@ -839,7 +947,8 @@ class NPCAgentSystem:
             return results
         except Exception as e:
             logger.error(f"Error in system-wide memory maintenance: {e}")
-            return {"error": str(e)}
+            results.error = str(e)
+            return results
 
     async def _run_comprehensive_npc_maintenance(self, npc_id: int) -> Dict[str, Any]:
         """
@@ -974,7 +1083,7 @@ class NPCAgentSystem:
         self, 
         npc_id: int, 
         context_text: str
-    ) -> Optional[Dict[str, Any]]:
+    ) -> FlashbackResult:
         """
         Generate a flashback for an NPC based on specific context.
         This is a memory operation which is allowed.
@@ -987,11 +1096,11 @@ class NPCAgentSystem:
             )
             time_since_last = (datetime.now() - last_flashback_time).total_seconds()
             if time_since_last < 300:  # 5 minutes minimum between flashbacks
-                return {
-                    "triggered": False,
-                    "reason": "too_soon",
-                    "time_since_last_seconds": time_since_last
-                }
+                return FlashbackResult(
+                    triggered=False,
+                    reason="too_soon",
+                    time_since_last_seconds=time_since_last
+                )
 
             memory_system = await self._get_memory_system()
             flashback = await memory_system.npc_flashback(npc_id, context_text)
@@ -1020,22 +1129,30 @@ class NPCAgentSystem:
                         intensity=intensity
                     )
                     
-                    flashback["triggered_emotion"] = emotion
-                    flashback["emotion_intensity"] = intensity
-                
-                flashback["triggered"] = True
-                return flashback
+                    return FlashbackResult(
+                        triggered=True,
+                        text=flashback.get("text"),
+                        memory_id=flashback.get("memory_id"),
+                        triggered_emotion=emotion,
+                        emotion_intensity=intensity
+                    )
+                else:
+                    return FlashbackResult(
+                        triggered=True,
+                        text=flashback.get("text"),
+                        memory_id=flashback.get("memory_id")
+                    )
             else:
-                return {
-                    "triggered": False,
-                    "reason": "no_relevant_memory"
-                }
+                return FlashbackResult(
+                    triggered=False,
+                    reason="no_relevant_memory"
+                )
         except Exception as e:
             logger.error(f"Error generating flashback for NPC {npc_id}: {e}")
-            return {
-                "triggered": False,
-                "error": str(e)
-            }
+            return FlashbackResult(
+                triggered=False,
+                error=str(e)
+            )
 
     async def process_command(self, command: str, parameters: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -1044,7 +1161,32 @@ class NPCAgentSystem:
         # Get the system agent
         system_agent = await self._get_system_agent()
         
-        # Create input data
+        # Convert parameters to appropriate models if needed
+        if command == "process_player_action" and "player_action" in parameters:
+            # Convert player_action dict to model
+            player_action_dict = parameters["player_action"]
+            player_action = PlayerAction(**player_action_dict)
+            
+            # Convert context dict to model if present
+            context = None
+            if "context" in parameters:
+                context = ActionContext(**parameters["context"])
+            
+            # Call the method directly with models
+            result = await self.handle_player_action(player_action, context)
+            return result.model_dump()
+            
+        elif command == "batch_update":
+            # Convert update_data to model
+            update_data = BatchUpdateData(**parameters.get("update_data", {}))
+            result = await self.batch_update_npcs(
+                parameters["npc_ids"],
+                parameters["update_type"],
+                update_data
+            )
+            return result.model_dump()
+        
+        # For other commands, use the existing approach
         input_data = {
             "command": command,
             "parameters": parameters
@@ -1060,7 +1202,6 @@ class NPCAgentSystem:
             
             # Return the result
             return result.final_output.result
-
     async def get_npc_name(self, npc_id: int) -> str:
         """
         Get the name of an NPC by ID.
