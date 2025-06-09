@@ -198,7 +198,7 @@ class NyxTaskIntegration:
                 "error": str(e)
             }
     
-    @function_tool
+    @function_tool(strict_mode=False)
     async def enhance_narrative_with_task(
         self,
         ctx,
@@ -226,7 +226,7 @@ class NyxTaskIntegration:
         
         return narrative_response
     
-    @function_tool
+    @function_tool(strict_mode=False)
     async def enhance_narrative_with_activities(
         self,
         ctx,
