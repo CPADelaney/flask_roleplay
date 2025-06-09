@@ -2633,3 +2633,247 @@ async def find_or_create_currency_system(
     )
     
     return currency_id
+
+# Add these functions to lore/core/canon.py
+
+async def find_or_create_event(ctx, conn, event_name: str, **kwargs) -> int:
+    """
+    Find or create an event canonically with semantic matching.
+    """
+    # Check exact match
+    existing = await conn.fetchrow("""
+        SELECT id FROM Events
+        WHERE LOWER(event_name) = LOWER($1)
+        AND user_id = $2 AND conversation_id = $3
+        AND year = $4 AND month = $5 AND day = $6
+    """, event_name, ctx.user_id, ctx.conversation_id,
+        kwargs.get('year', 1), kwargs.get('month', 1), kwargs.get('day', 1))
+    
+    if existing:
+        return existing['id']
+    
+    # Semantic similarity check
+    description = kwargs.get('description', '')
+    location = kwargs.get('location', 'Unknown')
+    embedding_text = f"{event_name} {description} at {location}"
+    search_vector = await generate_embedding(embedding_text)
+    
+    similar = await conn.fetchrow("""
+        SELECT id, event_name, description, location,
+               1 - (embedding <=> $1) AS similarity
+        FROM Events
+        WHERE user_id = $2 AND conversation_id = $3
+        AND embedding IS NOT NULL
+        AND 1 - (embedding <=> $1) > 0.85
+        ORDER BY embedding <=> $1
+        LIMIT 1
+    """, search_vector, ctx.user_id, ctx.conversation_id)
+    
+    if similar:
+        validation_agent = CanonValidationAgent()
+        prompt = f"""
+        Are these the same event?
+        
+        Proposed: {event_name} at {location}
+        Description: {description[:200]}
+        Date: Year {kwargs.get('year', 1)}, Month {kwargs.get('month', 1)}, Day {kwargs.get('day', 1)}
+        
+        Existing: {similar['event_name']} at {similar['location']}
+        Description: {similar['description'][:200]}
+        Similarity: {similar['similarity']:.2f}
+        
+        Answer only 'true' or 'false'.
+        """
+        
+        result = await Runner.run(validation_agent.agent, prompt)
+        if result.final_output.strip().lower() == 'true':
+            return similar['id']
+    
+    # Create new event
+    event_id = await conn.fetchval("""
+        INSERT INTO Events (
+            user_id, conversation_id, event_name, description,
+            start_time, end_time, location, year, month, day,
+            time_of_day, embedding
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+        RETURNING id
+    """,
+        ctx.user_id, ctx.conversation_id, event_name, description,
+        kwargs.get('start_time', 'TBD'),
+        kwargs.get('end_time', 'TBD'),
+        location,
+        kwargs.get('year', 1),
+        kwargs.get('month', 1),
+        kwargs.get('day', 1),
+        kwargs.get('time_of_day', 'Morning'),
+        search_vector
+    )
+    
+    await log_canonical_event(
+        ctx, conn,
+        f"Event '{event_name}' scheduled at {location}",
+        tags=['event', 'creation', 'canon'],
+        significance=5
+    )
+    
+    return event_id
+
+async def find_or_create_quest(ctx, conn, quest_name: str, **kwargs) -> int:
+    """
+    Find or create a quest canonically.
+    """
+    # Check exact match
+    existing = await conn.fetchrow("""
+        SELECT quest_id FROM Quests
+        WHERE LOWER(quest_name) = LOWER($1)
+        AND user_id = $2 AND conversation_id = $3
+        AND status = 'In Progress'
+    """, quest_name, ctx.user_id, ctx.conversation_id)
+    
+    if existing:
+        return existing['quest_id']
+    
+    # Create new quest
+    quest_id = await conn.fetchval("""
+        INSERT INTO Quests (
+            user_id, conversation_id, quest_name, status,
+            progress_detail, quest_giver, reward
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        RETURNING quest_id
+    """,
+        ctx.user_id, ctx.conversation_id, quest_name,
+        kwargs.get('status', 'In Progress'),
+        kwargs.get('progress_detail', ''),
+        kwargs.get('quest_giver', ''),
+        kwargs.get('reward', '')
+    )
+    
+    await log_canonical_event(
+        ctx, conn,
+        f"Quest '{quest_name}' initiated",
+        tags=['quest', 'creation', 'canon'],
+        significance=6
+    )
+    
+    return quest_id
+
+async def create_game_setting(ctx, conn, setting_name: str, **kwargs) -> None:
+    """
+    Create or update the game setting canonically.
+    """
+    # Store environment description
+    env_desc = kwargs.get('environment_desc', '')
+    env_history = kwargs.get('environment_history', '')
+    full_desc = f"{env_desc}\n\nHistory: {env_history}" if env_history else env_desc
+    
+    await update_current_roleplay(ctx, conn, ctx.user_id, ctx.conversation_id, 
+                                 'EnvironmentDesc', full_desc)
+    
+    # Store setting name
+    await update_current_roleplay(ctx, conn, ctx.user_id, ctx.conversation_id,
+                                 'CurrentSetting', setting_name)
+    
+    # Store calendar data if provided
+    if 'calendar_data' in kwargs:
+        await update_current_roleplay(ctx, conn, ctx.user_id, ctx.conversation_id,
+                                     'CalendarNames', json.dumps(kwargs['calendar_data']))
+    
+    # Update conversation name if scenario name provided
+    if 'scenario_name' in kwargs:
+        await conn.execute("""
+            UPDATE conversations
+            SET conversation_name = $1
+            WHERE id = $2 AND user_id = $3
+        """, kwargs['scenario_name'], ctx.conversation_id, ctx.user_id)
+    
+    await log_canonical_event(
+        ctx, conn,
+        f"Game setting '{setting_name}' established",
+        tags=['setting', 'world_creation', 'canon'],
+        significance=9
+    )
+
+async def store_player_schedule(ctx, conn, player_name: str, schedule: Dict[str, Any]) -> None:
+    """
+    Store a player's schedule canonically.
+    """
+    schedule_json = json.dumps(schedule)
+    
+    await update_current_roleplay(ctx, conn, ctx.user_id, ctx.conversation_id,
+                                 f'{player_name}Schedule', schedule_json)
+    
+    # Also create a journal entry for the schedule
+    schedule_summary = f"{player_name}'s typical schedule: "
+    for day, activities in schedule.items():
+        day_summary = f"\n{day}: "
+        if isinstance(activities, dict):
+            for period, activity in activities.items():
+                day_summary += f"{period}: {activity}; "
+        else:
+            day_summary += str(activities)
+        schedule_summary += day_summary
+    
+    await create_journal_entry(
+        ctx, conn,
+        entry_type="schedule",
+        entry_text=schedule_summary,
+        tags=["schedule", player_name.lower()],
+        importance=0.6
+    )
+    
+    await log_canonical_event(
+        ctx, conn,
+        f"Schedule created for {player_name}",
+        tags=['schedule', 'player', 'canon'],
+        significance=4
+    )
+
+async def create_opening_message(ctx, conn, sender: str, content: str) -> int:
+    """
+    Create the opening message canonically.
+    """
+    message_id = await create_message(ctx, conn, ctx.conversation_id, sender, content)
+    
+    await log_canonical_event(
+        ctx, conn,
+        f"Opening narrative created by {sender}",
+        tags=['narrative', 'opening', 'canon'],
+        significance=8
+    )
+    
+    return message_id
+
+# Add to the existing functions - update the embedding columns
+async def ensure_embedding_columns(conn):
+    """
+    Ensure all relevant tables have embedding columns.
+    """
+    tables_to_update = [
+        ('Events', 'event_name, description, location'),
+        ('Quests', 'quest_name, progress_detail'),
+        ('Locations', 'location_name, description')
+    ]
+    
+    for table, text_fields in tables_to_update:
+        # Check if embedding column exists
+        exists = await conn.fetchval("""
+            SELECT EXISTS (
+                SELECT 1 FROM information_schema.columns 
+                WHERE table_name = $1 AND column_name = 'embedding'
+            )
+        """, table.lower())
+        
+        if not exists:
+            await conn.execute(f"""
+                ALTER TABLE {table} 
+                ADD COLUMN embedding VECTOR(1536)
+            """)
+            
+            # Create index
+            await conn.execute(f"""
+                CREATE INDEX IF NOT EXISTS idx_{table.lower()}_embedding_hnsw
+                ON {table}
+                USING hnsw (embedding vector_cosine_ops)
+            """)
