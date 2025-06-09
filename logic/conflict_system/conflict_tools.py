@@ -30,6 +30,17 @@ from context.context_performance import track_performance
 
 logger = logging.getLogger(__name__)
 
+class StakeholderStatusUpdate(BaseModel):
+    """Model for stakeholder status updates."""
+    involvement_level: Optional[int] = None
+    faction_standing: Optional[int] = None
+    willing_to_betray_faction: Optional[bool] = None
+    public_motivation: Optional[str] = None
+    private_motivation: Optional[str] = None
+    desired_outcome: Optional[str] = None
+    faction_position: Optional[str] = None
+    leadership_ambition: Optional[int] = None
+
 # REFACTORED: Create stakeholders with canon integration
 async def _internal_create_stakeholders_logic(ctx: RunContextWrapper, conflict_id: int, conflict_data: Dict[str, Any], stakeholder_npcs: List[Dict[str, Any]]) -> None:
     context = ctx.context
@@ -1413,7 +1424,7 @@ async def get_active_conflicts(ctx: RunContextWrapper) -> List[Dict[str, Any]]:
     return await _internal_get_active_conflicts_logic(ctx)
 
 @function_tool
-async def update_stakeholder_status(ctx: RunContextWrapper, conflict_id: int, npc_id: int, status: Dict[str, Union[str, int, bool, float, None]]) -> Dict[str, Any]:
+async def update_stakeholder_status(ctx: RunContextWrapper, conflict_id: int, npc_id: int, status: StakeholderStatusUpdate) -> Dict[str, Any]:
     """Update the status of a stakeholder in a conflict."""
     return await _internal_update_stakeholder_status_logic(ctx, conflict_id, npc_id, status)
 
