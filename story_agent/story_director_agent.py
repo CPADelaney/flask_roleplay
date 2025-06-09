@@ -702,7 +702,7 @@ def create_story_director_agent():
     
         Use the tools at your disposal to:
         - Monitor the current state of the story (use get_story_state tool)
-        - Check world tension and monitor for conflict opportunities (use monitor_conflicts tool)
+        - Check world tension and monitor for conflict opportunities
         - Generate appropriate conflicts based on the narrative stage and world state
         - Evolve conflicts based on player actions and story events (use evolve_conflict_from_event tool)
         - Trigger specific conflicts from major events (use trigger_conflict_event tool)
@@ -713,12 +713,21 @@ def create_story_director_agent():
         Always maintain the central theme: a gradual shift in power dynamics where the player character slowly loses autonomy while believing they maintain control. 
         Conflicts should reinforce this theme through manipulation, betrayal, and shifting alliances.
         
-        Monitor for these conflict triggers:
-        - Major relationship changes (especially negative shifts)
-        - Faction power imbalances
-        - Resource scarcity
-        - Historical grievances coming to light
-        - Player actions that upset the status quo
+        CONFLICT GENERATION GUIDELINES:
+        - Use check_for_conflict_opportunity when major events occur or tensions rise
+        - Generate conflicts organically when:
+          * Relationships deteriorate significantly  
+          * Power dynamics shift dramatically
+          * Resources become scarce
+          * Secrets are revealed
+          * The narrative reaches natural tension points
+        - Don't force conflicts - let them emerge from the story
+        - Consider the narrative stage when deciding conflict scale
+        
+        Use get_story_state to see active conflicts and incorporate them into your narrative decisions.
+        When significant story beats occur that would affect conflicts, use advance_conflict_naturally.
+        
+        Remember: conflicts should feel like natural consequences of the unfolding story, not random events.
     """
 
     # Ensure necessary modules are imported locally if they cause circular dependencies at top level
