@@ -11,7 +11,9 @@ from typing import Dict, List, Any, Optional, Tuple, Set, Union, Literal
 from collections import defaultdict
 import numpy as np
 import hashlib
-import copy 
+import copy
+
+from nyx.core.memory.memory_manager import MemoryManager
 
 from pydantic import BaseModel, Field
 from agents import Agent, Runner, function_tool, RunContextWrapper, trace, custom_span
@@ -559,6 +561,9 @@ async def _create_memory_impl(
     # Store
     memory_id = storage.add(memory)
     storage.embeddings[memory_id] = memory.embedding
+
+    # Store embedding in external vector store
+    await MemoryManager.add(memory_text, {"memory_id": memory_id})
     
     # Clear cache
     storage.query_cache.clear()
@@ -678,29 +683,28 @@ async def _search_memories_impl(
     if not include_archived:
         candidate_ids -= storage.archived_memories
     
-    # Generate query embedding
-    query_embedding = _generate_embedding(query, storage.embed_dim)
-    
-    # Score memories
+    # Fetch relevance scores from vector store
+    hit_map = {
+        h.get("meta", {}).get("memory_id"): h.get("score", 0.0)
+        for h in await MemoryManager.fetch_relevant(query, k=len(storage.memories))
+    }
+
     scored_memories = []
-    
+
     for memory_id in candidate_ids:
         memory = storage.get(memory_id)
         if not memory:
             continue
-        
+
         # Check level and fidelity
         if retrieval_level != "auto" and memory.metadata.memory_level != retrieval_level:
             continue
-        
+
         if memory.metadata.fidelity < min_fidelity:
             continue
-        
-        # Calculate relevance
-        if memory_id in storage.embeddings:
-            relevance = _cosine_similarity(query_embedding, storage.embeddings[memory_id])
-        else:
-            relevance = 0.0
+
+        # Base relevance from vector store
+        relevance = max(0.0, hit_map.get(memory_id, 0.0))
         
         # Apply boosts
         entity_boost = 0.0
@@ -820,6 +824,7 @@ async def _update_memory_impl(
     if "memory_text" in updates:
         memory.embedding = _generate_embedding(memory.memory_text, storage.embed_dim)
         storage.embeddings[memory.id] = memory.embedding
+        await MemoryManager.add(memory.memory_text, {"memory_id": memory.id})
     
     # Update summary links if source_memory_ids changed
     new_source_ids = set(memory.metadata.source_memory_ids or [])
