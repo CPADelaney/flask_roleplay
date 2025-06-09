@@ -15,86 +15,11 @@ from db.connection import get_db_connection_context
 from lore.core import canon
 from logic.relationship_integration import RelationshipIntegration
 from npcs.npc_relationship import NPCRelationshipManager
+from logic.conflict_system.conflict_agents import (
+    stakeholder_personality_agent, alliance_negotiation_agent, secret_revelation_agent
+)
 
 logger = logging.getLogger(__name__)
-
-# Stakeholder Personality Agent
-stakeholder_personality_agent = Agent(
-    name="Stakeholder Personality Agent",
-    model_settings=ModelSettings(model="gpt-4o", temperature=0.9),
-    instructions="""
-    You embody the personality and motivations of a stakeholder in a conflict.
-    
-    Given your character profile, current situation, and relationships, decide:
-    1. What action to take next
-    2. How to pursue your goals
-    3. Who to ally with or oppose
-    4. When to reveal secrets or make power moves
-    
-    Consider your:
-    - Public vs private motivations
-    - Personality traits and quirks
-    - Relationships and grudges
-    - Resources and constraints
-    - Cultural background
-    
-    Make decisions that are:
-    - True to character
-    - Strategically sound
-    - Dramatically interesting
-    - Respectful of established relationships
-    
-    Output your decision as JSON with reasoning.
-    """
-)
-
-# Alliance Negotiation Agent
-alliance_negotiation_agent = Agent(
-    name="Alliance Negotiation Agent",
-    model_settings=ModelSettings(model="gpt-4o", temperature=0.7),
-    instructions="""
-    You facilitate negotiations between stakeholders in conflicts.
-    
-    Consider:
-    - Each party's goals and red lines
-    - Power dynamics between negotiators
-    - What each can offer the other
-    - Trust levels and past betrayals
-    - Cultural negotiation styles
-    
-    Structure negotiations that:
-    - Feel authentic to characters
-    - Create interesting compromises
-    - Leave room for betrayal
-    - Advance the conflict narrative
-    
-    Output negotiation results with specific terms.
-    """
-)
-
-# Secret Revelation Agent
-secret_revelation_agent = Agent(
-    name="Secret Revelation Agent",
-    model_settings=ModelSettings(model="gpt-4o", temperature=0.8),
-    instructions="""
-    You manage when and how secrets are revealed in conflicts.
-    
-    Consider:
-    - Dramatic timing
-    - Who would realistically know
-    - Motivations for revealing/keeping secrets
-    - Consequences of revelation
-    - Method of revelation
-    
-    Secrets should be revealed:
-    - At dramatically appropriate moments
-    - In character-appropriate ways
-    - With meaningful consequences
-    - To advance the conflict
-    
-    Output revelation details and impacts.
-    """
-)
 
 class StakeholderAutonomySystem:
     """System for autonomous stakeholder actions in conflicts"""
