@@ -51,6 +51,16 @@ DEFAULT_CONFIG = {
         "maintenance_threads": 2,         # Number of threads for maintenance tasks
         "max_parallel_requests": 5,       # Maximum parallel LLM requests
         "timeout": 30                     # Request timeout in seconds
+    },
+
+    # Reward configuration
+    "reward": {
+        "event_values": {
+            "unit_test_passed": 0.1,
+            "unit_test_failed": -0.1,
+            "positive_reinforcement": 0.2,
+            "negative_reinforcement": -0.2,
+        }
     }
 }
 
@@ -107,6 +117,10 @@ def get_narrative_config() -> Dict[str, Any]:
 def get_system_config() -> Dict[str, Any]:
     """Get system-specific configuration."""
     return CONFIG["system"]
+
+def get_reward_config() -> Dict[str, Any]:
+    """Get reward-related configuration."""
+    return CONFIG.get("reward", {})
 
 def update_config(new_config: Dict[str, Any]) -> Dict[str, Any]:
     """

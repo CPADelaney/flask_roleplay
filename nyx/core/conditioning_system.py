@@ -3,11 +3,14 @@
 import json
 import logging
 import random
+import time
 from typing import Dict, List, Any, Optional
 
 from agents import Agent, Runner, trace, ModelSettings, handoff
 from nyx.core.conditioning_models import *
 from nyx.core.conditioning_tools import *
+from nyx.core.reward.reward_buffer import RewardBuffer
+from nyx.core.reward.evaluator import adjust_association_strengths
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +28,13 @@ class ConditioningSystem:
             memory_core=memory_core,
             somatosensory_system=somatosensory_system
         )
-        
+
+        # Reward evaluation helpers
+        self.reward_buffer = RewardBuffer()
+        self._event_count = 0
+        self._weak_epochs: Dict[str, int] = {}
+        self._last_flush = time.time()
+
         # Reference associations from context
         self.classical_associations = self.context.classical_associations
         self.operant_associations = self.context.operant_associations
@@ -160,7 +169,18 @@ class ConditioningSystem:
         )
     
     # ==================== Public API Methods ====================
-    
+
+    async def record_event(self, event_type: str) -> None:
+        """Record a simple event for reward evaluation."""
+        await self.reward_buffer.add_event(event_type)
+        self._event_count += 1
+        now = time.time()
+        if self._event_count % 50 == 0 or now - self._last_flush > 600:
+            batch = await self.reward_buffer.next_batch()
+            if batch:
+                adjust_association_strengths(self, batch)
+            self._last_flush = now
+
     async def process_classical_conditioning(
         self,
         unconditioned_stimulus: str,
