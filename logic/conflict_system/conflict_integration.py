@@ -857,7 +857,31 @@ class ConflictSystemIntegration:
         """Add a complication to a conflict"""
         try:
             async with get_db_connection_context() as conn:
+                ctx = RunContextWrapper({
+                    "user_id": self.user_id,
+                    "conversation_id": self.conversation_id
+                })
+                
                 if complication.get("type") == "internal_faction":
+                    # Ensure NPCs exist canonically
+                    primary_npc_id = await canon.find_or_create_npc(
+                        ctx, conn,
+                        npc_name=complication.get("primary_npc_name", f"NPC_{complication.get('primary_npc_id')}")
+                    ) if complication.get("primary_npc_name") else complication["primary_npc_id"]
+                    
+                    target_npc_id = await canon.find_or_create_npc(
+                        ctx, conn,
+                        npc_name=complication.get("target_npc_name", f"NPC_{complication.get('target_npc_id')}")
+                    ) if complication.get("target_npc_name") else complication["target_npc_id"]
+                    
+                    # Ensure faction exists
+                    faction_id = None
+                    if complication.get("faction_name"):
+                        faction_id = await canon.find_or_create_faction(
+                            ctx, conn,
+                            faction_name=complication["faction_name"]
+                        )
+                    
                     await conn.execute("""
                         INSERT INTO InternalFactionConflicts (
                             faction_id, conflict_name, description,
@@ -866,10 +890,14 @@ class ConflictSystemIntegration:
                             parent_conflict_id
                         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
                     """,
-                    complication["faction_id"], complication["name"],
-                    complication["description"], complication["primary_npc_id"],
-                    complication["target_npc_id"], complication["prize"],
-                    complication["approach"], complication.get("public_knowledge", False),
+                    faction_id or complication["faction_id"], 
+                    complication["name"],
+                    complication["description"], 
+                    primary_npc_id,
+                    target_npc_id, 
+                    complication["prize"],
+                    complication["approach"], 
+                    complication.get("public_knowledge", False),
                     "brewing", 10, conflict_id
                     )
                 
@@ -882,6 +910,14 @@ class ConflictSystemIntegration:
                 conflict_id,
                 f"Complication arose: {complication['description']}",
                 7, "conflict", conflict_id
+                )
+                
+                # Log canonical event
+                await canon.log_canonical_event(
+                    ctx, conn,
+                    f"Conflict complication emerged: {complication['description']}",
+                    tags=["conflict", "complication", complication.get("type", "unknown")],
+                    significance=6
                 )
                 
         except Exception as e:
@@ -1141,25 +1177,31 @@ class ConflictSystemIntegration:
         try:
             async with get_db_connection_context() as conn:
                 async with conn.transaction():
-                    canon_ctx = type("ctx", (), {"user_id": self.user_id, "conversation_id": self.conversation_id})()
+                    ctx = RunContextWrapper({
+                        "user_id": self.user_id,
+                        "conversation_id": self.conversation_id
+                    })
+                    
                     for consequence in consequences:
                         ctype = consequence.get("type")
                         if ctype == "player_stat" and "stat_changes" in consequence:
                             for stat, change in consequence["stat_changes"].items():
+                                # Get current value
                                 current_val = await conn.fetchval(
                                     f"SELECT {stat} FROM PlayerStats WHERE user_id=$1 AND conversation_id=$2",
-                                    self.user_id,
-                                    self.conversation_id,
+                                    self.user_id, self.conversation_id
                                 )
                                 new_val = (current_val or 0) + change
+                                
+                                # Use canon function for stat updates
                                 await canon.update_player_stat_canonically(
-                                    canon_ctx,
-                                    conn,
-                                    "Chase",
+                                    ctx, conn,
+                                    "Chase",  # player name
                                     stat,
                                     new_val,
-                                    reason="conflict_reward",
+                                    reason=f"conflict_reward: {consequence.get('description', 'Conflict resolution')}"
                                 )
+                                
                                 logger.info(f"Updated player stat {stat} by {change} for user {self.user_id}")
                                 
                                 if self.memory_manager:
@@ -1174,15 +1216,15 @@ class ConflictSystemIntegration:
                                             "source": "conflict_resolution"
                                         }
                                     )
-                                
+                                    
                         elif ctype == "item_reward" and "item" in consequence:
                             item = consequence["item"]
+                            # Use canon function for inventory
                             await canon.find_or_create_inventory_item(
-                                canon_ctx,
-                                conn,
+                                ctx, conn,
                                 item_name=item["name"],
                                 player_name="Chase",
-                                item_description=item["description"],
+                                item_description=item.get("description", ""),
                                 item_category=item.get("category", "conflict_reward"),
                                 item_properties={
                                     "rarity": item.get("rarity", "common"),
@@ -1190,7 +1232,7 @@ class ConflictSystemIntegration:
                                     "source": "conflict_resolution",
                                 },
                                 quantity=1,
-                                equipped=False,
+                                equipped=False
                             )
                             logger.info(f"Added item {item['name']} to inventory for user {self.user_id}")
                             
@@ -1206,7 +1248,7 @@ class ConflictSystemIntegration:
                                         "source": "conflict_resolution"
                                     }
                                 )
-                            
+                                
         except Exception as e:
             logger.error(f"Error applying conflict rewards: {str(e)}", exc_info=True)
             raise
