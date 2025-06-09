@@ -37,15 +37,19 @@ async def prepare_context(ctx: str, user_msg: str) -> str:
 logger = logging.getLogger(__name__)
 _background_task = None
 _reflection_task = None
+_practice_task = None
 
 
 def start_background() -> None:
     """Start orchestrator background jobs."""
-    global _background_task, _reflection_task
+    global _background_task, _reflection_task, _practice_task
     if _background_task is None:
         _background_task = asyncio.create_task(_rollup_loop())
     if _reflection_task is None:
         _reflection_task = asyncio.create_task(_reflection_loop())
+    if _practice_task is None:
+        from nyx.core.practice.coding_practice import autoloop
+        _practice_task = asyncio.create_task(autoloop())
 
 
 async def _rollup_loop() -> None:
