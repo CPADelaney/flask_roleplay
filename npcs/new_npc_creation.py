@@ -2716,7 +2716,6 @@ class NPCCreationHandler:
                     f"Physical manifestations of {npc_name}'s true nature are becoming visible"
                 )
             
-            # Update slippage history
             if triggered_events:
                 slippage_history.extend(triggered_events)
                 
@@ -2730,25 +2729,48 @@ class NPCCreationHandler:
                 
                 if exists_row:
                     # Update using canon system
-                    await canon.update_entity_canonically(
+                    await canon.update_entity_with_governance(
                         ctx, conn, "NPCEvolution", npc_id,
                         {"mask_slippage_events": json.dumps(slippage_history)},
-                        f"Recording mask slippage progression for {npc_name}"
+                        f"Recording mask slippage progression for {npc_name}",
+                        significance=5
                     )
                 else:
-                    # Create new record - direct insert since it doesn't exist
-                    insert_query = """
-                        INSERT INTO NPCEvolution
-                        (user_id, conversation_id, npc_id, mask_slippage_events)
-                        VALUES ($1, $2, $3, $4)
-                    """
-                    await conn.execute(insert_query, user_id, conversation_id, npc_id, json.dumps(slippage_history))
+                    # Create new record through canon
+                    # First, ensure NPCEvolution entity exists in canon
+                    evolution_id = await canon.find_or_create_entity(
+                        ctx, conn,
+                        entity_type="npc_evolution",
+                        entity_name=f"evolution_{npc_id}",
+                        search_fields={
+                            "user_id": user_id,
+                            "conversation_id": conversation_id,
+                            "npc_id": npc_id,
+                            "name_field": "npc_id"
+                        },
+                        create_data={
+                            "user_id": user_id,
+                            "conversation_id": conversation_id,
+                            "npc_id": npc_id,
+                            "mask_slippage_events": json.dumps(slippage_history)
+                        },
+                        table_name="NPCEvolution",
+                        embedding_text=f"NPC {npc_id} evolution tracking",
+                        similarity_threshold=0.95
+                    )
+                    
+                    await canon.log_canonical_event(
+                        ctx, conn,
+                        f"Initialized evolution tracking for NPC {npc_name}",
+                        tags=["npc_evolution", "mask_slippage", "initialization"],
+                        significance=5
+                    )
             
             return triggered_events
             
-        except Exception as e:
-            logging.error(f"Error checking mask slippage: {e}")
-            return None
+    except Exception as e:
+        logging.error(f"Error checking mask slippage: {e}")
+        return None
     
     async def assign_random_relationships_canonical(self, user_id, conversation_id, npc_id, npc_name, npc_archetypes=None):
         """
