@@ -415,7 +415,7 @@ async def get_npc_stats(ctx: RunContextWrapper[NPCContext]) -> NPCStats:
         ctx.context.current_stats = stats.model_dump()
         return stats
 
-@function_tool
+@function_tool(strict_mode=False)
 async def execute_npc_action(
     ctx: RunContextWrapper[NPCContext],
     action: NPCAction,
@@ -738,6 +738,37 @@ async def get_nyx_governor(user_id: int, conversation_id: int):
     """
     from nyx.nyx_governance import NyxGovernor
     return NyxGovernor(user_id, conversation_id)
+
+async def get_lore_system(user_id: int, conversation_id: int):
+    """
+    Get an initialized instance of the LoreSystem.
+    
+    Args:
+        user_id: User ID
+        conversation_id: Conversation ID
+        
+    Returns:
+        Initialized LoreSystem instance
+    """
+    from lore.lore_system import LoreSystem
+    lore_system = LoreSystem.get_instance(user_id, conversation_id)
+    await lore_system.initialize()
+    return lore_system
+
+async def get_conflict_system(user_id: int, conversation_id: int):
+    """
+    Get an initialized instance of the ConflictSystem.
+    
+    Args:
+        user_id: User ID
+        conversation_id: Conversation ID
+        
+    Returns:
+        Initialized ConflictSystem instance
+    """
+    from logic.conflict_system.conflict_integration import ConflictSystemIntegration
+    conflict_system = ConflictSystemIntegration(user_id, conversation_id)
+    return conflict_system
     
 class NPCAgent:
     """
@@ -803,8 +834,13 @@ class NPCAgent:
     async def _get_story_context(self) -> Dict[str, Any]:
         """Get story context with enhanced lore integration."""
         from lore.lore_system import LoreSystem
-        # Get basic story context
-        story_context = await super()._get_story_context()
+        
+        # Create basic story context
+        story_context = {
+            "user_id": self.user_id,
+            "conversation_id": self.conversation_id,
+            "npc_id": self.npc_id
+        }
         
         # Get enhanced lore context
         lore_context = await self.lore_context_manager.get_lore_context(
@@ -819,8 +855,13 @@ class NPCAgent:
     async def _determine_npc_role(self) -> Dict[str, Any]:
         """Determine NPC role with lore-aware analysis."""
         from lore.lore_system import LoreSystem
-        # Get basic role determination
-        role = await super()._determine_npc_role()
+        
+        # Create basic role determination
+        role = {
+            "npc_id": self.npc_id,
+            "primary_role": "character",
+            "secondary_roles": []
+        }
         
         # Get lore context for role
         lore_context = await self.lore_context_manager.get_lore_context(
@@ -856,11 +897,150 @@ class NPCAgent:
     async def _get_affected_npcs(self, lore_change: Dict[str, Any]) -> List[int]:
         """Get list of NPCs affected by a lore change."""
         from lore.lore_system import LoreSystem
-        # Implementation would determine affected NPCs based on:
-        # - NPC relationships
-        # - NPC knowledge levels
-        # - Lore change scope
-        pass
+        
+        affected_npcs = set()  # Use set to avoid duplicates
+        
+        try:
+            # Get lore change details
+            change_type = lore_change.get('type', 'unknown')
+            scope = lore_change.get('scope', 'local')
+            entity_id = lore_change.get('entity_id')
+            entity_type = lore_change.get('entity_type')
+            location = lore_change.get('location')
+            faction_id = lore_change.get('faction_id')
+            culture_id = lore_change.get('culture_id')
+            
+            async with get_db_connection_context() as conn:
+                async with conn.cursor() as cursor:
+                    
+                    # 1. If scope is global, affect all NPCs in the conversation
+                    if scope == 'global':
+                        await cursor.execute("""
+                            SELECT npc_id FROM NPCStats
+                            WHERE user_id = %s AND conversation_id = %s
+                        """, (self.user_id, self.conversation_id))
+                        
+                        rows = await cursor.fetchall()
+                        affected_npcs.update([row[0] for row in rows])
+                        
+                    # 2. Location-based changes affect NPCs in that location
+                    elif location:
+                        await cursor.execute("""
+                            SELECT npc_id FROM NPCStats
+                            WHERE user_id = %s AND conversation_id = %s
+                            AND current_location = %s
+                        """, (self.user_id, self.conversation_id, location))
+                        
+                        rows = await cursor.fetchall()
+                        affected_npcs.update([row[0] for row in rows])
+                    
+                    # 3. Faction-based changes affect NPCs in that faction
+                    if faction_id:
+                        await cursor.execute("""
+                            SELECT n.npc_id 
+                            FROM NPCStats n
+                            LEFT JOIN NPCFactionMemberships fm ON n.npc_id = fm.npc_id
+                            WHERE n.user_id = %s AND n.conversation_id = %s
+                            AND fm.faction_id = %s
+                        """, (self.user_id, self.conversation_id, faction_id))
+                        
+                        rows = await cursor.fetchall()
+                        affected_npcs.update([row[0] for row in rows])
+                    
+                    # 4. Culture-based changes affect NPCs of that culture
+                    if culture_id:
+                        await cursor.execute("""
+                            SELECT n.npc_id 
+                            FROM NPCStats n
+                            LEFT JOIN NPCCulturalAffiliations ca ON n.npc_id = ca.npc_id
+                            WHERE n.user_id = %s AND n.conversation_id = %s
+                            AND ca.culture_id = %s
+                        """, (self.user_id, self.conversation_id, culture_id))
+                        
+                        rows = await cursor.fetchall()
+                        affected_npcs.update([row[0] for row in rows])
+                    
+                    # 5. Get NPCs with relationships to the entity
+                    if entity_id and entity_type == 'npc':
+                        # Get NPCs who have relationships with the affected NPC
+                        await cursor.execute("""
+                            SELECT DISTINCT npc_id FROM NPCRelationships
+                            WHERE user_id = %s AND conversation_id = %s
+                            AND (npc_id = %s OR target_npc_id = %s)
+                        """, (self.user_id, self.conversation_id, entity_id, entity_id))
+                        
+                        rows = await cursor.fetchall()
+                        affected_npcs.update([row[0] for row in rows])
+                    
+                    # 6. Get NPCs with high knowledge levels who would know about the change
+                    if change_type in ['historical_event', 'political_change', 'religious_change']:
+                        # NPCs with high intelligence or knowledge stats
+                        await cursor.execute("""
+                            SELECT npc_id FROM NPCStats
+                            WHERE user_id = %s AND conversation_id = %s
+                            AND (
+                                personality_traits::text LIKE '%knowledgeable%'
+                                OR personality_traits::text LIKE '%scholar%'
+                                OR personality_traits::text LIKE '%wise%'
+                                OR personality_traits::text LIKE '%informed%'
+                            )
+                        """, (self.user_id, self.conversation_id))
+                        
+                        rows = await cursor.fetchall()
+                        affected_npcs.update([row[0] for row in rows])
+                    
+                    # 7. Get NPCs based on lore change metadata
+                    if 'affected_entities' in lore_change:
+                        for entity in lore_change['affected_entities']:
+                            if entity.get('type') == 'npc':
+                                affected_npcs.add(entity.get('id'))
+                    
+                    # 8. Get NPCs who witnessed the event (if applicable)
+                    if 'witnesses' in lore_change:
+                        affected_npcs.update(lore_change['witnesses'])
+                    
+                    # 9. For belief or religious changes, get NPCs with matching beliefs
+                    if change_type == 'religious_change' and 'deity_id' in lore_change:
+                        await cursor.execute("""
+                            SELECT n.npc_id 
+                            FROM NPCStats n
+                            LEFT JOIN NPCBeliefs b ON n.npc_id = b.npc_id
+                            WHERE n.user_id = %s AND n.conversation_id = %s
+                            AND b.deity_id = %s
+                        """, (self.user_id, self.conversation_id, lore_change['deity_id']))
+                        
+                        rows = await cursor.fetchall()
+                        affected_npcs.update([row[0] for row in rows])
+                    
+                    # 10. Get NPCs in positions of authority who would need to know
+                    if change_type in ['political_change', 'law_change', 'leadership_change']:
+                        await cursor.execute("""
+                            SELECT npc_id FROM NPCStats
+                            WHERE user_id = %s AND conversation_id = %s
+                            AND (
+                                dominance > 70
+                                OR personality_traits::text LIKE '%leader%'
+                                OR personality_traits::text LIKE '%authority%'
+                                OR personality_traits::text LIKE '%noble%'
+                            )
+                        """, (self.user_id, self.conversation_id))
+                        
+                        rows = await cursor.fetchall()
+                        affected_npcs.update([row[0] for row in rows])
+            
+            # Remove the current NPC from the affected list (they're already handling it)
+            affected_npcs.discard(self.npc_id)
+            
+            # Convert to sorted list for consistent ordering
+            affected_list = sorted(list(affected_npcs))
+            
+            logger.info(f"Lore change type '{change_type}' affects {len(affected_list)} NPCs: {affected_list}")
+            
+            return affected_list
+            
+        except Exception as e:
+            logger.error(f"Error determining affected NPCs for lore change: {e}")
+            return []
         
     async def _update_state_from_impact(self, impact: Dict[str, Any]):
         """Update NPC state based on lore impact analysis."""
@@ -875,6 +1055,106 @@ class NPCAgent:
         # Update behavior
         if impact["behavior_changes"]:
             await self._update_behavior(impact["behavior_changes"])
+
+    async def _update_beliefs(self, belief_updates: List[Dict[str, Any]]):
+        """Update NPC beliefs based on lore changes."""
+        try:
+            async with get_db_connection_context() as conn:
+                async with conn.cursor() as cursor:
+                    for update in belief_updates:
+                        belief_type = update.get("type")
+                        belief_value = update.get("value")
+                        belief_strength = update.get("strength", 0.5)
+                        
+                        # Update or insert belief
+                        await cursor.execute("""
+                            INSERT INTO NPCBeliefs (npc_id, user_id, conversation_id, belief_type, belief_value, strength)
+                            VALUES (%s, %s, %s, %s, %s, %s)
+                            ON CONFLICT (npc_id, user_id, conversation_id, belief_type) 
+                            DO UPDATE SET belief_value = EXCLUDED.belief_value, strength = EXCLUDED.strength
+                        """, (self.npc_id, self.user_id, self.conversation_id, belief_type, belief_value, belief_strength))
+                        
+                        # Create memory of belief change
+                        memory_system = await self.context.get_memory_system()
+                        await memory_system.remember(
+                            entity_type="npc",
+                            entity_id=self.npc_id,
+                            memory_text=f"My beliefs about {belief_type} changed to {belief_value}",
+                            importance="high",
+                            tags=["belief_change", belief_type]
+                        )
+                        
+        except Exception as e:
+            logger.error(f"Error updating beliefs: {e}")
+
+    async def _update_relationships(self, relationship_impacts: List[Dict[str, Any]]):
+        """Update NPC relationships based on lore changes."""
+        try:
+            async with get_db_connection_context() as conn:
+                async with conn.cursor() as cursor:
+                    for impact in relationship_impacts:
+                        target_npc_id = impact.get("target_npc_id")
+                        stat_changes = impact.get("stat_changes", {})
+                        
+                        # Get current relationship stats
+                        await cursor.execute("""
+                            SELECT trust, respect, closeness 
+                            FROM NPCRelationships
+                            WHERE user_id = %s AND conversation_id = %s 
+                            AND npc_id = %s AND target_npc_id = %s
+                        """, (self.user_id, self.conversation_id, self.npc_id, target_npc_id))
+                        
+                        row = await cursor.fetchone()
+                        if row:
+                            current_trust, current_respect, current_closeness = row
+                        else:
+                            current_trust = current_respect = current_closeness = 50.0
+                        
+                        # Apply changes
+                        new_trust = max(0, min(100, current_trust + stat_changes.get("trust", 0)))
+                        new_respect = max(0, min(100, current_respect + stat_changes.get("respect", 0)))
+                        new_closeness = max(0, min(100, current_closeness + stat_changes.get("closeness", 0)))
+                        
+                        # Update relationship
+                        await cursor.execute("""
+                            INSERT INTO NPCRelationships 
+                            (user_id, conversation_id, npc_id, target_npc_id, trust, respect, closeness)
+                            VALUES (%s, %s, %s, %s, %s, %s, %s)
+                            ON CONFLICT (user_id, conversation_id, npc_id, target_npc_id)
+                            DO UPDATE SET trust = EXCLUDED.trust, respect = EXCLUDED.respect, closeness = EXCLUDED.closeness
+                        """, (self.user_id, self.conversation_id, self.npc_id, target_npc_id, 
+                              new_trust, new_respect, new_closeness))
+                        
+        except Exception as e:
+            logger.error(f"Error updating relationships: {e}")
+
+    async def _update_behavior(self, behavior_changes: List[Dict[str, Any]]):
+        """Update NPC behavior patterns based on lore changes."""
+        try:
+            for change in behavior_changes:
+                behavior_type = change.get("type")
+                behavior_value = change.get("value")
+                
+                # Update context cache
+                if behavior_type == "emotional_state":
+                    await self.context.update_cache("emotional_state", value=behavior_value)
+                elif behavior_type == "personality_modifier":
+                    # Apply temporary personality modifiers
+                    if self.context.current_stats:
+                        for stat, modifier in behavior_value.items():
+                            if stat in self.context.current_stats:
+                                self.context.current_stats[stat] = max(0, min(100, 
+                                    self.context.current_stats[stat] + modifier))
+                
+                # Record behavior change
+                self.context.record_decision({
+                    "type": "behavior_change",
+                    "change": change,
+                    "reason": "lore_impact"
+                })
+                
+        except Exception as e:
+            logger.error(f"Error updating behavior: {e}")
 
     def _setup_memory_monitoring(self):
         """Schedule periodic memory monitoring."""
@@ -1028,6 +1308,56 @@ class NPCAgent:
         
         return perception
     
+    async def make_decision(self, context: Dict[str, Any]) -> NPCAction:
+        """
+        Make a decision about what action to take based on current context.
+        
+        Args:
+            context: Current context information
+            
+        Returns:
+            NPCAction to take
+        """
+        try:
+            # Use the decision agent to make a decision
+            prompt = f"""
+            As NPC {self.npc_id}, analyze the current situation and decide on an appropriate action.
+            
+            Context: {json.dumps(context, indent=2)}
+            
+            Consider your personality traits, current emotional state, and the situation.
+            Choose an action that fits your character.
+            """
+            
+            # Run the decision agent
+            result = await Runner.run(
+                starting_agent=decision_agent,
+                input=prompt,
+                context=RunContextWrapper(self.context)
+            )
+            
+            # Extract the action from the result
+            if hasattr(result, 'final_output') and isinstance(result.final_output, NPCAction):
+                return result.final_output
+            else:
+                # Default action if decision fails
+                return NPCAction(
+                    type="observe",
+                    description="observes the situation carefully",
+                    target="environment",
+                    weight=0.5
+                )
+                
+        except Exception as e:
+            logger.error(f"Error making decision: {e}")
+            # Return safe default action
+            return NPCAction(
+                type="observe",
+                description="pauses momentarily",
+                target="environment",
+                weight=0.3
+            )
+
     async def process_player_action(
         self,
         player_action: Dict[str, Any],
@@ -1114,18 +1444,20 @@ class NPCAgent:
             # Get base speech patterns
             patterns = await lore_system.get_npc_speech_patterns(self.npc_id)
             
-            # Enhance with NPC-specific traits
-            if self.traits:
-                for trait in self.traits:
-                    if trait.get('type') == 'speech':
+            # Enhance with NPC-specific traits from current stats
+            if self.context.current_stats and self.context.current_stats.get('personality_traits'):
+                for trait in self.context.current_stats['personality_traits']:
+                    if isinstance(trait, dict) and trait.get('type') == 'speech':
                         patterns['traits'].append(trait)
             
             # Add to memory for future reference
-            await self.memory_system.add_memory(
-                self.run_ctx,
-                f"Speech patterns for NPC {self.npc_id}",
-                patterns,
-                memory_type="npc_speech"
+            memory_system = await self.context.get_memory_system()
+            await memory_system.remember(
+                entity_type="npc",
+                entity_id=self.npc_id,
+                memory_text=f"Speech patterns established: {patterns.get('dialect', 'standard')} dialect with {patterns.get('formality_level', 'neutral')} formality",
+                importance="low",
+                tags=["speech_pattern", "characteristic"]
             )
             
             return patterns
@@ -1156,13 +1488,18 @@ class NPCAgent:
             time_data = await self._get_current_time()
             current_location = await self._get_current_location()
             
+            # Get NPC name from stats
+            npc_name = "Unknown"
+            if self.context.current_stats:
+                npc_name = self.context.current_stats.get("npc_name", f"NPC_{self.npc_id}")
+            
             # Create activity context
             activity_context = {
                 "time_of_day": time_data["time_of_day"],
                 "location": current_location,
                 "schedule": schedule,
                 "npc_id": self.npc_id,
-                "npc_name": self.context.npc_name
+                "npc_name": npc_name
             }
             
             # Get relevant memories for this activity
@@ -1183,16 +1520,16 @@ class NPCAgent:
             
             # Make decision about activity
             decision_engine = await self._get_decision_engine()
-            action = await decision_engine.decide(activity_context)
+            action = await decision_engine.make_decision(activity_context)
             
             # Execute the action
-            result = await self._execute_action(action, activity_context)
+            result = await self._execute_action(action.model_dump(), activity_context)
             
             # Record the activity in memory
-            await self._record_activity(action, result, activity_context)
+            await self._record_activity(action.model_dump(), result, activity_context)
             
             return {
-                "action": action,
+                "action": action.model_dump(),
                 "result": result,
                 "context": activity_context
             }
@@ -1406,11 +1743,227 @@ class NPCAgent:
             return []
 
 
+    async def _get_relationship(self, target_npc_id: int) -> Dict[str, Any]:
+        """Get relationship data between this NPC and target NPC."""
+        try:
+            async with get_db_connection_context() as conn:
+                async with conn.cursor() as cursor:
+                    await cursor.execute("""
+                        SELECT trust, respect, closeness, last_interaction
+                        FROM NPCRelationships
+                        WHERE user_id = %s AND conversation_id = %s
+                        AND npc_id = %s AND target_npc_id = %s
+                    """, (self.user_id, self.conversation_id, self.npc_id, target_npc_id))
+                    
+                    row = await cursor.fetchone()
+                    if row:
+                        return {
+                            "trust": row[0],
+                            "respect": row[1],
+                            "closeness": row[2],
+                            "last_interaction": row[3]
+                        }
+                    return None
+        except Exception as e:
+            logger.error(f"Error getting relationship: {e}")
+            return None
+
+    def _determine_interaction_type(self, relationship: Dict[str, Any], context: Dict[str, Any]) -> str:
+        """Determine the type of interaction based on relationship and context."""
+        if not relationship:
+            return "introduction"
+        
+        # High trust and closeness = friendly interaction
+        if relationship.get("trust", 50) > 70 and relationship.get("closeness", 50) > 70:
+            return "friendly_chat"
+        
+        # Low trust = cautious interaction
+        if relationship.get("trust", 50) < 30:
+            return "cautious_exchange"
+        
+        # High respect = formal interaction
+        if relationship.get("respect", 50) > 80:
+            return "formal_discussion"
+        
+        # Default
+        return "casual_conversation"
+
+    async def _generate_interaction_details(
+        self,
+        interaction_type: str,
+        target_npc: Dict[str, Any],
+        relationship: Dict[str, Any],
+        context: Dict[str, Any]
+    ) -> str:
+        """Generate specific details for the interaction."""
+        templates = {
+            "introduction": "introduces themselves to {target}",
+            "friendly_chat": "has a warm conversation with {target}",
+            "cautious_exchange": "speaks carefully with {target}",
+            "formal_discussion": "engages in formal discourse with {target}",
+            "casual_conversation": "chats casually with {target}"
+        }
+        
+        template = templates.get(interaction_type, "interacts with {target}")
+        return template.format(target=target_npc["npc_name"])
+
+    def _calculate_relationship_changes(self, interaction: Dict[str, Any]) -> Dict[str, Any]:
+        """Calculate how an interaction changes relationship stats."""
+        changes = {"trust": 0, "respect": 0, "closeness": 0}
+        
+        interaction_type = interaction.get("type")
+        
+        # Positive interactions increase stats
+        if interaction_type in ["friendly_chat", "introduction"]:
+            changes["trust"] += random.randint(1, 3)
+            changes["closeness"] += random.randint(1, 3)
+        elif interaction_type == "formal_discussion":
+            changes["respect"] += random.randint(1, 3)
+            changes["trust"] += 1
+        elif interaction_type == "cautious_exchange":
+            changes["trust"] += random.randint(-1, 1)
+            changes["respect"] += random.randint(0, 1)
+        
+        return changes
+
+    async def _update_relationship_in_db(self, target_npc_id: int, changes: Dict[str, Any]) -> None:
+        """Update relationship stats in the database."""
+        try:
+            async with get_db_connection_context() as conn:
+                async with conn.cursor() as cursor:
+                    # Get current values
+                    await cursor.execute("""
+                        SELECT trust, respect, closeness
+                        FROM NPCRelationships
+                        WHERE user_id = %s AND conversation_id = %s
+                        AND npc_id = %s AND target_npc_id = %s
+                    """, (self.user_id, self.conversation_id, self.npc_id, target_npc_id))
+                    
+                    row = await cursor.fetchone()
+                    if row:
+                        current_trust, current_respect, current_closeness = row
+                    else:
+                        current_trust = current_respect = current_closeness = 50.0
+                    
+                    # Apply changes
+                    new_trust = max(0, min(100, current_trust + changes.get("trust", 0)))
+                    new_respect = max(0, min(100, current_respect + changes.get("respect", 0)))
+                    new_closeness = max(0, min(100, current_closeness + changes.get("closeness", 0)))
+                    
+                    # Update or insert
+                    await cursor.execute("""
+                        INSERT INTO NPCRelationships 
+                        (user_id, conversation_id, npc_id, target_npc_id, trust, respect, closeness, last_interaction)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
+                        ON CONFLICT (user_id, conversation_id, npc_id, target_npc_id)
+                        DO UPDATE SET 
+                            trust = EXCLUDED.trust,
+                            respect = EXCLUDED.respect,
+                            closeness = EXCLUDED.closeness,
+                            last_interaction = EXCLUDED.last_interaction
+                    """, (self.user_id, self.conversation_id, self.npc_id, target_npc_id,
+                          new_trust, new_respect, new_closeness))
+                    
+        except Exception as e:
+            logger.error(f"Error updating relationship in db: {e}")
+
+    async def _get_decision_engine(self):
+        """Get the decision engine for this NPC."""
+        # For now, return self as we have the make_decision method
+        return self
+
+    async def _generate_work_activity(self, work_type: str, location: str) -> Dict[str, Any]:
+        """Generate a work activity based on type and location."""
+        activities = {
+            "merchant": ["organizing inventory", "negotiating deals", "checking accounts"],
+            "guard": ["patrolling the area", "inspecting security", "training"],
+            "scholar": ["studying texts", "writing notes", "teaching"],
+            "general": ["completing tasks", "working diligently", "finishing duties"]
+        }
+        
+        activity_list = activities.get(work_type, activities["general"])
+        chosen_activity = random.choice(activity_list)
+        
+        return {
+            "type": work_type,
+            "description": f"{chosen_activity} at {location}",
+            "duration": random.randint(30, 120)  # minutes
+        }
+
+    async def _update_work_stats(self, work_activity: Dict[str, Any]) -> None:
+        """Update NPC stats based on work activity."""
+        # Work can affect intensity and other stats
+        try:
+            duration = work_activity.get("duration", 60)
+            
+            # Longer work increases intensity/stress
+            intensity_change = duration / 30  # 2 points per hour
+            
+            if self.context.current_stats:
+                current_intensity = self.context.current_stats.get("intensity", 50)
+                new_intensity = min(100, current_intensity + intensity_change)
+                self.context.current_stats["intensity"] = new_intensity
+                
+        except Exception as e:
+            logger.error(f"Error updating work stats: {e}")
+
+    async def _generate_relaxation_activity(self, relax_type: str, location: str) -> Dict[str, Any]:
+        """Generate a relaxation activity."""
+        activities = {
+            "reading": ["reading a book", "browsing texts", "studying literature"],
+            "socializing": ["chatting with friends", "enjoying company", "sharing stories"],
+            "meditation": ["meditating quietly", "reflecting on life", "centering themselves"],
+            "general": ["relaxing peacefully", "taking a break", "unwinding"]
+        }
+        
+        activity_list = activities.get(relax_type, activities["general"])
+        chosen_activity = random.choice(activity_list)
+        
+        return {
+            "type": relax_type,
+            "description": f"{chosen_activity} at {location}",
+            "duration": random.randint(15, 60)  # minutes
+        }
+
+    async def _update_relaxation_stats(self, relax_activity: Dict[str, Any]) -> None:
+        """Update NPC stats based on relaxation activity."""
+        try:
+            duration = relax_activity.get("duration", 30)
+            
+            # Relaxation reduces intensity/stress
+            intensity_change = -(duration / 20)  # -3 points per hour
+            
+            if self.context.current_stats:
+                current_intensity = self.context.current_stats.get("intensity", 50)
+                new_intensity = max(0, current_intensity + intensity_change)
+                self.context.current_stats["intensity"] = new_intensity
+                
+        except Exception as e:
+            logger.error(f"Error updating relaxation stats: {e}")
+
+    async def _update_location(self, new_location: str) -> None:
+        """Update NPC's current location."""
+        try:
+            async with get_db_connection_context() as conn:
+                async with conn.cursor() as cursor:
+                    await cursor.execute("""
+                        UPDATE NPCStats
+                        SET current_location = %s
+                        WHERE npc_id = %s AND user_id = %s AND conversation_id = %s
+                    """, (new_location, self.npc_id, self.user_id, self.conversation_id))
+                    
+            # Update cache
+            if self.context.current_stats:
+                self.context.current_stats["current_location"] = new_location
+                
+        except Exception as e:
+            logger.error(f"Error updating location: {e}")
+
     def _choose_interaction_target(self, nearby_npcs: List[Dict[str, Any]], context: Dict[str, Any]) -> Dict[str, Any]:
         """Choose an NPC to interact with."""
         try:
-            # Get NPC's traits
-            npc_traits = self.context.npc_traits
+            # Get NPC's traits from current stats
+            npc_traits = self.context.current_stats or {}
             
             # Calculate interaction scores
             scores = []
@@ -1423,9 +1976,9 @@ class NPCAgent:
                     score += relationship.get("trust", 0) * 2
                 
                 # Adjust based on personality compatibility
-                if npc_traits.get("dominance") > 60 and npc["dominance"] < 40:
+                if npc_traits.get("dominance", 50) > 60 and npc.get("dominance", 50) < 40:
                     score += 1  # Prefer submissive NPCs
-                elif npc_traits.get("dominance") < 40 and npc["dominance"] > 60:
+                elif npc_traits.get("dominance", 50) < 40 and npc.get("dominance", 50) > 60:
                     score += 1  # Prefer dominant NPCs
                 
                 # Random factor
