@@ -1,8 +1,9 @@
 # logic/conflict_system/conflict_tools.py
 """
-Conflict System Function Tools
+Conflict System Function Tools - Refactored for Canon Integration
 
 This module defines the function tools used by the conflict system agents.
+All entity creation and state changes now go through the canon system.
 """
 
 import logging
@@ -20,7 +21,6 @@ from agents import (
 )
 
 from db.connection import get_db_connection_context
-from logic.stats_logic import apply_stat_change
 from lore.core import canon
 from logic.resource_management import ResourceManager
 from logic.conflict_system.conflict_agents import get_relationship_status, get_manipulation_leverage
@@ -31,426 +31,146 @@ from context.context_performance import track_performance
 
 logger = logging.getLogger(__name__)
 
-# Database Access Tools
-
-async def _internal_get_resolution_paths_logic(ctx: RunContextWrapper, conflict_id: int) -> List[Dict[str, Any]]:
+# REFACTORED: Create stakeholders with canon integration
+async def _internal_create_stakeholders_logic(ctx: RunContextWrapper, conflict_id: int, conflict_data: Dict[str, Any], stakeholder_npcs: List[Dict[str, Any]]) -> None:
     context = ctx.context
     try:
         async with get_db_connection_context() as conn:
-            paths_rows = await conn.fetch("""
-                SELECT path_id, name, description, approach_type, difficulty,
-                       requirements, stakeholders_involved, key_challenges,
-                       progress, is_completed
-                FROM ResolutionPaths
-                WHERE conflict_id = $1
-            """, conflict_id)
-            paths = []
-            for row in paths_rows:
-                path = dict(row)
-                try: path["requirements"] = json.loads(path["requirements"]) if isinstance(path["requirements"], str) else path["requirements"] or {}
-                except (json.JSONDecodeError, TypeError): path["requirements"] = {}
-                try: path["stakeholders_involved"] = json.loads(path["stakeholders_involved"]) if isinstance(path["stakeholders_involved"], str) else path["stakeholders_involved"] or []
-                except (json.JSONDecodeError, TypeError): path["stakeholders_involved"] = []
-                try: path["key_challenges"] = json.loads(path["key_challenges"]) if isinstance(path["key_challenges"], str) else path["key_challenges"] or []
-                except (json.JSONDecodeError, TypeError): path["key_challenges"] = []
-                paths.append(path)
-            return paths
-    except Exception as e:
-        logger.error(f"Error getting resolution paths for conflict {conflict_id}: {e}", exc_info=True)
-        return []
-        
-async def _internal_update_conflict_progress_logic(ctx: RunContextWrapper, conflict_id: int, progress_increment: float) -> Dict[str, Any]:
-    context = ctx.context
-    conflict_manager = context.conflict_manager
-    try:
-        old_conflict = await conflict_manager.get_conflict(conflict_id) # Assumes conflict_manager.get_conflict is okay
-        old_phase = old_conflict['phase'] if old_conflict else "unknown"
-        updated_conflict = await conflict_manager.update_conflict_progress(conflict_id, progress_increment) # Assumes this is okay
-        if hasattr(context, 'add_narrative_memory'):
-            memory_importance = 0.7 if updated_conflict['phase'] != old_phase else 0.5
-            memory_content = f"Updated conflict {updated_conflict['conflict_name']} progress by {progress_increment} points to {updated_conflict['progress']}%. "
-            if updated_conflict['phase'] != old_phase: memory_content += f"Phase advanced from {old_phase} to {updated_conflict['phase']}."
-            await context.add_narrative_memory(memory_content, "conflict_progression", memory_importance)
-        return {"conflict_id": conflict_id, "new_progress": updated_conflict['progress'], "new_phase": updated_conflict['phase'], "phase_changed": updated_conflict['phase'] != old_phase, "success": True}
-    except Exception as e:
-        logger.error(f"Error updating conflict progress: {str(e)}", exc_info=True)
-        return {"conflict_id": conflict_id, "new_progress": 0, "new_phase": "unknown", "phase_changed": False, "success": False, "error": str(e)}
-
-async def _internal_get_active_conflicts_logic(ctx: RunContextWrapper) -> List[Dict[str, Any]]:
-    context = ctx.context
-    try:
-        async with get_db_connection_context() as conn:
-            conflicts_rows = await conn.fetch("""
-                SELECT c.conflict_id, c.conflict_name, c.conflict_type, 
-                       c.description, c.progress, c.phase, c.start_day,
-                       c.estimated_duration, c.success_rate, c.outcome, c.is_active
-                FROM Conflicts c
-                WHERE c.user_id = $1 AND c.conversation_id = $2 AND c.is_active = TRUE
-                ORDER BY c.conflict_id DESC
-            """, context.user_id, context.conversation_id)
-            conflicts = []
-            for row in conflicts_rows:
-                conflict = dict(row)
-                conflict_id = conflict["conflict_id"]
-                stakeholders_rows = await conn.fetch("""SELECT s.npc_id, n.npc_name, s.faction_id, s.faction_name, s.faction_position, s.public_motivation, s.private_motivation, s.desired_outcome, s.involvement_level, s.alliances, s.rivalries FROM ConflictStakeholders s JOIN NPCStats n ON s.npc_id = n.npc_id WHERE s.conflict_id = $1 ORDER BY s.involvement_level DESC""", conflict_id)
-                conflict["stakeholders"] = [dict(s_row) for s_row in stakeholders_rows]
-                paths_rows = await conn.fetch("""SELECT path_id, name, description, approach_type, difficulty, requirements, stakeholders_involved, key_challenges, progress, is_completed FROM ResolutionPaths WHERE conflict_id = $1""", conflict_id)
-                conflict["resolution_paths"] = [dict(p_row) for p_row in paths_rows]
-                involvement_row = await conn.fetchrow("""SELECT involvement_level, faction, money_committed, supplies_committed, influence_committed, actions_taken, manipulated_by FROM PlayerConflictInvolvement WHERE conflict_id = $1 AND user_id = $2 AND conversation_id = $3""", conflict_id, context.user_id, context.conversation_id)
-                if involvement_row:
-                    inv = dict(involvement_row)
-                    actions = json.loads(inv["actions_taken"]) if isinstance(inv["actions_taken"], str) else inv["actions_taken"] or []
-                    manipulated = json.loads(inv["manipulated_by"]) if isinstance(inv["manipulated_by"], str) else inv["manipulated_by"] or None
-                    conflict["player_involvement"] = {"involvement_level": inv["involvement_level"], "faction": inv["faction"], "resources_committed": {"money": inv["money_committed"], "supplies": inv["supplies_committed"], "influence": inv["influence_committed"]}, "actions_taken": actions, "is_manipulated": manipulated is not None, "manipulated_by": manipulated}
-                else:
-                    conflict["player_involvement"] = {"involvement_level": "none", "faction": "neutral", "resources_committed": {"money": 0, "supplies": 0, "influence": 0}, "actions_taken": [], "is_manipulated": False, "manipulated_by": None}
-                internal_conflicts_rows = await conn.fetch("""SELECT struggle_id, faction_id, conflict_name, description, primary_npc_id, target_npc_id, prize, approach, public_knowledge, current_phase, progress FROM InternalFactionConflicts WHERE parent_conflict_id = $1 ORDER BY progress DESC""", conflict_id)
-                internal_conflicts = []
-                for ic_row in internal_conflicts_rows:
-                    ic = dict(ic_row)
-                    ic["faction_name"] = await _internal_get_faction_name_logic(ctx, ic["faction_id"])
-                    ic["primary_npc_name"] = await _internal_get_npc_name_logic(ctx, ic["primary_npc_id"])
-                    ic["target_npc_name"] = await _internal_get_npc_name_logic(ctx, ic["target_npc_id"])
-                    internal_conflicts.append(ic)
-                if internal_conflicts: conflict["internal_faction_conflicts"] = internal_conflicts
-                conflicts.append(conflict)
-            return conflicts
-    except Exception as e:
-        logger.error(f"Error getting active conflicts: {e}", exc_info=True)
-        return []
-
-async def _internal_update_stakeholder_status_logic(ctx: RunContextWrapper, conflict_id: int, npc_id: int, status: Dict[str, Any]) -> Dict[str, Any]:
-    context = ctx.context
-    try:
-        async with get_db_connection_context() as conn:
-            exists = await conn.fetchval("SELECT 1 FROM ConflictStakeholders WHERE conflict_id = $1 AND npc_id = $2", conflict_id, npc_id)
-            if not exists: return {"success": False, "error": f"Stakeholder with NPC ID {npc_id} not found in conflict {conflict_id}"}
-            update_fields, params, param_index = [], [conflict_id, npc_id], 3
-            for field, value in status.items():
-                if field in ["involvement_level", "public_motivation", "private_motivation", "desired_outcome", "leadership_ambition", "faction_standing", "willing_to_betray_faction", "faction_id", "faction_name", "faction_position"]:
-                    update_fields.append(f"{field} = ${param_index}")
-                    params.append(json.dumps(value) if field in ["alliances", "rivalries"] else value)
-                    param_index += 1
-            if not update_fields: return {"success": False, "error": "No valid fields provided for update"}
-            update_query = f"UPDATE ConflictStakeholders SET {', '.join(update_fields)} WHERE conflict_id = $1 AND npc_id = $2"
-            await conn.execute(update_query, *params)
-            npc_name = await _internal_get_npc_name_logic(ctx, npc_id)
-            await _internal_create_conflict_memory_logic(ctx, conflict_id, f"Stakeholder {npc_name}'s status has been updated in the conflict.", significance=5)
-            return {"success": True, "npc_id": npc_id, "npc_name": npc_name, "conflict_id": conflict_id, "updated_fields": [field.split(' = ')[0] for field in update_fields]}
-    except Exception as e:
-        logger.error(f"Error updating stakeholder status for NPC {npc_id} in conflict {conflict_id}: {e}", exc_info=True)
-        return {"success": False, "error": str(e)}
-        
-async def _internal_get_player_involvement_logic(ctx: RunContextWrapper, conflict_id: int) -> Dict[str, Any]:
-    context = ctx.context
-    try:
-        async with get_db_connection_context() as conn:
-            involvement_row = await conn.fetchrow("""SELECT involvement_level, faction, money_committed, supplies_committed, influence_committed, actions_taken, manipulated_by FROM PlayerConflictInvolvement WHERE conflict_id = $1 AND user_id = $2 AND conversation_id = $3""", conflict_id, context.user_id, context.conversation_id)
-            if involvement_row:
-                inv = dict(involvement_row)
-                actions = json.loads(inv["actions_taken"]) if isinstance(inv["actions_taken"], str) else inv["actions_taken"] or []
-                manipulated = json.loads(inv["manipulated_by"]) if isinstance(inv["manipulated_by"], str) else inv["manipulated_by"] or None
-                return {"involvement_level": inv["involvement_level"], "faction": inv["faction"], "resources_committed": {"money": inv["money_committed"], "supplies": inv["supplies_committed"], "influence": inv["influence_committed"]}, "actions_taken": actions, "is_manipulated": manipulated is not None, "manipulated_by": manipulated}
-            else:
-                return {"involvement_level": "none", "faction": "neutral", "resources_committed": {"money": 0, "supplies": 0, "influence": 0}, "actions_taken": [], "is_manipulated": False, "manipulated_by": None}
-    except Exception as e:
-        logger.error(f"Error getting player involvement for conflict {conflict_id}: {e}", exc_info=True)
-        return {"involvement_level": "none", "faction": "neutral", "resources_committed": {"money": 0, "supplies": 0, "influence": 0}, "actions_taken": [], "is_manipulated": False, "manipulated_by": None}
-
-
-async def _internal_get_conflict_details_logic(ctx: RunContextWrapper, conflict_id: int) -> Dict[str, Any]:
-    context = ctx.context
-    try:
-        async with get_db_connection_context() as conn:
-            conflict_row = await conn.fetchrow("""SELECT c.conflict_id, c.conflict_name, c.conflict_type, c.description, c.progress, c.phase, c.start_day, c.estimated_duration, c.success_rate, c.outcome, c.is_active FROM Conflicts c WHERE c.conflict_id = $1 AND c.user_id = $2 AND c.conversation_id = $3""", conflict_id, context.user_id, context.conversation_id)
-            if not conflict_row: return {"error": "Conflict not found"}
-            conflict = dict(conflict_row)
-            conflict["stakeholders"] = await _internal_get_conflict_stakeholders_logic(ctx, conflict_id)
-            paths_rows = await conn.fetch("""SELECT path_id, name, description, approach_type, difficulty, requirements, stakeholders_involved, key_challenges, progress, is_completed FROM ResolutionPaths WHERE conflict_id = $1""", conflict_id)
-            paths = []
-            for row in paths_rows:
-                path = dict(row)
-                try: path["requirements"] = json.loads(path["requirements"]) if isinstance(path["requirements"], str) else path["requirements"] or {}
-                except (json.JSONDecodeError, TypeError): path["requirements"] = {}
-                try: path["stakeholders_involved"] = json.loads(path["stakeholders_involved"]) if isinstance(path["stakeholders_involved"], str) else path["stakeholders_involved"] or []
-                except (json.JSONDecodeError, TypeError): path["stakeholders_involved"] = []
-                try: path["key_challenges"] = json.loads(path["key_challenges"]) if isinstance(path["key_challenges"], str) else path["key_challenges"] or []
-                except (json.JSONDecodeError, TypeError): path["key_challenges"] = []
-                paths.append(path)
-            conflict["resolution_paths"] = paths
-            conflict["player_involvement"] = await _internal_get_player_involvement_logic(ctx, conflict_id) # Use internal
-            internal_conflicts_rows = await conn.fetch("""SELECT struggle_id, faction_id, conflict_name, description, primary_npc_id, target_npc_id, prize, approach, public_knowledge, current_phase, progress FROM InternalFactionConflicts WHERE parent_conflict_id = $1 ORDER BY progress DESC""", conflict_id)
-            internal_conflicts = []
-            for row in internal_conflicts_rows:
-                internal_conflict = dict(row)
-                internal_conflict["faction_name"] = await _internal_get_faction_name_logic(ctx, internal_conflict["faction_id"])
-                internal_conflict["primary_npc_name"] = await _internal_get_npc_name_logic(ctx, internal_conflict["primary_npc_id"])
-                internal_conflict["target_npc_name"] = await _internal_get_npc_name_logic(ctx, internal_conflict["target_npc_id"])
-                internal_conflicts.append(internal_conflict)
-            if internal_conflicts: conflict["internal_faction_conflicts"] = internal_conflicts
-            manipulation_attempts = await _internal_get_player_manipulation_attempts_logic(ctx, conflict_id) # Use internal
-            if manipulation_attempts: conflict["manipulation_attempts"] = manipulation_attempts
-            return conflict
-    except Exception as e:
-        logger.error(f"Error getting conflict details for ID {conflict_id}: {e}", exc_info=True)
-        return {"error": str(e)}
-
-async def _internal_get_conflict_stakeholders_logic(ctx: RunContextWrapper, conflict_id: int) -> List[Dict[str, Any]]:
-    context = ctx.context
-    try:
-        async with get_db_connection_context() as conn:
-            stakeholders_rows = await conn.fetch("""SELECT s.npc_id, n.npc_name, s.faction_id, s.faction_name, s.faction_position, s.public_motivation, s.private_motivation, s.desired_outcome, s.involvement_level, s.alliances, s.rivalries, s.leadership_ambition, s.faction_standing, s.willing_to_betray_faction FROM ConflictStakeholders s JOIN NPCStats n ON s.npc_id = n.npc_id WHERE s.conflict_id = $1 ORDER BY s.involvement_level DESC""", conflict_id)
-            stakeholders = []
-            for row in stakeholders_rows:
-                stakeholder = dict(row)
-                try: stakeholder["alliances"] = json.loads(stakeholder["alliances"]) if isinstance(stakeholder["alliances"], str) else stakeholder["alliances"] or {}
-                except (json.JSONDecodeError, TypeError): stakeholder["alliances"] = {}
-                try: stakeholder["rivalries"] = json.loads(stakeholder["rivalries"]) if isinstance(stakeholder["rivalries"], str) else stakeholder["rivalries"] or {}
-                except (json.JSONDecodeError, TypeError): stakeholder["rivalries"] = {}
-                stakeholder["secrets"] = await _internal_get_stakeholder_secrets_logic(ctx, conflict_id, stakeholder["npc_id"])
-                stakeholder["manipulates_player"] = await _internal_check_stakeholder_manipulates_player_logic(ctx, conflict_id, stakeholder["npc_id"])
-                stakeholder["relationship_with_player"] = await _internal_get_npc_relationship_with_player_logic(ctx, stakeholder["npc_id"])
-                stakeholders.append(stakeholder)
-            return stakeholders
-    except Exception as e:
-        logger.error(f"Error getting stakeholders for conflict {conflict_id}: {e}", exc_info=True)
-        return []
-
-async def _internal_get_player_manipulation_attempts_logic(ctx: RunContextWrapper, conflict_id: int) -> List[Dict[str, Any]]:
-    context = ctx.context
-    try:
-        async with get_db_connection_context() as conn:
-            attempts_rows = await conn.fetch("""SELECT attempt_id, npc_id, manipulation_type, content, goal, success, player_response, leverage_used, intimacy_level, created_at, resolved_at FROM PlayerManipulationAttempts WHERE conflict_id = $1 AND user_id = $2 AND conversation_id = $3 ORDER BY created_at DESC""", conflict_id, context.user_id, context.conversation_id)
-            attempts = []
-            for row in attempts_rows:
-                attempt = dict(row)
-                attempt["npc_name"] = await _internal_get_npc_name_logic(ctx, attempt["npc_id"])
-                try: attempt["goal"] = json.loads(attempt["goal"]) if isinstance(attempt["goal"], str) else attempt["goal"] or {}
-                except (json.JSONDecodeError, TypeError): attempt["goal"] = {}
-                try: attempt["leverage_used"] = json.loads(attempt["leverage_used"]) if isinstance(attempt["leverage_used"], str) else attempt["leverage_used"] or {}
-                except (json.JSONDecodeError, TypeError): attempt["leverage_used"] = {}
-                attempt["created_at"] = attempt["created_at"].isoformat() if attempt["created_at"] else None
-                attempt["resolved_at"] = attempt["resolved_at"].isoformat() if attempt["resolved_at"] else None
-                attempt["is_resolved"] = attempt["resolved_at"] is not None
-                attempts.append(attempt)
-            return attempts
-    except Exception as e:
-        logger.error(f"Error getting player manipulation attempts for conflict {conflict_id}: {e}", exc_info=True)
-        return []
-
-# Conflict Generation Tools
-
-async def _internal_generate_conflict_logic(ctx: RunContextWrapper, conflict_type: Optional[str] = None) -> Dict[str, Any]:
-    context = ctx.context
-    current_day = await _internal_get_current_day_logic(ctx)
-    active_conflicts = await _internal_get_active_conflicts_logic(ctx)
-    if len(active_conflicts) >= 3 and not conflict_type: conflict_type = "minor"
-    if len(active_conflicts) == 0 and not conflict_type: conflict_type = "standard"
-    if not conflict_type:
-        weights = {"minor": 0.4, "standard": 0.4, "major": 0.15, "catastrophic": 0.05}
-        conflict_type = random.choices(list(weights.keys()), weights=list(weights.values()), k=1)[0]
-    npcs = await _internal_get_available_npcs_logic(ctx)
-    if len(npcs) < 3: return {"error": "Not enough NPCs available to create a complex conflict"}
-    stakeholder_count = {"minor": min(3, len(npcs)), "standard": min(4, len(npcs)), "major": min(5, len(npcs)), "catastrophic": min(6, len(npcs))}.get(conflict_type, min(4, len(npcs)))
-    stakeholder_npcs = random.sample(npcs, stakeholder_count)
-    conflict_data = await _internal_generate_conflict_details_logic(ctx, conflict_type, stakeholder_npcs, current_day)
-    conflict_id = await _internal_create_conflict_record_logic(ctx, conflict_data, current_day)
-    await _internal_create_stakeholders_logic(ctx, conflict_id, conflict_data, stakeholder_npcs)
-    await _internal_create_resolution_paths_logic(ctx, conflict_id, conflict_data)
-    if "internal_faction_conflicts" in conflict_data: await _internal_create_internal_faction_conflicts_logic(ctx, conflict_id, conflict_data)
-    await _internal_generate_player_manipulation_attempts_logic(ctx, conflict_id, stakeholder_npcs)
-    await _internal_create_conflict_memory_logic(ctx, conflict_id, f"A new conflict has emerged: {conflict_data['conflict_name']}. It involves multiple stakeholders with their own agendas.", significance=6)
-    return await _internal_get_conflict_details_logic(ctx, conflict_id)
-
-
-async def _internal_get_internal_conflicts_logic(ctx: RunContextWrapper, conflict_id: int) -> List[Dict[str, Any]]:
-    context = ctx.context
-    try:
-        async with get_db_connection_context() as conn:
-            internal_conflicts_rows = await conn.fetch("""SELECT struggle_id, faction_id, conflict_name, description, primary_npc_id, target_npc_id, prize, approach, public_knowledge, current_phase, progress FROM InternalFactionConflicts WHERE parent_conflict_id = $1 ORDER BY progress DESC""", conflict_id)
-            internal_conflicts = []
-            for row in internal_conflicts_rows:
-                internal_conflict = dict(row)
-                internal_conflict["faction_name"] = await _internal_get_faction_name_logic(ctx, internal_conflict["faction_id"])
-                internal_conflict["primary_npc_name"] = await _internal_get_npc_name_logic(ctx, internal_conflict["primary_npc_id"])
-                internal_conflict["target_npc_name"] = await _internal_get_npc_name_logic(ctx, internal_conflict["target_npc_id"])
-                try:
-                    members_rows = await conn.fetch("SELECT npc_id, position, side, standing, loyalty_strength, reason FROM FactionStruggleMembers WHERE struggle_id = $1", internal_conflict["struggle_id"])
-                    if members_rows:
-                        members = []
-                        for member_row in members_rows:
-                            member = dict(member_row)
-                            member["npc_name"] = await _internal_get_npc_name_logic(ctx, member["npc_id"])
-                            members.append(member)
-                        internal_conflict["faction_members"] = members
-                except Exception: pass
-                internal_conflicts.append(internal_conflict)
-            return internal_conflicts
-    except Exception as e:
-        logger.error(f"Error getting internal conflicts for conflict {conflict_id}: {e}", exc_info=True)
-        return []
-        
-async def _internal_get_current_day_logic(ctx: RunContextWrapper) -> int:
-    context = ctx.context
-    try:
-        async with get_db_connection_context() as conn:
-            value = await conn.fetchval("SELECT value FROM CurrentRoleplay WHERE user_id=$1 AND conversation_id=$2 AND key='CurrentDay'", context.user_id, context.conversation_id)
-            return int(value) if value else 1
-    except Exception as e:
-        logger.error(f"Error getting current day: {e}", exc_info=True)
-        return 1
-
-async def _internal_get_available_npcs_logic(ctx: RunContextWrapper) -> List[Dict[str, Any]]:
-    context = ctx.context
-    try:
-        async with get_db_connection_context() as conn:
-            npc_rows = await conn.fetch("""SELECT npc_id, npc_name, dominance, cruelty, closeness, trust, respect, intensity, sex, current_location, faction_affiliations FROM NPCStats WHERE user_id=$1 AND conversation_id=$2 AND introduced=TRUE ORDER BY dominance DESC""", context.user_id, context.conversation_id)
-            npcs = []
-            for row in npc_rows:
-                npc = dict(row)
-                try: npc["faction_affiliations"] = json.loads(npc["faction_affiliations"]) if isinstance(npc["faction_affiliations"], str) else npc["faction_affiliations"] or []
-                except (json.JSONDecodeError, TypeError): npc["faction_affiliations"] = []
-                npc["relationship_with_player"] = await _internal_get_npc_relationship_with_player_logic(ctx, npc["npc_id"])
-                npcs.append(npc)
-            return npcs
-    except Exception as e:
-        logger.error(f"Error getting available NPCs: {e}", exc_info=True)
-        return []
-        
-async def _internal_get_npc_relationship_with_player_logic(ctx: RunContextWrapper, npc_id: int) -> Dict[str, Any]:
-    context = ctx.context
-    try:
-        relationship = await get_relationship_status(context.user_id, context.conversation_id, npc_id) # Assumes external
-        leverage = await get_manipulation_leverage(context.user_id, context.conversation_id, npc_id) # Assumes external
-        return {"closeness": relationship.get("closeness", 0), "trust": relationship.get("trust", 0), "respect": relationship.get("respect", 0), "intimidation": relationship.get("intimidation", 0), "dominance": relationship.get("dominance", 0), "has_leverage": len(leverage) > 0, "leverage_types": [l.get("type") for l in leverage], "manipulation_potential": relationship.get("dominance", 0) > 70 or relationship.get("closeness", 0) > 80}
-    except Exception as e:
-        logger.error(f"Error getting NPC relationship with player: {e}", exc_info=True)
-        return {"closeness": 0, "trust": 0, "respect": 0, "intimidation": 0, "dominance": 0, "has_leverage": False, "leverage_types": [], "manipulation_potential": False}
-
-async def _internal_generate_conflict_details_logic(ctx: RunContextWrapper, conflict_type: str, stakeholder_npcs: List[Dict[str, Any]], current_day: int) -> Dict[str, Any]:
-    context = ctx.context
-    npc_info = ""
-    for i, npc in enumerate(stakeholder_npcs): npc_info += f"{i+1}. {npc['npc_name']} (Dominance: {npc['dominance']}, Cruelty: {npc['cruelty']}, Closeness: {npc['closeness']})\n"
-    player_stats = await _internal_get_player_stats_logic(ctx)
-    
-    prompt = f"""
-    As an AI game system, generate a femdom-themed conflict with multiple stakeholders and complex motivations.
-
-    Conflict Type: {conflict_type.capitalize()}
-    Current Day: {current_day}
-    
-    Available NPCs to use as stakeholders:
-    {npc_info}
-    
-    Player Stats:
-    {json.dumps(player_stats, indent=2)}
-    
-    Generate the following details:
-    1. A compelling conflict name and description
-    2. 3-5 stakeholders with their own motivations and goals
-    3. At least 3 distinct resolution paths with different approaches
-    4. Potential internal faction conflicts that might emerge
-    5. Opportunities for NPCs to manipulate the player using femdom themes
-    
-    Create stakeholders with:
-    - Public and private motivations (what they claim vs. what they really want)
-    - Relationships with other stakeholders (alliances and rivalries)
-    - Faction affiliations and positions where applicable
-    - Secrets that could be revealed during the conflict
-    - Potential to manipulate the player based on dominance, corruption, etc.
-    
-    Create resolution paths that:
-    - Allow different play styles (social, investigative, direct, etc.)
-    - Require engaging with specific stakeholders
-    - Have interesting narrative implications
-    - Include key challenges to overcome
-    
-    Include opportunities for femdom-themed manipulation where:
-    - Dominant female NPCs could try to control or influence the player
-    - NPCs might use blackmail, seduction, or direct commands
-    - Different paths could affect player corruption, obedience, etc.
-    
-    Return your response in JSON format including all these elements.
-    """
-    
-    response = await get_chatgpt_response(context.conversation_id, conflict_type, prompt) # Assumes external
-    if response and "function_args" in response: return response["function_args"]
-    else:
-        try:
-            response_text = response.get("response", "{}")
-            json_match = re.search(r'{.*}', response_text, re.DOTALL)
-            if json_match: return json.loads(json_match.group(0))
-        except (json.JSONDecodeError, TypeError): pass
-        
-        # Fallback to basic structure
-        return {
-            "conflict_name": f"{conflict_type.capitalize()} Conflict",
-            "conflict_type": conflict_type,
-            "description": f"A {conflict_type} conflict involving multiple stakeholders with their own agendas.",
-            "stakeholders": [
-                {
-                    "npc_id": npc["npc_id"],
-                    "public_motivation": f"{npc['npc_name']} wants to resolve the conflict peacefully.",
-                    "private_motivation": f"{npc['npc_name']} actually wants to gain power through the conflict.",
-                    "desired_outcome": "Control the outcome to their advantage",
-                    "faction_id": npc.get("faction_affiliations", [{}])[0].get("faction_id") if npc.get("faction_affiliations") else None,
-                    "faction_name": npc.get("faction_affiliations", [{}])[0].get("faction_name") if npc.get("faction_affiliations") else None
-                }
-                for npc in stakeholder_npcs
-            ],
-            "resolution_paths": [
-                {
-                    "path_id": "diplomatic",
-                    "name": "Diplomatic Resolution",
-                    "description": "Resolve the conflict through negotiation and compromise.",
-                    "approach_type": "social",
-                    "difficulty": 5,
-                    "stakeholders_involved": [npc["npc_id"] for npc in stakeholder_npcs[:2]],
-                    "key_challenges": ["Building trust", "Finding common ground", "Managing expectations"]
-                },
-                {
-                    "path_id": "force",
-                    "name": "Forceful Resolution",
-                    "description": "Resolve the conflict through direct action and confrontation.",
-                    "approach_type": "direct",
-                    "difficulty": 7,
-                    "stakeholders_involved": [npc["npc_id"] for npc in stakeholder_npcs[1:3]],
-                    "key_challenges": ["Overcoming resistance", "Managing collateral damage", "Securing victory"]
-                },
-                {
-                    "path_id": "manipulation",
-                    "name": "Manipulative Resolution",
-                    "description": "Resolve the conflict by playing stakeholders against each other.",
-                    "approach_type": "deception",
-                    "difficulty": 8,
-                    "stakeholders_involved": [npc["npc_id"] for npc in stakeholder_npcs[:3]],
-                    "key_challenges": ["Maintaining deception", "Balancing interests", "Avoiding exposure"]
-                }
-            ],
-            "internal_faction_conflicts": [],
-            "player_manipulation_opportunities": [
-                {
-                    "npc_id": stakeholder_npcs[0]["npc_id"],
-                    "manipulation_type": "domination",
-                    "content": f"{stakeholder_npcs[0]['npc_name']} demands your help in the conflict, using her position of power over you.",
-                    "goal": {
-                        "faction": "a",
-                        "involvement_level": "participating"
+            stakeholders_to_insert = conflict_data.get("stakeholders", [])
+            if not stakeholders_to_insert:
+                # Generate default stakeholders from NPCs
+                stakeholders_to_insert = []
+                for i, npc in enumerate(stakeholder_npcs):
+                    stakeholder = {
+                        "npc_id": npc["npc_id"],
+                        "npc_name": npc.get("npc_name", f"NPC {npc['npc_id']}"),
+                        "public_motivation": f"{npc.get('npc_name', 'They')} wants to see the conflict resolved peacefully.",
+                        "private_motivation": f"{npc.get('npc_name', 'They')} actually wants to gain power through the conflict.",
+                        "desired_outcome": "Control the outcome to their advantage",
+                        "involvement_level": 7 - i,
+                        "faction_affiliations": npc.get("faction_affiliations", [])
                     }
-                }
-            ]
-        }
+                    stakeholders_to_insert.append(stakeholder)
+            
+            async with conn.transaction():
+                for sh in stakeholders_to_insert:
+                    # REFACTORED: Ensure NPC exists canonically
+                    if "npc_name" in sh and not sh.get("npc_id"):
+                        npc_id = await canon.find_or_create_npc(
+                            ctx, conn,
+                            npc_name=sh["npc_name"],
+                            role=sh.get("role", "stakeholder"),
+                            affiliations=sh.get("faction_affiliations", [])
+                        )
+                        sh["npc_id"] = npc_id
+                    else:
+                        npc_id = sh["npc_id"]
+                    
+                    # Find matching NPC from the provided list
+                    npc = next((n for n in stakeholder_npcs if n["npc_id"] == npc_id), None)
+                    if not npc:
+                        # If not in list, fetch from database
+                        npc_row = await conn.fetchrow("""
+                            SELECT npc_id, npc_name, dominance, cruelty, faction_affiliations
+                            FROM NPCStats
+                            WHERE npc_id = $1 AND user_id = $2 AND conversation_id = $3
+                        """, npc_id, context.user_id, context.conversation_id)
+                        if npc_row:
+                            npc = dict(npc_row)
+                        else:
+                            continue
+                    
+                    # REFACTORED: Handle faction creation/lookup canonically
+                    faction_id = sh.get("faction_id")
+                    faction_name = sh.get("faction_name")
+                    
+                    if faction_name and not faction_id:
+                        faction_id = await canon.find_or_create_faction(
+                            ctx, conn,
+                            faction_name=faction_name,
+                            type=sh.get("faction_type", "organization")
+                        )
+                    elif not faction_id and npc.get("faction_affiliations"):
+                        # Use NPC's primary faction
+                        affiliations = npc["faction_affiliations"]
+                        if isinstance(affiliations, str):
+                            try:
+                                affiliations = json.loads(affiliations)
+                            except:
+                                affiliations = []
+                        if affiliations and len(affiliations) > 0:
+                            faction_id = affiliations[0].get("faction_id")
+                            faction_name = affiliations[0].get("faction_name")
+                    
+                    # Insert stakeholder
+                    await conn.execute("""
+                        INSERT INTO ConflictStakeholders 
+                        (conflict_id, npc_id, faction_id, faction_name, faction_position, 
+                         public_motivation, private_motivation, desired_outcome, involvement_level, 
+                         alliances, rivalries, leadership_ambition, faction_standing, willing_to_betray_faction)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+                        ON CONFLICT (conflict_id, npc_id) DO UPDATE SET
+                            faction_id = EXCLUDED.faction_id,
+                            faction_name = EXCLUDED.faction_name,
+                            public_motivation = EXCLUDED.public_motivation
+                    """, 
+                    conflict_id, npc_id, faction_id, faction_name, 
+                    sh.get("faction_position", "Member"),
+                    sh.get("public_motivation", "Wants favorable resolution"),
+                    sh.get("private_motivation", "Seeks personal gain"),
+                    sh.get("desired_outcome", "Victory"),
+                    sh.get("involvement_level", 5),
+                    json.dumps(sh.get("alliances", {})),
+                    json.dumps(sh.get("rivalries", {})),
+                    sh.get("leadership_ambition", npc.get("dominance", 50) // 10),
+                    sh.get("faction_standing", 50),
+                    sh.get("willing_to_betray_faction", npc.get("cruelty", 20) > 60))
+                    
+                    # Handle secrets
+                    if "secrets" in sh:
+                        for secret in sh["secrets"]:
+                            # REFACTORED: Ensure target NPC exists if referenced
+                            target_npc_id = secret.get("target_npc_id")
+                            if secret.get("target_npc_name") and not target_npc_id:
+                                target_npc_id = await canon.find_or_create_npc(
+                                    ctx, conn,
+                                    npc_name=secret["target_npc_name"]
+                                )
+                            
+                            await conn.execute("""
+                                INSERT INTO StakeholderSecrets 
+                                (conflict_id, npc_id, secret_id, secret_type, content, 
+                                 target_npc_id, is_revealed, revealed_to, is_public)
+                                VALUES ($1, $2, $3, $4, $5, $6, FALSE, NULL, FALSE)
+                            """, 
+                            conflict_id, npc_id, 
+                            secret.get("secret_id", f"secret_{npc_id}_{random.randint(1000,9999)}"),
+                            secret.get("secret_type", "personal"),
+                            secret.get("content", "A hidden truth"),
+                            target_npc_id)
+                
+                # REFACTORED: Log canonical event
+                await canon.log_canonical_event(
+                    ctx, conn,
+                    f"Stakeholders established for conflict {conflict_id} with {len(stakeholders_to_insert)} participants",
+                    tags=["conflict", "stakeholders", "initialization"],
+                    significance=5
+                )
+                    
+    except Exception as e:
+        logger.error(f"Error creating stakeholders: {e}", exc_info=True)
+        raise
 
-# Manipulation Tools
-
+# REFACTORED: Create manipulation attempt already uses canon
 async def _internal_create_manipulation_attempt_logic(ctx: RunContextWrapper, conflict_id: int, npc_id: int, manipulation_type: str, content: str, goal: Dict[str, Any], leverage_used: Dict[str, Any], intimacy_level: int = 0) -> Dict[str, Any]:
     context = ctx.context
     try:
         async with get_db_connection_context() as conn:
             npc_name = await _internal_get_npc_name_logic(ctx, npc_id)
             async with conn.transaction():
+                # This already uses canon function - good!
                 attempt_id = await canon.create_player_manipulation_attempt(
-                    context,
+                    ctx,
                     conn,
                     conflict_id,
                     npc_id,
@@ -460,12 +180,15 @@ async def _internal_create_manipulation_attempt_logic(ctx: RunContextWrapper, co
                     leverage_used,
                     intimacy_level,
                 )
-                await _internal_create_conflict_memory_logic(
-                    ctx,
-                    conflict_id,
-                    f"{npc_name} attempted to {manipulation_type} the player regarding the conflict.",
-                    significance=7,
+                
+                # REFACTORED: Use canon for memory
+                await canon.log_canonical_event(
+                    ctx, conn,
+                    f"{npc_name} attempted to {manipulation_type} the player regarding conflict {conflict_id}",
+                    tags=["conflict", "manipulation", manipulation_type],
+                    significance=7
                 )
+                
                 return {
                     "attempt_id": attempt_id,
                     "npc_id": npc_id,
@@ -482,188 +205,707 @@ async def _internal_create_manipulation_attempt_logic(ctx: RunContextWrapper, co
         logger.error(f"Error creating player manipulation attempt: {e}", exc_info=True)
         raise
 
+# REFACTORED: Resolve manipulation with canon stat updates
 async def _internal_resolve_manipulation_attempt_logic(ctx: RunContextWrapper, attempt_id: int, success: bool, player_response: str) -> Dict[str, Any]:
     context = ctx.context
     try:
         async with get_db_connection_context() as conn:
-            attempt_row = await conn.fetchrow("SELECT conflict_id, npc_id, manipulation_type, goal FROM PlayerManipulationAttempts WHERE attempt_id = $1 AND user_id = $2 AND conversation_id = $3", attempt_id, context.user_id, context.conversation_id)
-            if not attempt_row: return {"error": "Manipulation attempt not found"}
-            conflict_id, npc_id, manipulation_type, goal_str = attempt_row["conflict_id"], attempt_row["npc_id"], attempt_row["manipulation_type"], attempt_row["goal"]
+            attempt_row = await conn.fetchrow("""
+                SELECT conflict_id, npc_id, manipulation_type, goal 
+                FROM PlayerManipulationAttempts 
+                WHERE attempt_id = $1 AND user_id = $2 AND conversation_id = $3
+            """, attempt_id, context.user_id, context.conversation_id)
+            
+            if not attempt_row: 
+                return {"error": "Manipulation attempt not found"}
+            
+            conflict_id = attempt_row["conflict_id"]
+            npc_id = attempt_row["npc_id"]
+            manipulation_type = attempt_row["manipulation_type"]
+            goal_str = attempt_row["goal"]
+            
             async with conn.transaction():
+                # This already uses canon function - good!
                 await canon.resolve_player_manipulation_attempt(
-                    context,
+                    ctx,
                     conn,
                     attempt_id,
                     success,
                     player_response,
                 )
+                
+                # REFACTORED: Get current player stats to calculate changes
+                player_name = "Chase"  # Default player name
                 stat_changes = {}
+                
                 if success:
-                    obedience_change, dependency_change = random.randint(2, 5), random.randint(1, 3)
-                    await apply_stat_change(context.user_id, context.conversation_id, "obedience", obedience_change) # Assumes external
-                    await apply_stat_change(context.user_id, context.conversation_id, "dependency", dependency_change) # Assumes external
-                    stat_changes.update({"obedience": obedience_change, "dependency": dependency_change})
-                    goal_dict = json.loads(goal_str) if isinstance(goal_str, str) else goal_str or {}
-                    involvement_row = await conn.fetchrow("SELECT involvement_level, faction FROM PlayerConflictInvolvement WHERE conflict_id = $1 AND user_id = $2 AND conversation_id = $3", conflict_id, context.user_id, context.conversation_id)
-                    faction, involvement_level = (goal_dict.get("faction", involvement_row["faction"] if involvement_row else "neutral"), goal_dict.get("involvement_level", involvement_row["involvement_level"] if involvement_row else "observing"))
-                    manipulated_by_json = json.dumps({"npc_id": npc_id, "manipulation_type": manipulation_type, "attempt_id": attempt_id})
-                    if involvement_row:
-                        await conn.execute("UPDATE PlayerConflictInvolvement SET involvement_level = $1, faction = $2, manipulated_by = $3 WHERE conflict_id = $4 AND user_id = $5 AND conversation_id = $6", involvement_level, faction, manipulated_by_json, conflict_id, context.user_id, context.conversation_id)
+                    # Player succumbed to manipulation
+                    obedience_change = random.randint(2, 5)
+                    dependency_change = random.randint(1, 3)
+                    
+                    # Get current stats
+                    stats_row = await conn.fetchrow("""
+                        SELECT obedience, dependency FROM PlayerStats
+                        WHERE user_id = $1 AND conversation_id = $2 AND player_name = $3
+                    """, context.user_id, context.conversation_id, player_name)
+                    
+                    if stats_row:
+                        new_obedience = stats_row['obedience'] + obedience_change
+                        new_dependency = stats_row['dependency'] + dependency_change
                     else:
-                        await conn.execute("INSERT INTO PlayerConflictInvolvement (conflict_id, user_id, conversation_id, player_name, involvement_level, faction, money_committed, supplies_committed, influence_committed, actions_taken, manipulated_by) VALUES ($1, $2, $3, $4, $5, $6, 0, 0, 0, '[]', $7)", conflict_id, context.user_id, context.conversation_id, "Player", involvement_level, faction, manipulated_by_json)
+                        # Create player stats if they don't exist
+                        await canon.find_or_create_player_stats(ctx, conn, player_name)
+                        new_obedience = obedience_change
+                        new_dependency = dependency_change
+                    
+                    # REFACTORED: Use canon stat updates
+                    await canon.update_player_stat_canonically(
+                        ctx, conn, player_name, "obedience", new_obedience, 
+                        f"Manipulation success: {manipulation_type} by NPC {npc_id}"
+                    )
+                    await canon.update_player_stat_canonically(
+                        ctx, conn, player_name, "dependency", new_dependency,
+                        f"Manipulation success: {manipulation_type} by NPC {npc_id}"
+                    )
+                    
+                    stat_changes = {"obedience": obedience_change, "dependency": dependency_change}
+                    
+                    # Update player involvement
+                    goal_dict = json.loads(goal_str) if isinstance(goal_str, str) else goal_str or {}
+                    involvement_row = await conn.fetchrow("""
+                        SELECT involvement_level, faction 
+                        FROM PlayerConflictInvolvement 
+                        WHERE conflict_id = $1 AND user_id = $2 AND conversation_id = $3
+                    """, conflict_id, context.user_id, context.conversation_id)
+                    
+                    faction = goal_dict.get("faction", involvement_row["faction"] if involvement_row else "neutral")
+                    involvement_level = goal_dict.get("involvement_level", involvement_row["involvement_level"] if involvement_row else "observing")
+                    manipulated_by_json = json.dumps({
+                        "npc_id": npc_id, 
+                        "manipulation_type": manipulation_type, 
+                        "attempt_id": attempt_id
+                    })
+                    
+                    if involvement_row:
+                        await conn.execute("""
+                            UPDATE PlayerConflictInvolvement 
+                            SET involvement_level = $1, faction = $2, manipulated_by = $3 
+                            WHERE conflict_id = $4 AND user_id = $5 AND conversation_id = $6
+                        """, involvement_level, faction, manipulated_by_json, 
+                        conflict_id, context.user_id, context.conversation_id)
+                    else:
+                        await conn.execute("""
+                            INSERT INTO PlayerConflictInvolvement 
+                            (conflict_id, user_id, conversation_id, player_name, 
+                             involvement_level, faction, money_committed, supplies_committed, 
+                             influence_committed, actions_taken, manipulated_by) 
+                            VALUES ($1, $2, $3, $4, $5, $6, 0, 0, 0, '[]', $7)
+                        """, conflict_id, context.user_id, context.conversation_id, player_name,
+                        involvement_level, faction, manipulated_by_json)
                 else:
-                    willpower_change, confidence_change = random.randint(2, 4), random.randint(1, 3)
-                    await apply_stat_change(context.user_id, context.conversation_id, "willpower", willpower_change) # Assumes external
-                    await apply_stat_change(context.user_id, context.conversation_id, "confidence", confidence_change) # Assumes external
-                    stat_changes.update({"willpower": willpower_change, "confidence": confidence_change})
+                    # Player resisted manipulation
+                    willpower_change = random.randint(2, 4)
+                    confidence_change = random.randint(1, 3)
+                    
+                    # Get current stats
+                    stats_row = await conn.fetchrow("""
+                        SELECT willpower, confidence FROM PlayerStats
+                        WHERE user_id = $1 AND conversation_id = $2 AND player_name = $3
+                    """, context.user_id, context.conversation_id, player_name)
+                    
+                    if stats_row:
+                        new_willpower = stats_row['willpower'] + willpower_change
+                        new_confidence = stats_row['confidence'] + confidence_change
+                    else:
+                        await canon.find_or_create_player_stats(ctx, conn, player_name)
+                        new_willpower = willpower_change
+                        new_confidence = confidence_change
+                    
+                    # REFACTORED: Use canon stat updates
+                    await canon.update_player_stat_canonically(
+                        ctx, conn, player_name, "willpower", new_willpower,
+                        f"Resisted manipulation: {manipulation_type} by NPC {npc_id}"
+                    )
+                    await canon.update_player_stat_canonically(
+                        ctx, conn, player_name, "confidence", new_confidence,
+                        f"Resisted manipulation: {manipulation_type} by NPC {npc_id}"
+                    )
+                    
+                    stat_changes = {"willpower": willpower_change, "confidence": confidence_change}
+                
+                # Get NPC name and log event
                 npc_name = await _internal_get_npc_name_logic(ctx, npc_id)
-                memory_text = f"Player {'succumbed to' if success else 'resisted'} {npc_name}'s {manipulation_type} attempt in the conflict."
-                await _internal_create_conflict_memory_logic(ctx, conflict_id, memory_text, significance=8 if success else 7)
-                return {"attempt_id": attempt_id, "success": success, "player_response": player_response, "is_resolved": True, "stat_changes": stat_changes}
+                
+                # REFACTORED: Use canon event logging
+                await canon.log_canonical_event(
+                    ctx, conn,
+                    f"Player {'succumbed to' if success else 'resisted'} {npc_name}'s {manipulation_type} attempt in conflict {conflict_id}",
+                    tags=["conflict", "manipulation", "resolution", "success" if success else "failure"],
+                    significance=8 if success else 7
+                )
+                
+                return {
+                    "attempt_id": attempt_id, 
+                    "success": success, 
+                    "player_response": player_response, 
+                    "is_resolved": True, 
+                    "stat_changes": stat_changes
+                }
     except Exception as e:
         logger.error(f"Error resolving manipulation attempt: {e}", exc_info=True)
         raise
-        
-async def _internal_suggest_manipulation_content_logic(ctx: RunContextWrapper, npc_id: int, conflict_id: int, manipulation_type: str, goal: Dict[str, Any]) -> Dict[str, Any]:
-    context = ctx.context
-    npc = await _internal_get_npc_details_logic(ctx, npc_id)
-    relationship = await _internal_get_npc_relationship_with_player_logic(ctx, npc_id)
-    conflict = await _internal_get_conflict_details_logic(ctx, conflict_id)
-    content = ""
-    if manipulation_type == "domination": content = generate_domination_content(npc, relationship, goal, conflict)
-    elif manipulation_type == "seduction": content = generate_seduction_content(npc, relationship, goal, conflict)
-    elif manipulation_type == "blackmail":
-        leverage = await get_manipulation_leverage(context.user_id, context.conversation_id, npc_id) # Assumes external
-        content = generate_blackmail_content(npc, relationship, goal, conflict, leverage)
-    else: content = generate_generic_manipulation_content(npc, relationship, goal, conflict)
-    leverage_used = generate_leverage(npc, relationship, manipulation_type)
-    intimacy_level = calculate_intimacy_level(npc, relationship, manipulation_type)
-    return {"npc_id": npc_id, "npc_name": npc.get("npc_name", "Unknown"), "manipulation_type": manipulation_type, "content": content, "leverage_used": leverage_used, "intimacy_level": intimacy_level, "goal": goal}
 
-async def _internal_analyze_manipulation_potential_logic(ctx: RunContextWrapper, npc_id: int, player_stats: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    context = ctx.context
-    npc = await _internal_get_npc_details_logic(ctx, npc_id)
-    relationship = await get_relationship_status(context.user_id, context.conversation_id, npc_id) # Assumes external
-    leverage = await get_manipulation_leverage(context.user_id, context.conversation_id, npc_id) # Assumes external
-    if not player_stats: player_stats = await _internal_get_player_stats_logic(ctx)
-    dom_pot = min(100, npc.get("dominance", 0) - player_stats.get("willpower", 50) + 50)
-    sed_pot = min(100, relationship.get("closeness", 0) + player_stats.get("lust", 20))
-    blk_pot = min(100, 50 + (len(leverage) * 15))
-    types = [{"type": "domination", "potential": dom_pot}, {"type": "seduction", "potential": sed_pot}, {"type": "blackmail", "potential": blk_pot}]
-    most_eff = max(types, key=lambda x: x["potential"])
-    return {"npc_id": npc_id, "npc_name": npc.get("npc_name", "Unknown"), "overall_potential": most_eff["potential"], "manipulation_types": types, "most_effective_type": most_eff["type"], "relationship": relationship, "available_leverage": leverage, "femdom_compatible": npc.get("sex", "female") == "female" and dom_pot > 60}
-
-# Resolution Path Tools
-
-async def _internal_track_story_beat_logic(ctx: RunContextWrapper, conflict_id: int, path_id: str, beat_description: str, involved_npcs: List[int], progress_value: float) -> Dict[str, Any]:
+# REFACTORED: Create conflict memory using canon
+async def _internal_create_conflict_memory_logic(ctx: RunContextWrapper, conflict_id: int, memory_text: str, significance: int = 5) -> int:
     context = ctx.context
     try:
         async with get_db_connection_context() as conn:
-            async with conn.transaction():
-                beat_id = await conn.fetchval("INSERT INTO PathStoryBeats (conflict_id, path_id, description, involved_npcs, progress_value, created_at) VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP) RETURNING beat_id", conflict_id, path_id, beat_description, json.dumps(involved_npcs), progress_value)
-                path_row = await conn.fetchrow("SELECT progress, is_completed FROM ResolutionPaths WHERE conflict_id = $1 AND path_id = $2", conflict_id, path_id)
-                if not path_row: return {"error": "Resolution path not found"}
-                current_progress, is_completed = path_row["progress"], path_row["is_completed"]
-                new_progress = min(100, current_progress + progress_value)
-                is_now_completed = new_progress >= 100
-                await conn.execute("UPDATE ResolutionPaths SET progress = $1, is_completed = $2, completion_date = CASE WHEN $2 = TRUE THEN CURRENT_TIMESTAMP ELSE NULL END WHERE conflict_id = $3 AND path_id = $4", new_progress, is_now_completed, conflict_id, path_id)
-                if is_now_completed: await _internal_check_conflict_advancement_logic(ctx, conflict_id)
-                await _internal_create_conflict_memory_logic(ctx, conflict_id, f"Progress made on path '{path_id}': {beat_description}", significance=6)
-                return {"beat_id": beat_id, "conflict_id": conflict_id, "path_id": path_id, "description": beat_description, "progress_value": progress_value, "new_progress": new_progress, "is_completed": is_now_completed}
+            # Create the memory event
+            memory_id = await conn.fetchval("""
+                INSERT INTO ConflictMemoryEvents 
+                (conflict_id, memory_text, significance, entity_type, entity_id, 
+                 user_id, conversation_id) 
+                VALUES ($1, $2, $3, $4, $5, $6, $7) 
+                RETURNING id
+            """, conflict_id, memory_text, significance, "conflict", conflict_id, 
+            context.user_id, context.conversation_id)
+            
+            # REFACTORED: Also log as canonical event
+            await canon.log_canonical_event(
+                ctx, conn,
+                f"Conflict {conflict_id}: {memory_text}",
+                tags=["conflict", "memory", f"significance_{significance}"],
+                significance=significance
+            )
+            
+            return memory_id if memory_id else 0
     except Exception as e:
-        logger.error(f"Error tracking story beat: {e}", exc_info=True)
-        raise
-        
-async def _internal_resolve_conflict_logic(ctx: RunContextWrapper, conflict_id: int) -> Dict[str, Any]:
-    context = ctx.context
-    try:
-        async with get_db_connection_context() as conn:
-            conflict_row = await conn.fetchrow("SELECT conflict_name, conflict_type, phase, progress FROM Conflicts WHERE conflict_id = $1 AND user_id = $2 AND conversation_id = $3", conflict_id, context.user_id, context.conversation_id)
-            if not conflict_row: return {"error": "Conflict not found"}
-            conflict_name, conflict_type, phase, progress = conflict_row["conflict_name"], conflict_row["conflict_type"], conflict_row["phase"], conflict_row["progress"]
-            if phase != "resolution" and progress < 90: return {"error": "Conflict is not ready to be resolved."}
-            player_row = await conn.fetchrow("SELECT involvement_level, faction FROM PlayerConflictInvolvement WHERE conflict_id = $1 AND user_id = $2 AND conversation_id = $3", conflict_id, context.user_id, context.conversation_id)
-            player_involvement, player_faction = (player_row["involvement_level"] if player_row else "none", player_row["faction"] if player_row else "neutral")
-            completed_paths = await conn.fetch("SELECT path_id, name FROM ResolutionPaths WHERE conflict_id = $1 AND is_completed = TRUE", conflict_id)
-            outcome, description = ("unresolved", "Conflict ended without clear resolution.") if not completed_paths else ("resolved", f"Conflict resolved with {player_faction if player_involvement != 'none' else 'neutral'} gaining advantage.")
-            async with conn.transaction():
-                await conn.execute("UPDATE Conflicts SET is_active = FALSE, progress = 100, phase = 'concluded', outcome = $1, resolution_description = $2, resolved_at = CURRENT_TIMESTAMP WHERE conflict_id = $3", outcome, description, conflict_id)
-                consequences = generate_conflict_consequences(conflict_type, outcome, player_involvement, player_faction, [dict(row) for row in completed_paths]) # Local helper
-                for con in consequences:
-                    await conn.execute("INSERT INTO ConflictConsequences (conflict_id, consequence_type, description, affected_entity_type, affected_entity_id, magnitude, is_permanent) VALUES ($1, $2, $3, $4, $5, $6, $7)", conflict_id, con.get("type", "general"), con.get("description", ""), con.get("affected_entity_type", "player"), con.get("affected_entity_id", 0), con.get("magnitude", 1), con.get("is_permanent", False))
-                    if con.get("affected_entity_type") == "player" and "stat_changes" in con:
-                        for stat, value in con["stat_changes"].items(): await apply_stat_change(context.user_id, context.conversation_id, stat, value) # Assumes external
-                await _internal_create_conflict_memory_logic(ctx, conflict_id, f"The conflict '{conflict_name}' has been resolved. {description}", significance=9)
-                return {"conflict_id": conflict_id, "outcome": outcome, "description": description, "consequences": consequences, "resolved_at": "now"}
-    except Exception as e:
-        logger.error(f"Error resolving conflict: {e}", exc_info=True)
-        raise
-        
-# Faction Power Struggle Tools (Added based on review)
+        logger.error(f"Error creating conflict memory: {e}", exc_info=True)
+        return 0
 
-async def _internal_initiate_faction_power_struggle_logic(ctx: RunContextWrapper, conflict_id: int, faction_id: int, challenger_npc_id: int, target_npc_id: int, prize: str, approach: str, is_public: bool = False) -> Dict[str, Any]:
+# REFACTORED: Generate player manipulation attempts with canon NPCs
+async def _internal_generate_player_manipulation_attempts_logic(ctx: RunContextWrapper, conflict_id: int, stakeholder_npcs: List[Dict[str, Any]]) -> None:
     context = ctx.context
-    faction_name = await _internal_get_faction_name_logic(ctx, faction_id)
-    challenger_name = await _internal_get_npc_name_logic(ctx, challenger_npc_id)
-    target_name = await _internal_get_npc_name_logic(ctx, target_npc_id)
-    struggle_details = await _internal_generate_struggle_details_logic(ctx, faction_id, challenger_npc_id, target_npc_id, prize, approach)
-    try:
-        async with get_db_connection_context() as conn:
-            async with conn.transaction():
-                struggle_id = await conn.fetchval("INSERT INTO InternalFactionConflicts (faction_id, conflict_name, description, primary_npc_id, target_npc_id, prize, approach, public_knowledge, current_phase, progress, parent_conflict_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING struggle_id", faction_id, struggle_details["conflict_name"], struggle_details["description"], challenger_npc_id, target_npc_id, prize, approach, is_public, "brewing", 10, conflict_id)
-                for member in struggle_details.get("faction_members", []): await conn.execute("INSERT INTO FactionStruggleMembers (struggle_id, npc_id, position, side, standing, loyalty_strength, reason) VALUES ($1, $2, $3, $4, $5, $6, $7)", struggle_id, member["npc_id"], member.get("position", "Member"), member.get("side", "neutral"), member.get("standing", 50), member.get("loyalty_strength", 50), member.get("reason", ""))
-                for diff in struggle_details.get("ideological_differences", []): await conn.execute("INSERT INTO FactionIdeologicalDifferences (struggle_id, issue, incumbent_position, challenger_position) VALUES ($1, $2, $3, $4)", struggle_id, diff.get("issue", ""), diff.get("incumbent_position", ""), diff.get("challenger_position", ""))
-                await _internal_create_conflict_memory_logic(ctx, conflict_id, f"Internal power struggle in {faction_name} between {challenger_name} and {target_name}.", significance=7)
-                return {"struggle_id": struggle_id, "faction_id": faction_id, "faction_name": faction_name, "conflict_name": struggle_details["conflict_name"], "description": struggle_details["description"], "primary_npc_id": challenger_npc_id, "primary_npc_name": challenger_name, "target_npc_id": target_npc_id, "target_npc_name": target_name, "prize": prize, "approach": approach, "public_knowledge": is_public, "current_phase": "brewing", "progress": 10}
-    except Exception as e:
-        logger.error(f"Error initiating faction power struggle: {e}", exc_info=True)
-        raise
+    eligible_npcs = [
+        npc for npc in stakeholder_npcs 
+        if npc.get("sex", "female") == "female" and 
+        (npc.get("dominance", 0) > 70 or 
+         npc.get("relationship_with_player", {}).get("closeness", 0) > 70)
+    ]
+    
+    if not eligible_npcs: 
+        return
+    
+    manipulation_types = ["domination", "blackmail", "seduction", "coercion", "bribery"]
+    involvement_levels = ["observing", "participating", "leading"]
+    factions = ["a", "b", "neutral"]
+    
+    for npc in eligible_npcs[:2]:  # Limit to 2 NPCs
+        if random.random() > 0.7: 
+            continue
+            
+        # Determine manipulation type based on NPC traits
+        if npc.get("dominance", 0) > 80:
+            manip_type = "domination"
+        elif npc.get("cruelty", 0) > 70:
+            manip_type = "blackmail"
+        elif npc.get("relationship_with_player", {}).get("closeness", 0) > 80:
+            manip_type = "seduction"
+        else:
+            manip_type = random.choice(manipulation_types)
+        
+        involvement = random.choice(involvement_levels)
+        faction_choice = random.choice(factions)
+        
+        # Generate content
+        goal = {
+            "faction": faction_choice, 
+            "involvement_level": involvement
+        }
+        
+        # Get manipulation content
+        if manip_type == "domination":
+            content = generate_domination_content(npc, npc.get("relationship_with_player", {}), goal, {})
+        elif manip_type == "seduction":
+            content = generate_seduction_content(npc, npc.get("relationship_with_player", {}), goal, {})
+        elif manip_type == "blackmail":
+            content = generate_blackmail_content(npc, npc.get("relationship_with_player", {}), goal, {}, [])
+        else:
+            content = generate_generic_manipulation_content(npc, npc.get("relationship_with_player", {}), goal, {})
+        
+        goal["specific_actions"] = random.choice(["Spy on the other faction", "Convince others to join", "Sabotage opposition efforts", "Gather intelligence"])
+        
+        leverage = generate_leverage(npc, npc.get("relationship_with_player", {}), manip_type)
+        intimacy = calculate_intimacy_level(npc, npc.get("relationship_with_player", {}), manip_type)
+        
+        # Create the manipulation attempt
+        await _internal_create_manipulation_attempt_logic(
+            ctx, conflict_id, npc["npc_id"], manip_type, content, goal, leverage, intimacy
+        )
 
+# REFACTORED: Faction coup attempt with canon integration
 async def _internal_attempt_faction_coup_logic(ctx: RunContextWrapper, struggle_id: int, approach: str, supporting_npcs: List[int], resources_committed: Dict[str, int]) -> Dict[str, Any]:
     context = ctx.context
     try:
         async with get_db_connection_context() as conn:
-            struggle_row = await conn.fetchrow("SELECT faction_id, primary_npc_id, target_npc_id, parent_conflict_id FROM InternalFactionConflicts WHERE struggle_id = $1", struggle_id)
-            if not struggle_row: return {"error": "Struggle not found"}
-            faction_id, primary_npc_id, target_npc_id, parent_conflict_id = struggle_row["faction_id"], struggle_row["primary_npc_id"], struggle_row["target_npc_id"], struggle_row["parent_conflict_id"]
-            resource_manager = ResourceManager(context.user_id, context.conversation_id) # Assumes ResourceManager is sync init
+            struggle_row = await conn.fetchrow("""
+                SELECT faction_id, primary_npc_id, target_npc_id, parent_conflict_id 
+                FROM InternalFactionConflicts 
+                WHERE struggle_id = $1
+            """, struggle_id)
+            
+            if not struggle_row: 
+                return {"error": "Struggle not found"}
+                
+            faction_id = struggle_row["faction_id"]
+            primary_npc_id = struggle_row["primary_npc_id"]
+            target_npc_id = struggle_row["target_npc_id"]
+            parent_conflict_id = struggle_row["parent_conflict_id"]
+            
+            # REFACTORED: Use canon resource management
             if sum(resources_committed.values()) > 0:
-                resource_check = await resource_manager.check_resources(resources_committed.get("money", 0), resources_committed.get("supplies", 0), resources_committed.get("influence", 0)) # Assumes method is async
-                if not resource_check["has_resources"]: return {"error": "Insufficient resources", "missing": resource_check["missing"], "current": resource_check["current"]}
-                await resource_manager.commit_resources(resources_committed.get("money", 0), resources_committed.get("supplies", 0), resources_committed.get("influence", 0), "Committed to coup") # Assumes method is async
-            success_chance = await _internal_calculate_coup_success_chance_logic(ctx, struggle_id, approach, supporting_npcs, resources_committed)
+                resource_result = await canon.adjust_player_resource(
+                    ctx, conn, "Chase", "money", -resources_committed.get("money", 0), 
+                    "coup_attempt", f"Committed to coup in struggle {struggle_id}"
+                )
+                
+                if resource_result['new_value'] < 0:
+                    return {"error": "Insufficient money", "current": resource_result['old_value']}
+                    
+                await canon.adjust_player_resource(
+                    ctx, conn, "Chase", "supplies", -resources_committed.get("supplies", 0),
+                    "coup_attempt", f"Committed to coup in struggle {struggle_id}"
+                )
+                
+                await canon.adjust_player_resource(
+                    ctx, conn, "Chase", "influence", -resources_committed.get("influence", 0),
+                    "coup_attempt", f"Committed to coup in struggle {struggle_id}"
+                )
+            
+            # Calculate success chance
+            success_chance = await _internal_calculate_coup_success_chance_logic(
+                ctx, struggle_id, approach, supporting_npcs, resources_committed
+            )
             success = random.random() * 100 <= success_chance
+            
             async with conn.transaction():
-                coup_id = await conn.fetchval("INSERT INTO FactionCoupAttempts (struggle_id, approach, supporting_npcs, resources_committed, success, success_chance, timestamp) VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP) RETURNING id", struggle_id, approach, json.dumps(supporting_npcs), json.dumps(resources_committed), success, success_chance)
-                primary_name, target_name, faction_name = await _internal_get_npc_name_logic(ctx, primary_npc_id), await _internal_get_npc_name_logic(ctx, target_npc_id), await _internal_get_faction_name_logic(ctx, faction_id)
+                # Record coup attempt
+                coup_id = await conn.fetchval("""
+                    INSERT INTO FactionCoupAttempts 
+                    (struggle_id, approach, supporting_npcs, resources_committed, 
+                     success, success_chance, timestamp) 
+                    VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP) 
+                    RETURNING id
+                """, struggle_id, approach, json.dumps(supporting_npcs), 
+                json.dumps(resources_committed), success, success_chance)
+                
+                # Get names
+                primary_name = await _internal_get_npc_name_logic(ctx, primary_npc_id)
+                target_name = await _internal_get_npc_name_logic(ctx, target_npc_id)
+                faction_name = await _internal_get_faction_name_logic(ctx, faction_id)
+                
+                player_name = "Chase"
                 stat_changes = {}
+                
                 if success:
-                    await conn.execute("UPDATE InternalFactionConflicts SET current_phase = $1, progress = 100, resolved_at = CURRENT_TIMESTAMP WHERE struggle_id = $2", "resolved", struggle_id)
-                    await _internal_create_conflict_memory_logic(ctx, parent_conflict_id, f"{primary_name}'s coup against {target_name} in {faction_name} succeeded.", significance=8)
-                    result = {"outcome": "success", "description": f"{primary_name} overthrew {target_name}."}
-                    await apply_stat_change(context.user_id, context.conversation_id, "corruption", 3) # Assumes external
-                    await apply_stat_change(context.user_id, context.conversation_id, "confidence", 5) # Assumes external
-                    stat_changes.update({"corruption": 3, "confidence": 5})
+                    # Update struggle status
+                    await conn.execute("""
+                        UPDATE InternalFactionConflicts 
+                        SET current_phase = $1, progress = 100, resolved_at = CURRENT_TIMESTAMP 
+                        WHERE struggle_id = $2
+                    """, "resolved", struggle_id)
+                    
+                    # REFACTORED: Log canonical event
+                    await canon.log_canonical_event(
+                        ctx, conn,
+                        f"{primary_name}'s coup against {target_name} in {faction_name} succeeded",
+                        tags=["conflict", "coup", "success", "faction_politics"],
+                        significance=8
+                    )
+                    
+                    result = {
+                        "outcome": "success", 
+                        "description": f"{primary_name} successfully overthrew {target_name} in {faction_name}."
+                    }
+                    
+                    # REFACTORED: Update player stats canonically
+                    stats_row = await conn.fetchrow("""
+                        SELECT corruption, confidence FROM PlayerStats
+                        WHERE user_id = $1 AND conversation_id = $2 AND player_name = $3
+                    """, context.user_id, context.conversation_id, player_name)
+                    
+                    if stats_row:
+                        new_corruption = stats_row['corruption'] + 3
+                        new_confidence = stats_row['confidence'] + 5
+                    else:
+                        await canon.find_or_create_player_stats(ctx, conn, player_name)
+                        new_corruption = 3
+                        new_confidence = 5
+                    
+                    await canon.update_player_stat_canonically(
+                        ctx, conn, player_name, "corruption", new_corruption,
+                        f"Successful coup participation in struggle {struggle_id}"
+                    )
+                    await canon.update_player_stat_canonically(
+                        ctx, conn, player_name, "confidence", new_confidence,
+                        f"Successful coup participation in struggle {struggle_id}"
+                    )
+                    
+                    stat_changes = {"corruption": 3, "confidence": 5}
                 else:
-                    await conn.execute("UPDATE InternalFactionConflicts SET current_phase = $1, primary_npc_id = $2, target_npc_id = $3, description = $4 WHERE struggle_id = $5", "aftermath", target_npc_id, primary_npc_id, f"Failed coup by {primary_name}.", struggle_id)
-                    await _internal_create_conflict_memory_logic(ctx, parent_conflict_id, f"{primary_name}'s coup against {target_name} in {faction_name} failed.", significance=8)
-                    result = {"outcome": "failure", "description": f"{primary_name}'s coup failed."}
-                    await apply_stat_change(context.user_id, context.conversation_id, "mental_resilience", 4) # Assumes external
-                    stat_changes.update({"mental_resilience": 4})
-                await conn.execute("UPDATE FactionCoupAttempts SET result = $1 WHERE id = $2", json.dumps(result), coup_id)
-                resources = await resource_manager.get_resources() # Assumes method is async
-                return {"coup_id": coup_id, "struggle_id": struggle_id, "approach": approach, "success": success, "success_chance": success_chance, "result": result, "stat_changes": stat_changes, "resources": resources}
+                    # Failed coup - reverse the leadership
+                    await conn.execute("""
+                        UPDATE InternalFactionConflicts 
+                        SET current_phase = $1, primary_npc_id = $2, target_npc_id = $3, 
+                            description = $4 
+                        WHERE struggle_id = $5
+                    """, "aftermath", target_npc_id, primary_npc_id, 
+                    f"Failed coup attempt by {primary_name}. {target_name} consolidates power.", 
+                    struggle_id)
+                    
+                    # REFACTORED: Log canonical event
+                    await canon.log_canonical_event(
+                        ctx, conn,
+                        f"{primary_name}'s coup against {target_name} in {faction_name} failed",
+                        tags=["conflict", "coup", "failure", "faction_politics"],
+                        significance=8
+                    )
+                    
+                    result = {
+                        "outcome": "failure", 
+                        "description": f"{primary_name}'s coup failed. {target_name} remains in power."
+                    }
+                    
+                    # REFACTORED: Update player stats canonically
+                    stats_row = await conn.fetchrow("""
+                        SELECT mental_resilience FROM PlayerStats
+                        WHERE user_id = $1 AND conversation_id = $2 AND player_name = $3
+                    """, context.user_id, context.conversation_id, player_name)
+                    
+                    if stats_row:
+                        new_resilience = stats_row['mental_resilience'] + 4
+                    else:
+                        await canon.find_or_create_player_stats(ctx, conn, player_name)
+                        new_resilience = 4
+                    
+                    await canon.update_player_stat_canonically(
+                        ctx, conn, player_name, "mental_resilience", new_resilience,
+                        f"Failed coup participation in struggle {struggle_id}"
+                    )
+                    
+                    stat_changes = {"mental_resilience": 4}
+                
+                # Update coup attempt result
+                await conn.execute("""
+                    UPDATE FactionCoupAttempts 
+                    SET result = $1 
+                    WHERE id = $2
+                """, json.dumps(result), coup_id)
+                
+                # Get current resources
+                resources = {}
+                resource_row = await conn.fetchrow("""
+                    SELECT money, supplies, influence FROM PlayerResources
+                    WHERE user_id = $1 AND conversation_id = $2 AND player_name = $3
+                """, context.user_id, context.conversation_id, player_name)
+                
+                if resource_row:
+                    resources = {
+                        "money": resource_row['money'],
+                        "supplies": resource_row['supplies'],
+                        "influence": resource_row['influence']
+                    }
+                
+                return {
+                    "coup_id": coup_id, 
+                    "struggle_id": struggle_id, 
+                    "approach": approach, 
+                    "success": success, 
+                    "success_chance": success_chance, 
+                    "result": result, 
+                    "stat_changes": stat_changes, 
+                    "resources": resources
+                }
     except Exception as e:
         logger.error(f"Error attempting faction coup: {e}", exc_info=True)
         raise
 
-# Narrative Integration Tool (Added based on review)
+# REFACTORED: Create conflict record with canon
+async def _internal_create_conflict_record_logic(ctx: RunContextWrapper, conflict_data: Dict[str, Any], current_day: int) -> int:
+    context = ctx.context
+    try:
+        async with get_db_connection_context() as conn:
+            success_rate = {
+                "minor": 0.75, 
+                "standard": 0.5, 
+                "major": 0.25, 
+                "catastrophic": 0.1
+            }.get(conflict_data.get("conflict_type", "standard"), 0.5)
+            
+            conflict_id = await conn.fetchval("""
+                INSERT INTO Conflicts 
+                (user_id, conversation_id, conflict_name, conflict_type, description, 
+                 progress, phase, start_day, estimated_duration, success_rate, 
+                 outcome, is_active) 
+                VALUES ($1, $2, $3, $4, $5, 0.0, 'brewing', $6, $7, $8, 'pending', TRUE) 
+                RETURNING conflict_id
+            """, context.user_id, context.conversation_id, 
+            conflict_data.get("conflict_name", "Unnamed Conflict"), 
+            conflict_data.get("conflict_type", "standard"), 
+            conflict_data.get("description", "A conflict has emerged"), 
+            current_day, 
+            conflict_data.get("estimated_duration", 7), 
+            success_rate)
+            
+            # REFACTORED: Log canonical event
+            await canon.log_canonical_event(
+                ctx, conn,
+                f"New conflict created: {conflict_data.get('conflict_name', 'Unnamed')} ({conflict_data.get('conflict_type', 'standard')})",
+                tags=["conflict", "creation", conflict_data.get("conflict_type", "standard")],
+                significance=7
+            )
+            
+            return conflict_id if conflict_id else 0
+    except Exception as e:
+        logger.error(f"Error creating conflict record: {e}", exc_info=True)
+        raise
 
+# REFACTORED: Resolve conflict with canon rewards
+async def _internal_resolve_conflict_logic(ctx: RunContextWrapper, conflict_id: int) -> Dict[str, Any]:
+    context = ctx.context
+    try:
+        async with get_db_connection_context() as conn:
+            conflict_row = await conn.fetchrow("""
+                SELECT conflict_name, conflict_type, phase, progress 
+                FROM Conflicts 
+                WHERE conflict_id = $1 AND user_id = $2 AND conversation_id = $3
+            """, conflict_id, context.user_id, context.conversation_id)
+            
+            if not conflict_row: 
+                return {"error": "Conflict not found"}
+                
+            conflict_name = conflict_row["conflict_name"]
+            conflict_type = conflict_row["conflict_type"]
+            phase = conflict_row["phase"]
+            progress = conflict_row["progress"]
+            
+            if phase != "resolution" and progress < 90: 
+                return {"error": "Conflict is not ready to be resolved. Must be in resolution phase or have 90%+ progress."}
+            
+            # Get player involvement
+            player_row = await conn.fetchrow("""
+                SELECT involvement_level, faction 
+                FROM PlayerConflictInvolvement 
+                WHERE conflict_id = $1 AND user_id = $2 AND conversation_id = $3
+            """, conflict_id, context.user_id, context.conversation_id)
+            
+            player_involvement = player_row["involvement_level"] if player_row else "none"
+            player_faction = player_row["faction"] if player_row else "neutral"
+            
+            # Get completed paths
+            completed_paths = await conn.fetch("""
+                SELECT path_id, name 
+                FROM ResolutionPaths 
+                WHERE conflict_id = $1 AND is_completed = TRUE
+            """, conflict_id)
+            
+            # Determine outcome
+            if not completed_paths:
+                outcome = "unresolved"
+                description = "The conflict ended without clear resolution."
+            else:
+                outcome = "resolved"
+                description = f"The conflict was resolved with {player_faction if player_involvement != 'none' else 'neutral'} faction gaining advantage."
+            
+            async with conn.transaction():
+                # Update conflict status
+                await conn.execute("""
+                    UPDATE Conflicts 
+                    SET is_active = FALSE, progress = 100, phase = 'concluded', 
+                        outcome = $1, resolution_description = $2, resolved_at = CURRENT_TIMESTAMP 
+                    WHERE conflict_id = $3
+                """, outcome, description, conflict_id)
+                
+                # Generate consequences
+                consequences = generate_conflict_consequences(
+                    conflict_type, outcome, player_involvement, 
+                    player_faction, [dict(row) for row in completed_paths]
+                )
+                
+                # Apply consequences
+                player_name = "Chase"
+                for con in consequences:
+                    # Store consequence record
+                    await conn.execute("""
+                        INSERT INTO ConflictConsequences 
+                        (conflict_id, consequence_type, description, affected_entity_type, 
+                         affected_entity_id, magnitude, is_permanent) 
+                        VALUES ($1, $2, $3, $4, $5, $6, $7)
+                    """, conflict_id, con.get("type", "general"), 
+                    con.get("description", ""), con.get("affected_entity_type", "player"), 
+                    con.get("affected_entity_id", 0), con.get("magnitude", 1), 
+                    con.get("is_permanent", False))
+                    
+                    # REFACTORED: Apply player stat changes canonically
+                    if con.get("affected_entity_type") == "player" and "stat_changes" in con:
+                        for stat, change in con["stat_changes"].items():
+                            # Get current value
+                            current_val = await conn.fetchval(
+                                f"SELECT {stat} FROM PlayerStats WHERE user_id=$1 AND conversation_id=$2 AND player_name=$3",
+                                context.user_id, context.conversation_id, player_name
+                            )
+                            
+                            if current_val is None:
+                                await canon.find_or_create_player_stats(ctx, conn, player_name)
+                                current_val = 0
+                            
+                            new_val = current_val + change
+                            
+                            await canon.update_player_stat_canonically(
+                                ctx, conn, player_name, stat, new_val,
+                                f"Conflict resolution reward: {con.get('description', 'Conflict outcome')}"
+                            )
+                    
+                    # REFACTORED: Add item rewards canonically
+                    elif con.get("type") == "item_reward" and "item" in con:
+                        item = con["item"]
+                        await canon.find_or_create_inventory_item(
+                            ctx, conn,
+                            item_name=item["name"],
+                            player_name=player_name,
+                            item_description=item.get("description", ""),
+                            item_category=item.get("category", "conflict_reward"),
+                            item_properties={
+                                "rarity": item.get("rarity", "common"),
+                                "resolution_style": item.get("resolution_style", "neutral"),
+                                "source": "conflict_resolution",
+                                "conflict_id": conflict_id,
+                                "conflict_type": conflict_type
+                            },
+                            quantity=1,
+                            equipped=False
+                        )
+                    
+                    # REFACTORED: Handle perk rewards (store as special inventory items)
+                    elif con.get("type") == "perk_reward" and "perk" in con:
+                        perk = con["perk"]
+                        await canon.find_or_create_inventory_item(
+                            ctx, conn,
+                            item_name=f"Perk: {perk['name']}",
+                            player_name=player_name,
+                            item_description=perk.get("description", ""),
+                            item_category="perk",
+                            item_properties={
+                                "tier": perk.get("tier", 1),
+                                "resolution_style": perk.get("resolution_style", "neutral"),
+                                "source": "conflict_resolution",
+                                "conflict_id": conflict_id,
+                                "perk_type": perk.get("category", "conflict_resolution")
+                            },
+                            quantity=1,
+                            equipped=True  # Perks are automatically "equipped"
+                        )
+                    
+                    # REFACTORED: Handle special rewards
+                    elif con.get("type") == "special_reward" and "special_reward" in con:
+                        special = con["special_reward"]
+                        await canon.find_or_create_inventory_item(
+                            ctx, conn,
+                            item_name=special["name"],
+                            player_name=player_name,
+                            item_description=special.get("description", ""),
+                            item_category="unique_conflict_reward",
+                            item_properties={
+                                "effect": special.get("effect", ""),
+                                "resolution_style": special.get("resolution_style", "neutral"),
+                                "source": "conflict_resolution",
+                                "conflict_id": conflict_id,
+                                "unique": True
+                            },
+                            quantity=1,
+                            equipped=False
+                        )
+                
+                # REFACTORED: Log canonical event for resolution
+                await canon.log_canonical_event(
+                    ctx, conn,
+                    f"Conflict '{conflict_name}' has been resolved. {description}",
+                    tags=["conflict", "resolution", outcome, conflict_type],
+                    significance=9
+                )
+                
+                return {
+                    "conflict_id": conflict_id, 
+                    "outcome": outcome, 
+                    "description": description, 
+                    "consequences": consequences, 
+                    "resolved_at": "now"
+                }
+    except Exception as e:
+        logger.error(f"Error resolving conflict: {e}", exc_info=True)
+        raise
+
+# REFACTORED: Extract NPCs from narrative with canon consideration
+async def _internal_extract_npcs_from_narrative_logic(ctx: RunContextWrapper, narrative_text: str) -> List[int]:
+    context = ctx.context
+    try:
+        async with get_db_connection_context() as conn:
+            # Get all introduced NPCs
+            npc_rows = await conn.fetch("""
+                SELECT npc_id, npc_name 
+                FROM NPCStats 
+                WHERE user_id = $1 AND conversation_id = $2 AND introduced = TRUE
+            """, context.user_id, context.conversation_id)
+            
+            mentioned_npc_ids = []
+            
+            # Check which NPCs are mentioned in the narrative
+            for row in npc_rows:
+                if row["npc_name"] in narrative_text:
+                    mentioned_npc_ids.append(row["npc_id"])
+            
+            # REFACTORED: Check for new NPC names that might need creation
+            # This is a simple pattern match - in production you'd want more sophisticated NER
+            import re
+            # Look for capitalized names that might be NPCs
+            potential_names = re.findall(r'\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\b', narrative_text)
+            
+            existing_names = [row["npc_name"] for row in npc_rows]
+            new_names = [name for name in potential_names if name not in existing_names and len(name.split()) <= 3]
+            
+            # For truly new NPCs mentioned, create them canonically
+            for new_name in new_names[:3]:  # Limit to 3 new NPCs per narrative
+                # Skip common words that might be capitalized
+                if new_name.lower() in ['the', 'player', 'you', 'i', 'we', 'they', 'he', 'she']:
+                    continue
+                    
+                # Create the new NPC canonically
+                npc_id = await canon.find_or_create_npc(
+                    ctx, conn,
+                    npc_name=new_name,
+                    role="mentioned_in_narrative"
+                )
+                mentioned_npc_ids.append(npc_id)
+            
+            return mentioned_npc_ids
+    except Exception as e:
+        logger.error(f"Error extracting NPCs from narrative: {e}", exc_info=True)
+        return []
+
+# REFACTORED: Add conflict to narrative with canon
 async def _internal_add_conflict_to_narrative_logic(ctx: RunContextWrapper, narrative_text: str) -> Dict[str, Any]:
-    context = ctx.context # Added this
+    context = ctx.context
     current_day = await _internal_get_current_day_logic(ctx)
     active_conflicts = await _internal_get_active_conflicts_logic(ctx)
-    if len(active_conflicts) >= 3: return {"trigger_conflict": False, "reason": "Too many active conflicts", "existing_conflicts": len(active_conflicts)}
+    
+    if len(active_conflicts) >= 3: 
+        return {
+            "trigger_conflict": False, 
+            "reason": "Too many active conflicts", 
+            "existing_conflicts": len(active_conflicts)
+        }
+    
+    # Analyze narrative for conflict potential
     prompt = f"""
     Analyze the following narrative text to determine if it contains potential for a character-driven conflict:
     
@@ -685,23 +927,58 @@ async def _internal_add_conflict_to_narrative_logic(ctx: RunContextWrapper, narr
     Return your response in JSON format.
     """
     
-    response = await get_chatgpt_response(context.conversation_id, "conflict_analysis", prompt) # Assumes external
+    response = await get_chatgpt_response(context.conversation_id, "conflict_analysis", prompt)
     conflict_analysis = {}
-    if response and "function_args" in response: conflict_analysis = response["function_args"]
+    
+    if response and "function_args" in response:
+        conflict_analysis = response["function_args"]
     else:
         try:
             response_text = response.get("response", "{}")
             json_match = re.search(r'{.*}', response_text, re.DOTALL)
-            if json_match: conflict_analysis = json.loads(json_match.group(0))
-        except (json.JSONDecodeError, TypeError): pass
-    if not conflict_analysis.get("conflict_potential", False): return {"trigger_conflict": False, "reason": "No significant conflict potential", "analysis": conflict_analysis}
+            if json_match: 
+                conflict_analysis = json.loads(json_match.group(0))
+        except (json.JSONDecodeError, TypeError):
+            pass
+    
+    if not conflict_analysis.get("conflict_potential", False): 
+        return {
+            "trigger_conflict": False, 
+            "reason": "No significant conflict potential", 
+            "analysis": conflict_analysis
+        }
+    
+    # Extract NPCs from narrative (now with canon creation)
     mentioned_npcs_ids = await _internal_extract_npcs_from_narrative_logic(ctx, narrative_text)
-    if not mentioned_npcs_ids or len(mentioned_npcs_ids) < 2: return {"trigger_conflict": False, "reason": "Not enough NPCs involved", "mentioned_npcs": mentioned_npcs_ids}
+    
+    if not mentioned_npcs_ids or len(mentioned_npcs_ids) < 2: 
+        return {
+            "trigger_conflict": False, 
+            "reason": "Not enough NPCs involved", 
+            "mentioned_npcs": mentioned_npcs_ids
+        }
+    
+    # Create the conflict
     conflict_type = conflict_analysis.get("conflict_type", "minor")
-    conflict_data = {"conflict_type": conflict_type, "conflict_name": conflict_analysis.get("conflict_name", f"Narrative-triggered {conflict_type} conflict"), "description": conflict_analysis.get("description", "A conflict from events"), "narrative_source": narrative_text[:100] + "..."}
+    conflict_data = {
+        "conflict_type": conflict_type, 
+        "conflict_name": conflict_analysis.get("conflict_name", f"Narrative-triggered {conflict_type} conflict"), 
+        "description": conflict_analysis.get("description", "A conflict arising from recent events"), 
+        "narrative_source": narrative_text[:100] + "..."
+    }
+    
+    # Create conflict record
     conflict_id = await _internal_create_conflict_record_logic(ctx, conflict_data, current_day)
-    stakeholder_npcs_details = [await _internal_get_npc_details_logic(ctx, npc_id) for npc_id in mentioned_npcs_ids[:4] if await _internal_get_npc_details_logic(ctx, npc_id)]
-    await _internal_create_stakeholders_logic(ctx, conflict_id, conflict_data, stakeholder_npcs_details) # Pass details
+    
+    # Get NPC details for stakeholders
+    stakeholder_npcs_details = []
+    for npc_id in mentioned_npcs_ids[:4]:  # Limit to 4 stakeholders
+        npc_details = await _internal_get_npc_details_logic(ctx, npc_id)
+        if npc_details:
+            stakeholder_npcs_details.append(npc_details)
+    
+    # Create stakeholders with canon integration
+    await _internal_create_stakeholders_logic(ctx, conflict_id, conflict_data, stakeholder_npcs_details)
 
     # Generate basic resolution paths
     default_paths = [
@@ -711,7 +988,7 @@ async def _internal_add_conflict_to_narrative_logic(ctx: RunContextWrapper, narr
             "description": "Resolve the conflict through negotiation and compromise.",
             "approach_type": "social",
             "difficulty": 5,
-            "stakeholders_involved": [npc["npc_id"] for npc in stakeholder_npcs_details[:2]] if len(stakeholder_npcs_details) >= 2 else ([stakeholder_npcs_details[0]["npc_id"]] if stakeholder_npcs_details else []),
+            "stakeholders_involved": [npc["npc_id"] for npc in stakeholder_npcs_details[:2]] if len(stakeholder_npcs_details) >= 2 else [],
             "key_challenges": ["Building trust", "Finding common ground", "Managing expectations"]
         },
         {
@@ -720,30 +997,31 @@ async def _internal_add_conflict_to_narrative_logic(ctx: RunContextWrapper, narr
             "description": "Resolve the conflict through confrontation and decisive action.",
             "approach_type": "direct",
             "difficulty": 7,
-            "stakeholders_involved": [npc["npc_id"] for npc in stakeholder_npcs_details[1:3]] if len(stakeholder_npcs_details) >= 3 else ([stakeholder_npcs_details[0]["npc_id"]] if stakeholder_npcs_details else []),
+            "stakeholders_involved": [npc["npc_id"] for npc in stakeholder_npcs_details[1:3]] if len(stakeholder_npcs_details) >= 3 else [],
             "key_challenges": ["Overcoming resistance", "Managing consequences", "Securing victory"]
         }
     ]
     
-    conflict_data["resolution_paths"] = default_paths 
-    await _internal_create_resolution_paths_logic(ctx, conflict_id, {"resolution_paths": default_paths}) # CHANGED
+    conflict_data["resolution_paths"] = default_paths
+    await _internal_create_resolution_paths_logic(ctx, conflict_id, {"resolution_paths": default_paths})
     
-    await _internal_create_conflict_memory_logic( # CHANGED
-        ctx,
-        conflict_id,
-        f"A new conflict has emerged from the narrative: {conflict_data['conflict_name']}.",
-        significance=7
-    )
+    # REFACTORED: Log canonical event
+    async with get_db_connection_context() as conn:
+        await canon.log_canonical_event(
+            ctx, conn,
+            f"A new conflict emerged from the narrative: {conflict_data['conflict_name']}",
+            tags=["conflict", "narrative_triggered", conflict_type],
+            significance=7
+        )
     
     return {
         "trigger_conflict": True,
         "conflict_id": conflict_id,
         "conflict_name": conflict_data["conflict_name"],
         "conflict_type": conflict_type,
-        "stakeholders": [npc["npc_name"] for npc in stakeholder_npcs_details], # Use details for names
+        "stakeholders": [npc["npc_name"] for npc in stakeholder_npcs_details],
         "analysis": conflict_analysis
     }
-
 # Helper Functions
 
 async def _internal_get_npc_details_logic(ctx: RunContextWrapper, npc_id: int) -> Dict[str, Any]:
@@ -1007,16 +1285,76 @@ async def _internal_update_player_involvement_logic(ctx: RunContextWrapper, conf
     context = ctx.context
     try:
         async with get_db_connection_context() as conn:
-            exists = await conn.fetchval("SELECT 1 FROM PlayerConflictInvolvement WHERE conflict_id = $1 AND user_id = $2 AND conversation_id = $3", conflict_id, context.user_id, context.conversation_id)
-            level, faction = involvement_data.get("involvement_level", "observing"), involvement_data.get("faction", "neutral")
-            money, supplies, influence = involvement_data.get("resources_committed", {}).get("money", 0), involvement_data.get("resources_committed", {}).get("supplies", 0), involvement_data.get("resources_committed", {}).get("influence", 0)
-            actions, manipulated_by = json.dumps(involvement_data.get("actions_taken", [])), json.dumps(involvement_data.get("manipulated_by")) if involvement_data.get("manipulated_by") else None
+            # Check if player involvement already exists
+            exists = await conn.fetchval("""
+                SELECT 1 FROM PlayerConflictInvolvement 
+                WHERE conflict_id = $1 AND user_id = $2 AND conversation_id = $3
+            """, conflict_id, context.user_id, context.conversation_id)
+            
+            level = involvement_data.get("involvement_level", "observing")
+            faction = involvement_data.get("faction", "neutral")
+            money = involvement_data.get("resources_committed", {}).get("money", 0)
+            supplies = involvement_data.get("resources_committed", {}).get("supplies", 0)
+            influence = involvement_data.get("resources_committed", {}).get("influence", 0)
+            actions = json.dumps(involvement_data.get("actions_taken", []))
+            manipulated_by = json.dumps(involvement_data.get("manipulated_by")) if involvement_data.get("manipulated_by") else None
+            
+            # REFACTORED: Validate resources if committing any
+            player_name = "Chase"
+            if money > 0 or supplies > 0 or influence > 0:
+                # Check current resources
+                resource_row = await conn.fetchrow("""
+                    SELECT money, supplies, influence FROM PlayerResources
+                    WHERE user_id = $1 AND conversation_id = $2 AND player_name = $3
+                """, context.user_id, context.conversation_id, player_name)
+                
+                if not resource_row:
+                    # Create default resources
+                    await canon.create_default_resources(ctx, conn, player_name)
+                    resource_row = {"money": 100, "supplies": 20, "influence": 10}
+                
+                # Validate sufficient resources
+                if resource_row['money'] < money:
+                    return {"success": False, "error": f"Insufficient money. Have: {resource_row['money']}, Need: {money}"}
+                if resource_row['supplies'] < supplies:
+                    return {"success": False, "error": f"Insufficient supplies. Have: {resource_row['supplies']}, Need: {supplies}"}
+                if resource_row['influence'] < influence:
+                    return {"success": False, "error": f"Insufficient influence. Have: {resource_row['influence']}, Need: {influence}"}
+            
             if exists:
-                await conn.execute("UPDATE PlayerConflictInvolvement SET involvement_level = $1, faction = $2, money_committed = $3, supplies_committed = $4, influence_committed = $5, actions_taken = $6, manipulated_by = $7 WHERE conflict_id = $8 AND user_id = $9 AND conversation_id = $10", level, faction, money, supplies, influence, actions, manipulated_by, conflict_id, context.user_id, context.conversation_id)
+                await conn.execute("""
+                    UPDATE PlayerConflictInvolvement 
+                    SET involvement_level = $1, faction = $2, money_committed = $3, 
+                        supplies_committed = $4, influence_committed = $5, 
+                        actions_taken = $6, manipulated_by = $7 
+                    WHERE conflict_id = $8 AND user_id = $9 AND conversation_id = $10
+                """, level, faction, money, supplies, influence, actions, manipulated_by, 
+                conflict_id, context.user_id, context.conversation_id)
             else:
-                await conn.execute("INSERT INTO PlayerConflictInvolvement (conflict_id, user_id, conversation_id, player_name, involvement_level, faction, money_committed, supplies_committed, influence_committed, actions_taken, manipulated_by) VALUES ($1, $2, $3, 'Player', $4, $5, $6, $7, $8, $9, $10)", conflict_id, context.user_id, context.conversation_id, level, faction, money, supplies, influence, actions, manipulated_by)
-            await _internal_create_conflict_memory_logic(ctx, conflict_id, f"Player involvement changed to {level} with {faction}.", significance=7)
-            return {"success": True, "conflict_id": conflict_id, "involvement_level": level, "faction": faction, "resources_committed": {"money": money, "supplies": supplies, "influence": influence}}
+                await conn.execute("""
+                    INSERT INTO PlayerConflictInvolvement 
+                    (conflict_id, user_id, conversation_id, player_name, involvement_level, 
+                     faction, money_committed, supplies_committed, influence_committed, 
+                     actions_taken, manipulated_by) 
+                    VALUES ($1, $2, $3, 'Player', $4, $5, $6, $7, $8, $9, $10)
+                """, conflict_id, context.user_id, context.conversation_id, level, faction, 
+                money, supplies, influence, actions, manipulated_by)
+            
+            # REFACTORED: Log canonical event
+            await canon.log_canonical_event(
+                ctx, conn,
+                f"Player involvement in conflict {conflict_id} changed to {level} with {faction} faction",
+                tags=["conflict", "player_involvement", level, faction],
+                significance=7
+            )
+            
+            return {
+                "success": True, 
+                "conflict_id": conflict_id, 
+                "involvement_level": level, 
+                "faction": faction, 
+                "resources_committed": {"money": money, "supplies": supplies, "influence": influence}
+            }
     except Exception as e:
         logger.error(f"Error updating player involvement in conflict {conflict_id}: {e}", exc_info=True)
         return {"success": False, "error": str(e)}
