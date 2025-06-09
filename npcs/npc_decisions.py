@@ -352,54 +352,56 @@ class BehaviorEvolution:
     # --- Updated to use asyncpg ---
     async def apply_scheming_adjustments(self, npc_id: int, adjustments: Dict[str, Any]) -> None:
         """
-        Apply scheming adjustments to the NPC in the database asynchronously.
+        Apply scheming adjustments to the NPC in the database using LoreSystem.
         """
-        new_level = adjustments.get("scheme_level", 0)
-        betrayal_planning = adjustments.get("betrayal_planning", False)
-
-        # Combine updates into one query if possible for efficiency,
-        # or use a transaction if atomicity is strictly needed.
-        # Here, we'll use separate execute calls for simplicity, assuming they don't *need* to be atomic.
-        update_query_level = """
-            UPDATE NPCStats
-            SET scheming_level = $1
-            WHERE npc_id = $2 AND user_id = $3 AND conversation_id = $4
-        """
-        update_query_betrayal = """
-            UPDATE NPCStats
-            SET betrayal_planning = $1
-            WHERE npc_id = $2 AND user_id = $3 AND conversation_id = $4
-        """
-
         try:
-            async with get_db_connection_context() as conn:
-                # Execute updates
-                await conn.execute(
-                    update_query_level,
-                    new_level, npc_id, self.user_id, self.conversation_id
-                )
-                await conn.execute(
-                    update_query_betrayal,
-                    betrayal_planning, npc_id, self.user_id, self.conversation_id
-                )
-
-            # Optional: Log successful memory update after DB commit
-            if adjustments.get("targeting_player"):
-                memory_system = await self.get_memory_system()
-                await memory_system.remember(
-                    entity_type="npc",
-                    entity_id=npc_id,
-                    memory_text="I decided to target the player, suspecting them of deception.",
-                    significance=MemorySignificance.HIGH,
-                    tags=["scheming", "targeting_player"]
-                )
-
-            logger.info(f"Applied scheming adjustments for NPC {npc_id}: level={new_level}, betrayal={betrayal_planning}")
-
-        except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as db_err:
-            logger.error(f"Database error applying scheming adjustments for NPC {npc_id}: {db_err}", exc_info=True)
+            # Get LoreSystem instance
+            from lore.lore_system import LoreSystem
+            lore_system = await LoreSystem.get_instance(self.user_id, self.conversation_id)
+            
+            # Create context for governance
+            ctx = type('obj', (object,), {
+                'user_id': self.user_id,
+                'conversation_id': self.conversation_id,
+                'npc_id': npc_id
+            })
+            
+            # Prepare updates
+            updates = {}
+            
+            new_level = adjustments.get("scheme_level", 0)
+            updates["scheming_level"] = new_level
+            
+            betrayal_planning = adjustments.get("betrayal_planning", False)
+            updates["betrayal_planning"] = betrayal_planning
+            
+            # Use LoreSystem to update
+            result = await lore_system.propose_and_enact_change(
+                ctx=ctx,
+                entity_type="NPCStats",
+                entity_identifier={"npc_id": npc_id},
+                updates=updates,
+                reason=f"Scheming adjustments applied: level={new_level}, betrayal={betrayal_planning}"
+            )
+            
+            if result.get("status") == "committed":
+                # Optional: Log successful memory update after DB commit
+                if adjustments.get("targeting_player"):
+                    memory_system = await self.get_memory_system()
+                    await memory_system.remember(
+                        entity_type="npc",
+                        entity_id=npc_id,
+                        memory_text="I decided to target the player, suspecting them of deception.",
+                        significance=MemorySignificance.HIGH,
+                        tags=["scheming", "targeting_player"]
+                    )
+                
+                logger.info(f"Applied scheming adjustments for NPC {npc_id}: level={new_level}, betrayal={betrayal_planning}")
+            else:
+                logger.error(f"Failed to apply scheming adjustments via LoreSystem: {result}")
+                
         except Exception as e:
-            logger.error(f"Unexpected error applying scheming adjustments for NPC {npc_id}: {e}", exc_info=True)
+            logger.error(f"Database error applying scheming adjustments for NPC {npc_id}: {e}", exc_info=True)
 
 
 # -------------------------------------------------------
