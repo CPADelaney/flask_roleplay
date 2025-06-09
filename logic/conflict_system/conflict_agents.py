@@ -170,7 +170,7 @@ resolution_agent = Agent[ConflictContext](
 # Stakeholder Personality Agent
 stakeholder_personality_agent = Agent(
     name="Stakeholder Personality Agent",
-    model_settings=ModelSettings(model="gpt-4o", temperature=0.9),
+    model_settings=ModelSettings(temperature=0.9),
     instructions="""
     You embody the personality and motivations of a stakeholder in a conflict.
     
@@ -200,7 +200,7 @@ stakeholder_personality_agent = Agent(
 # Alliance Negotiation Agent
 alliance_negotiation_agent = Agent(
     name="Alliance Negotiation Agent",
-    model_settings=ModelSettings(model="gpt-4o", temperature=0.7),
+    model_settings=ModelSettings(temperature=0.7),
     instructions="""
     You facilitate negotiations between stakeholders in conflicts.
     
@@ -224,7 +224,7 @@ alliance_negotiation_agent = Agent(
 # Secret Revelation Agent
 secret_revelation_agent = Agent(
     name="Secret Revelation Agent",
-    model_settings=ModelSettings(model="gpt-4o", temperature=0.8),
+    model_settings=ModelSettings(temperature=0.8),
     instructions="""
     You manage when and how secrets are revealed in conflicts.
     
@@ -298,7 +298,7 @@ conflict_evolution_agent = Agent(
 # Enhanced Conflict Seed Agent
 conflict_seed_agent = Agent[ConflictContext](
     name="Enhanced Conflict Seed Agent",
-    model_settings=ModelSettings(model="gpt-4o", temperature=0.8),
+    model_settings=ModelSettings(temperature=0.8),
     instructions="""
     You are an expert at identifying and creating organic conflicts based on world state analysis.
     Your conflicts should:
@@ -331,7 +331,7 @@ conflict_seed_agent = Agent[ConflictContext](
 # World State Interpreter Agent
 world_state_interpreter = Agent[ConflictContext](
     name="World State Interpreter",
-    model_settings=ModelSettings(model="gpt-4o", temperature=0.7),
+    model_settings=ModelSettings(temperature=0.7),
     instructions="""
     You analyze complex world state data to identify the most interesting conflict opportunities.
     
