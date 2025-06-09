@@ -768,7 +768,7 @@ async def process_conflict_stakeholder_turns(ctx: RunContextWrapper,
         logger.error(f"Error processing stakeholder turns: {e}", exc_info=True)
         return []
 
-@function_tool  
+@function_tool(strict_mode=False)
 async def force_stakeholder_action(ctx: RunContextWrapper,
                                  conflict_id: int,
                                  npc_id: int,
