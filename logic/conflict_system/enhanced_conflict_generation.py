@@ -474,8 +474,10 @@ class OrganicConflictGenerator:
                                               world_state: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Get NPCs relevant to the conflict archetype"""
         async with get_db_connection_context() as conn:
+            # Note: We're reading existing NPCs, not creating, so this is fine
+            # But if we need to create NPCs based on the query, we should use canon
+            
             if archetype == "personal_dispute":
-                # Get NPCs with personal tensions
                 npcs = await conn.fetch("""
                     SELECT DISTINCT n.*, 
                            array_agg(f.name) as faction_affiliations
@@ -631,16 +633,7 @@ async def generate_organic_conflict(
     preferred_scale: Optional[str] = None,
     force_archetype: Optional[str] = None
 ) -> Dict[str, Any]:
-    """
-    Generate a conflict that feels organic based on world state.
-    
-    Args:
-        preferred_scale: Preferred conflict scale (personal/local/regional/world)
-        force_archetype: Force a specific archetype
-        
-    Returns:
-        Generated conflict data
-    """
+    """Generate a conflict that feels organic based on world state."""
     context = ctx.context
     generator = OrganicConflictGenerator(context.user_id, context.conversation_id)
     
@@ -650,9 +643,8 @@ async def generate_organic_conflict(
             force_archetype=force_archetype
         )
         
-        # Create the conflict in the database
         async with get_db_connection_context() as conn:
-            # Get current day
+            # Get current day using canon helper
             current_day = await conn.fetchval("""
                 SELECT value FROM CurrentRoleplay
                 WHERE user_id = $1 AND conversation_id = $2 AND key = 'CurrentDay'
@@ -671,12 +663,28 @@ async def generate_organic_conflict(
             context.user_id, context.conversation_id,
             conflict_data["conflict_name"], conflict_data["archetype"],
             conflict_data["description"], current_day,
-            conflict_data["estimated_duration"], 
-            0.5  # Base success rate
+            conflict_data["estimated_duration"], 0.5
             )
             
-            # Create stakeholders
+            # Create stakeholders using canon
             for stakeholder in conflict_data.get("stakeholders", []):
+                # Ensure NPC exists canonically
+                npc_id = await canon.find_or_create_npc(
+                    context, conn,
+                    npc_name=stakeholder["npc_name"],
+                    role=stakeholder.get("role"),
+                    affiliations=stakeholder.get("faction_affiliations", [])
+                )
+                
+                # Ensure faction exists if specified
+                faction_id = None
+                if stakeholder.get("faction_name"):
+                    faction_id = await canon.find_or_create_faction(
+                        context, conn,
+                        faction_name=stakeholder["faction_name"],
+                        type=stakeholder.get("faction_type", "organization")
+                    )
+                
                 await conn.execute("""
                     INSERT INTO ConflictStakeholders (
                         conflict_id, npc_id, faction_id, faction_name,
@@ -684,8 +692,7 @@ async def generate_organic_conflict(
                         involvement_level
                     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
                 """,
-                conflict_id, stakeholder["npc_id"], 
-                stakeholder.get("faction_id"), stakeholder.get("faction_name"),
+                conflict_id, npc_id, faction_id, stakeholder.get("faction_name"),
                 stakeholder["public_motivation"], stakeholder["private_motivation"],
                 stakeholder["desired_outcome"], stakeholder.get("involvement_level", 5)
                 )
@@ -708,7 +715,7 @@ async def generate_organic_conflict(
             
             # Log canonical event
             await canon.log_canonical_event(
-                ctx.context, conn,
+                context, conn,
                 f"Conflict emerged: {conflict_data['conflict_name']} - {conflict_data['description'][:100]}...",
                 tags=["conflict", conflict_data["archetype"], "emergence"],
                 significance=8
