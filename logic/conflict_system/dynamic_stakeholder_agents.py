@@ -707,10 +707,10 @@ class StakeholderAutonomySystem:
                 
                 # Log canonical event for significant actions
                 if action_result['success'] and action_result['action_type'] in ['betray', 'reveal_secret']:
-                    ctx = type("ctx", (), {
+                    ctx = RunContextWrapper({
                         "user_id": self.user_id,
                         "conversation_id": self.conversation_id
-                    })()
+                    })
                     
                     await canon.log_canonical_event(
                         ctx, conn, action_desc,
