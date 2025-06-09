@@ -246,7 +246,7 @@ class MemoryContext:
 # Tool Functions
 # -------------------------------------------------------
 
-@function_tool
+@function_tool(strict_mode=False)
 async def add_memory(
     ctx: RunContextWrapper[MemoryContext],
     memory_input: MemoryInput
@@ -366,7 +366,7 @@ async def add_memory(
             ctx.context.record_operation("add_memory", elapsed)
             return {"error": str(e)}
 
-@function_tool
+@function_tool(strict_mode=False)
 async def analyze_memory_content(
     ctx: RunContextWrapper[MemoryContext],
     memory_text: str
@@ -467,7 +467,7 @@ def extract_femdom_tags(memory_text: str) -> List[str]:
     
     return femdom_tags
 
-@function_tool
+@function_tool(strict_mode=False)
 async def calculate_emotional_intensity(
     ctx: RunContextWrapper[MemoryContext],
     memory_text: str,
@@ -516,7 +516,7 @@ async def calculate_emotional_intensity(
         # Clamp [0..100]
         return float(min(100, max(0, intensity)))
 
-@function_tool
+@function_tool(strict_mode=False)
 async def retrieve_memories(
     ctx: RunContextWrapper[MemoryContext],
     query: MemoryQuery
@@ -634,7 +634,7 @@ async def retrieve_memories_with_femdom_focus(
     final_memories = final_memories[:limit]
     return {"memories": final_memories, "count": len(final_memories)}
 
-@function_tool
+@function_tool(strict_mode=False)
 async def search_memories(
     ctx: RunContextWrapper[MemoryContext],
     entity_type: str,
@@ -708,7 +708,7 @@ async def search_memories(
             logger.error(f"Error searching memories: {e}")
             return []
 
-@function_tool
+@function_tool(strict_mode=False)
 async def update_emotional_state(
     ctx: RunContextWrapper[MemoryContext],
     update: EmotionalStateUpdate
@@ -771,7 +771,7 @@ async def update_emotional_state(
             ctx.context.record_operation("update_emotion", elapsed)
             return {"error": str(e)}
 
-@function_tool
+@function_tool(strict_mode=False)
 async def get_emotional_state(
     ctx: RunContextWrapper[MemoryContext]
 ) -> Dict[str, Any]:
@@ -805,7 +805,7 @@ async def get_emotional_state(
             ctx.context.record_operation("update_emotion", elapsed)
             return {"error": str(e)}
 
-@function_tool
+@function_tool(strict_mode=False)
 async def generate_mask_slippage(
     ctx: RunContextWrapper[MemoryContext],
     input_data: MaskSlippageInput
@@ -874,7 +874,7 @@ async def generate_mask_slippage(
             ctx.context.record_operation("mask_operations", elapsed)
             return {"error": str(e)}
 
-@function_tool
+@function_tool(strict_mode=False)
 async def get_npc_mask(
     ctx: RunContextWrapper[MemoryContext]
 ) -> Dict[str, Any]:
@@ -907,7 +907,7 @@ async def get_npc_mask(
             ctx.context.record_operation("mask_operations", elapsed)
             return {"error": str(e)}
 
-@function_tool
+@function_tool(strict_mode=False)
 async def create_belief(
     ctx: RunContextWrapper[MemoryContext],
     input_data: BeliefInput
@@ -976,7 +976,7 @@ async def create_belief(
             ctx.context.record_operation("belief_operations", elapsed)
             return {"error": str(e)}
 
-@function_tool
+@function_tool(strict_mode=False)
 async def get_beliefs(
     ctx: RunContextWrapper[MemoryContext],
     topic: Optional[str] = None,
@@ -1025,7 +1025,7 @@ async def get_beliefs(
             ctx.context.record_operation("belief_operations", elapsed)
             return []
 
-@function_tool
+@function_tool(strict_mode=False)
 async def get_femdom_beliefs(
     ctx: RunContextWrapper[MemoryContext],
     min_confidence: float = 0.3
@@ -1078,7 +1078,7 @@ async def get_femdom_beliefs(
             ctx.context.record_operation("belief_operations", elapsed)
             return []
 
-@function_tool
+@function_tool(strict_mode=False)
 async def run_femdom_maintenance(
     ctx: RunContextWrapper[MemoryContext]
 ) -> Dict[str, Any]:
@@ -1192,7 +1192,7 @@ async def run_femdom_maintenance(
             logger.error(f"Error in femdom maintenance: {e}")
             return {"error": str(e)}
 
-@function_tool
+@function_tool(strict_mode=False)
 async def propagate_memory(
     ctx: RunContextWrapper[MemoryContext],
     memory_text: str,
@@ -1357,7 +1357,7 @@ def distort_text(original_text: str, severity=0.3) -> str:
     # Re-join, removing empties
     return " ".join([w for w in words if w])
 
-@function_tool
+@function_tool(strict_mode=False)
 async def run_memory_maintenance(
     ctx: RunContextWrapper[MemoryContext],
     options: MaintenanceOptions
