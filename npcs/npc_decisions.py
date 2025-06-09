@@ -488,7 +488,7 @@ async def generate_dynamic_actions_with_gpt(
 # Tool Functions for Decision Making
 # -------------------------------------------------------
 
-@function_tool
+@function_tool(strict_mode=False)
 async def get_npc_data(ctx: RunContextWrapper[DecisionContext]) -> NPCStats:
     """
     Get the NPC's stats and traits from the database asynchronously. Caches result in context.
@@ -586,7 +586,7 @@ async def get_npc_data(ctx: RunContextWrapper[DecisionContext]) -> NPCStats:
         logger.debug(f"Fetched and cached NPC stats for {npc_id}")
         return stats
 
-@function_tool
+@function_tool(strict_mode=False)
 async def get_default_actions(
     ctx: RunContextWrapper[DecisionContext],
     npc_data: NPCStats,
@@ -828,7 +828,7 @@ async def get_default_actions(
         
         return actions
 
-@function_tool
+@function_tool(strict_mode=False)
 async def generate_memory_based_actions(
     ctx: RunContextWrapper[DecisionContext],
     perception: NPCPerception
@@ -895,7 +895,7 @@ async def generate_memory_based_actions(
         
         return actions
 
-@function_tool
+@function_tool(strict_mode=False)
 async def score_actions(
     ctx: RunContextWrapper[DecisionContext],
     npc_data: NPCStats,
@@ -1037,7 +1037,7 @@ async def score_actions(
         
         return scored_actions
 
-@function_tool
+@function_tool(strict_mode=False)
 async def select_action(
     ctx: RunContextWrapper[DecisionContext],
     scored_actions: List[ScoredAction],
@@ -1097,7 +1097,7 @@ async def select_action(
         
         return selected_action
 
-@function_tool
+@function_tool(strict_mode=False)
 async def generate_flashback_action(
     ctx: RunContextWrapper[DecisionContext],
     flashback: Dict[str, Any],
@@ -1190,7 +1190,7 @@ async def generate_flashback_action(
             decision_metadata={"flashback_source": True}
         )
 
-@function_tool
+@function_tool(strict_mode=False)
 async def enhance_dominance_context(
     ctx: RunContextWrapper[DecisionContext],
     action: NPCAction,
@@ -1214,7 +1214,7 @@ async def enhance_dominance_context(
         
         return action
 
-@function_tool
+@function_tool(strict_mode=False)
 async def update_behavior_evolution(
     ctx: RunContextWrapper[DecisionContext]
 ) -> Dict[str, Any]:
