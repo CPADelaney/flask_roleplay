@@ -437,6 +437,11 @@ class ConflictResolutionSystem:
     ) -> Dict[str, Any]:
         """Execute a single resolution action."""
         try:
+            ctx = RunContextWrapper({
+                "user_id": self.user_id,
+                "conversation_id": self.conversation_id
+            })
+            
             # Initialize action tracking
             action_tracking = {
                 "action_name": action.get("name"),
@@ -458,7 +463,16 @@ class ConflictResolutionSystem:
                 result = await self._execute_internal_resolution(parameters, conflict_state)
             else:
                 result = {"success": False, "error": f"Unknown action type: {action_type}"}
-                
+            
+            # Log action canonically
+            async with get_db_connection_context() as conn:
+                await canon.log_canonical_event(
+                    ctx, conn,
+                    f"Conflict resolution action '{action_type}' executed with {'success' if result.get('success') else 'failure'}",
+                    tags=["conflict", "resolution", action_type],
+                    significance=5 if result.get('success') else 4
+                )
+            
             # Update action tracking
             action_tracking.update(result)
             action_tracking["end_time"] = datetime.utcnow().isoformat()
