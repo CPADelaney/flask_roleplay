@@ -2887,11 +2887,16 @@ class NPCCreationHandler:
         for rel in relationships:
             if rel["target_entity_type"] == "player":
                 # Create canonical social link
-                create_social_link(
-                    user_id, conversation_id,
-                    entity1_type="npc", entity1_id=npc_id,
-                    entity2_type="player", entity2_id=rel["target_entity_id"],
-                    link_type=rel["relationship_label"]
+                await canon.find_or_create_social_link(
+                    ctx, conn,
+                    user_id=user_id,
+                    conversation_id=conversation_id,
+                    entity1_type="npc",
+                    entity1_id=npc_id,
+                    entity2_type="player", 
+                    entity2_id=rel["target_entity_id"],
+                    link_type=rel["relationship_label"],
+                    link_level=50  # Default starting level
                 )
                 
                 # Update NPCStats relationships using canon system
