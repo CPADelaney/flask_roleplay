@@ -838,11 +838,15 @@ def create_story_director_agent():
         monitor_conflicts,        # NEW
         evolve_conflict_from_event,  # NEW
         trigger_conflict_event,      # NEW
-        *story_tools,
-        *conflict_tools,
-        *resource_tools,
-        *narrative_tools,
-        *context_tools,
+        story_tools,
+        conflict_tools,
+        resource_tools,
+        narrative_tools,
+        context_tools,
+        check_for_conflict_opportunity,
+        generate_conflict,
+        evolve_conflict,
+        resolve_conflict_path,
     ]
 
     # Filter out any None values in tools list if imports failed partially
