@@ -21,7 +21,7 @@ opentelemetry-proto         == 1.34.0
 opentelemetry-instrumentation ==0.55b0
 
 # Web frameworks
-aiohttp==3.11.18
+aiohttp==3.11.18  # required for web_search tool
 fastapi==0.115.9
 starlette==0.45.0
 quart==0.20.0

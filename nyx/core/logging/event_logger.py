@@ -13,6 +13,7 @@ async def log_event(event: dict) -> None:
     line = json.dumps(event)
     await asyncio.to_thread(_append_line, path, line)
 
+    # Lazy import avoids scheduling reflection twice if the agent is optional
     try:
         from reflection import reflection_agent as ra
     except Exception:
