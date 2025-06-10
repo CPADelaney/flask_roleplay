@@ -2857,4 +2857,4 @@ def generate_special_reward(resolution_style: str, conflict_type: str, impact_le
             "category": "unique_conflict_reward",
             "resolution_style": resolution_style
         }
-    }str, Any]) -> Dict[
+    }
