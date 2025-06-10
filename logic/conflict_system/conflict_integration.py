@@ -38,9 +38,7 @@ from logic.conflict_system.conflict_guardrails import apply_guardrails
 from context.context_service import get_context_service
 from context.memory_manager import get_memory_manager
 from context.vector_service import get_vector_service
-from story_agent.story_director_agent import (
-    initialize_story_director, get_current_story_state
-)
+
 
 logger = logging.getLogger(__name__)
 
@@ -126,7 +124,11 @@ class ConflictSystemIntegration:
                 self.context_service = await get_context_service(self.user_id, self.conversation_id)
                 self.memory_manager = await get_memory_manager(self.user_id, self.conversation_id)
                 self.vector_service = await get_vector_service(self.user_id, self.conversation_id)
-                
+
+
+                from story_agent.story_director_agent import (
+                    initialize_story_director
+                )
                 # Initialize story director
                 self.story_director, self.story_director_context = await initialize_story_director(
                     self.user_id, self.conversation_id
@@ -244,6 +246,9 @@ class ConflictSystemIntegration:
         try:
             if self.story_director and self.story_director_context:
                 try:
+                    from story_agent.story_director_agent import (
+                        get_current_story_state
+                    )
                     story_state = await get_current_story_state(self.story_director, self.story_director_context)
                     
                     if story_state and hasattr(story_state, 'final_output'):
