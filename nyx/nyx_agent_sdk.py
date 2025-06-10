@@ -1001,7 +1001,7 @@ async def get_activity_recommendations(
         "total_available": len(activities)
     }, ensure_ascii=False)
 
-@function_tool
+@function_tool(strict_mode=False)
 async def manage_beliefs(ctx: RunContextWrapper[NyxContext], action: str, belief_data: Dict[str, Any]) -> str:
     """
     Manage belief system operations.
@@ -1038,7 +1038,7 @@ async def manage_beliefs(ctx: RunContextWrapper[NyxContext], action: str, belief
         logger.error(f"Error managing beliefs: {e}", exc_info=True)
         return json.dumps({"error": str(e), "result": {}}, ensure_ascii=False)
 
-@function_tool
+@function_tool(strict_mode=False)
 async def score_decision_options(
     ctx: RunContextWrapper[NyxContext],
     options: List[Dict[str, Any]],
