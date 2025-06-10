@@ -24,12 +24,12 @@ logger = logging.getLogger(__name__)
 # Global conflict system instances
 conflict_systems = {}
 
-async def ensure_conflict_system(user_id: int, conversation_id: int) -> CanonicalConflictSystem:
+async def ensure_conflict_system(user_id: int, conversation_id: int):
     """Ensure conflict system is initialized for user/conversation"""
     key = f"{user_id}:{conversation_id}"
     
     if key not in _conflict_systems:
-        system = CanonicalConflictSystem(user_id, conversation_id)
+        system = ConflictSystemIntegration(user_id, conversation_id)
         await system.initialize()
         _conflict_systems[key] = system
         
