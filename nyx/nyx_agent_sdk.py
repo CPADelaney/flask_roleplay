@@ -1195,7 +1195,7 @@ def _get_fallback_decision(options: List[Dict[str, Any]]) -> Dict[str, Any]:
     # Otherwise return the first option
     return options[0] if options else {"action": "observe", "description": "Take a moment to assess"}
 
-@function_tool
+@function_tool(strict_mode=False)
 async def detect_conflicts_and_instability(
     ctx: RunContextWrapper[NyxContext],
     scenario_state: Dict[str, Any]
