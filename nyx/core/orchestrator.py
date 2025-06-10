@@ -1,9 +1,14 @@
-from nyx.core.memory.memory_manager import MemoryManager
+"""Lightweight orchestrator glue layer for Nyx agents."""
+
 import asyncio
 import datetime
 import logging
+
+from nyx.core.memory.memory_manager import MemoryManager
+from strategy.manager import StrategyManager
+from nyx.core.logging import event_logger as EventLogger
 from nyx.core.logging.summarizer import nightly_rollup
-from reflection.reflection_agent import schedule_reflection
+from nyx.core.reward import evaluator as RewardEvaluator
 
 async def prepare_context(ctx: str, user_msg: str) -> str:
     """Prepend relevant memories to context.
@@ -20,19 +25,36 @@ async def prepare_context(ctx: str, user_msg: str) -> str:
         Augmented context including a KNOWLEDGE section and memory comments.
     """
     hits = await MemoryManager.fetch_relevant(user_msg, k=5)
-    if not hits:
-        return ctx
+    if hits:
+        bullet_lines = "\n".join(
+            "- " + (h["text"][:300] + ("…" if len(h["text"]) > 300 else ""))
+            for h in hits
+        )
+        knowledge = f"KNOWLEDGE:\n{bullet_lines}\n"
+        comments = "".join(
+            f"<!--MEM:{h.get('meta', {}).get('uid')},{h.get('score',0):.2f}-->"
+            for h in hits
+        )
+        ctx = f"{knowledge}{comments}\n{ctx}"
 
-    bullet_lines = "\n".join(
-        "- " + (h["text"][:300] + ("…" if len(h["text"]) > 300 else ""))
-        for h in hits
-    )
-    knowledge = f"KNOWLEDGE:\n{bullet_lines}\n"
-    comments = "".join(
-        f"<!--MEM:{h.get('meta', {}).get('uid')},{h.get('score',0):.2f}-->"
-        for h in hits
-    )
-    return f"{knowledge}{comments}\n{ctx}"
+    strategy_line = ""
+    try:
+        params = StrategyManager().current()
+    except Exception:
+        pass
+    else:
+        strategy_line = f"STRATEGY: {params.json()}\n"
+
+    return f"{strategy_line}{ctx}"
+
+
+async def log_and_score(event_type: str, payload: dict | None = None) -> float:
+    """Log an event and return its reward score."""
+    event = {"type": event_type}
+    if payload:
+        event["payload"] = payload
+    await EventLogger.log_event(event)
+    return RewardEvaluator.evaluate(event_type)
 
 logger = logging.getLogger(__name__)
 _background_task = None
@@ -48,8 +70,12 @@ def start_background() -> None:
     if _reflection_task is None:
         _reflection_task = asyncio.create_task(_reflection_loop())
     if _practice_task is None:
-        from nyx.core.practice.coding_practice import autoloop
-        _practice_task = asyncio.create_task(autoloop())
+        try:
+            from nyx.core.practice.coding_practice import autoloop
+        except ImportError:  # pragma: no cover - optional dependency
+            pass
+        else:
+            _practice_task = asyncio.create_task(autoloop())
 
 
 async def _rollup_loop() -> None:
@@ -71,6 +97,7 @@ async def _reflection_loop() -> None:
     while True:
         await asyncio.sleep(60)
         try:
-            await schedule_reflection()
+            from reflection import reflection_agent
+            await reflection_agent.schedule_reflection()
         except Exception:
             logger.exception("Reflection scheduling failed")
