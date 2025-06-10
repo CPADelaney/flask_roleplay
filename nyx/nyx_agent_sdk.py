@@ -661,7 +661,7 @@ async def generate_image_from_scene(
     else:
         return "Failed to generate image"
 
-@function_tool
+@function_tool(strict_mode='False')
 async def calculate_and_update_emotional_state(ctx: RunContextWrapper[NyxContext], context: Dict[str, Any]) -> str:
     """
     Calculate emotional impact and immediately update the emotional state.
@@ -685,7 +685,7 @@ async def calculate_and_update_emotional_state(ctx: RunContextWrapper[NyxContext
     emotional_data["state_updated"] = True
     return json.dumps(emotional_data, ensure_ascii=False)
 
-@function_tool
+@function_tool(strict_mode='False')
 async def calculate_emotional_impact(ctx: RunContextWrapper[NyxContext], context: Dict[str, Any]) -> str:
     """
     Calculate emotional impact of current context using the emotional core system.
