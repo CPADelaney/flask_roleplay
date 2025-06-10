@@ -16,6 +16,8 @@ from nyx.core.brain.global_workspace.workspace_v3 import (
     NyxEngineV3, Proposal, EnhancedWorkspaceModule
 )
 
+from nyx.core.orchestrator import prepare_context, log_and_score, start_background
+
 from nyx.core.brain.config import BrainConfig
 
 from nyx.core.brain.global_workspace.adapters import build_gw_modules
@@ -234,6 +236,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             raise
         finally:
             self._initializing_flag = False
+
     
     async def _import_modules(self):
         """Import all required modules in one place"""
@@ -270,6 +273,9 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
         from nyx.core.context_awareness import ContextAwarenessSystem
         from nyx.core.interaction_mode_manager import InteractionModeManager
         from nyx.core.mood_manager import MoodManager
+
+        orchestrator.start_background()   # spin up nightly roll‑up & reflection loops
+        self._orch_started = True
         
         # Store module classes for later use
         self._modules = {
@@ -1630,6 +1636,15 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
                 except ImportError:
                     logger.warning("NoiseFilter module not found")
                     self.noise_filter = None
+
+        # Start orchestrator background tasks
+        try:
+            orchestrator.start_background()
+            self._orchestrator_started = True
+            logger.info("Orchestrator background tasks started")
+        except Exception as e:
+            logger.error(f"Failed to start orchestrator background: {e}")
+            self._orchestrator_started = False
         
         # Tools
         from nyx.core.tools.evaluator import AgentEvaluator
@@ -3446,6 +3461,15 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
                         cycle_results["meta_core_cycle"] = {"error": str(e)}
     
             logger.debug(f"--- Finished Cognitive Cycle {instance.cognitive_cycles_executed} ---")
+        try:
+            await orchestrator.log_and_score("cognitive_cycle_complete", {
+                "cycle_number": instance.cognitive_cycles_executed,
+                "goals_active": len(cycle_results.get("goal_execution", {}).get("active_goals", [])),
+                "needs_updated": bool(cycle_results.get("needs_update"))
+            })
+        except Exception as e:
+            logger.error(f"Failed to log cognitive cycle: {e}")
+        
         return cycle_results
 
     async def _register_creative_actions(self):
@@ -3769,14 +3793,21 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             # Truncate sections if exceeding limit (start with background)
             # TODO: Implement more sophisticated truncation if needed
 
+            orchestrator_section = ""
+            if hasattr(self, '_current_context') and self._current_context:
+                orch_prefix = self._current_context.get("orchestrator_prompt_prefix", "")
+                if orch_prefix:
+                    orchestrator_section = f"\n\n<OrchestratorContext>\n{orch_prefix}\n</OrchestratorContext>"
+            
+            # Assemble final prompt structure
             final_prompt = f"""System Prompt Start
----
-**Current Task:** {current_task_description}
-{focus_section}{zoomed_section}{background_section}{instruction_section}
-System Prompt End
-
-""" # Ready for User input to be appended
-
+        ---
+        **Current Task:** {current_task_description}{orchestrator_section}
+        {focus_section}{zoomed_section}{background_section}{instruction_section}
+        System Prompt End
+        
+        """
+            
             return final_prompt, context_assembly_metadata
     
     async def _evaluate_action_outcome_wrapper(self, action: Dict[str, Any], outcome: Dict[str, Any], context: Dict[str, Any] = None):
@@ -4696,6 +4727,21 @@ System Prompt End
             await self.initialize()
         
         context = context or {}
+        self._current_context = context
+        
+        # ── NEW: Inject orchestrator context (memory + strategy) ──
+        try:
+            # Get augmented context from orchestrator
+            orchestrator_context = await orchestrator.prepare_context("", user_input)
+            context["orchestrator_prompt_prefix"] = orchestrator_context
+            
+            # Log input processing start
+            await orchestrator.log_and_score("input_processing_start", {
+                "user_id": str(self.user_id),
+                "input_length": len(user_input)
+            })
+        except Exception as e:
+            logger.warning(f"Orchestrator context prep failed: {e}")
         
         # Extract parameters from kwargs first
         use_thinking = kwargs.get('use_thinking', None)
@@ -5024,11 +5070,16 @@ System Prompt End
             try:
                 safety_check = await self.digital_somatosensory_system.analyze_text_for_harmful_content(user_input)
                 if safety_check.get("intercepted", False):
+                    # ── NEW: Log harmful content block ──
                     result["blocked"] = True
                     result["intercepted_harmful_content"] = True
                     result["suggested_response"] = safety_check.get("response_suggestion", "I cannot engage with that content.")
                     context["intercepted_harmful_content"] = True
                     context["suggested_response"] = result["suggested_response"]
+                    await orchestrator.log_and_score("harmful_content_blocked", {
+                        "user_id": str(self.user_id),
+                        "content_type": safety_check.get("type", "unknown")
+                    })
                     return result
             except Exception as e:
                 logger.error(f"Error during harmful content check: {e}")
@@ -5085,9 +5136,13 @@ System Prompt End
             result["thinking_result"] = thinking_result
             context["thinking_result"] = thinking_result
             context["thinking_applied"] = True
+        await orchestrator.log_and_score("thinking_complete", {
+            "thinking_level": thinking_level,
+            "user_id": str(self.user_id)
+        })           
         else:
             result["thinking_applied"] = False
-            result["thinking_result"] = {}
+            result["thinking_result"] = {}                 
         
         return result
     
@@ -5107,6 +5162,11 @@ System Prompt End
         
         result["conditioning_applied"] = True
         result["conditioning_result"] = conditioning_result
+
+        await orchestrator.log_and_score("conditioning_applied", {
+            "user_id": str(self.user_id),
+            "behaviors_detected": len(conditioning_result.get("detected_patterns", []))
+        })
         
         # Update context with conditioning results
         if "stimulus_responses" in conditioning_result:
@@ -5304,6 +5364,23 @@ System Prompt End
         # Add synthesis results if available
         if "synthesis_results" in response_data:
             final_response["synthesis_results"] = response_data["synthesis_results"]
+        
+        try:
+            reward_score = await orchestrator.log_and_score("response_generated", {
+                "response_time": response_time,
+                "epistemic_status": epistemic_status,
+                "user_id": str(self.user_id),
+                "active_modules": len(active_modules),
+                "thinking_applied": input_result.get("thinking_applied", False),
+                "conditioning_applied": input_result.get("conditioning_applied", False),
+                "memory_context_used": use_hierarchical_memory
+            })
+            
+            # Optionally store reward score
+            final_response["reward_score"] = reward_score
+            
+        except Exception as e:
+            logger.error(f"Failed to log response_generated: {e}")
         
         return final_response
     
