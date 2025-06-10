@@ -41,7 +41,6 @@ from logic.conflict_system.hooks import (
 )
 from logic.conflict_system.dynamic_stakeholder_agents import process_conflict_stakeholder_turns
 from logic.conflict_system.enhanced_conflict_generation import analyze_conflict_pressure
-from logic.conflict_system.conflict_integration import ConflictSystemIntegration
 from logic.conflict_system.enhanced_conflict_generation import generate_organic_conflict
 from logic.conflict_system.dynamic_stakeholder_agents import force_stakeholder_action
 
@@ -564,6 +563,8 @@ class StoryDirectorContext:
         This is called by the agent when it thinks a conflict might be appropriate.
         """
         context = ctx.context
+
+        from logic.conflict_system.conflict_integration import ConflictSystemIntegration
         
         # Get world state analysis
         conflict_system = await ConflictSystemIntegration.get_instance(
@@ -595,6 +596,7 @@ class StoryDirectorContext:
         Generate a new conflict when the narrative calls for it.
         """
         context = ctx.context
+        from logic.conflict_system.conflict_integration import ConflictSystemIntegration
         
         # Use the conflict system to generate
         conflict_system = await ConflictSystemIntegration.get_instance(
@@ -624,6 +626,7 @@ class StoryDirectorContext:
         Advance a conflict based on narrative developments.
         """
         context = ctx.context
+        from logic.conflict_system.conflict_integration import ConflictSystemIntegration
         
         conflict_system = await ConflictSystemIntegration.get_instance(
             context.user_id, 
