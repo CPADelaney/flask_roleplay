@@ -25,6 +25,7 @@ async def prepare_context(ctx: str, user_msg: str) -> str:
         Augmented context including a KNOWLEDGE section and memory comments.
     """
     hits = await MemoryManager.fetch_relevant(user_msg, k=5)
+    # 1 )  Inject relevant memory
     if hits:
         bullet_lines = "\n".join(
             "- " + (h["text"][:300] + ("…" if len(h["text"]) > 300 else ""))
@@ -72,7 +73,7 @@ def start_background() -> None:
     if _practice_task is None:
         try:
             from nyx.core.practice.coding_practice import autoloop
-        except ImportError:  # pragma: no cover - optional dependency
+        except ImportError:  # optional – module isn't present in some installs
             pass
         else:
             _practice_task = asyncio.create_task(autoloop())
