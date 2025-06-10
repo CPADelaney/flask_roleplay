@@ -22,7 +22,7 @@ from logic.conflict_system.conflict_tools import (
 logger = logging.getLogger(__name__)
 
 # Global conflict system instances
-_conflict_systems: Dict[str, CanonicalConflictSystem] = {}
+conflict_systems = {}
 
 async def ensure_conflict_system(user_id: int, conversation_id: int) -> CanonicalConflictSystem:
     """Ensure conflict system is initialized for user/conversation"""
