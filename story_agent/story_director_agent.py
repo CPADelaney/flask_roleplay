@@ -713,7 +713,7 @@ async def evolve_conflict_from_event(
         "evolution_results": results
     }
 
-@function_tool
+@function_tool(strict_mode=False)
 async def trigger_conflict_event(
     ctx: RunContextWrapper[StoryDirectorContext],
     event_type: str,
