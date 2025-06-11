@@ -11,7 +11,7 @@ from typing import Dict, Any
 from agents import Agent, Runner, function_tool, GuardrailFunctionOutput, InputGuardrail
 from pydantic import BaseModel, Field
 
-from logic.memory_system import MemorySystem
+from memory.wrapper import MemorySystem
 from logic.stats_logic import insert_default_player_stats_chase
 
 # Import your existing modules
