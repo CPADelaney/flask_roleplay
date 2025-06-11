@@ -12,6 +12,8 @@ import json
 from typing import Dict, List, Any, Optional, Union, Tuple
 import asyncio
 from datetime import datetime
+import random
+from lore.core import canon
 
 from agents import function_tool, RunContextWrapper
 from nyx.integrate import get_central_governance
@@ -83,9 +85,15 @@ class ConflictResolutionSystem:
             capabilities=["strategy_development", "risk_assessment", "resource_optimization"]
         )
         
-    @with_governance
+    @with_governance(
+        agent_type=AgentType.CONFLICT_RESOLVER,
+        action_type="resolve_conflict",
+        action_description="Resolving conflict {conflict_id}",
+        id_from_context=lambda ctx: "conflict_resolver"
+    )
     async def resolve_conflict(
         self,
+        ctx,  # Add this parameter
         conflict_id: int,
         resolution_strategy: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
@@ -101,15 +109,15 @@ class ConflictResolutionSystem:
         """
         try:
             # Get conflict details
-            conflict = await get_conflict_details(RunContextWrapper(self.user_id, self.conversation_id), conflict_id)
+            conflict = await get_conflict_details(ctx, conflict_id)
             if not conflict:
                 return {"success": False, "error": "Conflict not found"}
                 
             # Get stakeholders
-            stakeholders = await get_conflict_stakeholders(RunContextWrapper(self.user_id, self.conversation_id), conflict_id)
+            stakeholders = await get_conflict_stakeholders(ctx, conflict_id)
             
             # Get player involvement
-            player_involvement = await get_player_involvement(RunContextWrapper(self.user_id, self.conversation_id), conflict_id)
+            player_involvement = await get_player_involvement(ctx, conflict_id)
             
             # Analyze conflict state
             conflict_state = await self._analyze_conflict_state(conflict, stakeholders, player_involvement)
@@ -161,7 +169,7 @@ class ConflictResolutionSystem:
             progression_analysis = await self._analyze_conflict_progression(conflict)
             
             # Analyze internal conflicts
-            internal_conflicts = await get_internal_conflicts(RunContextWrapper(self.user_id, self.conversation_id), conflict["conflict_id"])
+            internal_conflicts = await get_internal_conflicts(ctx, conflict["conflict_id"])
             internal_analysis = await self._analyze_internal_conflicts(internal_conflicts)
             
             return {
@@ -246,7 +254,7 @@ class ConflictResolutionSystem:
         """Analyze the progression of the conflict."""
         try:
             # Get resolution paths
-            resolution_paths = await get_resolution_paths(RunContextWrapper(self.user_id, self.conversation_id), conflict["conflict_id"])
+            resolution_paths = await get_resolution_paths(ctx, conflict["conflict_id"])
             
             # Analyze path progress
             path_progress = {}
@@ -1260,7 +1268,7 @@ class ConflictResolutionSystem:
         try:
             # Get internal conflict
             conflict_id = parameters.get("conflict_id")
-            internal_conflicts = await get_internal_conflicts(RunContextWrapper(self.user_id, self.conversation_id), conflict_id)
+            internal_conflicts = await get_internal_conflicts(ctx, conflict_id)
             internal_conflict = next((c for c in internal_conflicts if c["struggle_id"] == conflict_id), None)
             if not internal_conflict:
                 return {"success": False, "error": "Internal conflict not found"}
