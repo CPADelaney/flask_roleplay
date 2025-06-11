@@ -1550,7 +1550,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
         except ImportError:
             logger.warning("Dominance ideation agents not available")
 
-        orchestrator.start_background()   # spin up nightly roll‑up & reflection loops
+        start_background()   # spin up nightly roll‑up & reflection loops
         self._orch_started = True
     
     async def _init_tier_8_final_setup(self):
