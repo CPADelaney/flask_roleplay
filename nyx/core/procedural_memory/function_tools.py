@@ -14,33 +14,37 @@ from agents.exceptions import UserError
 
 from .models import Procedure, ProcedureStats, TransferStats, ProcedureTransferRecord
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 logger = logging.getLogger(__name__)
+
+class ProcedureStep(BaseModel):
+    """Model for a single procedure step"""
+    id: str
+    function: str
+    parameters: Dict[str, Any] = Field(default_factory=dict)
+    description: Optional[str] = None
+    model_config = ConfigDict(extra="allow")
+
+class ExecutionContext(BaseModel):
+    """Model for procedure execution context"""
+    model_config = ConfigDict(extra="allow")
+
+class StepParameters(BaseModel):
+    """Model for step parameters in refinement"""
+    model_config = ConfigDict(extra="allow")
 
 @function_tool
 async def add_procedure(
     ctx: RunContextWrapper[Any],
     name: str,
-    steps_json: Union[str, List[Dict[str, Any]], Tuple[Dict[str, Any], ...]],
+    steps_json: Union[str, List[ProcedureStep]],  # ✅ Fixed with Pydantic model
     description: Optional[str] = None,
     domain: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """
-    Add (or import) a procedure.
-
-    • `steps_json` may be:
-        – a JSON *string*  → will be `json.loads()`‑ed
-        – a Python list/tuple that the SDK has already deserialised
-    """
-
-    steps: List[Dict[str, Any]] # Declare steps here for consistent typing
-
-    # ---------- 1️⃣  Normalise `steps_json` ----------
-    if isinstance(steps_json, (list, tuple)):
-        # If it's already a list/tuple, use it directly
-        logger.debug(f"ADD_PROCEDURE_DEBUG: Received steps_json of type: {type(steps_json)}. Processing as pre-parsed list/tuple.")
-        steps = [dict(step) for step in steps_json]
+    # Handle both string and list inputs
+    if isinstance(steps_json, list):
+        steps = [step.model_dump() if isinstance(step, BaseModel) else dict(step) for step in steps_json]
     elif isinstance(steps_json, str):
         logger.debug(f"ADD_PROCEDURE_DEBUG: Received steps_json of type: <class 'str'>")
         logger.debug(f"ADD_PROCEDURE_DEBUG: Length of steps_json string: {len(steps_json)}")
@@ -148,7 +152,7 @@ async def add_procedure(
 async def execute_procedure(
     ctx: RunContextWrapper[Any],
     name: str,
-    context: Dict[str, Any] = None,
+    context: Optional[ExecutionContext] = None,  # ✅ Fixed with Pydantic model
     force_conscious: bool = False
 ) -> Dict[str, Any]:
     """
@@ -168,7 +172,7 @@ async def execute_procedure(
         return {"error": f"Procedure '{name}' not found", "success": False, "execution_time": 0.0}
     
     procedure = manager.procedures[name]
-    execution_context = context or {}
+    execution_context = context.model_dump() if context and isinstance(context, BaseModel) else (context or {})
     
     # Create trace span for execution
     with custom_span(
@@ -1160,7 +1164,7 @@ async def refine_step(
     procedure_name: str,
     step_id: str,
     new_function: Optional[str] = None,
-    new_parameters: Optional[Dict[str, Any]] = None,
+    new_parameters: Optional[StepParameters] = None,  # ✅ Fixed with Pydantic model
     new_description: Optional[str] = None
 ) -> Dict[str, Any]:
     """
@@ -1176,7 +1180,7 @@ async def refine_step(
     Returns:
         Result of the refinement with details about what was changed
     """
-    manager = ctx.context.manager
+    manager = ctx.context.manager  # ✅ This should be first
     
     if procedure_name not in manager.procedures:
         return {"error": f"Procedure '{procedure_name}' not found", "success": False}
@@ -1216,9 +1220,10 @@ async def refine_step(
             else:
                 step["function"] = new_function
             
-        # Update parameters if provided
+        # Update parameters if provided - ✅ MOVED TO CORRECT LOCATION
         if new_parameters:
-            step["parameters"] = new_parameters
+            # Convert Pydantic model to dict
+            step["parameters"] = new_parameters.model_dump() if isinstance(new_parameters, BaseModel) else new_parameters
             
         # Update description if provided
         if new_description:
