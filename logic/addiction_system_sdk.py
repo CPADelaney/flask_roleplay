@@ -271,19 +271,19 @@ class AddictionContext:
 )
 async def check_addiction_levels(
     ctx: RunContextWrapper[AddictionContext],
-    conn: asyncpg.Connection,  # NEW: Connection passed from LoreSystem
     player_name: str
 ) -> Dict[str, Any]:
     user_id = ctx.context.user_id
     conversation_id = ctx.context.conversation_id
     try:
-        # Ensure table exists through canon
-        await canon.ensure_addiction_table_exists(ctx, conn)
-        
-        rows = await conn.fetch(
-            "SELECT addiction_type, level, target_npc_id FROM PlayerAddictions WHERE user_id=$1 AND conversation_id=$2 AND player_name=$3",
-            user_id, conversation_id, player_name
-        )
+        async with get_db_connection_context() as conn:
+            # Ensure table exists through canon
+            await canon.ensure_addiction_table_exists(ctx, conn)
+            
+            rows = await conn.fetch(
+                "SELECT addiction_type, level, target_npc_id FROM PlayerAddictions WHERE user_id=$1 AND conversation_id=$2 AND player_name=$3",
+                user_id, conversation_id, player_name
+            )
         addiction_data = {}
         npc_specific = []
         for row in rows:
@@ -321,7 +321,6 @@ async def check_addiction_levels(
 )
 async def update_addiction_level(
     ctx: RunContextWrapper[AddictionContext],
-    conn: asyncpg.Connection,  # NEW: Connection passed from LoreSystem
     player_name: str,
     addiction_type: str,
     progression_chance: float = 0.2,
@@ -341,8 +340,8 @@ async def update_addiction_level(
         }
 
     try:
-        # Ensure table exists through canon
-        await canon.ensure_addiction_table_exists(ctx, conn)
+        async with get_db_connection_context() as conn:
+            await canon.ensure_addiction_table_exists(ctx, conn)
 
         if target_npc_id is None:
             row = await conn.fetchrow("""
@@ -410,7 +409,6 @@ async def update_addiction_level(
 )
 async def generate_addiction_effects(
     ctx: RunContextWrapper[AddictionContext],
-    conn: asyncpg.Connection,  # NEW: Connection passed from LoreSystem
     player_name: str,
     addiction_status: Dict[str, Any]
 ) -> Dict[str, Any]:
@@ -426,7 +424,9 @@ async def generate_addiction_effects(
         effects.extend(thematic.get_levels(addiction_type, level))
 
     npc_specific = addiction_status.get("npc_specific_addictions", [])
-    for entry in npc_specific:
+    
+    async with get_db_connection_context() as conn:
+        for entry in npc_specific:
         addiction_type = entry["addiction_type"]
         npc_name = entry.get("npc_name", f"NPC#{entry['npc_id']}")
         level = entry["level"]
@@ -557,29 +557,28 @@ async def process_addiction_update(
     addiction_context = AddictionContext(user_id, conversation_id)
     await addiction_context.initialize()
     
-    # REFACTORED: Get connection and pass it through
-    async with get_db_connection_context() as conn:
-        with trace(
-            workflow_name="Addiction System",
-            trace_id=f"addiction-{conversation_id}-{int(datetime.now().timestamp())}",
-            group_id=f"user-{user_id}"
-        ):
-            prompt = f"Update the player's addiction to {addiction_type}{f' related to NPC #{target_npc_id}' if target_npc_id else ''}. Player name: {player_name}. Progression multiplier: {progression_multiplier}"
-            
-            # Create context wrapper with connection
-            ctx_wrapper = RunContextWrapper(addiction_context)
-            
-            # Call update function with connection
-            update_result = await update_addiction_level(
-                ctx_wrapper, conn, player_name, addiction_type,
-                progression_multiplier=progression_multiplier,
-                target_npc_id=target_npc_id
-            )
-            
-            # Get addiction status for effects
-            addiction_status = await check_addiction_levels(ctx_wrapper, conn, player_name)
-            narrative_effects = await generate_addiction_effects(ctx_wrapper, conn, player_name, addiction_status)
-            
+    # Remove the connection context here
+    with trace(
+        workflow_name="Addiction System",
+        trace_id=f"addiction-{conversation_id}-{int(datetime.now().timestamp())}",
+        group_id=f"user-{user_id}"
+    ):
+        prompt = f"Update the player's addiction to {addiction_type}{f' related to NPC #{target_npc_id}' if target_npc_id else ''}. Player name: {player_name}. Progression multiplier: {progression_multiplier}"
+        
+        # Create context wrapper without connection
+        ctx_wrapper = RunContextWrapper(addiction_context)
+        
+        # Call update function without connection parameter
+        update_result = await update_addiction_level(
+            ctx_wrapper, player_name, addiction_type,
+            progression_multiplier=progression_multiplier,
+            target_npc_id=target_npc_id
+        )
+        
+        # Get addiction status for effects
+        addiction_status = await check_addiction_levels(ctx_wrapper, player_name)
+        narrative_effects = await generate_addiction_effects(ctx_wrapper, player_name, addiction_status)
+        
     return {"update": update_result, "narrative_effects": narrative_effects, "addiction_type": addiction_type, "target_npc_id": target_npc_id}
 
 async def process_addiction_effects(
