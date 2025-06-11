@@ -889,16 +889,22 @@ async def process_roleplay_updates_canonical(
     return count
 
 @function_tool
-async def apply_universal_updates(ctx, updates: Dict[str, Any]) -> Dict[str, Any]:
+async def apply_universal_updates(ctx, updates_json: str) -> Dict[str, Any]:
     """
     Apply universal updates to the database.
     
     Args:
-        updates: Dictionary containing all the updates to apply
+        updates_json: JSON string containing all the updates to apply
         
     Returns:
         Dictionary with update results
     """
+    # Parse the JSON string
+    try:
+        updates = json.loads(updates_json)
+    except json.JSONDecodeError as e:
+        return {"success": False, "error": f"Invalid JSON: {str(e)}"}
+    
     user_id = ctx.context.user_id
     conversation_id = ctx.context.conversation_id
     governor = ctx.context.governor
@@ -1097,7 +1103,10 @@ async def process_universal_update(
         
         # Apply the updates
         if update_data:
-            update_result = await apply_universal_updates(RunContextWrapper(updater_context), update_data.dict())
+            # Convert the Pydantic model to dict, then to JSON string
+            update_dict = update_data.dict()
+            update_json = json.dumps(update_dict)
+            update_result = await apply_universal_updates(RunContextWrapper(updater_context), update_json)
             return update_result
         else:
             return {"success": False, "error": "No updates extracted"}
