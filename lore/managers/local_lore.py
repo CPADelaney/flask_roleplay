@@ -419,38 +419,35 @@ class SpecializedAgents:
         )
 
 # ===== GUARDRAILS =====
-class MatriarchalThemeGuardrail(InputGuardrail):
+async def matriarchal_theme_guardrail(context: RunContextWrapper, agent: Agent) -> GuardrailFunctionOutput:
     """Ensures all lore respects matriarchal themes."""
+    # Check if the input contains anti-matriarchal themes
+    input_text = str(context.messages[-1].content if context.messages else "")
     
-    async def __call__(self, context: RunContextWrapper, agent: Agent) -> GuardrailFunctionOutput:
-        # Check if the input contains anti-matriarchal themes
-        input_text = str(context.messages[-1].content if context.messages else "")
-        
-        problematic_terms = [
-            "patriarchal dominance", "male supremacy", "women's subordination"
-        ]
-        
-        for term in problematic_terms:
-            if term.lower() in input_text.lower():
-                return GuardrailFunctionOutput(
-                    should_block=True,
-                    message="Content must respect matriarchal themes and feminine authority."
-                )
-        
-        return GuardrailFunctionOutput(should_block=False)
-
-class ContentCoherenceGuardrail(OutputGuardrail):
-    """Ensures generated content maintains narrative coherence."""
+    problematic_terms = [
+        "patriarchal dominance", "male supremacy", "women's subordination"
+    ]
     
-    async def __call__(self, context: RunContextWrapper, agent: Agent, output: Any) -> GuardrailFunctionOutput:
-        # Basic coherence check - ensure output isn't empty or nonsensical
-        if isinstance(output, str) and len(output.strip()) < 20:
+    for term in problematic_terms:
+        if term.lower() in input_text.lower():
             return GuardrailFunctionOutput(
                 should_block=True,
-                message="Output too short or incoherent. Please regenerate."
+                message="Content must respect matriarchal themes and feminine authority."
             )
-        
-        return GuardrailFunctionOutput(should_block=False)
+    
+    return GuardrailFunctionOutput(should_block=False)
+
+async def content_coherence_guardrail(context: RunContextWrapper, agent: Agent, output: Any) -> GuardrailFunctionOutput:
+    """Ensures generated content maintains narrative coherence."""
+    # Basic coherence check - ensure output isn't empty or nonsensical
+    if isinstance(output, str) and len(output.strip()) < 20:
+        return GuardrailFunctionOutput(
+            should_block=True,
+            message="Output too short or incoherent. Please regenerate."
+        )
+    
+    return GuardrailFunctionOutput(should_block=False)
+
 
 # ===== MAIN MANAGER CLASS =====
 class LocalLoreManager(BaseLoreManager):
@@ -464,9 +461,9 @@ class LocalLoreManager(BaseLoreManager):
         self.cache_namespace = "locallore"
         self.agents = SpecializedAgents()
         
-        # Initialize guardrails
-        self.theme_guardrail = MatriarchalThemeGuardrail()
-        self.coherence_guardrail = ContentCoherenceGuardrail()
+        # Initialize guardrails as InputGuardrail/OutputGuardrail instances
+        self.theme_guardrail = InputGuardrail(matriarchal_theme_guardrail)
+        self.coherence_guardrail = OutputGuardrail(content_coherence_guardrail)
         
     async def initialize_tables(self):
         """Ensure all local lore tables exist with enhanced fields."""
