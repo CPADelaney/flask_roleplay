@@ -60,30 +60,46 @@ class ConflictResolutionSystem:
         
     async def _create_resolution_agent(self):
         """Create the resolution agent for handling conflict resolutions."""
-        governance = await get_central_governance(self.user_id, self.conversation_id)
-        return await governance.create_agent(
-            agent_type=AgentType.CONFLICT_RESOLVER,
-            agent_id="conflict_resolver",
-            capabilities=["resolution_planning", "outcome_prediction", "stakeholder_management"]
-        )
+        try:
+            governance = await get_central_governance(self.user_id, self.conversation_id)
+            # Use CONFLICT_ANALYST as the agent type since CONFLICT_RESOLVER doesn't exist
+            return await governance.create_agent(
+                agent_type=AgentType.CONFLICT_ANALYST,
+                agent_id="conflict_resolver",
+                capabilities=["resolution_planning", "outcome_prediction", "stakeholder_management"]
+            )
+        except Exception as e:
+            logger.warning(f"Could not create resolution agent via governance: {e}")
+            # Return a mock agent object or None
+            return None
         
     async def _create_stakeholder_agent(self):
         """Create the stakeholder agent for managing conflict stakeholders."""
-        governance = await get_central_governance(self.user_id, self.conversation_id)
-        return await governance.create_agent(
-            agent_type=AgentType.STAKEHOLDER_MANAGER,
-            agent_id="stakeholder_manager",
-            capabilities=["stakeholder_analysis", "motivation_tracking", "alliance_management"]
-        )
-        
+        try:
+            governance = await get_central_governance(self.user_id, self.conversation_id)
+            # Use CONFLICT_ANALYST as the agent type
+            return await governance.create_agent(
+                agent_type=AgentType.CONFLICT_ANALYST,
+                agent_id="stakeholder_manager",
+                capabilities=["stakeholder_analysis", "motivation_tracking", "alliance_management"]
+            )
+        except Exception as e:
+            logger.warning(f"Could not create stakeholder agent via governance: {e}")
+            return None
+            
     async def _create_strategy_agent(self):
         """Create the strategy agent for developing resolution strategies."""
-        governance = await get_central_governance(self.user_id, self.conversation_id)
-        return await governance.create_agent(
-            agent_type=AgentType.STRATEGY_PLANNER,
-            agent_id="strategy_planner",
-            capabilities=["strategy_development", "risk_assessment", "resource_optimization"]
-        )
+        try:
+            governance = await get_central_governance(self.user_id, self.conversation_id)
+            # Use CONFLICT_ANALYST as the agent type
+            return await governance.create_agent(
+                agent_type=AgentType.CONFLICT_ANALYST,
+                agent_id="strategy_planner",
+                capabilities=["strategy_development", "risk_assessment", "resource_optimization"]
+            )
+        except Exception as e:
+            logger.warning(f"Could not create strategy agent via governance: {e}")
+            return None
 
     async def _calculate_faction_relationship(self, faction1_members: List[Dict[str, Any]], 
                                             faction2_members: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -627,7 +643,7 @@ class ConflictResolutionSystem:
             }
         
     @with_governance(
-        agent_type=AgentType.CONFLICT_RESOLVER,
+        agent_type=AgentType.CONFLICT_ANALYST,
         action_type="resolve_conflict",
         action_description="Resolving conflict {conflict_id}",
         id_from_context=lambda ctx: "conflict_resolver"
