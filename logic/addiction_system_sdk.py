@@ -415,20 +415,20 @@ async def update_addiction_level(
 async def generate_addiction_effects(
     ctx: RunContextWrapper[AddictionContext],
     player_name: str,
-    addiction_status: Dict[str, Any]
+    addiction_status: AddictionStatus  # Use the Pydantic model
 ) -> Dict[str, Any]:
     user_id = ctx.context.user_id
     conversation_id = ctx.context.conversation_id
     thematic = ctx.context.thematic_messages
 
     effects = []
-    addiction_levels = addiction_status.get("addiction_levels", {})
+    addiction_levels = addiction_status.addiction_levels  # Now properly typed
     for addiction_type, level in addiction_levels.items():
         if level <= 0:
             continue
         effects.extend(thematic.get_levels(addiction_type, level))
 
-    npc_specific = addiction_status.get("npc_specific_addictions", [])
+    npc_specific = addiction_status.npc_specific_addictions  # Also properly typed
     
     async with get_db_connection_context() as conn:
         for entry in npc_specific:
@@ -581,7 +581,12 @@ async def process_addiction_update(
         )
         
         # Get addiction status for effects
-        addiction_status = await check_addiction_levels(ctx_wrapper, player_name)
+        addiction_status_dict = await check_addiction_levels(ctx_wrapper, player_name)
+        addiction_status = AddictionStatus(
+            addiction_levels=addiction_status_dict.get("addiction_levels", {}),
+            npc_specific_addictions=addiction_status_dict.get("npc_specific_addictions", []),
+            has_addictions=addiction_status_dict.get("has_addictions", False)
+        )
         narrative_effects = await generate_addiction_effects(ctx_wrapper, player_name, addiction_status)
         
     return {"update": update_result, "narrative_effects": narrative_effects, "addiction_type": addiction_type, "target_npc_id": target_npc_id}
@@ -592,8 +597,13 @@ async def process_addiction_effects(
     addiction_context = AddictionContext(user_id, conversation_id)
     await addiction_context.initialize()
     
+    addiction_status_obj = AddictionStatus(
+        addiction_levels=addiction_status.get("addiction_levels", {}),
+        npc_specific_addictions=addiction_status.get("npc_specific_addictions", []),
+        has_addictions=addiction_status.get("has_addictions", False)
+    )
     effects_result = await generate_addiction_effects(
-        RunContextWrapper(addiction_context), player_name, addiction_status
+        RunContextWrapper(addiction_context), player_name, addiction_status_obj
     )
     return effects_result
 
@@ -612,7 +622,12 @@ async def check_addiction_status(
         levels_result = await check_addiction_levels(ctx_wrapper, player_name)
         effects_result = {"effects": [], "has_effects": False}
         if levels_result.get("has_addictions", False):
-            effects_result = await generate_addiction_effects(ctx_wrapper, player_name, levels_result)
+            addiction_status = AddictionStatus(
+                addiction_levels=levels_result.get("addiction_levels", {}),
+                npc_specific_addictions=levels_result.get("npc_specific_addictions", []),
+                has_addictions=levels_result.get("has_addictions", False)
+            )
+            effects_result = await generate_addiction_effects(ctx_wrapper, player_name, addiction_status)
     
     return {"status": levels_result, "effects": effects_result}
 
