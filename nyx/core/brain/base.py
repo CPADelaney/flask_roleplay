@@ -16,7 +16,7 @@ from nyx.core.brain.global_workspace.workspace_v3 import (
     NyxEngineV3, Proposal, EnhancedWorkspaceModule
 )
 
-from nyx.core.orchestrator import prepare_context, log_and_score, start_background
+import nyx.core.orchestrator as orchestrator
 
 from nyx.core.brain.config import BrainConfig
 
@@ -4294,7 +4294,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
         logger.info(f"Action: Express desire for '{object_of_desire}' towards {target_user_id} (Intensity: {intensity:.2f})")
     
         # Guardrails (similar to express_attraction but maybe require higher intimacy)
-        if not self.relationship_manager: return {"success": False, "reason": "RelationshipManager unavailable."}
+        if not instance.relationship_manager: return {"success": False, "reason": "RelationshipManager unavailable."}
         relationship = await self.relationship_manager.get_relationship_state(target_user_id)
         if not relationship or relationship.trust < 0.7 or relationship.intimacy < 0.5:
              logger.warning(f"Cannot express desire: Trust/Intimacy too low for {target_user_id}.")
