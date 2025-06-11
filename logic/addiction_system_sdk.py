@@ -405,7 +405,7 @@ async def update_addiction_level(
         logging.error(f"Error updating addiction: {e}")
         return {"error": str(e)}
 
-@function_tool
+@function_tool(strict_mode=False)
 @with_governance(
     agent_type=AgentType.UNIVERSAL_UPDATER,
     action_type="generate_effects",
