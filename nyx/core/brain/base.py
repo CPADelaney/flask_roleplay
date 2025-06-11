@@ -1549,9 +1549,6 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             self.hard_dominance_ideation_agent = create_hard_dominance_ideation_agent()
         except ImportError:
             logger.warning("Dominance ideation agents not available")
-
-        start_background()   # spin up nightly roll‑up & reflection loops
-        self._orch_started = True
     
     async def _init_tier_8_final_setup(self):
         """Final setup and integration tasks"""
@@ -1641,6 +1638,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
         try:
             orchestrator.start_background()
             self._orchestrator_started = True
+            self._orch_started = True
             logger.info("Orchestrator background tasks started")
         except Exception as e:
             logger.error(f"Failed to start orchestrator background: {e}")
