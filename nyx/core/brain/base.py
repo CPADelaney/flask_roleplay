@@ -5134,16 +5134,17 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             result["thinking_result"] = thinking_result
             context["thinking_result"] = thinking_result
             context["thinking_applied"] = True
-        await orchestrator.log_and_score("thinking_complete", {
-            "thinking_level": thinking_level,
-            "user_id": str(self.user_id)
-        })           
+            
+            # Move this inside the if block
+            await orchestrator.log_and_score("thinking_complete", {
+                "thinking_level": thinking_level,
+                "user_id": str(self.user_id)
+            })
         else:
             result["thinking_applied"] = False
             result["thinking_result"] = {}                 
         
         return result
-    
     
     async def _apply_conditioning_phase(self, user_input: str, context: Dict[str, Any],
                                       current_result: Dict[str, Any]) -> Dict[str, Any]:
