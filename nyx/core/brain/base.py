@@ -274,8 +274,8 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
         from nyx.core.interaction_mode_manager import InteractionModeManager
         from nyx.core.mood_manager import MoodManager
 
-        orchestrator.start_background()   # spin up nightly roll‑up & reflection loops
-        self._orch_started = True
+            orchestrator.start_background()   # spin up nightly roll‑up & reflection loops
+            self._orch_started = True
         
         # Store module classes for later use
         self._modules = {
