@@ -18,6 +18,17 @@ from agents.items import (
     ToolCallItem
 )
 
+from pydantic import BaseModel, ConfigDict
+
+# Add these Pydantic models after imports
+class IndicatorsModel(BaseModel):
+    """Model for context pattern indicators"""
+    model_config = ConfigDict(extra="allow")  # Allows any additional fields
+
+class TemporalPatternItem(BaseModel):
+    """Model for temporal pattern items"""
+    model_config = ConfigDict(extra="allow")  # Allows any additional fields
+
 from .models import ContextPattern, ChunkPrediction
 
 logger = logging.getLogger(__name__)
@@ -719,9 +730,9 @@ class ContextAwareChunkSelector:
     async def create_context_pattern(
         name: str,
         domain: str,
-        indicators: Dict[str, Any],
+        indicators: IndicatorsModel,  # Changed from Dict[str, Any]
         chunk_id: str,
-        temporal_pattern: Optional[List[Dict[str, Any]]] = None,
+        temporal_pattern: Optional[List[TemporalPatternItem]] = None,  # Changed from List[Dict[str, Any]]
         confidence_threshold: float = 0.7,
         ctx = None
     ) -> Dict[str, Any]:
@@ -749,22 +760,30 @@ class ContextAwareChunkSelector:
                 "error": "Chunk selector not available in context"
             }
         
+        # Convert Pydantic model to dict
+        indicators_dict = indicators.model_dump()
+        
         # Log pattern creation
-        logger.info(f"Create context pattern: name: {name}, domain: {domain}, indicators count: {len(indicators)}, chunk_id: {chunk_id}")
+        logger.info(f"Create context pattern: name: {name}, domain: {domain}, indicators count: {len(indicators_dict)}, chunk_id: {chunk_id}")
         
         # Add chunk association indicator
-        indicators[f"chunk_{chunk_id}_suitable"] = True
+        indicators_dict[f"chunk_{chunk_id}_suitable"] = True
         
         # Generate pattern ID
         pattern_id = f"pattern_{int(datetime.datetime.now().timestamp())}_{chunk_id}"
+        
+        # Convert temporal pattern if provided
+        temporal_pattern_list = []
+        if temporal_pattern:
+            temporal_pattern_list = [item.model_dump() for item in temporal_pattern]
         
         # Create pattern
         pattern = ContextPattern(
             id=pattern_id,
             name=name,
             domain=domain,
-            indicators=indicators,
-            temporal_pattern=temporal_pattern or [],
+            indicators=indicators_dict,
+            temporal_pattern=temporal_pattern_list,
             confidence_threshold=confidence_threshold,
             match_count=0,
             last_matched=None
@@ -778,10 +797,11 @@ class ContextAwareChunkSelector:
             "pattern_id": pattern_id,
             "name": name,
             "domain": domain,
-            "indicators_count": len(indicators),
+            "indicators_count": len(indicators_dict),
             "has_temporal_pattern": temporal_pattern is not None,
             "chunk_id": chunk_id
         }
+
     
     def get_pattern_performance_metrics_definition():
         """Define the get_pattern_performance_metrics function for OpenAI function calling"""
