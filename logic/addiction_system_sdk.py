@@ -16,6 +16,7 @@ import logging
 import random
 import json
 import asyncio
+import asyncpg
 import os
 from datetime import datetime
 from typing import Dict, List, Any, Optional, Union
