@@ -84,6 +84,547 @@ class ConflictResolutionSystem:
             agent_id="strategy_planner",
             capabilities=["strategy_development", "risk_assessment", "resource_optimization"]
         )
+
+    async def _calculate_faction_relationship(self, faction1_members: List[Dict[str, Any]], 
+                                            faction2_members: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Calculate the relationship between two factions based on their members."""
+        try:
+            # Calculate average relationships between faction members
+            total_relationship = 0
+            relationship_count = 0
+            
+            for member1 in faction1_members:
+                for member2 in faction2_members:
+                    # Get relationship between members
+                    rel_manager = NPCRelationshipManager(
+                        member1['npc_id'], 
+                        self.user_id, 
+                        self.conversation_id
+                    )
+                    relationship = await rel_manager.get_relationship_details('npc', member2['npc_id'])
+                    
+                    if relationship:
+                        link_level = relationship.get('link_level', 0)
+                        total_relationship += link_level
+                        relationship_count += 1
+            
+            avg_relationship = total_relationship / relationship_count if relationship_count > 0 else 0
+            
+            # Determine relationship type based on average
+            if avg_relationship > 50:
+                rel_type = "allied"
+            elif avg_relationship > 0:
+                rel_type = "neutral"
+            elif avg_relationship > -50:
+                rel_type = "tense"
+            else:
+                rel_type = "hostile"
+            
+            return {
+                "average_link_level": avg_relationship,
+                "relationship_type": rel_type,
+                "sample_size": relationship_count,
+                "tension_level": max(0, -avg_relationship)  # Higher tension for negative relationships
+            }
+            
+        except Exception as e:
+            logger.error(f"Error calculating faction relationship: {e}")
+            return {
+                "average_link_level": 0,
+                "relationship_type": "unknown",
+                "sample_size": 0,
+                "tension_level": 0
+            }
+    
+    async def _calculate_stakeholder_influence(self, stakeholder: Dict[str, Any], 
+                                             all_stakeholders: List[Dict[str, Any]]) -> float:
+        """Calculate a stakeholder's influence based on various factors."""
+        try:
+            influence = 0.0
+            
+            # Base influence from involvement level
+            influence += stakeholder.get('involvement_level', 0) * 10
+            
+            # Influence from dominance trait
+            influence += stakeholder.get('dominance', 50) / 2
+            
+            # Influence from faction position
+            faction_position = stakeholder.get('faction_position', '').lower()
+            if 'leader' in faction_position:
+                influence += 30
+            elif 'commander' in faction_position or 'captain' in faction_position:
+                influence += 20
+            elif 'lieutenant' in faction_position:
+                influence += 10
+            
+            # Influence from leadership ambition
+            influence += stakeholder.get('leadership_ambition', 0) / 5
+            
+            # Influence from faction standing
+            influence += stakeholder.get('faction_standing', 50) / 4
+            
+            # Influence from relationships with other stakeholders
+            relationship_bonus = 0
+            for other in all_stakeholders:
+                if other['npc_id'] != stakeholder['npc_id']:
+                    # Check if this stakeholder has alliances
+                    alliances = stakeholder.get('alliances', {})
+                    if isinstance(alliances, str):
+                        try:
+                            alliances = json.loads(alliances)
+                        except:
+                            alliances = {}
+                    
+                    if str(other['npc_id']) in alliances or other['npc_id'] in alliances:
+                        relationship_bonus += 5
+            
+            influence += relationship_bonus
+            
+            # Cap influence at 100
+            return min(100.0, influence)
+            
+        except Exception as e:
+            logger.error(f"Error calculating stakeholder influence: {e}")
+            return 0.0
+    
+    async def _calculate_player_influence(self, player_involvement: Dict[str, Any], 
+                                        stakeholders: List[Dict[str, Any]]) -> float:
+        """Calculate player's influence in the conflict."""
+        try:
+            influence = 0.0
+            
+            # Base influence from involvement level
+            involvement_level = player_involvement.get('involvement_level', 'none')
+            involvement_scores = {
+                'none': 0,
+                'observing': 10,
+                'participating': 30,
+                'leading': 50
+            }
+            influence += involvement_scores.get(involvement_level, 0)
+            
+            # Influence from resources committed
+            money_committed = player_involvement.get('money_committed', 0)
+            supplies_committed = player_involvement.get('supplies_committed', 0)
+            influence_committed = player_involvement.get('influence_committed', 0)
+            
+            # Convert resources to influence (weighted)
+            influence += money_committed / 100  # Money has less direct influence
+            influence += supplies_committed / 10  # Supplies have moderate influence
+            influence += influence_committed  # Direct influence conversion
+            
+            # Influence from faction alignment
+            if player_involvement.get('faction') not in ['neutral', None]:
+                influence += 10
+            
+            # Influence from being manipulated (negative)
+            if player_involvement.get('manipulated_by'):
+                influence -= 20
+            
+            # Influence from actions taken
+            actions_taken = player_involvement.get('actions_taken', [])
+            if isinstance(actions_taken, str):
+                try:
+                    actions_taken = json.loads(actions_taken)
+                except:
+                    actions_taken = []
+            influence += len(actions_taken) * 5
+            
+            return max(0.0, min(100.0, influence))
+            
+        except Exception as e:
+            logger.error(f"Error calculating player influence: {e}")
+            return 0.0
+    
+    async def _analyze_player_resources(self, player_involvement: Dict[str, Any]) -> Dict[str, Any]:
+        """Analyze player's available resources."""
+        try:
+            # Get resource manager
+            resource_manager = ResourceManager(self.user_id, self.conversation_id)
+            
+            # Get current resources
+            current_resources = await resource_manager.get_resources()
+            
+            # Get committed resources
+            committed = {
+                'money': player_involvement.get('money_committed', 0),
+                'supplies': player_involvement.get('supplies_committed', 0),
+                'influence': player_involvement.get('influence_committed', 0)
+            }
+            
+            # Calculate available resources
+            available = {
+                'money': current_resources.get('money', 0) - committed['money'],
+                'supplies': current_resources.get('supplies', 0) - committed['supplies'],
+                'influence': current_resources.get('influence', 0) - committed['influence']
+            }
+            
+            # Analyze resource status
+            resource_status = "abundant"
+            if available['money'] < 50 or available['supplies'] < 10 or available['influence'] < 5:
+                resource_status = "limited"
+            elif available['money'] < 20 or available['supplies'] < 5 or available['influence'] < 2:
+                resource_status = "scarce"
+            elif any(v < 0 for v in available.values()):
+                resource_status = "depleted"
+            
+            return {
+                'current': current_resources,
+                'committed': committed,
+                'available': available,
+                'status': resource_status,
+                'can_commit_more': resource_status in ["abundant", "limited"]
+            }
+            
+        except Exception as e:
+            logger.error(f"Error analyzing player resources: {e}")
+            return {
+                'current': {'money': 0, 'supplies': 0, 'influence': 0},
+                'committed': {'money': 0, 'supplies': 0, 'influence': 0},
+                'available': {'money': 0, 'supplies': 0, 'influence': 0},
+                'status': 'unknown',
+                'can_commit_more': False
+            }
+    
+    async def _analyze_player_relationships(self, player_involvement: Dict[str, Any], 
+                                          stakeholders: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Analyze player's relationships with stakeholders."""
+        try:
+            relationships = {}
+            relationship_summary = {
+                'allies': [],
+                'enemies': [],
+                'neutral': [],
+                'manipulators': []
+            }
+            
+            # Check who manipulated the player
+            manipulated_by = player_involvement.get('manipulated_by')
+            if manipulated_by:
+                if isinstance(manipulated_by, str):
+                    try:
+                        manipulated_by = json.loads(manipulated_by)
+                    except:
+                        manipulated_by = {}
+                manipulator_id = manipulated_by.get('npc_id')
+                if manipulator_id:
+                    relationship_summary['manipulators'].append(manipulator_id)
+            
+            # Get RelationshipIntegration instance
+            rel_integration = RelationshipIntegration(self.user_id, self.conversation_id)
+            
+            # Analyze relationship with each stakeholder
+            for stakeholder in stakeholders:
+                npc_id = stakeholder['npc_id']
+                
+                # Get relationship details
+                relationship = await rel_integration.get_relationship(
+                    'player', self.user_id,
+                    'npc', npc_id
+                )
+                
+                if relationship:
+                    link_level = relationship.get('link_level', 0)
+                    link_type = relationship.get('link_type', 'neutral')
+                    dynamics = relationship.get('dynamics', {})
+                    
+                    relationships[npc_id] = {
+                        'npc_name': stakeholder.get('npc_name', f'NPC {npc_id}'),
+                        'link_level': link_level,
+                        'link_type': link_type,
+                        'dynamics': dynamics,
+                        'is_manipulator': npc_id in relationship_summary['manipulators']
+                    }
+                    
+                    # Categorize based on link level
+                    if link_level > 50:
+                        relationship_summary['allies'].append(npc_id)
+                    elif link_level < -50:
+                        relationship_summary['enemies'].append(npc_id)
+                    else:
+                        relationship_summary['neutral'].append(npc_id)
+                else:
+                    # No existing relationship
+                    relationships[npc_id] = {
+                        'npc_name': stakeholder.get('npc_name', f'NPC {npc_id}'),
+                        'link_level': 0,
+                        'link_type': 'neutral',
+                        'dynamics': {},
+                        'is_manipulator': npc_id in relationship_summary['manipulators']
+                    }
+                    relationship_summary['neutral'].append(npc_id)
+            
+            return {
+                'individual_relationships': relationships,
+                'summary': relationship_summary,
+                'total_allies': len(relationship_summary['allies']),
+                'total_enemies': len(relationship_summary['enemies']),
+                'being_manipulated': len(relationship_summary['manipulators']) > 0
+            }
+            
+        except Exception as e:
+            logger.error(f"Error analyzing player relationships: {e}")
+            return {
+                'individual_relationships': {},
+                'summary': {
+                    'allies': [],
+                    'enemies': [],
+                    'neutral': [],
+                    'manipulators': []
+                },
+                'total_allies': 0,
+                'total_enemies': 0,
+                'being_manipulated': False
+            }
+    
+    async def _analyze_path_progress(self, path: Dict[str, Any]) -> Dict[str, Any]:
+        """Analyze progress on a specific resolution path."""
+        try:
+            progress = path.get('progress', 0)
+            is_completed = path.get('is_completed', False)
+            difficulty = path.get('difficulty', 5)
+            
+            # Calculate completion rate
+            if is_completed:
+                completion_rate = 100
+                status = 'completed'
+            elif progress >= 75:
+                completion_rate = progress
+                status = 'nearly_complete'
+            elif progress >= 50:
+                completion_rate = progress
+                status = 'progressing_well'
+            elif progress >= 25:
+                completion_rate = progress
+                status = 'early_progress'
+            elif progress > 0:
+                completion_rate = progress
+                status = 'just_started'
+            else:
+                completion_rate = 0
+                status = 'not_started'
+            
+            # Estimate remaining effort based on difficulty
+            if not is_completed:
+                remaining_effort = (100 - progress) * (difficulty / 10)
+            else:
+                remaining_effort = 0
+            
+            # Analyze key challenges
+            key_challenges = path.get('key_challenges', [])
+            if isinstance(key_challenges, str):
+                try:
+                    key_challenges = json.loads(key_challenges)
+                except:
+                    key_challenges = []
+            
+            # Estimate challenges completed based on progress
+            total_challenges = len(key_challenges)
+            if total_challenges > 0:
+                challenges_completed = int((progress / 100) * total_challenges)
+                challenges_remaining = total_challenges - challenges_completed
+            else:
+                challenges_completed = 0
+                challenges_remaining = 0
+            
+            return {
+                'path_id': path.get('path_id'),
+                'name': path.get('name'),
+                'progress': progress,
+                'completion_rate': completion_rate,
+                'status': status,
+                'is_completed': is_completed,
+                'difficulty': difficulty,
+                'remaining_effort': remaining_effort,
+                'total_challenges': total_challenges,
+                'challenges_completed': challenges_completed,
+                'challenges_remaining': challenges_remaining,
+                'approach_type': path.get('approach_type', 'standard')
+            }
+            
+        except Exception as e:
+            logger.error(f"Error analyzing path progress: {e}")
+            return {
+                'path_id': path.get('path_id', 'unknown'),
+                'name': path.get('name', 'Unknown Path'),
+                'progress': 0,
+                'completion_rate': 0,
+                'status': 'error',
+                'is_completed': False,
+                'difficulty': 5,
+                'remaining_effort': 100,
+                'total_challenges': 0,
+                'challenges_completed': 0,
+                'challenges_remaining': 0,
+                'approach_type': 'unknown'
+            }
+    
+    async def _calculate_overall_progress(self, conflict: Dict[str, Any], 
+                                        resolution_paths: List[Dict[str, Any]]) -> float:
+        """Calculate overall conflict progress based on all resolution paths."""
+        try:
+            if not resolution_paths:
+                # If no paths, use conflict's direct progress
+                return conflict.get('progress', 0)
+            
+            # Calculate weighted average of path progress
+            total_progress = 0
+            total_weight = 0
+            
+            for path in resolution_paths:
+                progress = path.get('progress', 0)
+                difficulty = path.get('difficulty', 5)
+                
+                # Weight by inverse difficulty (easier paths contribute more to overall progress)
+                weight = 11 - difficulty  # So difficulty 1 = weight 10, difficulty 10 = weight 1
+                
+                total_progress += progress * weight
+                total_weight += weight
+            
+            if total_weight > 0:
+                weighted_average = total_progress / total_weight
+            else:
+                weighted_average = 0
+            
+            # Blend with conflict's stored progress (in case it's tracked separately)
+            conflict_progress = conflict.get('progress', 0)
+            
+            # 70% from path progress, 30% from conflict progress
+            overall_progress = (weighted_average * 0.7) + (conflict_progress * 0.3)
+            
+            # Apply phase modifiers
+            phase = conflict.get('phase', 'brewing')
+            if phase == 'brewing' and overall_progress > 30:
+                overall_progress = min(overall_progress, 30)  # Cap at 30% in brewing
+            elif phase == 'active' and overall_progress > 60:
+                overall_progress = min(overall_progress, 60)  # Cap at 60% in active
+            elif phase == 'climax' and overall_progress > 90:
+                overall_progress = min(overall_progress, 90)  # Cap at 90% in climax
+            
+            return min(100.0, max(0.0, overall_progress))
+            
+        except Exception as e:
+            logger.error(f"Error calculating overall progress: {e}")
+            return 0.0
+    
+    async def _analyze_faction_internal_conflicts(self, conflicts: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Analyze internal conflicts within a faction."""
+        try:
+            # Group conflicts by phase
+            phases = {
+                'brewing': [],
+                'active': [],
+                'climax': [],
+                'aftermath': [],
+                'resolved': []
+            }
+            
+            # Analyze each conflict
+            conflict_analyses = []
+            
+            for conflict in conflicts:
+                current_phase = conflict.get('current_phase', 'brewing')
+                phases[current_phase].append(conflict)
+                
+                # Analyze conflict intensity
+                progress = conflict.get('progress', 0)
+                public_knowledge = conflict.get('public_knowledge', False)
+                
+                intensity = 'low'
+                if progress > 75:
+                    intensity = 'critical'
+                elif progress > 50:
+                    intensity = 'high'
+                elif progress > 25:
+                    intensity = 'moderate'
+                
+                # Determine likely outcome
+                approach = conflict.get('approach', 'subtle')
+                if approach in ['force', 'direct']:
+                    likely_outcome = 'confrontation'
+                elif approach in ['blackmail', 'sabotage']:
+                    likely_outcome = 'betrayal'
+                else:
+                    likely_outcome = 'negotiation'
+                
+                conflict_analyses.append({
+                    'struggle_id': conflict.get('struggle_id'),
+                    'faction_id': conflict.get('faction_id'),
+                    'primary_npc_id': conflict.get('primary_npc_id'),
+                    'target_npc_id': conflict.get('target_npc_id'),
+                    'prize': conflict.get('prize', 'unknown'),
+                    'approach': approach,
+                    'phase': current_phase,
+                    'progress': progress,
+                    'intensity': intensity,
+                    'is_public': public_knowledge,
+                    'likely_outcome': likely_outcome,
+                    'description': conflict.get('description', '')
+                })
+            
+            # Calculate faction stability based on internal conflicts
+            stability_score = 100
+            
+            # Deduct for each conflict based on phase and intensity
+            for analysis in conflict_analyses:
+                if analysis['phase'] == 'resolved':
+                    stability_score -= 5  # Past conflicts leave scars
+                elif analysis['phase'] == 'aftermath':
+                    stability_score -= 10
+                elif analysis['phase'] == 'climax':
+                    if analysis['intensity'] == 'critical':
+                        stability_score -= 30
+                    else:
+                        stability_score -= 20
+                elif analysis['phase'] == 'active':
+                    if analysis['intensity'] == 'high':
+                        stability_score -= 15
+                    else:
+                        stability_score -= 10
+                else:  # brewing
+                    stability_score -= 5
+                
+                # Public conflicts are more damaging
+                if analysis['is_public']:
+                    stability_score -= 5
+            
+            stability_score = max(0, stability_score)
+            
+            # Determine faction status
+            if stability_score > 80:
+                faction_status = 'stable'
+            elif stability_score > 60:
+                faction_status = 'tensions_present'
+            elif stability_score > 40:
+                faction_status = 'unstable'
+            elif stability_score > 20:
+                faction_status = 'crisis'
+            else:
+                faction_status = 'collapse_imminent'
+            
+            return {
+                'total_conflicts': len(conflicts),
+                'conflicts_by_phase': {k: len(v) for k, v in phases.items()},
+                'active_struggles': len(phases['active']) + len(phases['climax']),
+                'resolved_struggles': len(phases['resolved']),
+                'conflict_analyses': conflict_analyses,
+                'faction_stability_score': stability_score,
+                'faction_status': faction_status,
+                'most_intense_conflict': max(conflict_analyses, key=lambda x: x['progress']) if conflict_analyses else None
+            }
+            
+        except Exception as e:
+            logger.error(f"Error analyzing faction internal conflicts: {e}")
+            return {
+                'total_conflicts': 0,
+                'conflicts_by_phase': {},
+                'active_struggles': 0,
+                'resolved_struggles': 0,
+                'conflict_analyses': [],
+                'faction_stability_score': 100,
+                'faction_status': 'unknown',
+                'most_intense_conflict': None
+            }
         
     @with_governance(
         agent_type=AgentType.CONFLICT_RESOLVER,
@@ -91,6 +632,7 @@ class ConflictResolutionSystem:
         action_description="Resolving conflict {conflict_id}",
         id_from_context=lambda ctx: "conflict_resolver"
     )
+    
     async def resolve_conflict(
         self,
         ctx,  # Add this parameter
