@@ -734,7 +734,7 @@ class ContextAwareChunkSelector:
         chunk_id: str,
         temporal_pattern: Optional[List[TemporalPatternItem]] = None,  # Changed from List[Dict[str, Any]]
         confidence_threshold: float = 0.7,
-        ctx = None
+        ctx: RunContextWrapper = None  # Fixed: Should be RunContextWrapper, not just ctx = None
     ) -> Dict[str, Any]:
         """
         Create a new context pattern for chunk selection
@@ -752,7 +752,14 @@ class ContextAwareChunkSelector:
             Information about the created pattern
         """
         # Access chunk selector from context
-        chunk_selector = ctx.context.manager.chunk_selector if hasattr(ctx.context, "manager") else None
+        # Note: You'll need to adjust this based on your actual context structure
+        chunk_selector = None
+        if ctx and hasattr(ctx, 'context'):
+            # Try different ways to access the chunk selector based on your context structure
+            if hasattr(ctx.context, 'manager') and hasattr(ctx.context.manager, 'chunk_selector'):
+                chunk_selector = ctx.context.manager.chunk_selector
+            elif hasattr(ctx.context, 'chunk_selector'):
+                chunk_selector = ctx.context.chunk_selector
         
         if not chunk_selector:
             return {
@@ -767,9 +774,11 @@ class ContextAwareChunkSelector:
         logger.info(f"Create context pattern: name: {name}, domain: {domain}, indicators count: {len(indicators_dict)}, chunk_id: {chunk_id}")
         
         # Add chunk association indicator
+        # Fixed: Changed asterisks to underscores
         indicators_dict[f"chunk_{chunk_id}_suitable"] = True
         
         # Generate pattern ID
+        # Fixed: Changed asterisks to underscores
         pattern_id = f"pattern_{int(datetime.datetime.now().timestamp())}_{chunk_id}"
         
         # Convert temporal pattern if provided
