@@ -41,6 +41,9 @@ from nyx.nyx_governance import (
 )
 from nyx.integrate import get_central_governance
 
+logger = logging.getLogger(__name__)
+
+
 # -------------------------------------------------------------------------------
 # Pydantic Models for Structured Outputs
 # -------------------------------------------------------------------------------
@@ -108,7 +111,12 @@ async def fetch_inventory_item(
     governor = ctx.context.governor
 
     # Check permission (Keep as is)
-    permission = await governor.check_action_permission(...)
+    permission = await governor.check_action_permission(
+        agent_type=AgentType.UNIVERSAL_UPDATER,
+        agent_id="inventory_system",
+        action_type="fetch_item",
+        context={"item": item_name, "player": player_name}
+    )
     if not permission["approved"]:
         return {"error": permission["reasoning"], "success": False}
 
@@ -130,7 +138,13 @@ async def fetch_inventory_item(
 
         if not row:
             # Report action to governance (Keep as is)
-            await governor.process_agent_action_report(...)
+            await governor.process_agent_action_report(
+                agent_type=AgentType.UNIVERSAL_UPDATER,
+                agent_id="inventory_system",
+                action_type="fetch_item",
+                result={"found": False},
+                context={"item": item_name, "player": player_name}
+            )
             return {"error": f"No item named '{item_name}' found in {player_name}'s inventory", "success": False}
 
         # Extract data (Keep as is)
@@ -145,7 +159,13 @@ async def fetch_inventory_item(
         }
 
         # Report action to governance (Keep as is)
-        await governor.process_agent_action_report(...)
+        await governor.process_agent_action_report(
+            agent_type=AgentType.UNIVERSAL_UPDATER,
+            agent_id="inventory_system",
+            action_type="fetch_item",
+            result={"found": False},
+            context={"item": item_name, "player": player_name}
+        )
         return item_data
 
     except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as db_err:
@@ -376,7 +396,12 @@ async def get_player_inventory(
     governor = ctx.context.governor
 
     # Check permission (Keep as is)
-    permission = await governor.check_action_permission(...)
+    permission = await governor.check_action_permission(
+        agent_type=AgentType.UNIVERSAL_UPDATER,
+        agent_id="inventory_system",
+        action_type="get_inventory",
+        context={"player": player_name}
+    )
     if not permission["approved"]:
         return InventoryList(items=[], player_name=player_name, total_items=0, error=permission["reasoning"]).model_dump()
 
@@ -407,7 +432,13 @@ async def get_player_inventory(
                  ))
 
         # Report action to governance (Keep as is)
-        await governor.process_agent_action_report(...)
+        await governor.process_agent_action_report(
+            agent_type=AgentType.UNIVERSAL_UPDATER,
+            agent_id="inventory_system",
+            action_type="get_inventory",
+            result={"items_count": len(inventory_items)},
+            context={"player": player_name}
+        )
 
         # Return using Pydantic model
         return InventoryList(items=inventory_items, player_name=player_name, total_items=len(inventory_items)).model_dump()
@@ -510,11 +541,30 @@ async def update_item_effect(
 async def categorize_items(
     ctx: RunContextWrapper[InventoryContext],
     player_name: str,
-    category_mapping: Dict[str, str]
+    category_mapping_json: str
 ) -> Dict[str, Any]:
     """
     Categorize multiple items in a player's inventory.
+    
+    Args:
+        ctx: The context wrapper
+        player_name: Name of the player
+        category_mapping_json: JSON string mapping item names to categories
+        
+    Returns:
+        Dictionary with categorization results
     """
+    # Parse the JSON string
+    try:
+        category_mapping = json.loads(category_mapping_json)
+    except json.JSONDecodeError as e:
+        return {
+            "success": False, 
+            "player_name": player_name,
+            "operation": "categorize", 
+            "error": f"Invalid JSON: {str(e)}"
+        }
+    
     user_id = ctx.context.user_id
     conversation_id = ctx.context.conversation_id
     governor = ctx.context.governor
