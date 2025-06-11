@@ -273,9 +273,6 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
         from nyx.core.context_awareness import ContextAwarenessSystem
         from nyx.core.interaction_mode_manager import InteractionModeManager
         from nyx.core.mood_manager import MoodManager
-
-            orchestrator.start_background()   # spin up nightly roll‑up & reflection loops
-            self._orch_started = True
         
         # Store module classes for later use
         self._modules = {
@@ -1552,6 +1549,9 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             self.hard_dominance_ideation_agent = create_hard_dominance_ideation_agent()
         except ImportError:
             logger.warning("Dominance ideation agents not available")
+
+        orchestrator.start_background()   # spin up nightly roll‑up & reflection loops
+        self._orch_started = True
     
     async def _init_tier_8_final_setup(self):
         """Final setup and integration tasks"""
