@@ -28,6 +28,17 @@ from nyx.core.proactive_communication import (
 
 # =============== Models for Structured Output ===============
 
+class _RecordReflectionIn(BaseModel):
+    reflection: str
+    confidence: float
+    memory_ids: List[str]
+    scenario_type: str
+    emotional_context: Any = Field(default_factory=dict)          # use Any instead of Dict[…]
+    neurochemical_influence: Any = Field(default_factory=dict)    # → no additionalProperties
+    topic: Optional[str] = None
+
+    model_config = {"extra": "forbid"}
+
 class SummaryOutput(BaseModel):
     """Structured output for generated summaries"""
     summary_text: str = Field(description="The generated summary text")
@@ -234,14 +245,7 @@ async def extract_neurochemical_influence(ctx: RunContextWrapper[Any], memory: A
         return neurochemical_influence
 
 @function_tool
-async def record_reflection(ctx: RunContextWrapper[Any],
-                          reflection: str,
-                          confidence: float,
-                          memory_ids: List[str],
-                          scenario_type: str,
-                          emotional_context: Any,
-                          neurochemical_influence: Dict[str, float],
-                          topic: Optional[str] = None) -> str:
+async def record_reflection(params: _RecordReflectionIn) -> str:
     """Record a reflection with emotional and neurochemical data for future reference"""
     with custom_span("record_reflection"):
         # This would normally store the reflection in a database
