@@ -15,7 +15,8 @@ from agents.items import (
     TResponseInputItem, 
     TResponseOutputItem,
     MessageOutputItem,
-    ToolCallItem
+    ToolCallItem,
+    RunContextWrapper
 )
 
 from pydantic import BaseModel, ConfigDict
