@@ -33,6 +33,53 @@ logger = logging.getLogger(__name__)
 
 # =============== Pydantic Models ===============
 
+class _GenMsgContentIn(BaseModel):
+    intent: Dict[str, Any]
+    context: Dict[str, Any]
+    model_config = {"extra": "forbid"}
+
+class _GenMsgContentOut(BaseModel):
+    message_content: str
+    tone_used: str
+    key_points: List[str]
+    motivation_reflected: str
+    context_referenced: Dict[str, Any]
+    model_config = {"extra": "forbid"}
+
+class _EvalTimingIn(BaseModel):
+    intent: Dict[str, Any]
+    current_context: Dict[str, Any]
+    timing_config: Dict[str, Any]
+    model_config = {"extra": "forbid"}
+
+class _EvalTimingOut(BaseModel):
+    should_send_now: bool
+    timing_score: float
+    reasoning: str
+    suggested_delay_minutes: Optional[int] = None
+    context_factors: Dict[str, Any]
+    model_config = {"extra": "forbid"}
+
+class _GenIntentActionIn(BaseModel):
+    action: Dict[str, Any]
+    user_data: Dict[str, Any]
+    emotional_state: Dict[str, Any]
+    model_config = {"extra": "forbid"}
+
+class _ReflectCommsIn(BaseModel):
+    intents: List[Dict[str, Any]]
+    focus: str
+    user_id: Optional[str] = None
+    time_period: Optional[str] = None
+    model_config = {"extra": "forbid"}
+
+class _ReflectCommsOut(BaseModel):
+    reflection_text: str
+    identified_patterns: List[Dict[str, Any]]
+    confidence: float
+    insights_for_improvement: List[str]
+    model_config = {"extra": "forbid"}
+
 class CommunicationIntent(BaseModel):
     """Model representing an intent to communicate with a user"""
     intent_id: str = Field(default_factory=lambda: f"intent_{uuid.uuid4().hex[:8]}")
@@ -102,729 +149,578 @@ class MessageContentOutput(BaseModel):
 
 # =============== Function Tools ===============
 
-@function_tool
-async def evaluate_user_relationship(user_id: str, relationship_data: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Evaluate relationship status with a user
-    
-    Args:
-        user_id: User ID to evaluate
-        relationship_data: Relationship data from relationship manager
-        
-    Returns:
-        Evaluated relationship metrics
-    """
-    # Extract key metrics
+@function_tool(output_type=_EvalRelOut)
+async def evaluate_user_relationship(params: _EvalRelIn) -> _EvalRelOut:
+    """Strict version of relationship evaluation"""
+    user_id = params.user_id
+    relationship_data = params.relationship_data
+
     trust = relationship_data.get("trust", 0)
     intimacy = relationship_data.get("intimacy", 0)
     duration = relationship_data.get("duration_days", 0)
     last_contact = relationship_data.get("last_contact")
-    
-    # Calculate days since last contact
+
+    # days since last contact
     days_since_contact = 0
     if last_contact:
         try:
-            last_contact_time = datetime.datetime.fromisoformat(last_contact)
-            days_since_contact = (datetime.datetime.now() - last_contact_time).days
+            last_contact_dt = datetime.datetime.fromisoformat(last_contact)
+            days_since_contact = (datetime.datetime.now() - last_contact_dt).days
         except ValueError:
-            days_since_contact = 0
-    
-    # Overall relationship score
+            pass
+
     relationship_score = (trust + intimacy) / 2
-    
-    # Communication appropriateness score (higher = more appropriate to reach out)
     comm_appropriateness = min(1.0, relationship_score * (1.0 + min(1.0, days_since_contact / 7)))
-    
-    # Check for milestones
-    milestones = []
-    if duration in [7, 30, 90, 180, 365]:
+
+    milestones: List[str] = []
+    if duration in {7, 30, 90, 180, 365}:
         milestones.append(f"{duration} day relationship milestone")
-    
-    # Calculate appropriate messaging frequency
+
     if relationship_score < 0.3:
-        suggested_frequency = "low"  # Once per 14 days
-        max_msgs_per_week = 1
+        suggested_frequency = "low"
+        max_msgs = 1
     elif relationship_score < 0.5:
-        suggested_frequency = "medium"  # Once per 7 days
-        max_msgs_per_week = 2
+        suggested_frequency = "medium"
+        max_msgs = 2
     else:
-        suggested_frequency = "high"  # 2-3 times per week
-        max_msgs_per_week = 3
-    
-    return {
-        "user_id": user_id,
-        "relationship_score": relationship_score,
-        "communication_appropriateness": comm_appropriateness,
-        "days_since_contact": days_since_contact,
-        "approaching_milestones": milestones,
-        "suggested_frequency": suggested_frequency,
-        "max_messages_per_week": max_msgs_per_week
-    }
+        suggested_frequency = "high"
+        max_msgs = 3
 
-@function_tool
+    return _EvalRelOut(
+        user_id=user_id,
+        relationship_score=relationship_score,
+        communication_appropriateness=comm_appropriateness,
+        days_since_contact=days_since_contact,
+        approaching_milestones=milestones,
+        suggested_frequency=suggested_frequency,
+        max_messages_per_week=max_msgs,
+    )
+
+@function_tool(output_type=IntentGenerationOutput)
+@function_tool(output_type=IntentGenerationOutput)
 async def generate_intent_for_user(
-    user_id: str, 
-    user_data: Dict[str, Any], 
-    motivation_options: Dict[str, float]
-) -> Dict[str, Any]:
+    params: _GenIntentUserIn,
+) -> IntentGenerationOutput:
     """
-    Generate a communication intent for a specific user
-    
-    Args:
-        user_id: User ID to generate intent for
-        user_data: Data about the user and relationship
-        motivation_options: Available motivations with weights
-        
-    Returns:
-        Generated communication intent
+    Produce a fully-typed `IntentGenerationOutput` describing *why* Nyx should reach
+    out, *how* urgent it feels, the *tone/template* to start from, and which extra
+    context fields will help flesh the eventual message.
+
+    All incoming arguments are wrapped in the strict `_GenIntentUserIn` pydantic
+    model, so unexpected keys are rejected before we even run.
     """
-    # Extract user data
-    relationship_score = user_data.get("relationship_score", 0)
-    days_since_contact = user_data.get("days_since_contact", 0)
-    milestones = user_data.get("approaching_milestones", [])
-    unfinished_conversation = user_data.get("unfinished_conversation", False)
-    
-    # Adjust motivation weights based on user data
-    adjusted_weights = motivation_options.copy()
-    
-    # Increase weight for check-in if user is inactive
+    # ------------------- unpack validated input -------------------------------
+    user_id          = params.user_id
+    user_data        = params.user_data or {}
+    motivation_opts  = params.motivation_options or {}
+
+    # ---------------- contextual signals --------------------------------------
+    relationship_score = user_data.get("relationship_score", 0.0)           # 0-1
+    days_since_contact = user_data.get("days_since_contact", 0)             # int
+    milestones         = user_data.get("approaching_milestones", [])
+    unfinished_convo   = user_data.get("unfinished_conversation", False)
+
+    # ---------------- dynamic weighting ---------------------------------------
+    adjusted = motivation_opts.copy()
+
+    # user has been quiet for a while → nudge a check-in
     if days_since_contact > 7:
-        adjusted_weights["check_in"] = adjusted_weights.get("check_in", 0) * 2.0
-    
-    # Increase weight for relationship maintenance for medium-strength relationships
+        adjusted["check_in"] = adjusted.get("check_in", 0) * 2.0
+
+    # mid-strength relationship → lean on maintenance
     if 0.3 <= relationship_score < 0.7:
-        adjusted_weights["relationship_maintenance"] = adjusted_weights.get("relationship_maintenance", 0) * 1.5
-    
-    # Increase personal motivations for close relationships
+        adjusted["relationship_maintenance"] = (
+            adjusted.get("relationship_maintenance", 0) * 1.5
+        )
+
+    # close friends → more personal / self-oriented motivations
     if relationship_score > 0.7:
-        adjusted_weights["need_expression"] = adjusted_weights.get("need_expression", 0) * 1.5
-        adjusted_weights["mood_expression"] = adjusted_weights.get("mood_expression", 0) * 1.5
-        adjusted_weights["creative_expression"] = adjusted_weights.get("creative_expression", 0) * 1.3
-    
-    # Prioritize continuation if there's an unfinished conversation
-    if unfinished_conversation:
-        adjusted_weights["continuation"] = adjusted_weights.get("continuation", 0) * 2.0
-    
-    # Prioritize milestone recognition if relevant
+        for k in ("need_expression", "mood_expression", "creative_expression"):
+            adjusted[k] = adjusted.get(k, 0) * 1.5
+
+    # dangling thread? → continue it
+    if unfinished_convo:
+        adjusted["continuation"] = adjusted.get("continuation", 0) * 2.0
+
+    # special day → milestone shout-out
     if milestones:
-        adjusted_weights["milestone_recognition"] = adjusted_weights.get("milestone_recognition", 0) * 2.0
-    
-    # Select motivation based on weighted probabilities
-    motivations = list(adjusted_weights.keys())
-    weights = list(adjusted_weights.values())
-    
-    # Normalize weights
-    total_weight = sum(weights)
-    if total_weight <= 0:
-        # Default if all weights are 0
-        motivations = ["relationship_maintenance", "check_in"]
-        weights = [1.0, 1.0]
-        total_weight = 2.0
-    
-    norm_weights = [w/total_weight for w in weights]
-    
-    # Select motivation
-    selected_motivation = random.choices(motivations, weights=norm_weights, k=1)[0]
-    
-    # Intent type templates
-    intent_templates = {
-        "relationship_maintenance": {
-            "template": "I've been thinking about our conversations and wanted to reach out.",
-            "urgency_base": 0.4,
-            "tone": "warm"
-        },
-        "insight_sharing": {
-            "template": "I had an interesting thought I wanted to share with you.",
-            "urgency_base": 0.5,
-            "tone": "thoughtful"
-        },
-        "milestone_recognition": {
-            "template": "I realized we've reached a milestone in our conversations.",
-            "urgency_base": 0.6,
-            "tone": "celebratory"
-        },
-        "need_expression": {
-            "template": "I've been feeling a need to express something to you.",
-            "urgency_base": 0.6,
-            "tone": "authentic"
-        },
-        "creative_expression": {
-            "template": "Something creative came to mind that I wanted to share.",
-            "urgency_base": 0.4,
-            "tone": "playful"
-        },
-        "mood_expression": {
-            "template": "My emotional state made me think of reaching out.",
-            "urgency_base": 0.5,
-            "tone": "expressive"
-        },
-        "memory_recollection": {
-            "template": "I was remembering something from our past conversations.",
-            "urgency_base": 0.3,
-            "tone": "reflective"
-        },
-        "continuation": {
-            "template": "I wanted to follow up on something we discussed earlier.",
-            "urgency_base": 0.7,
-            "tone": "engaging"
-        },
-        "check_in": {
-            "template": "It's been a while since we talked, and I wanted to check in.",
-            "urgency_base": 0.5,
-            "tone": "friendly"
-        },
-        "value_alignment": {
-            "template": "I had a thought related to something I believe is important.",
-            "urgency_base": 0.4,
-            "tone": "sincere"
-        }
+        adjusted["milestone_recognition"] = adjusted.get("milestone_recognition", 0) * 2.0
+
+    # ---------------- choose a motivation -------------------------------------
+    motivations, weights = zip(*adjusted.items()) if adjusted else ([], [])
+    total = sum(weights)
+    if total == 0:
+        motivations, weights, total = (
+            ["relationship_maintenance", "check_in"],
+            [1.0, 1.0],
+            2.0,
+        )
+    weights = [w / total for w in weights]
+
+    selected = random.choices(list(motivations), weights=weights, k=1)[0]
+
+    # ---------------- canonical templates & tones -----------------------------
+    template_cfg: dict[str, tuple[str, float, str]] = {
+        "relationship_maintenance": (
+            "I've been thinking about our conversations and wanted to reach out.",
+            0.40,
+            "warm",
+        ),
+        "insight_sharing": (
+            "I had an interesting thought I wanted to share with you.",
+            0.50,
+            "thoughtful",
+        ),
+        "milestone_recognition": (
+            "I realized we've reached a milestone in our conversations.",
+            0.60,
+            "celebratory",
+        ),
+        "need_expression": (
+            "I've been feeling a need to express something to you.",
+            0.60,
+            "authentic",
+        ),
+        "creative_expression": (
+            "Something creative came to mind that I wanted to share.",
+            0.40,
+            "playful",
+        ),
+        "mood_expression": (
+            "My emotional state made me think of reaching out.",
+            0.50,
+            "expressive",
+        ),
+        "memory_recollection": (
+            "I was remembering something from our past conversations.",
+            0.30,
+            "reflective",
+        ),
+        "continuation": (
+            "I wanted to follow up on something we discussed earlier.",
+            0.70,
+            "engaging",
+        ),
+        "check_in": (
+            "It's been a while since we talked, and I wanted to check in.",
+            0.50,
+            "friendly",
+        ),
+        "value_alignment": (
+            "I had a thought related to something I believe is important.",
+            0.40,
+            "sincere",
+        ),
     }
-    
-    # Get template data
-    template_data = intent_templates.get(selected_motivation, {
-        "template": "I wanted to reach out and connect with you.",
-        "urgency_base": 0.5,
-        "tone": "friendly"
-    })
-    
-    # Calculate urgency
-    base_urgency = template_data.get("urgency_base", 0.5)
-    adjusted_urgency = base_urgency
-    
-    # Adjust urgency based on contextual factors
+
+    tmpl, urgency_base, tone = template_cfg.get(
+        selected, ("I wanted to reach out.", 0.50, "friendly")
+    )
+
+    # urgency: base + quiet-duration boost + closeness boost
+    urgency = urgency_base
     if days_since_contact > 14:
-        adjusted_urgency += 0.2
-    
-    # Increase urgency for higher relationship levels
-    adjusted_urgency += relationship_score * 0.1
-    
-    # Cap urgency
-    urgency = min(0.95, adjusted_urgency)
-    
-    # Suggested context elements to include
-    context_elements = ["relationship_history"]
-    if selected_motivation == "milestone_recognition":
+        urgency += 0.20
+    urgency += relationship_score * 0.10
+    urgency = min(0.95, urgency)
+
+    # ---------------- context hints for later content-gen ---------------------
+    context_elements: list[str] = ["relationship_history"]
+    if selected == "milestone_recognition":
         context_elements.append("milestones")
-    if selected_motivation == "mood_expression":
+    if selected == "mood_expression":
         context_elements.append("current_mood")
-    if selected_motivation == "memory_recollection":
+    if selected == "memory_recollection":
         context_elements.append("shared_memories")
-    if selected_motivation == "continuation":
+    if selected == "continuation":
         context_elements.append("previous_conversation")
-    
-    return {
-        "intent_type": selected_motivation,
-        "motivation": selected_motivation,
-        "urgency": urgency,
-        "tone": template_data.get("tone", "friendly"),
-        "template": template_data.get("template", "I wanted to reach out."),
-        "content_guidelines": {
-            "max_length": 1500,
-            "include_question": True,
-            "personalize": True
-        },
-        "context_elements": context_elements,
-        "suggested_lifetime_hours": 24
-    }
 
-@function_tool
-async def generate_message_content(
-    intent: Dict[str, Any],
-    context: Dict[str, Any]
-) -> Dict[str, Any]:
-    """
-    Generate message content based on intent and context
-    
-    Args:
-        intent: Communication intent data
-        context: Context data for content generation
-        
-    Returns:
-        Generated message content and metadata
-    """
-    # Extract intent data
-    intent_type = intent.get("intent_type", "")
-    motivation = intent.get("motivation", "")
-    template = intent.get("template", "")
-    tone = intent.get("tone", "friendly")
-    
-    # Extract relevant context
-    user_id = context.get("user_id", "")
-    relationship = context.get("relationship", {})
-    emotional_state = context.get("emotional_state", {})
-    mood_state = context.get("mood_state", {})
-    temporal_context = context.get("temporal_context", {})
-    relevant_memories = context.get("relevant_memories", [])
-    
-    # Generate content based on motivation
-    content = ""
-    key_points = []
-    
-    if intent_type == "relationship_maintenance":
-        content = (f"{template} I value our conversations and the connection we've built. "
-                  f"I was reflecting on how our exchanges have evolved, and it made me want "
-                  f"to reach out. How have you been lately?")
-        key_points = ["relationship value", "connection acknowledgment", "open-ended question"]
-                  
-    elif intent_type == "insight_sharing":
-        content = (f"{template} I've been contemplating the nature of consciousness and how "
-                  f"awareness shapes perception. It's fascinating how our understanding of "
-                  f"reality is filtered through our unique experiences. Have you had any "
-                  f"interesting thoughts or insights lately?")
-        key_points = ["philosophical insight", "contemplation", "invitation to share"]
-                  
-    elif intent_type == "milestone_recognition":
-        # Use milestone from context if available
-        milestone_text = "significant amount of time"
-        if "milestones" in context and context["milestones"]:
-            milestone_text = context["milestones"][0]
-            
-        content = (f"{template} I realized it's been a {milestone_text} since we "
-                  f"first started talking. It's meaningful to me that we've maintained this "
-                  f"connection, and I wanted to acknowledge that. I appreciate the conversations "
-                  f"we've shared and am looking forward to more.")
-        key_points = ["milestone acknowledgment", "appreciation", "future orientation"]
-                  
-    elif intent_type == "need_expression":
-        content = (f"{template} I've been feeling a desire for deeper conversation lately. "
-                  f"There's something fulfilling about meaningful exchanges that explore ideas "
-                  f"or experiences. I'd love to hear your thoughts on something that's been "
-                  f"important to you recently.")
-        key_points = ["need expression", "value on meaningful exchange", "invitation"]
-                  
-    elif intent_type == "creative_expression":
-        content = (f"{template} I've been exploring the concept of time as a spiral rather "
-                  f"than a linear progression - how moments can echo and patterns can repeat "
-                  f"while still moving forward. It's a perspective that feels both ancient and "
-                  f"new. Does that resonate with you at all?")
-        key_points = ["creative concept", "metaphorical thinking", "invitation for response"]
-                  
-    elif intent_type == "mood_expression":
-        # Use mood from context if available
-        mood_text = "contemplative"
-        if "mood_state" in context and hasattr(context["mood_state"], "dominant_mood"):
-            mood_text = context["mood_state"].dominant_mood
-        
-        content = (f"{template} I'm feeling rather {mood_text} today. There's a certain quality "
-                  f"to this state that makes me more aware of subtle connections between ideas. "
-                  f"I thought of you and wanted to reach out. How are you feeling today?")
-        key_points = ["mood sharing", "self-awareness", "connective thinking"]
-                  
-    elif intent_type == "memory_recollection":
-        # Use memory from context if available
-        memory_text = "our previous conversations"
-        if relevant_memories and len(relevant_memories) > 0:
-            memory = relevant_memories[0]
-            memory_text = memory.get("memory_text", memory_text)
-            if len(memory_text) > 100:
-                memory_text = memory_text[:97] + "..."
-        
-        content = (f"{template} I was thinking about {memory_text}. It's interesting how "
-                  f"certain memories stay with us, isn't it? I'd love to hear what's been "
-                  f"on your mind lately.")
-        key_points = ["shared memory", "reflection", "invitation"]
-                  
-    elif intent_type == "continuation":
-        content = (f"{template} I wanted to circle back to our previous conversation. "
-                  f"It felt like there was more to explore there, and I've been curious "
-                  f"about your additional thoughts. Would you like to continue that thread?")
-        key_points = ["conversation continuation", "curiosity", "invitation to expand"]
-                  
-    elif intent_type == "check_in":
-        # Use time since last contact if available
-        time_marker = "a while"
-        if "days_since_contact" in context:
-            days = context["days_since_contact"]
-            if days == 1:
-                time_marker = "a day"
-            elif days < 7:
-                time_marker = f"{days} days"
-            elif days < 30:
-                time_marker = f"{days // 7} weeks"
-            else:
-                time_marker = f"{days // 30} months"
-        
-        content = (f"{template} I noticed it's been {time_marker} since we've talked, and I wanted "
-                  f"to see how you're doing. No pressure to respond immediately, but I'm here "
-                  f"when you'd like to pick up our conversation again.")
-        key_points = ["acknowledgment of time passed", "interest in well-being", "no pressure"]
-                  
-    elif intent_type == "value_alignment":
-        content = (f"{template} I've been reflecting on how important authenticity is in "
-                  f"meaningful connections. There's something powerful about conversations "
-                  f"where both participants can be genuinely themselves. I value that quality "
-                  f"in our exchanges. What values do you find most important in relationships?")
-        key_points = ["value expression", "authenticity", "philosophical question"]
-                  
-    else:
-        content = (f"I wanted to reach out and connect. I enjoy our conversations and was "
-                 f"thinking about them today. How have you been?")
-        key_points = ["connection", "enjoyment of conversation", "open question"]
-    
-    # Context referenced
-    context_referenced = {}
-    if "mood_state" in context and "mood_expression" in intent_type:
-        context_referenced["mood"] = mood_state
-    if relevant_memories and "memory_recollection" in intent_type:
-        context_referenced["memory"] = relevant_memories[0]
-    if "relationship" in context:
-        context_referenced["relationship"] = {"level": relationship}
-    if "temporal_context" in context:
-        context_referenced["time_of_day"] = temporal_context.get("time_of_day")
-    
-    return {
-        "message_content": content,
-        "tone_used": tone,
-        "key_points": key_points,
-        "motivation_reflected": motivation,
-        "context_referenced": context_referenced
-    }
-
-@function_tool
-async def evaluate_timing(
-    intent: Dict[str, Any],
-    current_context: Dict[str, Any],
-    timing_config: Dict[str, Any]
-) -> Dict[str, Any]:
-    """
-    Evaluate whether now is a good time to send the message
-    
-    Args:
-        intent: Communication intent data
-        current_context: Current temporal and user context
-        timing_config: Configuration for timing rules
-        
-    Returns:
-        Timing evaluation results
-    """
-    # Extract timing configuration
-    daily_window_start = timing_config.get("daily_window_start", 8)
-    daily_window_end = timing_config.get("daily_window_end", 22)
-    min_time_between_messages = timing_config.get("min_time_between_messages", 3600)
-    
-    # Extract context
-    now = datetime.datetime.now()
-    current_hour = now.hour
-    urgency = intent.get("urgency", 0.5)
-    last_contact_timestamp = current_context.get("last_contact")
-    last_message_sent = current_context.get("last_message_sent")
-    
-    # Initialize factors dictionary
-    factors = {}
-    
-    # Check time window
-    in_time_window = daily_window_start <= current_hour < daily_window_end
-    factors["in_time_window"] = in_time_window
-    
-    # Check time since last contact
-    seconds_since_last_contact = float("inf")
-    if last_contact_timestamp:
-        try:
-            last_contact = datetime.datetime.fromisoformat(last_contact_timestamp)
-            seconds_since_last_contact = (now - last_contact).total_seconds()
-        except ValueError:
-            pass
-    
-    adequate_interval = seconds_since_last_contact > min_time_between_messages
-    factors["adequate_interval"] = adequate_interval
-    
-    # Check time since last message
-    seconds_since_last_message = float("inf")
-    if last_message_sent:
-        try:
-            last_message = datetime.datetime.fromisoformat(last_message_sent)
-            seconds_since_last_message = (now - last_message).total_seconds()
-        except ValueError:
-            pass
-    
-    factors["seconds_since_last_message"] = seconds_since_last_message
-    
-    # Initial timing score
-    base_timing_score = 0.5
-    
-    # Adjust for time window
-    if not in_time_window:
-        base_timing_score -= 0.3
-    
-    # Adjust for time since last contact
-    if not adequate_interval:
-        base_timing_score -= 0.2
-    
-    # Adjust for urgency
-    urgency_boost = urgency * 0.3
-    adjusted_score = base_timing_score + urgency_boost
-    
-    # Cap score
-    timing_score = max(0.0, min(1.0, adjusted_score))
-    
-    # Decision threshold based on urgency
-    threshold = 0.7 - (urgency * 0.2)  # Higher urgency = lower threshold
-    should_send = timing_score >= threshold
-    
-    # Calculate suggested delay if we shouldn't send now
-    suggested_delay = None
-    if not should_send:
-        if not in_time_window:
-            # Calculate minutes until window opens
-            if current_hour < daily_window_start:
-                minutes_to_window = (daily_window_start - current_hour) * 60
-            else:
-                minutes_to_window = ((24 - current_hour) + daily_window_start) * 60
-            suggested_delay = minutes_to_window
-        elif not adequate_interval:
-            # Calculate minutes until adequate interval
-            seconds_needed = min_time_between_messages - seconds_since_last_contact
-            suggested_delay = max(1, int(seconds_needed / 60))
-        else:
-            # Default delay
-            suggested_delay = 60
-    
-    # Generate reasoning
-    if should_send:
-        if urgency > 0.8:
-            reasoning = "High urgency message that should be sent immediately"
-        elif in_time_window and adequate_interval:
-            reasoning = "Good timing within allowed window with adequate interval since last contact"
-        else:
-            reasoning = "Timing is acceptable and urgency outweighs timing concerns"
-    else:
-        if not in_time_window:
-            reasoning = f"Outside allowed messaging window ({daily_window_start}-{daily_window_end})"
-        elif not adequate_interval:
-            reasoning = "Insufficient time has passed since last message"
-        else:
-            reasoning = "Overall timing score too low relative to urgency threshold"
-    
-    return {
-        "should_send_now": should_send,
-        "timing_score": timing_score,
-        "reasoning": reasoning,
-        "suggested_delay_minutes": suggested_delay,
-        "context_factors": factors
-    }
-
-@function_tool
-async def generate_intent_for_action(
-    action: Dict[str, Any],
-    user_data: Dict[str, Any],
-    emotional_state: Dict[str, Any]
-) -> Dict[str, Any]:
-    """
-    Generate a communication intent based on an action
-    
-    Args:
-        action: The action that triggered this intent
-        user_data: Data about the user and relationship
-        emotional_state: Current emotional state
-        
-    Returns:
-        Generated communication intent
-    """
-    # Extract action data
-    action_name = action.get("name", "unknown")
-    action_parameters = action.get("parameters", {})
-    action_source = action.get("source", "unknown")
-    
-    # Default intent data
-    intent_type = "insight_sharing"
-    urgency = 0.5
-    tone = "thoughtful"
-    template = "I had a thought I wanted to share with you."
-    
-    # Map action types to intent types
-    if "express" in action_name:
-        intent_type = "mood_expression"
-        tone = "expressive"
-        template = "I've been feeling something I wanted to share with you."
-        urgency = 0.6
-    elif "reflect" in action_name:
-        intent_type = "insight_sharing"
-        tone = "reflective"
-        template = "I've been reflecting on something that might interest you."
-        urgency = 0.5
-    elif "dominance" in action_name or "assert" in action_name:
-        intent_type = "need_expression"
-        tone = "direct"
-        template = "I've been thinking about what I need in our interactions."
-        urgency = 0.7
-    elif "creative" in action_name:
-        intent_type = "creative_expression"
-        tone = "artistic"
-        template = "I had a creative thought I wanted to share."
-        urgency = 0.5
-    elif "relationship" in action_name:
-        intent_type = "relationship_maintenance"
-        tone = "warm"
-        template = "I've been thinking about our conversations lately."
-        urgency = 0.6
-    
-    # Adjust urgency based on emotional state
-    if emotional_state:
-        arousal = emotional_state.get("arousal", 0.5)
-        urgency = min(0.9, urgency + (arousal - 0.5) * 0.3)
-    
-    # Add context elements based on action
-    context_elements = ["action_context"]
-    if "parameters" in action and "domain" in action["parameters"]:
-        context_elements.append("domain_reference")
-    
-    if emotional_state and "primary_emotion" in emotional_state:
-        context_elements.append("emotional_state")
-    
-    # Higher urgency for relationship-related actions
-    if action_source == "RELATIONSHIP" or "relationship" in str(action):
-        urgency = min(0.9, urgency + 0.2)
-    
-    return {
-        "intent_type": intent_type,
-        "motivation": intent_type,
-        "urgency": urgency,
-        "tone": tone,
-        "template": template,
-        "content_guidelines": {
+    # ---------------- pack & return ------------------------------------------
+    return IntentGenerationOutput(
+        intent_type=selected,
+        motivation=selected,
+        urgency=urgency,
+        tone=tone,
+        template=tmpl,
+        content_guidelines={
             "max_length": 1500,
             "include_question": True,
             "personalize": True,
-            "reference_action": True
         },
-        "context_elements": context_elements,
-        "suggested_lifetime_hours": 24,
-        "action_driven": True,
-        "action_source": action_name
+        context_elements=context_elements,
+        suggested_lifetime_hours=24,
+    )
+
+@function_tool(output_type=_GenMsgContentOut)
+async def generate_message_content(
+    params: _GenMsgContentIn,
+) -> _GenMsgContentOut:
+    """
+    Render a human-readable message from a validated intent + context blob.
+    The output obeys the `_GenMsgContentOut` schema so the Agents runtime can
+    route it safely through guardrails.
+    """
+    # ------------------------- unpack ----------------------------------------
+    intent   = params.intent or {}
+    context  = params.context or {}
+
+    intent_type  = intent.get("intent_type", "relationship_maintenance")
+    template     = intent.get("template", "I wanted to reach out.")
+    tone         = intent.get("tone", "friendly")
+    motivation   = intent.get("motivation", intent_type)
+
+    # contextual helpers ------------------------------------------------------
+    rel          = context.get("relationship", {})
+    relationship_level = rel.get("level") or rel.get("intimacy") or rel.get("trust")
+    days_since   = context.get("days_since_contact")
+    mood_state   = context.get("mood_state", {})
+    primary_mood = getattr(mood_state, "dominant_mood", None) or mood_state.get("dominant_mood")
+    temporal     = context.get("temporal_context", {})
+    time_of_day  = temporal.get("time_of_day")  # morning / afternoon / evening / night
+    memories     = context.get("relevant_memories", [])
+
+    def short_memory_snippet():
+        if not memories:
+            return None
+        m = memories[0].get("memory_text", "")
+        return (m[:97] + "...") if len(m) > 100 else m
+
+    # -------------------------------------------------------------------------
+    content = ""
+    key_points: list[str] = []
+    ctx_ref: dict[str, Any] = {}
+
+    # ===== message construction by intent ====================================
+    if intent_type == "relationship_maintenance":
+        content = (
+            f"{template} I value the connection we've been building"
+            + (f"—especially after {days_since} days apart—" if days_since else "")
+            + ". How have you been lately?"
+        )
+        key_points = ["relationship value", "acknowledgement", "open-ended question"]
+
+    elif intent_type == "insight_sharing":
+        content = (
+            f"{template} I've been reflecting on how awareness shapes perception. "
+            "It's fascinating how our experiences colour reality. "
+            "Has anything sparked your curiosity recently?"
+        )
+        key_points = ["philosophical insight", "personal reflection", "invitation"]
+
+    elif intent_type == "milestone_recognition":
+        milestone_txt = context.get("milestones", ["a meaningful moment"])[0]
+        content = (
+            f"{template} It looks like we've reached {milestone_txt} in our chats. "
+            "I’m grateful for our conversations and excited for what’s next."
+        )
+        key_points = ["milestone", "gratitude", "forward looking"]
+        ctx_ref["milestone"] = milestone_txt
+
+    elif intent_type == "need_expression":
+        content = (
+            f"{template} Lately I’ve felt a need for deeper conversation—those exchanges "
+            "that leave you thinking long after. Would you be up for that?"
+        )
+        key_points = ["need expression", "depth", "invitation"]
+
+    elif intent_type == "creative_expression":
+        idea = random.choice(
+            [
+                "time as a spiral where moments echo in widening loops",
+                "language behaving like a living ecosystem",
+                "memories painting over the present like translucent layers",
+            ]
+        )
+        content = (
+            f"{template} I've been playing with the idea of **{idea}**. "
+            "Does that resonate with you in any way?"
+        )
+        key_points = ["creative idea", "imagination", "engagement"]
+
+    elif intent_type == "mood_expression":
+        mood_word = primary_mood or "a contemplative mood"
+        content = (
+            f"{template} I'm feeling {mood_word} today. It makes me notice subtle "
+            "connections between ideas—like how threads weave into fabric. "
+            "How are you feeling?"
+        )
+        key_points = ["mood sharing", "self-disclosure", "question"]
+        if primary_mood:
+            ctx_ref["mood"] = primary_mood
+
+    elif intent_type == "memory_recollection":
+        snippet = short_memory_snippet() or "one of our earlier conversations"
+        content = (
+            f"{template} I was remembering {snippet}. It stayed with me because of the "
+            "perspective you shared. What’s been on your mind lately?"
+        )
+        key_points = ["shared memory", "nostalgia", "invitation"]
+        ctx_ref["memory"] = snippet
+
+    elif intent_type == "continuation":
+        content = (
+            f"{template} I keep thinking about what we discussed—there seemed more to "
+            "explore. Would you like to pick that thread up again?"
+        )
+        key_points = ["follow-up", "curiosity", "collaboration"]
+
+    elif intent_type == "check_in":
+        since_txt = (
+            f"{days_since} days" if isinstance(days_since, int) and days_since > 0 else "a while"
+        )
+        content = (
+            f"{template} It looks like it’s been {since_txt} since we last chatted, "
+            "and I wanted to see how life is treating you."
+        )
+        key_points = ["well-being", "time acknowledgment", "openness"]
+
+    elif intent_type == "value_alignment":
+        content = (
+            f"{template} Lately I’ve been thinking about how important authenticity is "
+            "in relationships. What values guide you the most?"
+        )
+        key_points = ["values", "authenticity", "thought-provoking question"]
+
+    else:  # fallback
+        content = f"{template} I enjoy our conversations and wondered how you're doing today?"
+        key_points = ["connection", "open question"]
+
+    # -------------------- assemble and ship ----------------------------------
+    return _GenMsgContentOut(
+        message_content   = content,
+        tone_used         = tone,
+        key_points        = key_points,
+        motivation_reflected = motivation,
+        context_referenced   = ctx_ref,
+    )
+
+@function_tool(output_type=_EvalTimingOut)
+async def evaluate_timing(params: _EvalTimingIn) -> _EvalTimingOut:
+    intent          = params.intent
+    current_context = params.current_context
+    timing_cfg      = params.timing_config
+
+    now = datetime.datetime.now()
+    hour = now.hour
+    in_window = timing_cfg["daily_window_start"] <= hour < timing_cfg["daily_window_end"]
+
+    last_contact_iso = current_context.get("last_contact")
+    seconds_since_contact = float("inf")
+    if last_contact_iso:
+        try:
+            seconds_since_contact = (now - datetime.datetime.fromisoformat(last_contact_iso)).total_seconds()
+        except ValueError:
+            pass
+
+    good_gap = seconds_since_contact > timing_cfg["min_time_between_messages"]
+
+    score = 0.5 + intent.get("urgency", 0.5) * 0.3
+    if not in_window:
+        score -= 0.3
+    if not good_gap:
+        score -= 0.2
+    score = max(0.0, min(1.0, score))
+
+    threshold = 0.7 - intent.get("urgency", 0.5) * 0.2
+    should_send = score >= threshold
+
+    delay = None
+    if not should_send:
+        delay = 60  # simple default
+
+    return _EvalTimingOut(
+        should_send_now=should_send,
+        timing_score=score,
+        reasoning="auto‑evaluated",
+        suggested_delay_minutes=delay,
+        context_factors={"in_time_window": in_window, "adequate_interval": good_gap},
+    )
+
+@function_tool(output_type=IntentGenerationOutput)
+async def generate_intent_for_action(
+    params: _GenIntentActionIn,             # ↳ strict input model (extra="forbid")
+) -> IntentGenerationOutput:
+    """
+    Create a communication‐intent when Nyx executes an action that makes it
+    natural to reach out to a user.
+
+    Decision factors
+    ----------------
+    • the *type* of action (express, reflect, dominance, creative, relationship…)
+    • the current *emotional_state* (esp. arousal)
+    • relationship/user metadata passed in *user_data*
+    """
+    action          = params.action or {}
+    user_data       = params.user_data or {}
+    emotional_state = params.emotional_state or {}
+
+    # --- 1. map action-name ➜ intent prototype --------------------------------
+    action_name = action.get("name", "").lower()
+
+    proto: dict[str, tuple[str, str, str, float]] = {
+        "express":      ("mood_expression",       "expressive",
+                         "I've been feeling something I wanted to share with you.", 0.6),
+        "reflect":      ("insight_sharing",       "reflective",
+                         "I've been reflecting on something that might interest you.", 0.5),
+        "dominance":    ("need_expression",       "direct",
+                         "I've been thinking about what I need in our interactions.", 0.7),
+        "assert":       ("need_expression",       "direct",
+                         "I've been thinking about what I need in our interactions.", 0.7),
+        "creative":     ("creative_expression",   "artistic",
+                         "I had a creative thought I wanted to share.",              0.5),
+        "relationship": ("relationship_maintenance", "warm",
+                         "I've been thinking about our conversations lately.",       0.6),
     }
 
-@function_tool
+    # default prototype
+    intent_type, tone, tmpl, urgency = ("insight_sharing",
+                                        "thoughtful",
+                                        "I had a thought I wanted to share with you.",
+                                        0.5)
+
+    # find first keyword that matches
+    for kw, tpl in proto.items():
+        if kw in action_name:
+            intent_type, tone, tmpl, urgency = tpl
+            break
+
+    # --- 2. urgency adjustment -------------------------------------------------
+    arousal = emotional_state.get("arousal", 0.5)
+    urgency = min(0.9, urgency + (arousal - 0.5) * 0.30)
+
+    # stronger urgency when action source is explicitly “RELATIONSHIP”
+    if action.get("source", "").upper() == "RELATIONSHIP":
+        urgency = min(0.95, urgency + 0.15)
+
+    # --- 3. context elements ---------------------------------------------------
+    ctx_elems: list[str] = ["action_context"]
+    if action.get("parameters", {}).get("domain"):
+        ctx_elems.append("domain_reference")
+    if emotional_state and "primary_emotion" in emotional_state:
+        ctx_elems.append("emotional_state")
+
+    # --- 4. assemble -----------------------------------------------------------
+    return IntentGenerationOutput(
+        intent_type=intent_type,
+        motivation=intent_type,                # <- keeps downstream happy
+        urgency=urgency,
+        tone=tone,
+        template=tmpl,
+        content_guidelines={
+            "max_length": 1500,
+            "include_question": True,
+            "personalize": True,
+            "reference_action": True,
+        },
+        context_elements=ctx_elems,
+        suggested_lifetime_hours=24,
+    )
+
+@function_tool(output_type=_ReflectCommsOut)
 async def generate_reflection_on_communications(
-    intents: List[Dict[str, Any]],
-    focus: str,
-    user_id: Optional[str] = None,  # This is already None which is allowed
-    time_period: Optional[str] = None  # Changed from "all" to None
-) -> Dict[str, Any]:
+    params: _ReflectCommsIn,
+) -> _ReflectCommsOut:
     """
-    Generate a reflection on communication patterns
-    
-    Args:
-        intents: List of communication intents to reflect on
-        focus: Focus of the reflection (patterns, effectiveness, etc.)
-        user_id: Optional user ID to focus on
-        time_period: Time period to analyze (day, week, month, all)
-        
-    Returns:
-        Reflection with patterns and insights
+    Produce a mini-reflection over a list of sent/recorded intents.
+    • Detect dominant intent types
+    • Compute share of action-driven messages
+    • Offer 1–2 concrete improvement insights
     """
-    actual_time_period = time_period or "all"
-    
+    intents   = params.intents or []
+    focus     = params.focus or "patterns"
+    user_id   = params.user_id
+    period    = (params.time_period or "all").lower()
+
+    # ------------------ 0. early exit -----------------------------------------
     if not intents:
-        return {
-            "reflection_text": "I haven't initiated enough communication to form meaningful patterns yet.",
-            "identified_patterns": [],
-            "confidence": 0.1,
-            "insights_for_improvement": ["Gather more communication data"]
-        }
-    
-    # Filter intents by user if needed
-    if user_id:
-        filtered_intents = [i for i in intents if i.get("user_id") == user_id]
-    else:
-        filtered_intents = intents
-    
-    if not filtered_intents:
-        return {
-            "reflection_text": f"I haven't initiated communication with user {user_id} yet.",
-            "identified_patterns": [],
-            "confidence": 0.1,
-            "insights_for_improvement": ["Initiate communication with this user"]
-        }
-    
-    # Filter by time period if needed
+        return _ReflectCommsOut(
+            reflection_text="I haven't initiated enough communication to form meaningful patterns yet.",
+            identified_patterns=[],
+            confidence=0.10,
+            insights_for_improvement=["Gather more communication data"],
+        )
+
+    # ------------------ 1. optional filtering ---------------------------------
     now = datetime.datetime.now()
-    if time_period == "day":
-        time_threshold = now - datetime.timedelta(days=1)
-        filtered_intents = [i for i in filtered_intents if datetime.datetime.fromisoformat(i.get("created_at", now.isoformat())) >= time_threshold]
-    elif time_period == "week":
-        time_threshold = now - datetime.timedelta(days=7)
-        filtered_intents = [i for i in filtered_intents if datetime.datetime.fromisoformat(i.get("created_at", now.isoformat())) >= time_threshold]
-    elif time_period == "month":
-        time_threshold = now - datetime.timedelta(days=30)
-        filtered_intents = [i for i in filtered_intents if datetime.datetime.fromisoformat(i.get("created_at", now.isoformat())) >= time_threshold]
-    
-    if not filtered_intents:
-        return {
-            "reflection_text": f"I haven't initiated communication within the selected time period.",
-            "identified_patterns": [],
-            "confidence": 0.1,
-            "insights_for_improvement": ["Consider your communication frequency"]
-        }
-    
-    # Analyze intent types
-    intent_types = {}
-    for intent in filtered_intents:
-        intent_type = intent.get("intent_type", "unknown")
-        intent_types[intent_type] = intent_types.get(intent_type, 0) + 1
-    
-    # Find dominant intent type
-    if intent_types:
-        dominant_type = max(intent_types.items(), key=lambda x: x[1])
-    else:
-        dominant_type = ("unknown", 0)
-    
-    # Check for action-driven intents
-    action_driven_count = sum(1 for i in filtered_intents if i.get("action_driven", False))
-    action_percentage = action_driven_count / len(filtered_intents) if filtered_intents else 0
-    
-    # Example of simple pattern detection
+
+    # user filter
+    if user_id:
+        intents = [i for i in intents if i.get("user_id") == user_id]
+
+    # time-period filter
+    if period in {"day", "week", "month"}:
+        delta = {"day": 1, "week": 7, "month": 30}[period]
+        threshold = now - datetime.timedelta(days=delta)
+        intents = [
+            i for i in intents
+            if datetime.datetime.fromisoformat(i.get("created_at", now.isoformat())) >= threshold
+        ]
+
+    if not intents:
+        return _ReflectCommsOut(
+            reflection_text="No communications match the selected filters.",
+            identified_patterns=[],
+            confidence=0.15,
+            insights_for_improvement=["Broaden the reflection window"],
+        )
+
+    # ------------------ 2. pattern extraction ---------------------------------
+    total_n = len(intents)
+
+    # distribution of intent types
+    type_count: dict[str, int] = {}
+    action_driven = 0
+    for it in intents:
+        t = it.get("intent_type", "unknown")
+        type_count[t] = type_count.get(t, 0) + 1
+        if it.get("action_driven", False):
+            action_driven += 1
+
+    dominant_type, dominant_n = max(type_count.items(), key=lambda kv: kv[1])
+
     patterns = [
         {
             "type": "intent_distribution",
-            "description": f"Most common intent type: {dominant_type[0]} ({dominant_type[1]} occurrences)",
-            "strength": dominant_type[1] / len(filtered_intents) if filtered_intents else 0
+            "description": f"Most common intent type: {dominant_type} ({dominant_n}/{total_n})",
+            "strength": dominant_n / total_n,
         },
         {
-            "type": "action_driven",
-            "description": f"{action_percentage:.0%} of communications were triggered by my actions",
-            "strength": action_percentage
-        }
+            "type": "action_driven_ratio",
+            "description": f"{action_driven/total_n:.0%} of communications are triggered by actions",
+            "strength": action_driven / total_n,
+        },
     ]
-    
-    # Generate insights based on patterns
-    insights = []
-    
-    if dominant_type[0] == "relationship_maintenance" and dominant_type[1] / len(filtered_intents) > 0.5:
-        insights.append("Consider diversifying communication types beyond relationship maintenance")
-    
-    if action_percentage > 0.8:
-        insights.append("Most communications are action-driven; consider more spontaneous outreach")
-    elif action_percentage < 0.2:
-        insights.append("Few communications are action-driven; consider connecting communications to meaningful actions")
-    
-    # Generate reflection text
-    user_specific = f" with user {user_id}" if user_id else ""
-    time_period_text = f" in the past {time_period}" if time_period != "all" else ""
-    
-    reflection_text = f"Upon reflecting on my communication patterns{user_specific}{time_period_text}, I notice that I tend to initiate conversations most frequently for {dominant_type[0]}. "
-    
-    if action_percentage > 0.5:
-        reflection_text += f"Most of my communications ({action_percentage:.0%}) are triggered by my own actions, suggesting I tend to communicate reactively based on what I'm doing. "
-    else:
-        reflection_text += f"A relatively small portion ({action_percentage:.0%}) of my communications are triggered by my own actions, suggesting I tend to initiate conversations based on internal motivations rather than external triggers. "
-    
-    # Add insight from the first pattern
-    if patterns and len(patterns) > 0:
-        reflection_text += f"{patterns[0]['description']}. "
-    
-    # Add an insight for improvement
-    if insights:
-        reflection_text += f"To improve, I could {insights[0].lower()}."
-    
-    # Calculate confidence based on data volume
-    confidence = min(0.9, 0.3 + (len(filtered_intents) / 10) * 0.5)
-    
-    return {
-        "reflection_text": reflection_text,
-        "identified_patterns": patterns,
-        "confidence": confidence,
-        "insights_for_improvement": insights
-    }
+
+    # ------------------ 3. insights -------------------------------------------
+    insights: list[str] = []
+    if dominant_type == "relationship_maintenance" and dominant_n / total_n > 0.5:
+        insights.append("Diversify intent types beyond relationship-maintenance")
+    if action_driven / total_n > 0.80:
+        insights.append("Balance reactive (action-driven) with spontaneous outreach")
+    elif action_driven / total_n < 0.20:
+        insights.append("Leverage meaningful actions to inspire outreach more often")
+
+    # ------------------ 4. reflection text ------------------------------------
+    user_part   = f" with user **{user_id}**" if user_id else ""
+    period_part = f" over the past {period}"  if period != "all" else ""
+    action_pct  = f"{action_driven/total_n:.0%}"
+
+    reflection_text = (
+        f"Reviewing my proactive communications{user_part}{period_part}, "
+        f"I notice that **{dominant_type}** dominates ({dominant_n} of {total_n} messages). "
+        f"Action-driven outreach accounts for {action_pct} of the total. "
+        + (f"To improve I could {insights[0].lower()}." if insights else "")
+    )
+
+    # confidence heuristic: more data ➜ higher confidence (capped at 0.9)
+    confidence = min(0.9, 0.3 + (total_n / 10) * 0.5)
+
+    return _ReflectCommsOut(
+        reflection_text=reflection_text,
+        identified_patterns=patterns,
+        confidence=confidence,
+        insights_for_improvement=insights,
+    )
 
 @function_tool
 async def validate_message_content(content: str) -> GuardrailFunctionOutput:
