@@ -6,6 +6,7 @@ import datetime
 import logging
 import random
 from typing import Dict, List, Any, Optional, Tuple, Union, Callable, Set
+from typing_extensions import TypedDict
 from collections import Counter, defaultdict
 
 # OpenAI Agents SDK imports
@@ -33,6 +34,80 @@ from nyx.core.procedural_memory.temporal import TemporalNode, TemporalProcedureG
 
 # Set up logging
 logger = logging.getLogger(__name__)
+
+class StepParameters(TypedDict, total=False):
+    """Flexible parameters for procedure steps"""
+    button: Optional[str]
+    control: Optional[str]
+    input_method: Optional[str]
+    key: Optional[str]
+    # Add other common parameters as needed
+
+class ProcedureStep(TypedDict):
+    """Schema for a procedure step"""
+    id: str
+    description: str
+    function: str
+    parameters: StepParameters
+
+class ExecutionContext(TypedDict, total=False):
+    """Schema for execution context"""
+    timestamp: str
+    conscious_execution: bool
+    result: bool
+    execution_time: float
+    action_history: List[Dict[str, str]]  # Keep this simple
+    current_chunk: str
+    current_procedure: str
+    hierarchical: bool
+    temporal_execution: bool
+    graph_execution: bool
+    optimization_run: bool
+    execution_history: List[Dict[str, Any]]
+
+class ObservationStep(TypedDict):
+    """Schema for observation sequence step"""
+    action: str
+    state: Dict[str, Any]
+    timestamp: str
+
+class ErrorInfo(TypedDict):
+    """Schema for error information"""
+    error_type: str
+    message: str
+    context: Dict[str, Any]
+
+class MappingInfo(TypedDict):
+    """Schema for transfer mapping"""
+    source_function: str
+    target_function: str
+    target_parameters: StepParameters
+
+class TransferPlan(TypedDict):
+    """Schema for transfer plan"""
+    source_domain: str
+    target_domain: str
+    mappings: List[MappingInfo]
+    transfer_strategy: str
+
+class GoalState(TypedDict, total=False):
+    """Schema for goal state - flexible"""
+    pass
+
+class TemporalConstraint(TypedDict):
+    """Schema for temporal constraints"""
+    from_step: str
+    to_step: str
+    type: str
+    delay: Optional[float]
+
+class PreconditionSet(TypedDict, total=False):
+    """Schema for preconditions - flexible"""
+    pass
+
+class PostconditionSet(TypedDict, total=False):
+    """Schema for postconditions - flexible"""
+    pass
 
 class ProceduralMemoryManager:
     """
@@ -274,7 +349,7 @@ class ProceduralMemoryManager:
     async def add_procedure(
         ctx: RunContextWrapper,
         name: str,
-        steps: List[Dict[str, Any]],
+        steps: List[ProcedureStep],
         description: str,
         domain: str
     ) -> Dict[str, Any]:
@@ -351,7 +426,7 @@ class ProceduralMemoryManager:
     async def update_procedure(
         ctx: RunContextWrapper,
         name: str,
-        steps: Optional[List[Dict[str, Any]]] = None,
+        steps: Optional[List[ProcedureStep]] = None,
         description: Optional[str] = None,
         domain: Optional[str] = None
     ) -> Dict[str, Any]:
@@ -425,9 +500,10 @@ class ProceduralMemoryManager:
             
     @staticmethod
     @function_tool
-    async def execute_procedure(ctx: RunContextWrapper,
+    async def execute_procedure(
+        ctx: RunContextWrapper,
         name: str,
-        context: Optional[Dict[str, Any]] = None
+        context: Optional[ExecutionContext] = None
     ) -> Dict[str, Any]:
         """
         Execute a procedure
@@ -601,9 +677,10 @@ class ProceduralMemoryManager:
 
     @staticmethod
     @function_tool
-    async def execute_step(ctx: RunContextWrapper,
-        step: Dict[str, Any], 
-        context: Dict[str, Any], 
+    async def execute_step(
+        ctx: RunContextWrapper,
+        step: ProcedureStep,
+        context: ExecutionContext,
         minimal_monitoring: bool = False
     ) -> Dict[str, Any]:
         """
@@ -1633,9 +1710,10 @@ class ProceduralMemoryManager:
 
     @staticmethod
     @function_tool
-    async def execute_hierarchical_procedure(ctx: RunContextWrapper,
+    async def execute_hierarchical_procedure(
+        ctx: RunContextWrapper,
         name: str,
-        context: Dict[str, Any] = None
+        context: Optional[ExecutionContext] = None
     ) -> Dict[str, Any]:
         """
         Execute a hierarchical procedure
@@ -1650,11 +1728,12 @@ class ProceduralMemoryManager:
         # Placeholder implementation since the EnhancedProceduralMemoryManager handles this
         return {"error": "Hierarchical procedure execution requires the EnhancedProceduralMemoryManager"}
 
-    @staticmethod 
+    @staticmethod
     @function_tool
-    async def execute_temporal_procedure(ctx: RunContextWrapper,
-        name: str, 
-        context: Dict[str, Any] = None
+    async def execute_temporal_procedure(
+        ctx: RunContextWrapper,
+        name: str,
+        context: Optional[ExecutionContext] = None
     ) -> Dict[str, Any]:
         """
         Execute a procedure with temporal constraints
@@ -1671,10 +1750,11 @@ class ProceduralMemoryManager:
 
     @staticmethod
     @function_tool
-    async def execute_graph_procedure(ctx: RunContextWrapper,
+    async def execute_graph_procedure(
+        ctx: RunContextWrapper,
         procedure_name: str,
-        context: Dict[str, Any] = None,
-        goal: Dict[str, Any] = None
+        context: Optional[ExecutionContext] = None,
+        goal: Optional[GoalState] = None
     ) -> Dict[str, Any]:
         """
         Execute a procedure using its graph representation
@@ -1923,8 +2003,9 @@ class EnhancedProceduralMemoryManager(ProceduralMemoryManager):
     # Implement enhanced agent function tools
     @staticmethod
     @function_tool
-    async def learn_from_demonstration(ctx: RunContextWrapper,
-        observation_sequence: List[Dict[str, Any]], 
+    async def learn_from_demonstration(
+        ctx: RunContextWrapper,
+        observation_sequence: List[Dict[str, Any]],  # This one might be okay as is
         domain: str,
         name: Optional[str] = None
     ) -> Dict[str, Any]:
@@ -1968,14 +2049,15 @@ class EnhancedProceduralMemoryManager(ProceduralMemoryManager):
 
     @staticmethod
     @function_tool
-    async def create_hierarchical_procedure(ctx: RunContextWrapper,
+    async def create_hierarchical_procedure(
+        ctx: RunContextWrapper,
         name: str,
         description: str,
         domain: str,
-        steps: List[Dict[str, Any]],
-        goal_state: Dict[str, Any] = None,
-        preconditions: Dict[str, Any] = None,
-        postconditions: Dict[str, Any] = None,
+        steps: List[ProcedureStep],
+        goal_state: Optional[GoalState] = None,
+        preconditions: Optional[Dict[str, Any]] = None,
+        postconditions: Optional[Dict[str, Any]] = None,
         parent_id: Optional[str] = None
     ) -> Dict[str, Any]:
         """
@@ -2148,12 +2230,13 @@ class EnhancedProceduralMemoryManager(ProceduralMemoryManager):
 
     @staticmethod
     @function_tool
-    async def create_temporal_procedure(ctx: RunContextWrapper,
+    async def create_temporal_procedure(
+        ctx: RunContextWrapper,
         name: str,
-        steps: List[Dict[str, Any]],
-        temporal_constraints: List[Dict[str, Any]],
+        steps: List[ProcedureStep],
+        temporal_constraints: List[TemporalConstraint],
         domain: str,
-        description: str = None
+        description: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Create a procedure with temporal constraints
@@ -2510,8 +2593,9 @@ class EnhancedProceduralMemoryManager(ProceduralMemoryManager):
 
     @staticmethod
     @function_tool
-    async def execute_transfer_plan(ctx: RunContextWrapper,
-        transfer_plan: Dict[str, Any],
+    async def execute_transfer_plan(
+        ctx: RunContextWrapper,
+        transfer_plan: TransferPlan,
         target_name: str
     ) -> Dict[str, Any]:
         """
@@ -2613,9 +2697,10 @@ class EnhancedProceduralMemoryManager(ProceduralMemoryManager):
 
     @staticmethod
     @function_tool
-    async def handle_execution_error(ctx: RunContextWrapper,
-        error: Dict[str, Any],
-        context: Dict[str, Any] = None
+    async def handle_execution_error(
+        ctx: RunContextWrapper,
+        error: ErrorInfo,
+        context: Optional[ExecutionContext] = None
     ) -> Dict[str, Any]:
         """
         Handle an execution error using the causal model
