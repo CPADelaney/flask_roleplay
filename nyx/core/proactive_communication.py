@@ -163,53 +163,57 @@ class MessageContentOutput(BaseModel):
 # =============== Function Tools ===============
 
 @function_tool(output_type=_EvalRelOut)
-async def evaluate_user_relationship(params: _EvalRelIn) -> _EvalRelOut:
-    """Strict version of relationship evaluation"""
-    user_id = params.user_id
-    relationship_data = params.relationship_data
-
-    trust = relationship_data.get("trust", 0)
-    intimacy = relationship_data.get("intimacy", 0)
-    duration = relationship_data.get("duration_days", 0)
+async def evaluate_user_relationship(
+    user_id: str,
+    relationship_data: Dict[str, Any]
+) -> Dict[str, Any]:
+    """
+    Evaluate relationship status with a user and suggest messaging cadence.
+    """
+    trust        = relationship_data.get("trust", 0.0)
+    intimacy     = relationship_data.get("intimacy", 0.0)
+    duration     = relationship_data.get("duration_days", 0)
     last_contact = relationship_data.get("last_contact")
 
-    # days since last contact
+    # days since last contact -----------------------------------------------
     days_since_contact = 0
     if last_contact:
         try:
-            last_contact_dt = datetime.datetime.fromisoformat(last_contact)
-            days_since_contact = (datetime.datetime.now() - last_contact_dt).days
+            last_dt = datetime.datetime.fromisoformat(last_contact)
+            days_since_contact = (datetime.datetime.now() - last_dt).days
         except ValueError:
             pass
 
-    relationship_score = (trust + intimacy) / 2
-    comm_appropriateness = min(1.0, relationship_score * (1.0 + min(1.0, days_since_contact / 7)))
+    # core scores ------------------------------------------------------------
+    relationship_score = (trust + intimacy) / 2.0
+    comm_appropriateness = min(
+        1.0, relationship_score * (1 + min(1.0, days_since_contact / 7))
+    )
 
-    milestones: List[str] = []
+    # milestone check --------------------------------------------------------
+    milestones = []
     if duration in {7, 30, 90, 180, 365}:
-        milestones.append(f"{duration} day relationship milestone")
+        milestones.append(f"{duration}-day relationship milestone")
 
+    # suggested cadence ------------------------------------------------------
     if relationship_score < 0.3:
-        suggested_frequency = "low"
-        max_msgs = 1
+        freq, max_week = "low", 1
     elif relationship_score < 0.5:
-        suggested_frequency = "medium"
-        max_msgs = 2
+        freq, max_week = "medium", 2
     else:
-        suggested_frequency = "high"
-        max_msgs = 3
+        freq, max_week = "high", 3
 
+    # return strict object ---------------------------------------------------
     return _EvalRelOut(
         user_id=user_id,
         relationship_score=relationship_score,
         communication_appropriateness=comm_appropriateness,
         days_since_contact=days_since_contact,
         approaching_milestones=milestones,
-        suggested_frequency=suggested_frequency,
-        max_messages_per_week=max_msgs,
+        suggested_frequency=freq,
+        max_messages_per_week=max_week,
     )
-
-@function_tool(output_type=IntentGenerationOutput)
+    
 @function_tool(output_type=IntentGenerationOutput)
 async def generate_intent_for_user(
     params: _GenIntentUserIn,
