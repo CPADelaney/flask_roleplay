@@ -28,12 +28,12 @@ class Modality(str, Enum):
 
 # --- Base Schemas ---
 class SensoryInput(BaseModel):
-    """Schema for raw sensory input"""
+    """Schema for raw sensory input (strict-schema-safe)"""
     modality: Modality
-    data: Any = Field(..., description="Raw input data (e.g., text string, image bytes, audio data)")
-    confidence: float = Field(1.0, description="Input confidence (0.0-1.0)", ge=0.0, le=1.0)
+    data: Any = Field(..., description="Raw input (text, bytes, etc.)")
+    confidence: float = Field(1.0, ge=0.0, le=1.0)
     timestamp: str = Field(default_factory=lambda: datetime.datetime.now().isoformat())
-    metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
+    metadata: Any = Field(default_factory=dict, description="Opaque metadata blob")
 
 class ExpectationSignal(BaseModel):
     """Schema for top-down expectation signal"""
@@ -58,33 +58,32 @@ class ImageFeatures(BaseModel):
     """Features extracted from image data."""
     description: str = Field(default="No description available.")
     objects: List[str] = Field(default_factory=list)
-    text_content: Optional[str] = None  # OCR
+    text_content: Optional[str] = None
     dominant_colors: List[Tuple[int, int, int]] = Field(default_factory=list)
     estimated_mood: Optional[str] = None
     is_screenshot: bool = False
-    spatial_layout: Optional[Dict[str, Any]] = None  # Positions of detected objects
+    spatial_layout: Any = None             # ← Dict → Any
 
-class AudioFeatures(BaseModel):
-    """Features extracted from audio data."""
-    type: str = "unknown"  # music, speech, ambient, sound_effect
-    transcription: Optional[str] = None  # For speech
-    speaker_id: Optional[str] = None  # For speech
-    mood: Optional[str] = None  # For music/speech
-    genre: Optional[str] = None  # For music
-    tempo_bpm: Optional[float] = None  # For music
-    key: Optional[str] = None  # For music
-    sound_events: List[str] = Field(default_factory=list)  # For ambient/effects
-    noise_level: Optional[float] = None  # Estimated background noise
+class AudioFeatures(BaseModel):            # unchanged – shown for fwd-ref clarity
+    type: str = "unknown"
+    transcription: Optional[str] = None
+    speaker_id: Optional[str] = None
+    mood: Optional[str] = None
+    genre: Optional[str] = None
+    tempo_bpm: Optional[float] = None
+    key: Optional[str] = None
+    sound_events: List[str] = Field(default_factory=list)
+    noise_level: Optional[float] = None
 
 class VideoFeatures(BaseModel):
     """Features extracted from video data."""
     summary: str = "No summary available."
     key_actions: List[str] = Field(default_factory=list)
-    tracked_objects: Dict[str, List[Tuple[float, float]]] = Field(default_factory=dict)  # Object name -> list of (time, confidence)
-    scene_changes: List[float] = Field(default_factory=list)  # Timestamps of scene changes
-    audio_features: Optional[AudioFeatures] = None  # Embedded audio analysis
-    estimated_mood_progression: List[Tuple[float, str]] = Field(default_factory=list)  # List of (time, mood)
-    significant_frames: List[Dict[str, Any]] = Field(default_factory=list)  # Key moments
+    tracked_objects: Any = None            # ← Dict → Any
+    scene_changes: List[float] = Field(default_factory=list)
+    audio_features: Optional[AudioFeatures] = None
+    estimated_mood_progression: List[Tuple[float, str]] = Field(default_factory=list)
+    significant_frames: Any = None         # ← List[Dict] → Any
 
 class TouchEventFeatures(BaseModel):
     """Features extracted from touch event data."""
@@ -112,11 +111,10 @@ class SmellFeatures(BaseModel):
     source_description: Optional[str] = None
 
 class FeatureExtractionResult(BaseModel):
-    """Result of feature extraction from sensory input."""
     modality: Modality
     features: Any
     confidence: float
-    metadata: Dict[str, Any]
+    metadata: Any
 
 class ExpectationResult(BaseModel):
     """Result of applying top-down expectations to features."""
@@ -152,6 +150,11 @@ POSITIVE_TASTES = {"sweet", "umami", "fatty", "savory"}
 NEGATIVE_TASTES = {"bitter", "sour", "metallic", "spoiled"}
 POSITIVE_SMELLS = {"floral", "fruity", "sweet", "fresh", "baked", "woody", "earthy"}
 NEGATIVE_SMELLS = {"pungent", "chemical", "rotten", "sour", "fishy", "burnt"}
+
+class ProcessSensoryInputParams(BaseModel):
+    """Arguments wrapper for the process_sensory_input() tool"""
+    input_data: SensoryInput
+    expectations: Optional[List['ExpectationSignal']] = None   # fwd-ref
 
 # Context class to hold the state and dependencies
 class MultimodalIntegratorContext:
@@ -196,19 +199,13 @@ class MultimodalIntegratorContext:
 @function_tool
 async def process_sensory_input(
     ctx: RunContextWrapper[MultimodalIntegratorContext],
-    input_data: dict,  # Changed from Dict[str, Any] to dict
-    expectations: list = None  # Changed from Optional[List[Dict[str, Any]]] to list with default None
-) -> dict:  # Changed return type to dict
+    params: ProcessSensoryInputParams,                     # ← single Pydantic arg
+) -> Dict[str, Any]:
     """
-    Process sensory input using both bottom-up and top-down pathways.
-    
-    Args:
-        input_data: Raw sensory input data with modality, data, confidence, etc.
-        expectations: Optional list of top-down expectations to influence processing
-        
-    Returns:
-        Integrated percept combining bottom-up and top-down processing
+    Bottom-up + top-down sensory processing. Returns IntegratedPercept as dict.
     """
+    input_data = params.input_data
+    expectations = params.expectations
     integrator_ctx = ctx.context
     
     # Convert input_data to SensoryInput if it's a dict
@@ -489,53 +486,29 @@ async def get_perception_stats(
 
 @function_tool
 async def process_text(
-    ctx: RunContextWrapper[MultimodalIntegratorContext], 
-    text: str, 
-    metadata: Optional[Dict[str, Any]] = None
+    ctx: RunContextWrapper[MultimodalIntegratorContext],
+    text: str,
+    metadata: Optional[Any] = None,        # Dict → Any
 ) -> Dict[str, Any]:
-    """
-    Process a text input through the multimodal integration system.
-    
-    Args:
-        text: The text input to process
-        metadata: Optional metadata about the text
-        
-    Returns:
-        Processing results including features and integration data
-    """
     input_data = SensoryInput(
         modality=Modality.TEXT,
         data=text,
-        timestamp=datetime.datetime.now().isoformat(),
         metadata=metadata or {}
     )
-    
-    return await process_sensory_input(ctx, input_data.dict())
+    return await process_sensory_input(ctx, ProcessSensoryInputParams(input_data=input_data))
 
 @function_tool
 async def process_image(
-    ctx: RunContextWrapper[MultimodalIntegratorContext], 
+    ctx: RunContextWrapper[MultimodalIntegratorContext],
     image_data: Any,
-    metadata: Optional[Dict[str, Any]] = None
+    metadata: Optional[Any] = None,        # Dict → Any
 ) -> Dict[str, Any]:
-    """
-    Process an image through the multimodal integration system.
-    
-    Args:
-        image_data: Raw image data (bytes, path, or base64 encoded string)
-        metadata: Optional metadata about the image
-        
-    Returns:
-        Processing results including image features and integration data
-    """
     input_data = SensoryInput(
         modality=Modality.IMAGE,
         data=image_data,
-        timestamp=datetime.datetime.now().isoformat(),
         metadata=metadata or {}
     )
-    
-    return await process_sensory_input(ctx, input_data.dict())
+    return await process_sensory_input(ctx, ProcessSensoryInputParams(input_data=input_data))
 
 @function_tool
 async def register_feature_extractor(
