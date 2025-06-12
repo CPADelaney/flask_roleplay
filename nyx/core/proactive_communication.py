@@ -41,11 +41,9 @@ class _EvalRelIn(BaseModel):
     model_config = {"extra": "forbid"}
 
 class _GenIntentUserIn(BaseModel):
-    """Strict input-wrapper for generate_intent_for_user"""
     user_id: str
-    user_data: Dict[str, Any]
-    motivation_options: Dict[str, float]
-
+    user_data: Any = Field(default_factory=dict)
+    motivation_options: Any = Field(default_factory=dict)
     model_config = {"extra": "forbid"}
 
 class _EvalRelOut(BaseModel):
@@ -62,8 +60,8 @@ class _EvalRelOut(BaseModel):
 
 
 class _GenMsgContentIn(BaseModel):
-    intent: Dict[str, Any]
-    context: Dict[str, Any]
+    intent: Any
+    context: Any
     model_config = {"extra": "forbid"}
 
 class _GenMsgContentOut(BaseModel):
@@ -75,9 +73,9 @@ class _GenMsgContentOut(BaseModel):
     model_config = {"extra": "forbid"}
 
 class _EvalTimingIn(BaseModel):
-    intent: Dict[str, Any]
-    current_context: Dict[str, Any]
-    timing_config: Dict[str, Any]
+    intent: Any
+    current_context: Any
+    timing_config: Any
     model_config = {"extra": "forbid"}
 
 class _EvalTimingOut(BaseModel):
@@ -89,13 +87,13 @@ class _EvalTimingOut(BaseModel):
     model_config = {"extra": "forbid"}
 
 class _GenIntentActionIn(BaseModel):
-    action: Dict[str, Any]
-    user_data: Dict[str, Any]
-    emotional_state: Dict[str, Any]
+    action: Any
+    user_data: Any = Field(default_factory=dict)
+    emotional_state: Any = Field(default_factory=dict)
     model_config = {"extra": "forbid"}
 
 class _ReflectCommsIn(BaseModel):
-    intents: List[Dict[str, Any]]
+    intents: List[Any]
     focus: str
     user_id: Optional[str] = None
     time_period: Optional[str] = None
