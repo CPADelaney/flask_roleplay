@@ -10,7 +10,8 @@ import numpy as np
 import openai
 
 # Updated imports for the new Agents SDK
-from agents import Agent, Runner, function_tool, trace, ModelResponse, RunContextWrapper
+from agents import Agent, Runner, function_tool, trace, ModelResponse
+# Remove RunContextWrapper - it doesn't exist in the SDK
 from agents.items import (
     TResponseInputItem, 
     TResponseOutputItem,
@@ -20,14 +21,8 @@ from agents.items import (
 
 from pydantic import BaseModel, ConfigDict
 
-# Add these Pydantic models after imports
-class IndicatorsModel(BaseModel):
-    """Model for context pattern indicators"""
-    model_config = ConfigDict(extra="allow")  # Allows any additional fields
-
-class TemporalPatternItem(BaseModel):
-    """Model for temporal pattern items"""
-    model_config = ConfigDict(extra="allow")  # Allows any additional fields
+# Note: Removed Pydantic models for indicators and temporal patterns
+# The OpenAI Agents SDK doesn't support models with extra="allow" in strict schemas
 
 from .models import ContextPattern, ChunkPrediction
 
@@ -730,11 +725,11 @@ class ContextAwareChunkSelector:
     async def create_context_pattern(
         name: str,
         domain: str,
-        indicators: IndicatorsModel,  # Changed from Dict[str, Any]
+        indicators: Dict[str, Any],
         chunk_id: str,
-        temporal_pattern: Optional[List[TemporalPatternItem]] = None,  # Changed from List[Dict[str, Any]]
+        temporal_pattern: Optional[List[Dict[str, Any]]] = None,
         confidence_threshold: float = 0.7,
-        ctx: RunContextWrapper = None  # Fixed: Should be RunContextWrapper, not just ctx = None
+        ctx = None  # Context is injected automatically, no specific type needed
     ) -> Dict[str, Any]:
         """
         Create a new context pattern for chunk selection
@@ -767,32 +762,22 @@ class ContextAwareChunkSelector:
                 "error": "Chunk selector not available in context"
             }
         
-        # Convert Pydantic model to dict
-        indicators_dict = indicators.model_dump()
-        
         # Log pattern creation
-        logger.info(f"Create context pattern: name: {name}, domain: {domain}, indicators count: {len(indicators_dict)}, chunk_id: {chunk_id}")
+        logger.info(f"Create context pattern: name: {name}, domain: {domain}, indicators count: {len(indicators)}, chunk_id: {chunk_id}")
         
         # Add chunk association indicator
-        # Fixed: Changed asterisks to underscores
-        indicators_dict[f"chunk_{chunk_id}_suitable"] = True
+        indicators[f"chunk_{chunk_id}_suitable"] = True
         
         # Generate pattern ID
-        # Fixed: Changed asterisks to underscores
         pattern_id = f"pattern_{int(datetime.datetime.now().timestamp())}_{chunk_id}"
-        
-        # Convert temporal pattern if provided
-        temporal_pattern_list = []
-        if temporal_pattern:
-            temporal_pattern_list = [item.model_dump() for item in temporal_pattern]
         
         # Create pattern
         pattern = ContextPattern(
             id=pattern_id,
             name=name,
             domain=domain,
-            indicators=indicators_dict,
-            temporal_pattern=temporal_pattern_list,
+            indicators=indicators,
+            temporal_pattern=temporal_pattern or [],
             confidence_threshold=confidence_threshold,
             match_count=0,
             last_matched=None
@@ -806,7 +791,7 @@ class ContextAwareChunkSelector:
             "pattern_id": pattern_id,
             "name": name,
             "domain": domain,
-            "indicators_count": len(indicators_dict),
+            "indicators_count": len(indicators),
             "has_temporal_pattern": temporal_pattern is not None,
             "chunk_id": chunk_id
         }
@@ -918,6 +903,7 @@ class ContextAwareChunkSelector:
             }
         }
     
+    @function_tool
     async def analyze_context_patterns(domain: Optional[str] = None, ctx = None) -> Dict[str, Any]:
         """
         Analyze context patterns for efficiency and effectiveness
