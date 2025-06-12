@@ -35,6 +35,43 @@ logger = logging.getLogger(__name__)
 
 # =============== Pydantic Models ===============
 
+class _GenObsFromActionParams(BaseModel):
+    action: Any = Field(default_factory=dict)
+    context: Any = Field(default_factory=dict)
+    is_action_driven: Optional[bool] = False   # ← NEW
+    model_config = {"extra": "forbid"}
+
+
+class _GenObsFromSourceParams(BaseModel):
+    source: Optional[str] = None
+    context: Any = Field(default_factory=dict)
+    template_options: Optional[List[str]] = None
+    is_environment_scan: Optional[bool] = False   # ← NEW
+    hint: Optional[str] = None                    # ← NEW
+    model_config = {"extra": "forbid"}
+
+
+class _EvalObsParams(BaseModel):
+    observation_text: str
+    current_context: Any = Field(default_factory=dict)
+    source: Optional[str] = None
+
+    model_config = {"extra": "forbid"}
+
+
+class _FilterObsParams(BaseModel):
+    observations: List[Any]                          # list of opaque dicts
+    filter_criteria: Any                             # free-shape dict
+
+    model_config = {"extra": "forbid"}
+
+
+class _PatternCheckParams(BaseModel):
+    recent_observations: List[Any] = Field(default_factory=list)
+    current_context: Any = Field(default_factory=dict)
+
+    model_config = {"extra": "forbid"}
+
 class ObservationSource(str, Enum):
     """Enum for tracking the source of an observation"""
     ENVIRONMENT = "environment"
@@ -193,13 +230,10 @@ async def categorize_time_elapsed_obs(seconds: float) -> str:
 
 @function_tool
 async def generate_observation_from_action(
-    action: Optional[Dict[str, Any]] = None, 
-    context: Optional[Dict[str, Any]] = None
+    params: _GenObsFromActionParams,               # ← single strict param
 ) -> Dict[str, Any]:
-    """Generate an observation based on an action that was taken"""
-    # Set defaults inside the function
-    action = {} if action is None else action
-    context = {} if context is None else context
+    action  = params.action or {}
+    context = params.context or {}
     
     # Get action details
     action_name = action.get("name", "unknown action")
@@ -256,10 +290,11 @@ async def generate_observation_from_action(
 
 @function_tool
 async def generate_observation_from_source(
-    source: Optional[str] = None,
-    context: Optional[Dict[str, Any]] = None,
-    template_options: Optional[List[str]] = None
+    params: _GenObsFromSourceParams,
 ) -> Dict[str, Any]:
+    source           = params.source
+    context          = params.context or {}
+    template_options = params.template_options
     """Generate an observation based on a specific source"""
     # Set defaults inside the function
     context = {} if context is None else context
@@ -439,15 +474,11 @@ async def generate_observation_from_source(
 
 @function_tool
 async def evaluate_observation_relevance(
-    observation_text: Optional[str] = None,
-    current_context: Optional[Dict[str, Any]] = None,
-    source: Optional[str] = None
+    params: _EvalObsParams,
 ) -> Dict[str, Any]:
-    """Evaluate how relevant an observation is to the current context"""
-    # Set defaults inside the function
-    observation_text = "" if observation_text is None else observation_text
-    current_context = {} if current_context is None else current_context
-    source = "unknown" if source is None else source
+    observation_text = params.observation_text or ""
+    current_context  = params.current_context or {}
+    source           = params.source or "unknown"
     
     # Base relevance score based on source
     base_relevance = {
@@ -524,9 +555,10 @@ async def evaluate_observation_relevance(
 
 @function_tool
 async def filter_observations(
-    observations: List[Dict[str, Any]],
-    filter_criteria: Dict[str, Any]
+    params: _FilterObsParams,
 ) -> List[Dict[str, Any]]:
+    observations    = params.observations
+    filter_criteria = params.filter_criteria
     """Filter observations based on criteria"""
     # Extract filter criteria
     min_relevance = filter_criteria.get("min_relevance", 0.3)
@@ -579,9 +611,10 @@ async def filter_observations(
 
 @function_tool
 async def check_observation_patterns(
-    recent_observations: Optional[List[Dict[str, Any]]] = None,
-    current_context: Optional[Dict[str, Any]] = None
+    params: _PatternCheckParams,
 ) -> Optional[Dict[str, Any]]:
+    recent_observations = params.recent_observations or []
+    current_context     = params.current_context or {}
     """Check for patterns across recent observations"""
     # Default empty list/dict if None
     recent_observations = [] if recent_observations is None else recent_observations
