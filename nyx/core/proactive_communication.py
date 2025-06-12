@@ -33,6 +33,13 @@ logger = logging.getLogger(__name__)
 
 # =============== Pydantic Models ===============
 
+class _EvalRelIn(BaseModel):
+    """Strict input for evaluate_user_relationship"""
+    user_id: str
+    relationship_data: Any = Field(default_factory=dict)
+
+    model_config = {"extra": "forbid"}
+
 class _GenIntentUserIn(BaseModel):
     """Strict input-wrapper for generate_intent_for_user"""
     user_id: str
@@ -172,12 +179,15 @@ class MessageContentOutput(BaseModel):
 
 @function_tool
 async def evaluate_user_relationship(
-    user_id: str,
-    relationship_data: Dict[str, Any]
+    params: _EvalRelIn,            # ← single validated param
 ) -> _EvalRelOut:
     """
     Evaluate relationship status with a user and suggest a messaging cadence.
     """
+
+    # ---------- pull raw metrics ------------------------------------------
+    user_id           = params.user_id
+    relationship_data = params.relationship_data or {}
 
     # ---------- pull raw metrics ------------------------------------------
     trust        = relationship_data.get("trust", 0.0)
