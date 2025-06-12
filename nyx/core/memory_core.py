@@ -87,25 +87,25 @@ class Memory(BaseModel):
 # ==================== Input/Output Models ====================
 
 class MemoryCreateParams(BaseModel):
-    """Input model for creating memories"""
+    """Input model for creating memories (strict-schema safe)."""
     memory_text: str
     memory_type: Optional[str] = "observation"
     memory_scope: Optional[str] = "game"
     significance: Optional[int] = 5
     tags: Optional[List[str]] = Field(default_factory=list)
-    metadata: Optional[Dict[str, Any]] = Field(default_factory=dict)
+    metadata: Optional[Any] = Field(default_factory=dict)          # ← Dict → Any
     memory_level: Optional[Literal['detail', 'summary', 'abstraction']] = "detail"
     source_memory_ids: Optional[List[str]] = None
     fidelity: Optional[float] = 1.0
     summary_of: Optional[str] = None
 
 class MemoryUpdateParams(BaseModel):
-    """Input model for updating memories"""
+    """Input model for updating memories (strict-schema safe)."""
     memory_id: str
-    updates: Optional[Dict[str, Any]] = Field(default_factory=dict)
+    updates: Optional[Any] = Field(default_factory=dict)  
 
 class MemoryQuery(BaseModel):
-    """Input model for retrieving memories"""
+    """Input model for retrieving memories (strict-schema safe)."""
     query: str
     memory_types: Optional[List[str]] = None
     scopes: Optional[List[str]] = None
@@ -113,7 +113,7 @@ class MemoryQuery(BaseModel):
     min_significance: Optional[int] = 3
     include_archived: Optional[bool] = False
     entities: Optional[List[str]] = None
-    emotional_state: Optional[Dict[str, Any]] = None
+    emotional_state: Optional[Any] = None                         # ← Dict → Any
     tags: Optional[List[str]] = None
     retrieval_level: Optional[Literal['detail', 'summary', 'abstraction', 'auto']] = "auto"
     min_fidelity: Optional[float] = 0.0
@@ -1130,7 +1130,7 @@ async def create_memory(
     memory_scope: str = "game",
     significance: int = 5,
     tags: List[str] = None,
-    emotional_context: Dict[str, Any] = None,
+    emotional_context: Optional[Any] = None,          # ← Dict → Any
     memory_level: str = "detail",
     source_memory_ids: List[str] = None,
     entities: List[str] = None
@@ -1162,7 +1162,7 @@ async def search_memories(
     include_archived: bool = False,
     tags: List[str] = None,
     entities: List[str] = None,
-    emotional_state: Dict[str, Any] = None,
+    emotional_state: Optional[Any] = None,            # ← Dict → Any
     retrieval_level: str = "auto",
     min_fidelity: float = 0.0
 ) -> List[Dict[str, Any]]:
@@ -1188,7 +1188,7 @@ async def search_memories(
 async def update_memory(
     ctx: RunContextWrapper[MemoryContext],
     memory_id: str,
-    updates: Dict[str, Any]
+    updates: Any                                      # ← Dict → Any
 ) -> Dict[str, Any]:
     """Update an existing memory"""
     with custom_span("update_memory", {"memory_id": memory_id}):
@@ -1298,7 +1298,7 @@ async def retrieve_relevant_experiences(
     ctx: RunContextWrapper[MemoryContext],
     query: str,
     scenario_type: str = "",
-    emotional_state: Dict[str, Any] = None,
+    emotional_state: Optional[Any] = None,            # ← Dict → Any
     entities: List[str] = None,
     limit: int = 3,
     min_relevance: float = 0.6
@@ -1648,7 +1648,7 @@ async def get_memory_stats(ctx: RunContextWrapper[MemoryContext]) -> Dict[str, A
 async def generate_conversational_recall(
     ctx: RunContextWrapper[MemoryContext],
     memory_id: str,
-    context: Dict[str, Any] = None
+    context: Optional[Any] = None                     # ← Dict → Any
 ) -> Dict[str, Any]:
     """Generate natural recall of a memory"""
     with custom_span("generate_conversational_recall", {"memory_id": memory_id}):
