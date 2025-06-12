@@ -113,7 +113,7 @@ class CommunicationReflectionOutput(BaseModel):
 # =============== Tool Functions ===============
 
 @function_tool
-async def format_memories_for_reflection(memories: List[Dict[str, Any]], 
+async def format_memories_for_reflection(memories: List[Any],
                                        topic: Optional[str] = None,
                                        emotional_context: Optional[Dict[str, Any]] = None) -> str:
     """Format memory data into a structured representation for reflection with emotional context"""
@@ -139,7 +139,7 @@ async def format_memories_for_reflection(memories: List[Dict[str, Any]],
         ).model_dump_json()
 
 @function_tool
-async def extract_scenario_type(ctx: RunContextWrapper[Any], memory: Dict[str, Any]) -> str:
+async def extract_scenario_type(ctx: RunContextWrapper[Any], memory: Any) -> str:
     """Extract the scenario type from memory data"""
     with custom_span("extract_scenario_type"):
         tags = memory.get("tags", [])
@@ -156,7 +156,7 @@ async def extract_scenario_type(ctx: RunContextWrapper[Any], memory: Dict[str, A
         return "general"
 
 @function_tool
-async def extract_neurochemical_influence(ctx: RunContextWrapper[Any], memory: Dict[str, Any]) -> Dict[str, float]:
+async def extract_neurochemical_influence(ctx: RunContextWrapper[Any], memory: Any) -> Dict[str, float]:
     """Extract the neurochemical influence from memory data"""
     with custom_span("extract_neurochemical_influence"):
         emotional_context = memory.get("metadata", {}).get("emotional_context", {})
@@ -232,12 +232,12 @@ async def extract_neurochemical_influence(ctx: RunContextWrapper[Any], memory: D
         return neurochemical_influence
 
 @function_tool
-async def record_reflection(ctx: RunContextWrapper[Any], 
-                          reflection: str, 
-                          confidence: float, 
+async def record_reflection(ctx: RunContextWrapper[Any],
+                          reflection: str,
+                          confidence: float,
                           memory_ids: List[str],
-                          scenario_type: str, 
-                          emotional_context: Dict[str, Any],
+                          scenario_type: str,
+                          emotional_context: Any,
                           neurochemical_influence: Dict[str, float],
                           topic: Optional[str] = None) -> str:
     """Record a reflection with emotional and neurochemical data for future reference"""
@@ -299,8 +299,8 @@ async def get_agent_stats(ctx: RunContextWrapper[Any]) -> Dict[str, Any]:
         }
 
 @function_tool
-async def analyze_emotional_patterns_reflect(ctx: RunContextWrapper[Any], 
-                                    emotional_history: List[Dict[str, Any]]) -> Dict[str, Any]:
+async def analyze_emotional_patterns_reflect(ctx: RunContextWrapper[Any],
+                                    emotional_history: List[Any]) -> Dict[str, Any]:
     """Analyze patterns in emotional history"""
     with custom_span("analyze_emotional_patterns_reflect"):
         if not emotional_history:
@@ -393,7 +393,7 @@ async def analyze_emotional_patterns_reflect(ctx: RunContextWrapper[Any],
 
 @function_tool
 async def process_emotional_content(ctx: RunContextWrapper[Any],
-                                  emotional_state: Dict[str, Any],
+                                  emotional_state: Any,
                                   neurochemical_state: Dict[str, float]) -> Dict[str, Any]:
     """Process emotional state and neurochemical influences for reflection"""
     with custom_span("process_emotional_content"):
@@ -476,7 +476,7 @@ async def process_emotional_content(ctx: RunContextWrapper[Any],
 
 @function_tool
 async def format_observations_for_reflection(
-    observations: List[Dict[str, Any]], 
+    observations: List[Any],
     topic: Optional[str] = None
 ) -> str:
     """Format observation data into a structured representation for reflection"""
@@ -507,7 +507,7 @@ async def format_observations_for_reflection(
 
 @function_tool
 async def format_communications_for_reflection(
-    intents: List[Dict[str, Any]], 
+    intents: List[Any],
     topic: Optional[str] = None
 ) -> str:
     """Format communication intent data into a structured representation for reflection"""
@@ -540,7 +540,7 @@ async def format_communications_for_reflection(
 
 @function_tool
 async def analyze_observation_patterns(
-    observations: List[Dict[str, Any]]
+    observations: List[Any]
 ) -> Dict[str, Any]:
     """Analyze patterns in observation data"""
     with custom_span("analyze_observation_patterns"):
@@ -618,7 +618,7 @@ async def analyze_observation_patterns(
 
 @function_tool
 async def analyze_communication_patterns(
-    intents: List[Dict[str, Any]]
+    intents: List[Any]
 ) -> Dict[str, Any]:
     """Analyze patterns in communication intents"""
     with custom_span("analyze_communication_patterns"):
@@ -699,7 +699,7 @@ async def analyze_communication_patterns(
 
 @function_tool
 async def generate_observation_reflection(
-    observations: List[Dict[str, Any]],
+    observations: List[Any],
     topic: Optional[str] = None,
     neurochemical_state: Dict[str, float] = None
 ) -> Dict[str, Any]:
@@ -783,7 +783,7 @@ async def generate_observation_reflection(
 
 @function_tool
 async def generate_communication_reflection(
-    intents: List[Dict[str, Any]],
+    intents: List[Any],
     topic: Optional[str] = None,
     neurochemical_state: Dict[str, float] = None
 ) -> Dict[str, Any]:
