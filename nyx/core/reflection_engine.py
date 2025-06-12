@@ -115,7 +115,7 @@ class CommunicationReflectionOutput(BaseModel):
 @function_tool
 async def format_memories_for_reflection(memories: List[Any],
                                        topic: Optional[str] = None,
-                                       emotional_context: Optional[Dict[str, Any]] = None) -> str:
+                                       emotional_context: Optional[Any] = None
     """Format memory data into a structured representation for reflection with emotional context"""
     with custom_span("format_memories_for_reflection"):
         formatted_memories = []
