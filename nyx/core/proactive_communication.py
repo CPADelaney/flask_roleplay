@@ -33,6 +33,19 @@ logger = logging.getLogger(__name__)
 
 # =============== Pydantic Models ===============
 
+class _EvalRelOut(BaseModel):
+    user_id: str
+    relationship_score: float
+    communication_appropriateness: float
+    days_since_contact: int
+    approaching_milestones: List[str]
+    suggested_frequency: str
+    max_messages_per_week: int
+
+    model_config = {"extra": "forbid"}   #  ← enforces *no* additionalProperties
+
+
+
 class _GenMsgContentIn(BaseModel):
     intent: Dict[str, Any]
     context: Dict[str, Any]
