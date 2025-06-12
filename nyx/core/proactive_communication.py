@@ -33,6 +33,14 @@ logger = logging.getLogger(__name__)
 
 # =============== Pydantic Models ===============
 
+class _GenIntentUserIn(BaseModel):
+    """Strict input-wrapper for generate_intent_for_user"""
+    user_id: str
+    user_data: Dict[str, Any]
+    motivation_options: Dict[str, float]
+
+    model_config = {"extra": "forbid"}
+
 class _EvalRelOut(BaseModel):
     user_id: str
     relationship_score: float
@@ -42,7 +50,7 @@ class _EvalRelOut(BaseModel):
     suggested_frequency: str
     max_messages_per_week: int
 
-    model_config = {"extra": "forbid"}   #  ← enforces *no* additionalProperties
+    model_config = {"extra": "forbid"}  
 
 
 
@@ -162,20 +170,22 @@ class MessageContentOutput(BaseModel):
 
 # =============== Function Tools ===============
 
-@function_tool(output_type=_EvalRelOut)
+@function_tool
 async def evaluate_user_relationship(
     user_id: str,
     relationship_data: Dict[str, Any]
-) -> Dict[str, Any]:
+) -> _EvalRelOut:
     """
-    Evaluate relationship status with a user and suggest messaging cadence.
+    Evaluate relationship status with a user and suggest a messaging cadence.
     """
+
+    # ---------- pull raw metrics ------------------------------------------
     trust        = relationship_data.get("trust", 0.0)
     intimacy     = relationship_data.get("intimacy", 0.0)
     duration     = relationship_data.get("duration_days", 0)
     last_contact = relationship_data.get("last_contact")
 
-    # days since last contact -----------------------------------------------
+    # ---------- recency of contact ----------------------------------------
     days_since_contact = 0
     if last_contact:
         try:
@@ -184,37 +194,37 @@ async def evaluate_user_relationship(
         except ValueError:
             pass
 
-    # core scores ------------------------------------------------------------
-    relationship_score = (trust + intimacy) / 2.0
-    comm_appropriateness = min(
+    # ---------- composite scores ------------------------------------------
+    relationship_score      = (trust + intimacy) / 2.0
+    comm_appropriateness    = min(
         1.0, relationship_score * (1 + min(1.0, days_since_contact / 7))
     )
 
-    # milestone check --------------------------------------------------------
+    # ---------- milestone detection ---------------------------------------
     milestones = []
     if duration in {7, 30, 90, 180, 365}:
         milestones.append(f"{duration}-day relationship milestone")
 
-    # suggested cadence ------------------------------------------------------
+    # ---------- suggested cadence -----------------------------------------
     if relationship_score < 0.3:
-        freq, max_week = "low", 1
+        suggested_frequency, max_week = "low", 1          # ~ 1 / 14 days
     elif relationship_score < 0.5:
-        freq, max_week = "medium", 2
+        suggested_frequency, max_week = "medium", 2       # ~ 1 / 7 days
     else:
-        freq, max_week = "high", 3
+        suggested_frequency, max_week = "high", 3         # 2-3 / week
 
-    # return strict object ---------------------------------------------------
+    # ---------- strict return object --------------------------------------
     return _EvalRelOut(
         user_id=user_id,
         relationship_score=relationship_score,
         communication_appropriateness=comm_appropriateness,
         days_since_contact=days_since_contact,
         approaching_milestones=milestones,
-        suggested_frequency=freq,
+        suggested_frequency=suggested_frequency,
         max_messages_per_week=max_week,
     )
     
-@function_tool(output_type=IntentGenerationOutput)
+@function_tool
 async def generate_intent_for_user(
     params: _GenIntentUserIn,
 ) -> IntentGenerationOutput:
@@ -368,7 +378,7 @@ async def generate_intent_for_user(
         suggested_lifetime_hours=24,
     )
 
-@function_tool(output_type=_GenMsgContentOut)
+@function_tool
 async def generate_message_content(
     params: _GenMsgContentIn,
 ) -> _GenMsgContentOut:
@@ -511,7 +521,7 @@ async def generate_message_content(
         context_referenced   = ctx_ref,
     )
 
-@function_tool(output_type=_EvalTimingOut)
+@function_tool
 async def evaluate_timing(params: _EvalTimingIn) -> _EvalTimingOut:
     intent          = params.intent
     current_context = params.current_context
@@ -553,7 +563,7 @@ async def evaluate_timing(params: _EvalTimingIn) -> _EvalTimingOut:
         context_factors={"in_time_window": in_window, "adequate_interval": good_gap},
     )
 
-@function_tool(output_type=IntentGenerationOutput)
+@function_tool
 async def generate_intent_for_action(
     params: _GenIntentActionIn,             # ↳ strict input model (extra="forbid")
 ) -> IntentGenerationOutput:
@@ -633,7 +643,7 @@ async def generate_intent_for_action(
         suggested_lifetime_hours=24,
     )
 
-@function_tool(output_type=_ReflectCommsOut)
+@function_tool
 async def generate_reflection_on_communications(
     params: _ReflectCommsIn,
 ) -> _ReflectCommsOut:
