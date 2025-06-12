@@ -6,7 +6,7 @@ import logging
 import random
 import json
 import uuid
-from typing import Dict, List, Any, Optional, Tuple, Union
+from typing import List, Any, Optional, Tuple, Union
 
 # OpenAI Agents SDK imports
 from agents import Agent, Runner, trace, function_tool, RunContextWrapper, ModelSettings, handoff, custom_span, FunctionTool
@@ -18,11 +18,13 @@ from pydantic import BaseModel, Field, ConfigDict
 
 logger = logging.getLogger(__name__)
 
+# ===== PYDANTIC MODELS FOR ALL INPUTS AND OUTPUTS =====
+
 class ProcedureStep(BaseModel):
     """Model for a single procedure step"""
     id: str
     function: str
-    parameters: Dict[str, Any] = Field(default_factory=dict)
+    parameters: dict = Field(default_factory=dict)  # Using lowercase dict is fine in Pydantic
     description: Optional[str] = None
     model_config = ConfigDict(extra="allow")
 
@@ -34,14 +36,152 @@ class StepParameters(BaseModel):
     """Model for step parameters in refinement"""
     model_config = ConfigDict(extra="allow")
 
+# Return type models
+class AddProcedureResponse(BaseModel):
+    """Response model for add_procedure"""
+    success: bool
+    procedure_id: Optional[str] = None
+    name: Optional[str] = None
+    domain: Optional[str] = None
+    steps_count: Optional[int] = None
+    error: Optional[str] = None
+
+class ExecuteProcedureResponse(BaseModel):
+    """Response model for execute_procedure"""
+    success: bool
+    execution_time: float
+    error: Optional[str] = None
+    strategy: Optional[str] = None
+    results: List[Any] = Field(default_factory=list)
+
+class TransferProcedureResponse(BaseModel):
+    """Response model for transfer_procedure"""
+    success: bool
+    source_name: str
+    target_name: str
+    source_domain: str
+    target_domain: str
+    steps_count: int
+    procedure_id: str
+    error: Optional[str] = None
+
+class ProcedureSummary(BaseModel):
+    """Model for procedure summary in list_procedures"""
+    name: str
+    id: str
+    description: str
+    domain: str
+    proficiency: float
+    proficiency_level: str
+    steps_count: int
+    execution_count: int
+    is_chunked: bool
+    created_at: str
+    last_updated: str
+    last_execution: Optional[str] = None
+
+class ChunkingOpportunityResponse(BaseModel):
+    """Response model for identify_chunking_opportunities"""
+    can_chunk: bool
+    procedure_name: str
+    potential_chunks: Optional[List[List[str]]] = None
+    chunk_count: Optional[int] = None
+    reason: Optional[str] = None
+
+class ApplyChunkingResponse(BaseModel):
+    """Response model for apply_chunking"""
+    success: bool
+    chunks_applied: Optional[int] = None
+    chunk_ids: Optional[List[str]] = None
+    procedure_name: str
+    error: Optional[str] = None
+
+class GeneralizeChunkResponse(BaseModel):
+    """Response model for generalize_chunk_from_steps"""
+    success: bool
+    template_id: Optional[str] = None
+    name: Optional[str] = None
+    domain: Optional[str] = None
+    actions_count: Optional[int] = None
+    can_transfer: Optional[bool] = None
+    error: Optional[str] = None
+
+class ChunkMatch(BaseModel):
+    """Model for chunk match in find_matching_chunks"""
+    template_id: str
+    similarity: float
+    domain: str
+    name: str
+
+class FindMatchingChunksResponse(BaseModel):
+    """Response model for find_matching_chunks"""
+    success: bool
+    chunks_found: bool
+    matches: Optional[List[ChunkMatch]] = None
+    count: Optional[int] = None
+    source_domain: Optional[str] = None
+    target_domain: Optional[str] = None
+    message: Optional[str] = None
+    error: Optional[str] = None
+
+class TransferChunkResponse(BaseModel):
+    """Response model for transfer_chunk"""
+    success: bool
+    steps: Optional[List[dict]] = None
+    steps_count: Optional[int] = None
+    target_domain: Optional[str] = None
+    error: Optional[str] = None
+
+class ChunkTransferDetail(BaseModel):
+    """Model for chunk transfer details"""
+    chunk_id: str
+    template_id: str
+    steps_count: int
+    newly_created: Optional[bool] = None
+
+class TransferWithChunkingResponse(BaseModel):
+    """Response model for transfer_with_chunking"""
+    success: bool
+    source_name: str
+    target_name: str
+    source_domain: str
+    target_domain: str
+    steps_count: int
+    chunks_transferred: Optional[int] = None
+    procedure_id: str
+    chunk_transfer_details: Optional[List[ChunkTransferDetail]] = None
+    error: Optional[str] = None
+
+class SimilarProcedure(BaseModel):
+    """Model for similar procedure in find_similar_procedures"""
+    name: str
+    id: str
+    domain: str
+    similarity: float
+    steps_count: int
+    proficiency: float
+
+class RefineStepResponse(BaseModel):
+    """Response model for refine_step"""
+    success: bool
+    procedure_name: Optional[str] = None
+    step_id: Optional[str] = None
+    function_updated: Optional[bool] = None
+    parameters_updated: Optional[bool] = None
+    description_updated: Optional[bool] = None
+    chunking_reset: Optional[bool] = None
+    error: Optional[str] = None
+
+# ===== FUNCTION TOOLS WITH UPDATED SIGNATURES =====
+
 @function_tool
 async def add_procedure(
     ctx: RunContextWrapper[Any],
     name: str,
-    steps_json: Union[str, List[ProcedureStep]],  # ✅ Fixed with Pydantic model
+    steps_json: Union[str, List[ProcedureStep]],  # Already using Pydantic model
     description: Optional[str] = None,
     domain: Optional[str] = None,
-) -> Dict[str, Any]:
+) -> AddProcedureResponse:  # Changed return type
     # Handle both string and list inputs
     if isinstance(steps_json, list):
         steps = [step.model_dump() if isinstance(step, BaseModel) else dict(step) for step in steps_json]
@@ -81,26 +221,26 @@ async def add_procedure(
         except Exception as e: # Catch parsing errors (original, from substring, or ValueError)
             logger.error(f"ADD_PROCEDURE_ERROR: Failed to parse steps_json string. Error: {e}")
             logger.error(f"ADD_PROCEDURE_ERROR: Problematic steps_json (len {len(steps_json)}): {repr(steps_json)}")
-            return {"error": f"Invalid steps_json string: {e}", "success": False}
+            return AddProcedureResponse(error=f"Invalid steps_json string: {e}", success=False)
     else:
         logger.error(f"ADD_PROCEDURE_ERROR: steps_json is of unexpected type: {type(steps_json)}")
-        return {"error": f"steps_json is of unexpected type: {type(steps_json)}", "success": False}
+        return AddProcedureResponse(error=f"steps_json is of unexpected type: {type(steps_json)}", success=False)
 
     # ---------- 2️⃣  Validate / enrich each step ----------
     # (This part of your code seems fine)
     for i, step_data in enumerate(steps): # Renamed 'step' to 'step_data' to avoid confusion
         if not isinstance(step_data, dict):
             logger.error(f"ADD_PROCEDURE_ERROR: Step {i+1} is not an object (dictionary). Found: {type(step_data)}")
-            return {"error": f"Step {i+1} is not an object (dictionary).", "success": False}
+            return AddProcedureResponse(error=f"Step {i+1} is not an object (dictionary).", success=False)
 
         step_data.setdefault("id", f"step_{i+1}")
 
         if "function" not in step_data or not step_data["function"]:
             logger.error(f"ADD_PROCEDURE_ERROR: Step {step_data['id']} is missing the required 'function' field.")
-            return {
-                "error": f"Step {step_data['id']} is missing the required 'function' field.",
-                "success": False,
-            }
+            return AddProcedureResponse(
+                error=f"Step {step_data['id']} is missing the required 'function' field.",
+                success=False,
+            )
         step_data.setdefault("parameters", {})
 
     # ---------- 3️⃣  House‑keeping ----------
@@ -138,23 +278,22 @@ async def add_procedure(
     manager.procedures[name] = procedure
     logger.info(f"Added procedure '{name}' ({len(steps)} steps) in domain '{domain}') with ID {procedure_id}")
 
-    return {
-        "success": True,
-        "procedure_id": procedure_id,
-        "name": name,
-        "domain": domain,
-        "steps_count": len(steps),
-    }
-
+    return AddProcedureResponse(
+        success=True,
+        procedure_id=procedure_id,
+        name=name,
+        domain=domain,
+        steps_count=len(steps),
+    )
 
 
 @function_tool(use_docstring_info=True)
 async def execute_procedure(
     ctx: RunContextWrapper[Any],
     name: str,
-    context: Optional[ExecutionContext] = None,  # ✅ Fixed with Pydantic model
+    context: Optional[ExecutionContext] = None,  # Already using Pydantic model
     force_conscious: bool = False
-) -> Dict[str, Any]:
+) -> ExecuteProcedureResponse:  # Changed return type
     """
     Execute a procedure by name.
     
@@ -169,7 +308,7 @@ async def execute_procedure(
     manager = ctx.context.manager
     
     if name not in manager.procedures:
-        return {"error": f"Procedure '{name}' not found", "success": False, "execution_time": 0.0}
+        return ExecuteProcedureResponse(error=f"Procedure '{name}' not found", success=False, execution_time=0.0)
     
     procedure = manager.procedures[name]
     execution_context = context.model_dump() if context and isinstance(context, BaseModel) else (context or {})
@@ -220,19 +359,19 @@ async def execute_procedure(
                     context=execution_context
                 )
             
-            return result
+            return ExecuteProcedureResponse(**result)
             
         except Exception as e:
             logger.error(f"Error executing procedure '{name}': {str(e)}")
             execution_time = (datetime.datetime.now() - start_time).total_seconds()
             
-            return {
-                "success": False,
-                "execution_time": execution_time,
-                "error": str(e),
-                "strategy": strategy,
-                "results": []
-            }
+            return ExecuteProcedureResponse(
+                success=False,
+                execution_time=execution_time,
+                error=str(e),
+                strategy=strategy,
+                results=[]
+            )
 
 @function_tool(use_docstring_info=True)
 async def transfer_procedure(
@@ -240,7 +379,7 @@ async def transfer_procedure(
     source_name: str,
     target_name: str,
     target_domain: str
-) -> Dict[str, Any]:
+) -> TransferProcedureResponse:  # Changed return type
     """
     Transfer a procedure from one domain to another.
     
@@ -255,16 +394,16 @@ async def transfer_procedure(
     manager = ctx.context.manager
     
     if source_name not in manager.procedures:
-        return {
-            "success": False,
-            "error": f"Source procedure '{source_name}' not found",
-            "source_name": source_name,
-            "target_name": target_name,
-            "source_domain": "unknown",
-            "target_domain": target_domain,
-            "steps_count": 0,
-            "procedure_id": ""
-        }
+        return TransferProcedureResponse(
+            success=False,
+            error=f"Source procedure '{source_name}' not found",
+            source_name=source_name,
+            target_name=target_name,
+            source_domain="unknown",
+            target_domain=target_domain,
+            steps_count=0,
+            procedure_id=""
+        )
     
     source = manager.procedures[source_name]
     
@@ -293,16 +432,16 @@ async def transfer_procedure(
                 mapped_steps.append(mapped_step)
         
         if not mapped_steps:
-            return {
-                "success": False,
-                "error": "Could not map any steps to the target domain",
-                "source_name": source_name,
-                "target_name": target_name,
-                "source_domain": source.domain,
-                "target_domain": target_domain,
-                "steps_count": 0,
-                "procedure_id": ""
-            }
+            return TransferProcedureResponse(
+                success=False,
+                error="Could not map any steps to the target domain",
+                source_name=source_name,
+                target_name=target_name,
+                source_domain=source.domain,
+                target_domain=target_domain,
+                steps_count=0,
+                procedure_id=""
+            )
         
         # Create new procedure
         import json
@@ -314,23 +453,23 @@ async def transfer_procedure(
             domain=target_domain
         )
         
-        if not new_procedure.get("success", False):
-            return {
-                "success": False,
-                "error": new_procedure.get("error", "Failed to create new procedure"),
-                "source_name": source_name,
-                "target_name": target_name,
-                "source_domain": source.domain,
-                "target_domain": target_domain,
-                "steps_count": len(mapped_steps),
-                "procedure_id": ""
-            }
+        if not new_procedure.success:
+            return TransferProcedureResponse(
+                success=False,
+                error=new_procedure.error or "Failed to create new procedure",
+                source_name=source_name,
+                target_name=target_name,
+                source_domain=source.domain,
+                target_domain=target_domain,
+                steps_count=len(mapped_steps),
+                procedure_id=""
+            )
         
         # Record transfer
         transfer_record = ProcedureTransferRecord(
             source_procedure_id=source.id,
             source_domain=source.domain,
-            target_procedure_id=new_procedure["procedure_id"],
+            target_procedure_id=new_procedure.procedure_id,
             target_domain=target_domain,
             transfer_date=datetime.datetime.now().isoformat(),
             success_level=0.8,  # Initial estimate
@@ -345,21 +484,21 @@ async def transfer_procedure(
             manager.transfer_stats["total_transfers"] += 1
             manager.transfer_stats["successful_transfers"] += 1
         
-        return {
-            "success": True,
-            "source_name": source_name,
-            "target_name": target_name,
-            "source_domain": source.domain,
-            "target_domain": target_domain,
-            "steps_count": len(mapped_steps),
-            "procedure_id": new_procedure["procedure_id"]
-        }
+        return TransferProcedureResponse(
+            success=True,
+            source_name=source_name,
+            target_name=target_name,
+            source_domain=source.domain,
+            target_domain=target_domain,
+            steps_count=len(mapped_steps),
+            procedure_id=new_procedure.procedure_id
+        )
 
 @function_tool(use_docstring_info=True)
 async def get_procedure_proficiency(
     ctx: RunContextWrapper[Any], 
     name: str
-) -> ProcedureStats:
+) -> ProcedureStats:  # Already returns a Pydantic model
     """
     Get the current proficiency level for a procedure.
     
@@ -418,7 +557,7 @@ async def get_procedure_proficiency(
 async def list_procedures(
     ctx: RunContextWrapper[Any],
     domain: Optional[str] = None
-) -> List[Dict[str, Any]]:
+) -> List[ProcedureSummary]:  # Changed return type
     """
     List all procedures, optionally filtered by domain.
     
@@ -455,30 +594,30 @@ async def list_procedures(
                 proficiency_level = "competent"
                 
             # Create summary
-            procedure_list.append({
-                "name": name,
-                "id": procedure.id,
-                "description": procedure.description,
-                "domain": procedure.domain,
-                "proficiency": procedure.proficiency,
-                "proficiency_level": proficiency_level,
-                "steps_count": len(procedure.steps),
-                "execution_count": procedure.execution_count,
-                "is_chunked": procedure.is_chunked,
-                "created_at": procedure.created_at,
-                "last_updated": procedure.last_updated,
-                "last_execution": procedure.last_execution
-            })
+            procedure_list.append(ProcedureSummary(
+                name=name,
+                id=procedure.id,
+                description=procedure.description,
+                domain=procedure.domain,
+                proficiency=procedure.proficiency,
+                proficiency_level=proficiency_level,
+                steps_count=len(procedure.steps),
+                execution_count=procedure.execution_count,
+                is_chunked=procedure.is_chunked,
+                created_at=procedure.created_at,
+                last_updated=procedure.last_updated,
+                last_execution=procedure.last_execution
+            ))
             
         # Sort by domain and then name
-        procedure_list.sort(key=lambda x: (x["domain"], x["name"]))
+        procedure_list.sort(key=lambda x: (x.domain, x.name))
         
         return procedure_list
 
 @function_tool(use_docstring_info=True)
 async def get_transfer_statistics(
     ctx: RunContextWrapper[Any]
-) -> TransferStats:
+) -> TransferStats:  # Already returns a Pydantic model
     """
     Get statistics about procedure transfers across domains.
     
@@ -532,7 +671,7 @@ async def get_transfer_statistics(
 async def identify_chunking_opportunities(
     ctx: RunContextWrapper[Any], 
     procedure_name: str
-) -> Dict[str, Any]:
+) -> ChunkingOpportunityResponse:  # Changed return type
     """
     Identify opportunities to chunk steps in a procedure.
     
@@ -561,11 +700,11 @@ async def identify_chunking_opportunities(
     ):
         # Need at least 3 steps and some executions to consider chunking
         if len(procedure.steps) < 3 or procedure.execution_count < 5:
-            return {
-                "can_chunk": False,
-                "procedure_name": procedure_name,
-                "reason": f"Need at least 3 steps and 5 executions (has {len(procedure.steps)} steps and {procedure.execution_count} executions)"
-            }
+            return ChunkingOpportunityResponse(
+                can_chunk=False,
+                procedure_name=procedure_name,
+                reason=f"Need at least 3 steps and 5 executions (has {len(procedure.steps)} steps and {procedure.execution_count} executions)"
+            )
         
         # Find sequences of steps that could be chunked
         chunks = []
@@ -596,18 +735,18 @@ async def identify_chunking_opportunities(
         if len(current_chunk) > 1:
             chunks.append(current_chunk)
         
-        return {
-            "can_chunk": len(chunks) > 0,
-            "potential_chunks": chunks,
-            "chunk_count": len(chunks),
-            "procedure_name": procedure_name
-        }
+        return ChunkingOpportunityResponse(
+            can_chunk=len(chunks) > 0,
+            potential_chunks=chunks,
+            chunk_count=len(chunks),
+            procedure_name=procedure_name
+        )
 
 @function_tool(use_docstring_info=True)
 async def apply_chunking(
     ctx: RunContextWrapper[Any], 
     procedure_name: str
-) -> Dict[str, Any]:
+) -> ApplyChunkingResponse:  # Changed return type
     """
     Apply chunking to a procedure based on execution patterns.
     
@@ -636,11 +775,15 @@ async def apply_chunking(
         # Find chunking opportunities
         chunking_result = await identify_chunking_opportunities(ctx, procedure_name)
         
-        if not chunking_result["can_chunk"]:
-            return chunking_result
+        if not chunking_result.can_chunk:
+            return ApplyChunkingResponse(
+                success=False,
+                error=chunking_result.reason,
+                procedure_name=procedure_name
+            )
         
         # Apply chunks
-        chunks = chunking_result["potential_chunks"]
+        chunks = chunking_result.potential_chunks
         
         for i, chunk in enumerate(chunks):
             chunk_id = f"chunk_{i+1}"
@@ -661,12 +804,12 @@ async def apply_chunking(
         procedure.is_chunked = True
         procedure.last_updated = datetime.datetime.now().isoformat()
         
-        return {
-            "success": True,
-            "chunks_applied": len(chunks),
-            "chunk_ids": list(procedure.chunked_steps.keys()),
-            "procedure_name": procedure_name
-        }
+        return ApplyChunkingResponse(
+            success=True,
+            chunks_applied=len(chunks),
+            chunk_ids=list(procedure.chunked_steps.keys()),
+            procedure_name=procedure_name
+        )
 
 @function_tool(use_docstring_info=True)
 async def generalize_chunk_from_steps(
@@ -675,7 +818,7 @@ async def generalize_chunk_from_steps(
     procedure_name: str,
     step_ids: List[str],
     domain: Optional[str] = None
-) -> Dict[str, Any]:
+) -> GeneralizeChunkResponse:  # Changed return type
     """
     Create a generalizable chunk template from specific procedure steps.
     
@@ -691,7 +834,7 @@ async def generalize_chunk_from_steps(
     manager = ctx.context.manager
     
     if procedure_name not in manager.procedures:
-        return {"error": f"Procedure '{procedure_name}' not found", "success": False}
+        return GeneralizeChunkResponse(error=f"Procedure '{procedure_name}' not found", success=False)
     
     procedure = manager.procedures[procedure_name]
     
@@ -712,7 +855,7 @@ async def generalize_chunk_from_steps(
                 steps.append(step)
         
         if not steps:
-            return {"error": "No valid steps found", "success": False}
+            return GeneralizeChunkResponse(error="No valid steps found", success=False)
         
         # Use the procedure's domain if not specified
         chunk_domain = domain or procedure.domain
@@ -722,7 +865,7 @@ async def generalize_chunk_from_steps(
         
         # Create the chunk template
         if not hasattr(manager, "chunk_library") or not manager.chunk_library:
-            return {"error": "Chunk library not available", "success": False}
+            return GeneralizeChunkResponse(error="Chunk library not available", success=False)
             
         template = manager.chunk_library.create_chunk_template_from_steps(
             chunk_id=template_id,
@@ -732,7 +875,7 @@ async def generalize_chunk_from_steps(
         )
         
         if not template:
-            return {"error": "Failed to create chunk template", "success": False}
+            return GeneralizeChunkResponse(error="Failed to create chunk template", success=False)
         
         # If these steps were already part of a chunk, store the template reference
         for chunk_id, step_list in procedure.chunked_steps.items():
@@ -741,21 +884,21 @@ async def generalize_chunk_from_steps(
                 procedure.generalized_chunks[chunk_id] = template.id
                 break
         
-        return {
-            "success": True,
-            "template_id": template.id,
-            "name": template.name,
-            "domain": chunk_domain,
-            "actions_count": len(template.actions),
-            "can_transfer": True
-        }
+        return GeneralizeChunkResponse(
+            success=True,
+            template_id=template.id,
+            name=template.name,
+            domain=chunk_domain,
+            actions_count=len(template.actions),
+            can_transfer=True
+        )
 
 @function_tool(use_docstring_info=True)
 async def find_matching_chunks(
     ctx: RunContextWrapper[Any],
     procedure_name: str,
     target_domain: str
-) -> Dict[str, Any]:
+) -> FindMatchingChunksResponse:  # Changed return type
     """
     Find library chunks that match a procedure's steps for transfer.
     
@@ -769,7 +912,7 @@ async def find_matching_chunks(
     manager = ctx.context.manager
     
     if procedure_name not in manager.procedures:
-        return {"error": f"Procedure '{procedure_name}' not found", "success": False}
+        return FindMatchingChunksResponse(error=f"Procedure '{procedure_name}' not found", success=False, chunks_found=False)
     
     procedure = manager.procedures[procedure_name]
     
@@ -784,11 +927,11 @@ async def find_matching_chunks(
     ):
         # Ensure we have a chunk library
         if not hasattr(manager, "chunk_library") or not manager.chunk_library:
-            return {
-                "chunks_found": False,
-                "message": "Chunk library not available",
-                "success": False
-            }
+            return FindMatchingChunksResponse(
+                chunks_found=False,
+                message="Chunk library not available",
+                success=False
+            )
         
         # Find matching chunks
         matches = manager.chunk_library.find_matching_chunks(
@@ -798,27 +941,37 @@ async def find_matching_chunks(
         )
         
         if not matches:
-            return {
-                "chunks_found": False,
-                "message": "No matching chunks found for transfer",
-                "success": True
-            }
+            return FindMatchingChunksResponse(
+                chunks_found=False,
+                message="No matching chunks found for transfer",
+                success=True
+            )
         
-        return {
-            "chunks_found": True,
-            "matches": matches,
-            "count": len(matches),
-            "source_domain": procedure.domain,
-            "target_domain": target_domain,
-            "success": True
-        }
+        # Convert matches to ChunkMatch models
+        chunk_matches = [
+            ChunkMatch(
+                template_id=match["template_id"],
+                similarity=match["similarity"],
+                domain=match.get("domain", target_domain),
+                name=match.get("name", "")
+            ) for match in matches
+        ]
+        
+        return FindMatchingChunksResponse(
+            chunks_found=True,
+            matches=chunk_matches,
+            count=len(chunk_matches),
+            source_domain=procedure.domain,
+            target_domain=target_domain,
+            success=True
+        )
 
 @function_tool(use_docstring_info=True)
 async def transfer_chunk(
     ctx: RunContextWrapper[Any],
     template_id: str,
     target_domain: str
-) -> Dict[str, Any]:
+) -> TransferChunkResponse:  # Changed return type
     """
     Transfer a chunk template to a new domain.
     
@@ -841,10 +994,10 @@ async def transfer_chunk(
     ):
         # Ensure we have a chunk library
         if not hasattr(manager, "chunk_library") or not manager.chunk_library:
-            return {
-                "success": False,
-                "error": "Chunk library not available"
-            }
+            return TransferChunkResponse(
+                success=False,
+                error="Chunk library not available"
+            )
         
         # Map the chunk to the new domain
         mapped_steps = manager.chunk_library.map_chunk_to_new_domain(
@@ -853,17 +1006,17 @@ async def transfer_chunk(
         )
         
         if not mapped_steps:
-            return {
-                "success": False,
-                "error": "Failed to map chunk to new domain"
-            }
+            return TransferChunkResponse(
+                success=False,
+                error="Failed to map chunk to new domain"
+            )
         
-        return {
-            "success": True,
-            "steps": mapped_steps,
-            "steps_count": len(mapped_steps),
-            "target_domain": target_domain
-        }
+        return TransferChunkResponse(
+            success=True,
+            steps=mapped_steps,
+            steps_count=len(mapped_steps),
+            target_domain=target_domain
+        )
 
 @function_tool(use_docstring_info=True)
 async def transfer_with_chunking(
@@ -871,7 +1024,7 @@ async def transfer_with_chunking(
     source_name: str,
     target_name: str,
     target_domain: str
-) -> Dict[str, Any]:
+) -> TransferWithChunkingResponse:  # Changed return type
     """
     Transfer a procedure from one domain to another using chunk-level transfer.
     
@@ -886,16 +1039,16 @@ async def transfer_with_chunking(
     manager = ctx.context.manager
     
     if source_name not in manager.procedures:
-        return {
-            "success": False,
-            "error": f"Source procedure '{source_name}' not found",
-            "source_name": source_name,
-            "target_name": target_name,
-            "source_domain": "unknown",
-            "target_domain": target_domain,
-            "steps_count": 0,
-            "procedure_id": ""
-        }
+        return TransferWithChunkingResponse(
+            success=False,
+            error=f"Source procedure '{source_name}' not found",
+            source_name=source_name,
+            target_name=target_name,
+            source_domain="unknown",
+            target_domain=target_domain,
+            steps_count=0,
+            procedure_id=""
+        )
     
     source = manager.procedures[source_name]
     
@@ -912,16 +1065,16 @@ async def transfer_with_chunking(
     ):
         # Ensure we have a chunk library
         if not hasattr(manager, "chunk_library") or not manager.chunk_library:
-            return {
-                "success": False,
-                "error": "Chunk library not available",
-                "source_name": source_name,
-                "target_name": target_name,
-                "source_domain": source.domain,
-                "target_domain": target_domain,
-                "steps_count": 0,
-                "procedure_id": ""
-            }
+            return TransferWithChunkingResponse(
+                success=False,
+                error="Chunk library not available",
+                source_name=source_name,
+                target_name=target_name,
+                source_domain=source.domain,
+                target_domain=target_domain,
+                steps_count=0,
+                procedure_id=""
+            )
         
         # Get chunks from source if chunked
         steps_from_chunks = set()
@@ -947,11 +1100,11 @@ async def transfer_with_chunking(
                     if mapped_steps:
                         # Add steps from this chunk
                         all_steps.extend(mapped_steps)
-                        transferred_chunks.append({
-                            "chunk_id": chunk_id,
-                            "template_id": template_id,
-                            "steps_count": len(mapped_steps)
-                        })
+                        transferred_chunks.append(ChunkTransferDetail(
+                            chunk_id=chunk_id,
+                            template_id=template_id,
+                            steps_count=len(mapped_steps)
+                        ))
                         
                         # Track which source steps were covered
                         steps_from_chunks.update(step_ids)
@@ -978,11 +1131,11 @@ async def transfer_with_chunking(
                     if mapped_steps:
                         # Add steps from this chunk
                         all_steps.extend(mapped_steps)
-                        transferred_chunks.append({
-                            "chunk_id": chunk_id,
-                            "template_id": template_id,
-                            "steps_count": len(mapped_steps)
-                        })
+                        transferred_chunks.append(ChunkTransferDetail(
+                            chunk_id=chunk_id,
+                            template_id=template_id,
+                            steps_count=len(mapped_steps)
+                        ))
                         
                         # Track which source steps were covered
                         steps_from_chunks.update(step_ids)
@@ -1005,12 +1158,12 @@ async def transfer_with_chunking(
                         
                         if mapped_steps:
                             all_steps.extend(mapped_steps)
-                            transferred_chunks.append({
-                                "chunk_id": chunk_id,
-                                "template_id": template.id,
-                                "steps_count": len(mapped_steps),
-                                "newly_created": True
-                            })
+                            transferred_chunks.append(ChunkTransferDetail(
+                                chunk_id=chunk_id,
+                                template_id=template.id,
+                                steps_count=len(mapped_steps),
+                                newly_created=True
+                            ))
                             
                             # Track which source steps were covered
                             steps_from_chunks.update(step_ids)
@@ -1030,16 +1183,16 @@ async def transfer_with_chunking(
                 all_steps.append(mapped_step)
         
         if not all_steps:
-            return {
-                "success": False,
-                "error": "Could not map any steps or chunks to the target domain",
-                "source_name": source_name,
-                "target_name": target_name,
-                "source_domain": source.domain,
-                "target_domain": target_domain,
-                "steps_count": 0,
-                "procedure_id": ""
-            }
+            return TransferWithChunkingResponse(
+                success=False,
+                error="Could not map any steps or chunks to the target domain",
+                source_name=source_name,
+                target_name=target_name,
+                source_domain=source.domain,
+                target_domain=target_domain,
+                steps_count=0,
+                procedure_id=""
+            )
         
         # Create new procedure
         import json
@@ -1051,30 +1204,30 @@ async def transfer_with_chunking(
             domain=target_domain
         )
         
-        if not new_procedure.get("success", False):
-            return {
-                "success": False,
-                "error": new_procedure.get("error", "Failed to create new procedure"),
-                "source_name": source_name,
-                "target_name": target_name,
-                "source_domain": source.domain,
-                "target_domain": target_domain,
-                "steps_count": len(all_steps),
-                "procedure_id": ""
-            }
+        if not new_procedure.success:
+            return TransferWithChunkingResponse(
+                success=False,
+                error=new_procedure.error or "Failed to create new procedure",
+                source_name=source_name,
+                target_name=target_name,
+                source_domain=source.domain,
+                target_domain=target_domain,
+                steps_count=len(all_steps),
+                procedure_id=""
+            )
         
         # Record transfer
         transfer_record = ProcedureTransferRecord(
             source_procedure_id=source.id,
             source_domain=source.domain,
-            target_procedure_id=new_procedure["procedure_id"],
+            target_procedure_id=new_procedure.procedure_id,
             target_domain=target_domain,
             transfer_date=datetime.datetime.now().isoformat(),
             adaptation_steps=[{
-                "chunk_id": info["chunk_id"],
-                "template_id": info["template_id"],
-                "steps_count": info["steps_count"]
-            } for info in transferred_chunks],
+                "chunk_id": chunk.chunk_id,
+                "template_id": chunk.template_id,
+                "steps_count": chunk.steps_count
+            } for chunk in transferred_chunks],
             success_level=0.8,  # Initial estimate
             practice_needed=5  # Initial estimate
         )
@@ -1086,24 +1239,24 @@ async def transfer_with_chunking(
             manager.transfer_stats["total_transfers"] += 1
             manager.transfer_stats["successful_transfers"] += 1
         
-        return {
-            "success": True,
-            "source_name": source_name,
-            "target_name": target_name,
-            "source_domain": source.domain,
-            "target_domain": target_domain,
-            "steps_count": len(all_steps),
-            "chunks_transferred": len(transferred_chunks),
-            "procedure_id": new_procedure["procedure_id"],
-            "chunk_transfer_details": transferred_chunks
-        }
+        return TransferWithChunkingResponse(
+            success=True,
+            source_name=source_name,
+            target_name=target_name,
+            source_domain=source.domain,
+            target_domain=target_domain,
+            steps_count=len(all_steps),
+            chunks_transferred=len(transferred_chunks),
+            procedure_id=new_procedure.procedure_id,
+            chunk_transfer_details=transferred_chunks
+        )
 
 @function_tool(use_docstring_info=True)
 async def find_similar_procedures(
     ctx: RunContextWrapper[Any],
     name: str, 
     target_domain: Optional[str] = None
-) -> List[Dict[str, Any]]:
+) -> List[SimilarProcedure]:  # Changed return type
     """
     Find procedures similar to the specified one.
     
@@ -1144,17 +1297,17 @@ async def find_similar_procedures(
             similarity = await manager.calculate_procedure_similarity(source, procedure)
             
             if similarity > 0.3:  # Minimum similarity threshold
-                similar_procedures.append({
-                    "name": proc_name,
-                    "id": procedure.id,
-                    "domain": procedure.domain,
-                    "similarity": similarity,
-                    "steps_count": len(procedure.steps),
-                    "proficiency": procedure.proficiency
-                })
+                similar_procedures.append(SimilarProcedure(
+                    name=proc_name,
+                    id=procedure.id,
+                    domain=procedure.domain,
+                    similarity=similarity,
+                    steps_count=len(procedure.steps),
+                    proficiency=procedure.proficiency
+                ))
         
         # Sort by similarity
-        similar_procedures.sort(key=lambda x: x["similarity"], reverse=True)
+        similar_procedures.sort(key=lambda x: x.similarity, reverse=True)
         
         return similar_procedures
 
@@ -1164,9 +1317,9 @@ async def refine_step(
     procedure_name: str,
     step_id: str,
     new_function: Optional[str] = None,
-    new_parameters: Optional[StepParameters] = None,  # ✅ Fixed with Pydantic model
+    new_parameters: Optional[StepParameters] = None,  # Already using Pydantic model
     new_description: Optional[str] = None
-) -> Dict[str, Any]:
+) -> RefineStepResponse:  # Changed return type
     """
     Refine a specific step in a procedure.
     
@@ -1183,7 +1336,7 @@ async def refine_step(
     manager = ctx.context.manager  # ✅ This should be first
     
     if procedure_name not in manager.procedures:
-        return {"error": f"Procedure '{procedure_name}' not found", "success": False}
+        return RefineStepResponse(error=f"Procedure '{procedure_name}' not found", success=False)
     
     procedure = manager.procedures[procedure_name]
     
@@ -1206,10 +1359,10 @@ async def refine_step(
                 break
                 
         if not step:
-            return {
-                "error": f"Step '{step_id}' not found in procedure '{procedure_name}'",
-                "success": False
-            }
+            return RefineStepResponse(
+                error=f"Step '{step_id}' not found in procedure '{procedure_name}'",
+                success=False
+            )
             
         # Update function if provided
         if new_function:
@@ -1253,12 +1406,12 @@ async def refine_step(
                 r for r in procedure.refinement_opportunities if r.get("step_id") != step_id
             ]
         
-        return {
-            "success": True,
-            "procedure_name": procedure_name,
-            "step_id": step_id,
-            "function_updated": new_function is not None,
-            "parameters_updated": new_parameters is not None,
-            "description_updated": new_description is not None,
-            "chunking_reset": len(affected_chunks) > 0
-        }
+        return RefineStepResponse(
+            success=True,
+            procedure_name=procedure_name,
+            step_id=step_id,
+            function_updated=new_function is not None,
+            parameters_updated=new_parameters is not None,
+            description_updated=new_description is not None,
+            chunking_reset=len(affected_chunks) > 0
+        )
