@@ -10,13 +10,12 @@ import numpy as np
 import openai
 
 # Updated imports for the new Agents SDK
-from agents import Agent, Runner, function_tool, trace, ModelResponse
+from agents import Agent, Runner, function_tool, trace, ModelResponse, RunContextWrapper
 from agents.items import (
     TResponseInputItem, 
     TResponseOutputItem,
     MessageOutputItem,
-    ToolCallItem,
-    RunContextWrapper
+    ToolCallItem
 )
 
 from pydantic import BaseModel, ConfigDict
