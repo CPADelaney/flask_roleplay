@@ -174,7 +174,7 @@ class RefineStepResponse(BaseModel):
 
 # ===== FUNCTION TOOLS WITH UPDATED SIGNATURES =====
 
-@function_tool
+@function_tool(strict_json_schema=False)  # Disable strict schema for this function
 async def add_procedure(
     ctx: RunContextWrapper[Any],
     name: str,
@@ -287,7 +287,7 @@ async def add_procedure(
     )
 
 
-@function_tool(use_docstring_info=True)
+@function_tool(use_docstring_info=True, strict_json_schema=False)  # Disable strict schema
 async def execute_procedure(
     ctx: RunContextWrapper[Any],
     name: str,
@@ -1311,7 +1311,7 @@ async def find_similar_procedures(
         
         return similar_procedures
 
-@function_tool(use_docstring_info=True)
+@function_tool(use_docstring_info=True, strict_json_schema=False)  # Disable strict schema
 async def refine_step(
     ctx: RunContextWrapper[Any],
     procedure_name: str,
