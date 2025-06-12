@@ -34,6 +34,283 @@ client = AsyncOpenAI()
 
 logger = logging.getLogger(__name__)
 
+# Note: function_tool decorated functions must be defined outside the class
+# to avoid JSON schema issues with the OpenAI Agents SDK's strict schema validation.
+# The SDK doesn't handle Dict[str, Any] parameters well within class methods.
+
+# Define OpenAI function tools outside the class to avoid schema issues
+
+@function_tool
+async def create_context_pattern(
+    name: str,
+    domain: str,
+    indicators: Any,  # Using Any to avoid strict schema issues with Dict
+    chunk_id: str,
+    temporal_pattern: Optional[Any] = None,  # Using Any to avoid strict schema issues
+    confidence_threshold: float = 0.7,
+    ctx = None  # Context is injected automatically
+) -> Dict[str, Any]:
+    """
+    Create a new context pattern for chunk selection
+    
+    Args:
+        name: Name for the pattern
+        domain: Domain where the pattern applies
+        indicators: Dictionary of indicators that trigger the pattern (passed as Any to avoid schema issues)
+        chunk_id: ID of the chunk this pattern is associated with
+        temporal_pattern: Optional list of temporal pattern items (passed as Any to avoid schema issues)
+        confidence_threshold: Minimum confidence required to activate pattern
+        ctx: Function context (automatically injected by the SDK)
+        
+    Returns:
+        Information about the created pattern
+    """
+    # Access chunk selector from context
+    # Note: You'll need to adjust this based on your actual context structure
+    chunk_selector = None
+    if ctx and hasattr(ctx, 'context'):
+        # Try different ways to access the chunk selector based on your context structure
+        if hasattr(ctx.context, 'manager') and hasattr(ctx.context.manager, 'chunk_selector'):
+            chunk_selector = ctx.context.manager.chunk_selector
+        elif hasattr(ctx.context, 'chunk_selector'):
+            chunk_selector = ctx.context.chunk_selector
+    
+    if not chunk_selector:
+        return {
+            "success": False,
+            "error": "Chunk selector not available in context"
+        }
+    
+    # Ensure indicators is a dict
+    if not isinstance(indicators, dict):
+        indicators = {}
+    
+    # Log pattern creation
+    logger.info(f"Create context pattern: name: {name}, domain: {domain}, indicators count: {len(indicators)}, chunk_id: {chunk_id}")
+    
+    # Add chunk association indicator
+    indicators[f"chunk_{chunk_id}_suitable"] = True
+    
+    # Generate pattern ID
+    pattern_id = f"pattern_{int(datetime.datetime.now().timestamp())}_{chunk_id}"
+    
+    # Ensure temporal_pattern is a list
+    if temporal_pattern is None:
+        temporal_pattern = []
+    elif not isinstance(temporal_pattern, list):
+        temporal_pattern = []
+    
+    # Create pattern
+    pattern = ContextPattern(
+        id=pattern_id,
+        name=name,
+        domain=domain,
+        indicators=indicators,
+        temporal_pattern=temporal_pattern,
+        confidence_threshold=confidence_threshold,
+        match_count=0,
+        last_matched=None
+    )
+    
+    # Register pattern
+    chunk_selector.register_context_pattern(pattern)
+    
+    return {
+        "success": True,
+        "pattern_id": pattern_id,
+        "name": name,
+        "domain": domain,
+        "indicators_count": len(indicators),
+        "has_temporal_pattern": bool(temporal_pattern),
+        "chunk_id": chunk_id
+    }
+
+
+@function_tool
+async def get_pattern_performance_metrics(pattern_id: Optional[str] = None, ctx = None) -> Dict[str, Any]:
+    """
+    Get performance metrics for patterns
+    
+    Args:
+        pattern_id: Optional ID of a specific pattern to get metrics for
+        ctx: Function context (automatically injected)
+        
+    Returns:
+        Performance metrics for the pattern(s)
+    """
+    # Access chunk selector from context
+    chunk_selector = ctx.context.manager.chunk_selector if hasattr(ctx.context, "manager") else None
+    
+    if not chunk_selector:
+        return {
+            "success": False,
+            "error": "Chunk selector not available in context"
+        }
+    
+    # Log getting metrics
+    logger.debug(f"Get pattern performance metrics: pattern_id: {pattern_id}")
+    
+    if pattern_id:
+        # Get metrics for specific pattern
+        if pattern_id not in chunk_selector.pattern_performance:
+            return {
+                "success": False,
+                "error": f"Pattern '{pattern_id}' not found"
+            }
+            
+        return {
+            "success": True,
+            "pattern_id": pattern_id,
+            "metrics": chunk_selector.pattern_performance[pattern_id]
+        }
+    else:
+        # Get metrics for all patterns
+        all_metrics = chunk_selector.get_pattern_performance()
+        
+        # Calculate summary metrics
+        total_match_count = sum(metrics["match_count"] for metrics in all_metrics.values())
+        total_success_count = sum(metrics["success_count"] for metrics in all_metrics.values())
+        
+        avg_success_rate = 0.0
+        if total_match_count > 0:
+            avg_success_rate = total_success_count / total_match_count
+        
+        return {
+            "success": True,
+            "patterns_count": len(all_metrics),
+            "total_match_count": total_match_count,
+            "total_success_count": total_success_count,
+            "avg_success_rate": avg_success_rate,
+            "patterns": {
+                pattern_id: {
+                    "match_count": metrics["match_count"],
+                    "success_count": metrics["success_count"],
+                    "success_rate": metrics["success_rate"],
+                    "last_used": metrics["last_used"]
+                }
+                for pattern_id, metrics in all_metrics.items()
+            }
+        }
+
+
+@function_tool
+async def analyze_context_patterns(domain: Optional[str] = None, ctx = None) -> Dict[str, Any]:
+    """
+    Analyze context patterns for efficiency and effectiveness
+    
+    Args:
+        domain: Optional domain to filter patterns by
+        ctx: Function context (automatically injected)
+        
+    Returns:
+        Analysis of patterns including usage and success metrics
+    """
+    # Access chunk selector from context
+    chunk_selector = ctx.manager.chunk_selector if hasattr(ctx, "manager") else None
+    
+    if not chunk_selector:
+        return {
+            "success": False,
+            "error": "Chunk selector not available in context"
+        }
+    
+    # Log analysis
+    logger.debug(f"Analyze context patterns: domain: {domain}")
+    
+    # Filter patterns by domain if specified
+    if domain:
+        pattern_ids = chunk_selector.domain_specific_patterns.get(domain, [])
+        patterns = {
+            pid: chunk_selector.context_patterns[pid] 
+            for pid in pattern_ids 
+            if pid in chunk_selector.context_patterns
+        }
+    else:
+        patterns = chunk_selector.context_patterns
+    
+    if not patterns:
+        return {
+            "success": True,
+            "patterns_count": 0,
+            "message": f"No patterns found for domain: {domain}" if domain else "No patterns found"
+        }
+    
+    # Get performance metrics
+    all_metrics = chunk_selector.get_pattern_performance()
+    
+    # Filter metrics for selected patterns
+    filtered_metrics = {
+        pid: all_metrics.get(pid, {})
+        for pid in patterns.keys()
+    }
+    
+    # Calculate efficiency metrics
+    efficiency_metrics = {}
+    
+    for pid, pattern in patterns.items():
+        metrics = filtered_metrics.get(pid, {})
+        indicators_count = len(pattern.indicators)
+        has_temporal = bool(pattern.temporal_pattern)
+        success_rate = metrics.get("success_rate", 0.0)
+        match_count = metrics.get("match_count", 0)
+        
+        # Calculate effectiveness score
+        effectiveness = success_rate * 0.7 + (match_count / 100 if match_count <= 100 else 1.0) * 0.3
+        
+        # Calculate complexity score (lower is better)
+        complexity = (indicators_count / 20 if indicators_count <= 20 else 1.0) * 0.7
+        complexity += 0.3 if has_temporal else 0.0
+        
+        # Calculate overall efficiency (higher is better)
+        efficiency = effectiveness * 0.8 - complexity * 0.2
+        
+        efficiency_metrics[pid] = {
+            "name": pattern.name,
+            "effectiveness": effectiveness,
+            "complexity": complexity,
+            "efficiency": efficiency,
+            "success_rate": success_rate,
+            "match_count": match_count,
+            "indicators_count": indicators_count,
+            "has_temporal_pattern": has_temporal
+        }
+    
+    # Sort patterns by efficiency
+    sorted_patterns = sorted(
+        efficiency_metrics.items(),
+        key=lambda x: x[1]["efficiency"],
+        reverse=True
+    )
+    
+    return {
+        "success": True,
+        "patterns_count": len(patterns),
+        "domain": domain,
+        "top_patterns": [
+            {
+                "pattern_id": pid,
+                "name": metrics["name"],
+                "efficiency": metrics["efficiency"],
+                "success_rate": metrics["success_rate"],
+                "match_count": metrics["match_count"]
+            }
+            for pid, metrics in sorted_patterns[:5]
+        ],
+        "inefficient_patterns": [
+            {
+                "pattern_id": pid,
+                "name": metrics["name"],
+                "efficiency": metrics["efficiency"],
+                "success_rate": metrics["success_rate"],
+                "match_count": metrics["match_count"]
+            }
+            for pid, metrics in sorted_patterns[-5:] if metrics["efficiency"] < 0.3
+        ],
+        "avg_efficiency": sum(m["efficiency"] for m in efficiency_metrics.values()) / len(efficiency_metrics) if efficiency_metrics else 0.0,
+        "avg_success_rate": sum(m["success_rate"] for m in efficiency_metrics.values()) / len(efficiency_metrics) if efficiency_metrics else 0.0
+    }
+
+
 class ContextAwareChunkSelector:
     """Enhanced selection system for chunks based on execution context"""
     
@@ -46,6 +323,20 @@ class ContextAwareChunkSelector:
         self.similarity_cache = {}  # Cache for similarity calculations
         self.pattern_performance = {}  # pattern_id -> performance metrics
         self.session_id = str(uuid.uuid4())  # Unique session ID for tracing
+    
+    @staticmethod
+    def get_function_tools():
+        """
+        Get the function tools that can be registered with an OpenAI agent.
+        
+        Returns:
+            List of function tools (create_context_pattern, get_pattern_performance_metrics, analyze_context_patterns)
+        """
+        return [
+            create_context_pattern,
+            get_pattern_performance_metrics,
+            analyze_context_patterns
+        ]
         
     def register_context_pattern(self, pattern: ContextPattern) -> str:
         """Register a new context pattern"""
@@ -675,347 +966,3 @@ class ContextAwareChunkSelector:
         logger.debug(f"Get pattern performance: patterns count: {len(self.pattern_performance)}")
         
         return self.pattern_performance.copy()
-
-    # Define OpenAI function tools
-    
-    def create_context_pattern_definition():
-        """Define the create_context_pattern function for OpenAI function calling"""
-        return {
-            "type": "function",
-            "function": {
-                "name": "create_context_pattern",
-                "description": "Create a new context pattern for chunk selection",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "name": {
-                            "type": "string",
-                            "description": "Name for the pattern"
-                        },
-                        "domain": {
-                            "type": "string",
-                            "description": "Domain where the pattern applies"
-                        },
-                        "indicators": {
-                            "type": "object",
-                            "description": "Dictionary of indicators that trigger the pattern"
-                        },
-                        "chunk_id": {
-                            "type": "string",
-                            "description": "ID of the chunk this pattern is associated with"
-                        },
-                        "temporal_pattern": {
-                            "type": "array",
-                            "description": "Optional temporal pattern of actions",
-                            "items": {
-                                "type": "object"
-                            }
-                        },
-                        "confidence_threshold": {
-                            "type": "number",
-                            "description": "Minimum confidence required to activate pattern"
-                        }
-                    },
-                    "required": ["name", "domain", "indicators", "chunk_id"]
-                }
-            }
-        }
-    
-    @function_tool
-    async def create_context_pattern(
-        name: str,
-        domain: str,
-        indicators: Dict[str, Any],
-        chunk_id: str,
-        temporal_pattern: Optional[List[Dict[str, Any]]] = None,
-        confidence_threshold: float = 0.7,
-        ctx = None  # Context is injected automatically, no specific type needed
-    ) -> Dict[str, Any]:
-        """
-        Create a new context pattern for chunk selection
-        
-        Args:
-            name: Name for the pattern
-            domain: Domain where the pattern applies
-            indicators: Dictionary of indicators that trigger the pattern
-            chunk_id: ID of the chunk this pattern is associated with
-            temporal_pattern: Optional temporal pattern of actions
-            confidence_threshold: Minimum confidence required to activate pattern
-            ctx: Function context (automatically injected)
-            
-        Returns:
-            Information about the created pattern
-        """
-        # Access chunk selector from context
-        # Note: You'll need to adjust this based on your actual context structure
-        chunk_selector = None
-        if ctx and hasattr(ctx, 'context'):
-            # Try different ways to access the chunk selector based on your context structure
-            if hasattr(ctx.context, 'manager') and hasattr(ctx.context.manager, 'chunk_selector'):
-                chunk_selector = ctx.context.manager.chunk_selector
-            elif hasattr(ctx.context, 'chunk_selector'):
-                chunk_selector = ctx.context.chunk_selector
-        
-        if not chunk_selector:
-            return {
-                "success": False,
-                "error": "Chunk selector not available in context"
-            }
-        
-        # Log pattern creation
-        logger.info(f"Create context pattern: name: {name}, domain: {domain}, indicators count: {len(indicators)}, chunk_id: {chunk_id}")
-        
-        # Add chunk association indicator
-        indicators[f"chunk_{chunk_id}_suitable"] = True
-        
-        # Generate pattern ID
-        pattern_id = f"pattern_{int(datetime.datetime.now().timestamp())}_{chunk_id}"
-        
-        # Create pattern
-        pattern = ContextPattern(
-            id=pattern_id,
-            name=name,
-            domain=domain,
-            indicators=indicators,
-            temporal_pattern=temporal_pattern or [],
-            confidence_threshold=confidence_threshold,
-            match_count=0,
-            last_matched=None
-        )
-        
-        # Register pattern
-        chunk_selector.register_context_pattern(pattern)
-        
-        return {
-            "success": True,
-            "pattern_id": pattern_id,
-            "name": name,
-            "domain": domain,
-            "indicators_count": len(indicators),
-            "has_temporal_pattern": temporal_pattern is not None,
-            "chunk_id": chunk_id
-        }
-
-    
-    def get_pattern_performance_metrics_definition():
-        """Define the get_pattern_performance_metrics function for OpenAI function calling"""
-        return {
-            "type": "function",
-            "function": {
-                "name": "get_pattern_performance_metrics",
-                "description": "Get performance metrics for patterns",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "pattern_id": {
-                            "type": "string",
-                            "description": "Optional ID of a specific pattern to get metrics for"
-                        }
-                    },
-                    "required": []
-                }
-            }
-        }
-    
-    @function_tool
-    async def get_pattern_performance_metrics(pattern_id: Optional[str] = None, ctx = None) -> Dict[str, Any]:
-        """
-        Get performance metrics for patterns
-        
-        Args:
-            pattern_id: Optional ID of a specific pattern to get metrics for
-            ctx: Function context (automatically injected)
-            
-        Returns:
-            Performance metrics for the pattern(s)
-        """
-        # Access chunk selector from context
-        chunk_selector = ctx.context.manager.chunk_selector if hasattr(ctx.context, "manager") else None
-        
-        if not chunk_selector:
-            return {
-                "success": False,
-                "error": "Chunk selector not available in context"
-            }
-        
-        # Log getting metrics
-        logger.debug(f"Get pattern performance metrics: pattern_id: {pattern_id}")
-        
-        if pattern_id:
-            # Get metrics for specific pattern
-            if pattern_id not in chunk_selector.pattern_performance:
-                return {
-                    "success": False,
-                    "error": f"Pattern '{pattern_id}' not found"
-                }
-                
-            return {
-                "success": True,
-                "pattern_id": pattern_id,
-                "metrics": chunk_selector.pattern_performance[pattern_id]
-            }
-        else:
-            # Get metrics for all patterns
-            all_metrics = chunk_selector.get_pattern_performance()
-            
-            # Calculate summary metrics
-            total_match_count = sum(metrics["match_count"] for metrics in all_metrics.values())
-            total_success_count = sum(metrics["success_count"] for metrics in all_metrics.values())
-            
-            avg_success_rate = 0.0
-            if total_match_count > 0:
-                avg_success_rate = total_success_count / total_match_count
-            
-            return {
-                "success": True,
-                "patterns_count": len(all_metrics),
-                "total_match_count": total_match_count,
-                "total_success_count": total_success_count,
-                "avg_success_rate": avg_success_rate,
-                "patterns": {
-                    pattern_id: {
-                        "match_count": metrics["match_count"],
-                        "success_count": metrics["success_count"],
-                        "success_rate": metrics["success_rate"],
-                        "last_used": metrics["last_used"]
-                    }
-                    for pattern_id, metrics in all_metrics.items()
-                }
-            }
-            
-    def analyze_context_patterns_definition():
-        """Define the analyze_context_patterns function for OpenAI function calling"""
-        return {
-            "type": "function",
-            "function": {
-                "name": "analyze_context_patterns",
-                "description": "Analyze context patterns for efficiency and effectiveness",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "domain": {
-                            "type": "string",
-                            "description": "Optional domain to filter patterns by"
-                        }
-                    },
-                    "required": []
-                }
-            }
-        }
-    
-    @function_tool
-    async def analyze_context_patterns(domain: Optional[str] = None, ctx = None) -> Dict[str, Any]:
-        """
-        Analyze context patterns for efficiency and effectiveness
-        
-        Args:
-            domain: Optional domain to filter patterns by
-            ctx: Function context (automatically injected)
-            
-        Returns:
-            Analysis of patterns including usage and success metrics
-        """
-        # Access chunk selector from context
-        chunk_selector = ctx.manager.chunk_selector if hasattr(ctx, "manager") else None
-        
-        if not chunk_selector:
-            return {
-                "success": False,
-                "error": "Chunk selector not available in context"
-            }
-        
-        # Log analysis
-        logger.debug(f"Analyze context patterns: domain: {domain}")
-        
-        # Filter patterns by domain if specified
-        if domain:
-            pattern_ids = chunk_selector.domain_specific_patterns.get(domain, [])
-            patterns = {
-                pid: chunk_selector.context_patterns[pid] 
-                for pid in pattern_ids 
-                if pid in chunk_selector.context_patterns
-            }
-        else:
-            patterns = chunk_selector.context_patterns
-        
-        if not patterns:
-            return {
-                "success": True,
-                "patterns_count": 0,
-                "message": f"No patterns found for domain: {domain}" if domain else "No patterns found"
-            }
-        
-        # Get performance metrics
-        all_metrics = chunk_selector.get_pattern_performance()
-        
-        # Filter metrics for selected patterns
-        filtered_metrics = {
-            pid: all_metrics.get(pid, {})
-            for pid in patterns.keys()
-        }
-        
-        # Calculate efficiency metrics
-        efficiency_metrics = {}
-        
-        for pid, pattern in patterns.items():
-            metrics = filtered_metrics.get(pid, {})
-            indicators_count = len(pattern.indicators)
-            has_temporal = bool(pattern.temporal_pattern)
-            success_rate = metrics.get("success_rate", 0.0)
-            match_count = metrics.get("match_count", 0)
-            
-            # Calculate effectiveness score
-            effectiveness = success_rate * 0.7 + (match_count / 100 if match_count <= 100 else 1.0) * 0.3
-            
-            # Calculate complexity score (lower is better)
-            complexity = (indicators_count / 20 if indicators_count <= 20 else 1.0) * 0.7
-            complexity += 0.3 if has_temporal else 0.0
-            
-            # Calculate overall efficiency (higher is better)
-            efficiency = effectiveness * 0.8 - complexity * 0.2
-            
-            efficiency_metrics[pid] = {
-                "name": pattern.name,
-                "effectiveness": effectiveness,
-                "complexity": complexity,
-                "efficiency": efficiency,
-                "success_rate": success_rate,
-                "match_count": match_count,
-                "indicators_count": indicators_count,
-                "has_temporal_pattern": has_temporal
-            }
-        
-        # Sort patterns by efficiency
-        sorted_patterns = sorted(
-            efficiency_metrics.items(),
-            key=lambda x: x[1]["efficiency"],
-            reverse=True
-        )
-        
-        return {
-            "success": True,
-            "patterns_count": len(patterns),
-            "domain": domain,
-            "top_patterns": [
-                {
-                    "pattern_id": pid,
-                    "name": metrics["name"],
-                    "efficiency": metrics["efficiency"],
-                    "success_rate": metrics["success_rate"],
-                    "match_count": metrics["match_count"]
-                }
-                for pid, metrics in sorted_patterns[:5]
-            ],
-            "inefficient_patterns": [
-                {
-                    "pattern_id": pid,
-                    "name": metrics["name"],
-                    "efficiency": metrics["efficiency"],
-                    "success_rate": metrics["success_rate"],
-                    "match_count": metrics["match_count"]
-                }
-                for pid, metrics in sorted_patterns[-5:] if metrics["efficiency"] < 0.3
-            ],
-            "avg_efficiency": sum(m["efficiency"] for m in efficiency_metrics.values()) / len(efficiency_metrics) if efficiency_metrics else 0.0,
-            "avg_success_rate": sum(m["success_rate"] for m in efficiency_metrics.values()) / len(efficiency_metrics) if efficiency_metrics else 0.0
-        }
