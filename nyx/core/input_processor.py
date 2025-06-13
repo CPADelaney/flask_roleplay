@@ -3,9 +3,10 @@
 import asyncio
 import logging
 import re
-from typing import Dict, List, Any, Optional, Tuple
+from typing import Dict, List, Any, Optional, Tuple, Union
 import random
-from pydantic import BaseModel, Field
+from datetime import datetime
+from pydantic import BaseModel, Field, ConfigDict
 
 from agents import Agent, Runner, function_tool, trace, ModelSettings, RunContextWrapper
 
@@ -17,35 +18,163 @@ logger = logging.getLogger(__name__)
 
 # Pydantic models for structured data
 class PatternDetection(BaseModel):
+    """Detected pattern information"""
+    model_config = ConfigDict(extra='forbid')
+    
     pattern_name: str = Field(description="Name of the detected pattern")
-    confidence: float = Field(description="Confidence level for the detection (0.0-1.0)")
+    confidence: float = Field(default=0.8, ge=0.0, le=1.0, description="Confidence level for the detection (0.0-1.0)")
     matched_text: str = Field(description="Text that matched the pattern")
 
 class ConditionedResponse(BaseModel):
+    """Conditioned response information"""
+    model_config = ConfigDict(extra='forbid')
+    
     response_type: str = Field(description="Type of conditioned response")
-    strength: float = Field(description="Strength of the response (0.0-1.0)")
+    strength: float = Field(ge=0.0, le=1.0, description="Strength of the response (0.0-1.0)")
     description: str = Field(description="Description of the triggered response")
 
 class BehaviorEvaluation(BaseModel):
+    """Behavior evaluation result"""
+    model_config = ConfigDict(extra='forbid')
+    
     behavior: str = Field(description="Behavior being evaluated")
-    recommendation: str = Field(description="Approach or avoid recommendation")
-    confidence: float = Field(description="Confidence in the recommendation (0.0-1.0)")
+    recommendation: str = Field(pattern="^(approach|avoid)$", description="Approach or avoid recommendation")
+    confidence: float = Field(ge=0.0, le=1.0, description="Confidence in the recommendation (0.0-1.0)")
     reasoning: str = Field(description="Reasoning for the evaluation")
     relevant_associations: Optional[List[Dict[str, Any]]] = Field(default=None, description="Relevant associations considered")
 
 class OperantConditioningResult(BaseModel):
+    """Result of operant conditioning"""
+    model_config = ConfigDict(extra='forbid')
+    
     behavior: str = Field(description="Behavior being conditioned")
     consequence_type: str = Field(description="Type of operant conditioning")
-    intensity: float = Field(description="Intensity of the conditioning (0.0-1.0)")
+    intensity: float = Field(ge=0.0, le=1.0, description="Intensity of the conditioning (0.0-1.0)")
     effect: str = Field(description="Expected effect on future behavior")
+    success: bool = Field(default=True, description="Whether conditioning was successful")
 
 class BlendedResponseModification(BaseModel):
     """Output schema for blended response modification"""
+    model_config = ConfigDict(extra='forbid')
+    
     modified_text: str = Field(description="Modified response text")
     mode_influences: Dict[str, float] = Field(description="Influence of each mode on the modification")
     modifications_made: List[Dict[str, Any]] = Field(description="List of modifications made to the response")
-    coherence: float = Field(description="Coherence of the modified response (0.0-1.0)", ge=0.0, le=1.0)
-    style_notes: Optional[str] = Field(None, description="Notes about the style of the modified response")
+    coherence: float = Field(ge=0.0, le=1.0, description="Coherence of the modified response (0.0-1.0)")
+    style_notes: Optional[str] = Field(default=None, description="Notes about the style of the modified response")
+
+# Input/Output models for function tools
+class DetectPatternsInput(BaseModel):
+    """Input for pattern detection"""
+    model_config = ConfigDict(extra='forbid')
+    
+    text: str = Field(default="", description="Text to analyze for patterns")
+
+class DetectPatternsResult(BaseModel):
+    """Result of pattern detection"""
+    model_config = ConfigDict(extra='forbid')
+    
+    patterns: List[PatternDetection] = Field(default_factory=list, description="Detected patterns")
+    pattern_count: int = Field(default=0, description="Number of patterns detected")
+
+class EvaluateBehaviorInput(BaseModel):
+    """Input for behavior evaluation"""
+    model_config = ConfigDict(extra='forbid')
+    
+    behavior: str = Field(default="", description="Behavior to evaluate")
+    detected_patterns: List[PatternDetection] = Field(default_factory=list, description="Detected patterns")
+    user_history: Optional[Dict[str, Any]] = Field(default=None, description="User interaction history")
+
+class EvaluateBehaviorResult(BaseModel):
+    """Result of behavior evaluation"""
+    model_config = ConfigDict(extra='forbid')
+    
+    behavior: str = Field(description="Evaluated behavior")
+    recommendation: str = Field(description="Recommendation (approach/avoid)")
+    confidence: float = Field(ge=0.0, le=1.0, description="Confidence in recommendation")
+    reasoning: str = Field(description="Reasoning for the recommendation")
+    associations: Optional[List[Dict[str, Any]]] = Field(default=None, description="Relevant associations")
+
+class ProcessConditioningInput(BaseModel):
+    """Input for operant conditioning"""
+    model_config = ConfigDict(extra='forbid')
+    
+    behavior: str = Field(default="unspecified", description="Behavior being conditioned")
+    consequence_type: str = Field(default="neutral", description="Type of conditioning")
+    intensity: float = Field(default=0.5, ge=0.0, le=1.0, description="Intensity of conditioning")
+    context_info: Optional[Dict[str, Any]] = Field(default=None, description="Additional context")
+
+class ProcessConditioningResult(BaseModel):
+    """Result of operant conditioning"""
+    model_config = ConfigDict(extra='forbid')
+    
+    behavior: str = Field(description="Behavior that was conditioned")
+    consequence_type: str = Field(description="Type of conditioning applied")
+    intensity: float = Field(ge=0.0, le=1.0, description="Intensity of conditioning")
+    effect: str = Field(description="Expected effect description")
+    success: bool = Field(default=True, description="Whether conditioning succeeded")
+
+class ModePreferencesInput(BaseModel):
+    """Input for getting mode preferences"""
+    model_config = ConfigDict(extra='forbid')
+    
+    mode: str = Field(default="", description="Mode to get preferences for")
+
+class ModePreferencesResult(BaseModel):
+    """Result of mode preferences query"""
+    model_config = ConfigDict(extra='forbid')
+    
+    mode: str = Field(description="Mode name")
+    add_elements: List[str] = Field(default_factory=list, description="Elements to add")
+    remove_elements: List[str] = Field(default_factory=list, description="Elements to remove")
+    tone_elements: List[str] = Field(default_factory=list, description="Tone elements")
+    phrasing_examples: List[str] = Field(default_factory=list, description="Example phrases")
+    typical_pronouns: List[str] = Field(default_factory=list, description="Typical pronouns")
+    lexical_preferences: Optional[Dict[str, List[str]]] = Field(default=None, description="Lexical preferences")
+
+class StyleElementsInput(BaseModel):
+    """Input for calculating style elements"""
+    model_config = ConfigDict(extra='forbid')
+    
+    mode_distribution: Dict[str, float] = Field(default_factory=dict, description="Mode distribution")
+
+class StyleElementsResult(BaseModel):
+    """Result of style elements calculation"""
+    model_config = ConfigDict(extra='forbid')
+    
+    blended_style: Dict[str, List[str]] = Field(description="Blended style elements")
+    influences: Dict[str, float] = Field(description="Mode influences")
+    element_sources: Dict[str, Dict[str, List[str]]] = Field(description="Sources for each element")
+
+class CoherenceAnalysisInput(BaseModel):
+    """Input for coherence analysis"""
+    model_config = ConfigDict(extra='forbid')
+    
+    original_response: str = Field(default="", description="Original response text")
+    modified_response: str = Field(default="", description="Modified response text")
+
+class CoherenceAnalysisResult(BaseModel):
+    """Result of coherence analysis"""
+    model_config = ConfigDict(extra='forbid')
+    
+    coherence_score: float = Field(ge=0.0, le=1.0, description="Overall coherence score")
+    metrics: Dict[str, float] = Field(description="Detailed coherence metrics")
+    is_coherent: bool = Field(description="Whether response is coherent")
+
+class ProcessInputResult(BaseModel):
+    """Result of input processing"""
+    model_config = ConfigDict(extra='forbid')
+    
+    input_text: str = Field(description="Original input text")
+    user_id: str = Field(description="User ID")
+    detected_patterns: List[PatternDetection] = Field(description="Detected patterns")
+    behavior_evaluations: List[BehaviorEvaluation] = Field(description="Behavior evaluations")
+    recommended_behaviors: List[str] = Field(description="Recommended behaviors")
+    avoided_behaviors: List[str] = Field(description="Behaviors to avoid")
+    reinforcement_results: List[ProcessConditioningResult] = Field(description="Reinforcement results")
+    mode_distribution: Dict[str, float] = Field(description="Current mode distribution")
+    adjusted_sensitivities: Dict[str, float] = Field(description="Adjusted sensitivities")
+    behavior_scores: Dict[str, float] = Field(description="Behavior scores")
 
 class InputProcessingAgentContext:
     """Context for input processing agent operations"""
@@ -239,7 +368,7 @@ class BlendedInputProcessor:
     def _create_pattern_analyzer(self) -> Agent:
         """Create an agent specialized in analyzing input patterns"""
         return Agent(
-            name="Pattern Analyzer",
+            name="Pattern_Analyzer",
             instructions="""
             You analyze input text to identify patterns indicating submission, defiance, 
             flattery, disrespect, or embarrassment. 
@@ -252,10 +381,10 @@ class BlendedInputProcessor:
             Be thorough in your analysis, but focus on clear indicators.
             Do not overinterpret ambiguous text.
             """,
-            model="gpt-4.1-nano",
+            model="gpt-4o-mini",
             model_settings=ModelSettings(temperature=0.2),
             tools=[
-                self._detect_patterns
+                function_tool(self._detect_patterns, strict_mode=False)
             ],
             output_type=List[PatternDetection]
         )
@@ -263,7 +392,7 @@ class BlendedInputProcessor:
     def _create_behavior_selector(self) -> Agent:
         """Create an agent specialized in selecting appropriate behaviors"""
         return Agent(
-            name="Behavior Selector",
+            name="Behavior_Selector",
             instructions="""
             You evaluate which behaviors are appropriate based on detected patterns.
             
@@ -276,11 +405,11 @@ class BlendedInputProcessor:
             Prioritize behaviors that are appropriate to the interaction and will 
             reinforce desired patterns while discouraging undesired ones.
             """,
-            model="gpt-4.1-nano",
+            model="gpt-4o-mini",
             model_settings=ModelSettings(temperature=0.3),
             tools=[
-                self._evaluate_behavior,
-                self._process_operant_conditioning
+                function_tool(self._evaluate_behavior, strict_mode=False),
+                function_tool(self._process_operant_conditioning, strict_mode=False)
             ],
             output_type=List[BehaviorEvaluation]
         )
@@ -288,7 +417,7 @@ class BlendedInputProcessor:
     def _create_response_modifier(self) -> Agent:
         """Create an agent specialized in modifying responses"""
         return Agent(
-            name="Response Modifier",
+            name="Response_Modifier",
             instructions="""
             You modify response text based on behavior recommendations and detected patterns.
             
@@ -300,7 +429,7 @@ class BlendedInputProcessor:
             Modifications should be subtle but effective, maintaining the core message
             while adjusting tone, phrasing, and emphasis.
             """,
-            model="gpt-4.1-nano",
+            model="gpt-4o-mini",
             model_settings=ModelSettings(temperature=0.4),
             output_type=str
         )
@@ -308,7 +437,7 @@ class BlendedInputProcessor:
     def _create_blended_modifier(self) -> Agent:
         """Create an agent specialized in blended response modification"""
         return Agent(
-            name="Blended Modifier",
+            name="Blended_Modifier",
             instructions="""
             You modify response text based on a blend of interaction modes.
             
@@ -321,34 +450,35 @@ class BlendedInputProcessor:
             The blend should proportionally reflect all active modes in the mode distribution,
             with higher-weighted modes having more influence on the final result.
             """,
-            model="gpt-4.1-nano",
+            model="gpt-4o-mini",
             model_settings=ModelSettings(temperature=0.4),
             tools=[
-                self._get_mode_preferences,
-                self._calculate_style_elements,
-                self._analyze_response_coherence
+                function_tool(self._get_mode_preferences, strict_mode=False),
+                function_tool(self._calculate_style_elements, strict_mode=False),
+                function_tool(self._analyze_response_coherence, strict_mode=False)
             ],
             output_type=BlendedResponseModification
         )
 
     @staticmethod
-    @function_tool
-    async def _detect_patterns(ctx: RunContextWrapper[InputProcessingAgentContext], text: str = "") -> List[Dict[str, Any]]:
+    @function_tool(strict_mode=False)
+    async def _detect_patterns(ctx: RunContextWrapper[InputProcessingAgentContext], input_data: DetectPatternsInput) -> DetectPatternsResult:
         """
         Detect patterns in input text using regular expressions.
         
         Args:
             ctx: The run context wrapper
-            text: Input text to analyze
+            input_data: Input data containing text to analyze
             
         Returns:
-            List of detected patterns with confidence scores
+            Detection results
         """
         context = ctx.context
-        detected = []
+        text = input_data.text
+        patterns = []
         
         if not text:
-            return detected
+            return DetectPatternsResult(patterns=[], pattern_count=0)
         
         # Update shared context with detections
         context.shared_context.patterns = []
@@ -357,53 +487,50 @@ class BlendedInputProcessor:
             for regex in regex_list:
                 match = re.search(regex, text)
                 if match:
-                    pattern_data = {
-                        "pattern_name": pattern_name,
-                        "confidence": 0.8,  # Base confidence
-                        "matched_text": match.group(0)
-                    }
-                    detected.append(pattern_data)
-                    context.shared_context.patterns.append(pattern_data)
+                    pattern = PatternDetection(
+                        pattern_name=pattern_name,
+                        confidence=0.8,  # Base confidence
+                        matched_text=match.group(0)
+                    )
+                    patterns.append(pattern)
+                    context.shared_context.patterns.append(pattern.model_dump())
                     break  # Only detect each pattern once
         
-        return detected
+        return DetectPatternsResult(
+            patterns=patterns,
+            pattern_count=len(patterns)
+        )
 
     @staticmethod
-    @function_tool
+    @function_tool(strict_mode=False)
     async def _evaluate_behavior(
         ctx: RunContextWrapper[InputProcessingAgentContext], 
-        behavior: str = "",
-        detected_patterns: List[Dict[str, Any]] = None,
-        user_history: Dict[str, Any] = None
-    ) -> Dict[str, Any]:
+        input_data: EvaluateBehaviorInput
+    ) -> EvaluateBehaviorResult:
         """
         Evaluate if a behavior should be approached or avoided.
         
         Args:
             ctx: The run context wrapper
-            behavior: Behavior to evaluate
-            detected_patterns: Patterns detected in the input
-            user_history: History of user interactions
+            input_data: Input data for behavior evaluation
             
         Returns:
-            Evaluation result with recommendation
+            Evaluation result
         """
-        # Handle None values and defaults
-        if not behavior:
-            return {
-                "behavior": "unknown",
-                "recommendation": "avoid",
-                "confidence": 0.0,
-                "reasoning": "No behavior specified"
-            }
-        
-        if detected_patterns is None:
-            detected_patterns = []
-        if user_history is None:
-            user_history = {}
-            
         context = ctx.context
+        behavior = input_data.behavior
+        detected_patterns = input_data.detected_patterns
+        user_history = input_data.user_history or {}
         
+        # Handle empty behavior
+        if not behavior:
+            return EvaluateBehaviorResult(
+                behavior="unknown",
+                recommendation="avoid",
+                confidence=0.0,
+                reasoning="No behavior specified"
+            )
+            
         # Check shared context for adjusted sensitivities
         adjusted_sensitivities = context.shared_context.get_adjusted_sensitivities()
         behavior_scores = context.shared_context.get_behavior_scores()
@@ -411,107 +538,104 @@ class BlendedInputProcessor:
         # Use behavior scores if available
         if behavior in behavior_scores:
             score = behavior_scores[behavior]
-            return {
-                "behavior": behavior,
-                "recommendation": "approach" if score > 0.5 else "avoid",
-                "confidence": abs(score - 0.5) * 2,  # Convert to confidence
-                "reasoning": f"Based on context-adjusted preferences (score: {score:.2f})"
-            }
+            return EvaluateBehaviorResult(
+                behavior=behavior,
+                recommendation="approach" if score > 0.5 else "avoid",
+                confidence=abs(score - 0.5) * 2,  # Convert to confidence
+                reasoning=f"Based on context-adjusted preferences (score: {score:.2f})"
+            )
         
         # Fall back to conditioning system if available
         if context.conditioning_system and hasattr(context.conditioning_system, 'evaluate_behavior_consequences'):
             result = await context.conditioning_system.evaluate_behavior_consequences(
                 behavior=behavior,
                 context={
-                    "detected_patterns": [p["pattern_name"] for p in detected_patterns],
+                    "detected_patterns": [p.pattern_name for p in detected_patterns],
                     "user_history": user_history,
                     "adjusted_sensitivities": adjusted_sensitivities
                 }
             )
-            return result
+            return EvaluateBehaviorResult(
+                behavior=result.get("behavior", behavior),
+                recommendation=result.get("recommendation", "avoid"),
+                confidence=result.get("confidence", 0.5),
+                reasoning=result.get("reasoning", "Based on conditioning system evaluation"),
+                associations=result.get("relevant_associations")
+            )
         
         # Fallback logic if no conditioning system is available
-        pattern_names = [p["pattern_name"] for p in detected_patterns]
+        pattern_names = [p.pattern_name for p in detected_patterns]
         
         # Simple rule-based evaluation
         if behavior == "dominant_response":
             if "submission_language" in pattern_names:
-                return {
-                    "behavior": behavior,
-                    "recommendation": "approach",
-                    "confidence": 0.8,
-                    "reasoning": "Submission language detected, dominant response is appropriate"
-                }
+                return EvaluateBehaviorResult(
+                    behavior=behavior,
+                    recommendation="approach",
+                    confidence=0.8,
+                    reasoning="Submission language detected, dominant response is appropriate"
+                )
             elif "defiance" in pattern_names:
-                return {
-                    "behavior": behavior,
-                    "recommendation": "approach",
-                    "confidence": 0.7,
-                    "reasoning": "Defiance detected, dominant response may be needed"
-                }
+                return EvaluateBehaviorResult(
+                    behavior=behavior,
+                    recommendation="approach",
+                    confidence=0.7,
+                    reasoning="Defiance detected, dominant response may be needed"
+                )
             else:
-                return {
-                    "behavior": behavior,
-                    "recommendation": "avoid",
-                    "confidence": 0.6,
-                    "reasoning": "No submission or defiance detected, dominant response not clearly indicated"
-                }
+                return EvaluateBehaviorResult(
+                    behavior=behavior,
+                    recommendation="avoid",
+                    confidence=0.6,
+                    reasoning="No submission or defiance detected, dominant response not clearly indicated"
+                )
         
         elif behavior == "teasing_response":
             if "flattery" in pattern_names:
-                return {
-                    "behavior": behavior,
-                    "recommendation": "approach",
-                    "confidence": 0.7,
-                    "reasoning": "Flattery detected, teasing response can be appropriate"
-                }
+                return EvaluateBehaviorResult(
+                    behavior=behavior,
+                    recommendation="approach",
+                    confidence=0.7,
+                    reasoning="Flattery detected, teasing response can be appropriate"
+                )
             else:
-                return {
-                    "behavior": behavior,
-                    "recommendation": "avoid",
-                    "confidence": 0.6,
-                    "reasoning": "No clear indicator for teasing response"
-                }
+                return EvaluateBehaviorResult(
+                    behavior=behavior,
+                    recommendation="avoid",
+                    confidence=0.6,
+                    reasoning="No clear indicator for teasing response"
+                )
         
         # Default response for other behaviors
-        return {
-            "behavior": behavior,
-            "recommendation": "avoid",
-            "confidence": 0.5,
-            "reasoning": "No clear indicator for this behavior"
-        }
+        return EvaluateBehaviorResult(
+            behavior=behavior,
+            recommendation="avoid",
+            confidence=0.5,
+            reasoning="No clear indicator for this behavior"
+        )
 
     @staticmethod
-    @function_tool
+    @function_tool(strict_mode=False)
     async def _process_operant_conditioning(
         ctx: RunContextWrapper[InputProcessingAgentContext],
-        behavior: str = "",
-        consequence_type: str = "",
-        intensity: float = 0.5,
-        context_info: Dict[str, Any] = None
-    ) -> Dict[str, Any]:
+        input_data: ProcessConditioningInput
+    ) -> ProcessConditioningResult:
         """
         Process operant conditioning for a behavior.
         
         Args:
             ctx: The run context wrapper
-            behavior: Behavior being conditioned
-            consequence_type: Type of operant conditioning
-            intensity: Intensity of the conditioning (0.0-1.0)
-            context_info: Additional context information
+            input_data: Input data for conditioning
             
         Returns:
             Result of the conditioning process
         """
-        # Handle defaults
-        if not behavior:
-            behavior = "unspecified"
-        if not consequence_type:
-            consequence_type = "neutral"
-        if context_info is None:
-            context_info = {}
-            
         processor_ctx = ctx.context
+        behavior = input_data.behavior
+        consequence_type = input_data.consequence_type
+        intensity = input_data.intensity
+        context_info = input_data.context_info or {}
+        
         if processor_ctx.conditioning_system and hasattr(processor_ctx.conditioning_system, 'process_operant_conditioning'):
             # Use the actual conditioning system if available
             result = await processor_ctx.conditioning_system.process_operant_conditioning(
@@ -520,39 +644,54 @@ class BlendedInputProcessor:
                 intensity=intensity,
                 context=context_info
             )
-            return result
+            return ProcessConditioningResult(
+                behavior=result.get("behavior", behavior),
+                consequence_type=result.get("consequence_type", consequence_type),
+                intensity=result.get("intensity", intensity),
+                effect=result.get("effect", "Effect applied"),
+                success=result.get("success", True)
+            )
         
         # Fallback logic if no conditioning system is available
         effect = "increase likelihood" if consequence_type.startswith("positive_") else "decrease likelihood"
         
-        return {
-            "behavior": behavior,
-            "consequence_type": consequence_type,
-            "intensity": intensity,
-            "effect": f"Will {effect} of {behavior} in the future",
-            "success": True
-        }
+        return ProcessConditioningResult(
+            behavior=behavior,
+            consequence_type=consequence_type,
+            intensity=intensity,
+            effect=f"Will {effect} of {behavior} in the future",
+            success=True
+        )
 
     @staticmethod
-    @function_tool
+    @function_tool(strict_mode=False)
     async def _get_mode_preferences(
         ctx: RunContextWrapper[InputProcessingAgentContext],
-        mode: str = ""
-    ) -> Dict[str, Any]:
+        input_data: ModePreferencesInput
+    ) -> ModePreferencesResult:
         """
         Get response modification preferences for a specific mode
         
         Args:
             ctx: The run context wrapper
-            mode: The interaction mode
+            input_data: Input data containing mode
             
         Returns:
-            Response modification preferences for the mode
+            Mode preferences
         """
-        if not mode:
-            return {}
-            
         processor_ctx = ctx.context
+        mode = input_data.mode
+        
+        if not mode:
+            return ModePreferencesResult(
+                mode="unknown",
+                add_elements=[],
+                remove_elements=[],
+                tone_elements=[],
+                phrasing_examples=[],
+                typical_pronouns=[]
+            )
+            
         preferences = processor_ctx.mode_response_preferences.get(mode.lower(), {})
         
         if not preferences and processor_ctx.mode_manager:
@@ -560,59 +699,65 @@ class BlendedInputProcessor:
             try:
                 mode_enum = InteractionMode(mode.lower())
                 # Construct basic preferences from mode parameters and conversation style
-                mode_params = processor_ctx.mode_manager.get_mode_parameters(mode_enum)
-                conv_style = processor_ctx.mode_manager.get_conversation_style(mode_enum)
-                vocal_patterns = processor_ctx.mode_manager.get_vocalization_patterns(mode_enum)
+                mode_params = processor_ctx.mode_manager.get_mode_parameters(mode_enum.value)
+                conv_style = processor_ctx.mode_manager.get_conversation_style(mode_enum.value)
+                vocal_patterns = processor_ctx.mode_manager.get_vocalization_patterns(mode_enum.value)
                 
-                if mode_params and conv_style:
+                if mode_params and conv_style and vocal_patterns:
                     # Extract tone from conversation style
-                    tone = conv_style.get("tone", "")
+                    tone = conv_style.tone
                     tone_elements = [t.strip() for t in tone.split(",")] if tone else []
                     
                     # Extract statement types
-                    statement_types = conv_style.get("types_of_statements", "")
+                    statement_types = conv_style.types_of_statements
                     add_elements = [s.strip() for s in statement_types.split(",")] if statement_types else []
                     
-                    # Extract topics to emphasize/avoid
-                    topics_to_emphasize = conv_style.get("topics_to_emphasize", "")
-                    topics_to_avoid = conv_style.get("topics_to_avoid", "")
+                    # Extract topics
+                    topics_to_avoid = conv_style.topics_to_avoid
+                    remove_elements = [t.strip() for t in topics_to_avoid.split(",")] if topics_to_avoid else []
                     
-                    # Extract key phrases
-                    key_phrases = vocal_patterns.get("key_phrases", []) if vocal_patterns else []
-                    
-                    # Construct preferences
-                    preferences = {
-                        "add_elements": add_elements,
-                        "remove_elements": [t.strip() for t in topics_to_avoid.split(",")] if topics_to_avoid else [],
-                        "tone_elements": tone_elements,
-                        "phrasing_examples": key_phrases,
-                        "typical_pronouns": vocal_patterns.get("pronouns", []) if vocal_patterns else []
-                    }
+                    # Return constructed preferences
+                    return ModePreferencesResult(
+                        mode=mode,
+                        add_elements=add_elements,
+                        remove_elements=remove_elements,
+                        tone_elements=tone_elements,
+                        phrasing_examples=vocal_patterns.key_phrases,
+                        typical_pronouns=vocal_patterns.pronouns,
+                        lexical_preferences=preferences.get("lexical_preferences")
+                    )
             except Exception as e:
                 logger.warning(f"Error getting mode preferences from mode manager: {e}")
         
-        return preferences
+        # Return preferences from stored data
+        return ModePreferencesResult(
+            mode=mode,
+            add_elements=preferences.get("add_elements", []),
+            remove_elements=preferences.get("remove_elements", []),
+            tone_elements=preferences.get("tone_elements", []),
+            phrasing_examples=preferences.get("phrasing_examples", []),
+            typical_pronouns=preferences.get("typical_pronouns", []),
+            lexical_preferences=preferences.get("lexical_preferences")
+        )
 
     @staticmethod
-    @function_tool
+    @function_tool(strict_mode=False)
     async def _calculate_style_elements(
         ctx: RunContextWrapper[InputProcessingAgentContext],
-        mode_distribution: Dict[str, float] = None
-    ) -> Dict[str, Any]:
+        input_data: StyleElementsInput
+    ) -> StyleElementsResult:
         """
         Calculate blended style elements based on mode distribution
         
         Args:
             ctx: The run context wrapper
-            mode_distribution: The mode distribution
+            input_data: Input data containing mode distribution
             
         Returns:
             Blended style elements
         """
-        if mode_distribution is None:
-            mode_distribution = {}
-            
         processor_ctx = ctx.context
+        mode_distribution = input_data.mode_distribution
         
         # Initialize style elements
         blended_style = {
@@ -642,8 +787,9 @@ class BlendedInputProcessor:
         
         # For each significant mode
         for mode, norm_weight in normalized_weights.items():
-            # Get mode preferences - use await since _get_mode_preferences is async
-            preferences = await BlendedInputProcessor._get_mode_preferences(ctx, mode)
+            # Get mode preferences
+            pref_input = ModePreferencesInput(mode=mode)
+            preferences = await BlendedInputProcessor._get_mode_preferences(ctx, pref_input)
             
             if not preferences:
                 continue
@@ -653,12 +799,13 @@ class BlendedInputProcessor:
             
             # Add weighted elements based on mode weight
             for element_type in ["add_elements", "remove_elements", "tone_elements"]:
-                if element_type in preferences:
+                elements = getattr(preferences, element_type, [])
+                if elements:
                     # Number of elements to include based on weight
-                    num_elements = max(1, round(len(preferences[element_type]) * norm_weight))
+                    num_elements = max(1, round(len(elements) * norm_weight))
                     
                     # Select top elements
-                    top_elements = preferences[element_type][:num_elements]
+                    top_elements = elements[:num_elements]
                     blended_style[element_type].extend(top_elements)
                     
                     # Record sources
@@ -668,12 +815,12 @@ class BlendedInputProcessor:
                         element_sources[element_type][element].append(mode)
             
             # Add phrasing examples based on weight
-            if "phrasing_examples" in preferences:
+            if preferences.phrasing_examples:
                 # Number of phrases to include
-                num_phrases = max(1, round(len(preferences["phrasing_examples"]) * norm_weight))
+                num_phrases = max(1, round(len(preferences.phrasing_examples) * norm_weight))
                 
                 # Select top phrases
-                top_phrases = preferences["phrasing_examples"][:num_phrases]
+                top_phrases = preferences.phrasing_examples[:num_phrases]
                 blended_style["phrasing_examples"].extend(top_phrases)
                 
                 # Record sources
@@ -683,11 +830,11 @@ class BlendedInputProcessor:
                     element_sources["phrasing_examples"][phrase].append(mode)
             
             # Add pronouns
-            if "typical_pronouns" in preferences:
-                blended_style["typical_pronouns"].extend(preferences["typical_pronouns"])
+            if preferences.typical_pronouns:
+                blended_style["typical_pronouns"].extend(preferences.typical_pronouns)
                 
                 # Record sources
-                for pronoun in preferences["typical_pronouns"]:
+                for pronoun in preferences.typical_pronouns:
                     if pronoun not in element_sources["typical_pronouns"]:
                         element_sources["typical_pronouns"][pronoun] = []
                     element_sources["typical_pronouns"][pronoun].append(mode)
@@ -697,41 +844,42 @@ class BlendedInputProcessor:
             seen = set()
             blended_style[element_type] = [x for x in blended_style[element_type] if not (x in seen or seen.add(x))]
         
-        return {
-            "blended_style": blended_style,
-            "influences": influences,
-            "element_sources": element_sources
-        }
+        return StyleElementsResult(
+            blended_style=blended_style,
+            influences=influences,
+            element_sources=element_sources
+        )
 
     @staticmethod
-    @function_tool
+    @function_tool(strict_mode=False)
     async def _analyze_response_coherence(
         ctx: RunContextWrapper[InputProcessingAgentContext],
-        original_response: str = "",
-        modified_response: str = ""
-    ) -> Dict[str, Any]:
+        input_data: CoherenceAnalysisInput
+    ) -> CoherenceAnalysisResult:
         """
         Analyze the coherence of a modified response
         
         Args:
             ctx: The run context wrapper
-            original_response: Original response text
-            modified_response: Modified response text
+            input_data: Input data containing original and modified responses
             
         Returns:
             Coherence analysis
         """
+        original_response = input_data.original_response
+        modified_response = input_data.modified_response
+        
         # Handle empty strings
         if not original_response and not modified_response:
-            return {
-                "coherence_score": 1.0,
-                "metrics": {
+            return CoherenceAnalysisResult(
+                coherence_score=1.0,
+                metrics={
                     "length_change": 1.0,
                     "word_retention": 1.0,
                     "sentence_count_ratio": 1.0
                 },
-                "is_coherent": True
-            }
+                is_coherent=True
+            )
         
         if not original_response:
             original_response = " "  # Avoid division by zero
@@ -778,15 +926,15 @@ class BlendedInputProcessor:
         # Ensure score is in range
         coherence_score = max(0.0, min(1.0, coherence_score))
         
-        return {
-            "coherence_score": coherence_score,
-            "metrics": {
+        return CoherenceAnalysisResult(
+            coherence_score=coherence_score,
+            metrics={
                 "length_change": length_change,
                 "word_retention": word_retention,
                 "sentence_count_ratio": sentence_count_ratio
             },
-            "is_coherent": coherence_score >= 0.5
-        }
+            is_coherent=coherence_score >= 0.5
+        )
     
     async def update_context_from_brain_state(self):
         """Update shared context with current brain state"""
@@ -804,8 +952,9 @@ class BlendedInputProcessor:
         # Apply mode influence
         if self.context.mode_manager and hasattr(self.context.mode_manager, 'context'):
             try:
-                mode_distribution = self.context.mode_manager.context.mode_distribution.dict()
-                self.shared_context.apply_mode_influence({"mode_distribution": mode_distribution})
+                mode_dist = self.context.mode_manager.context.mode_distribution
+                mode_dict = mode_dist.model_dump() if hasattr(mode_dist, 'model_dump') else mode_dist.dict()
+                self.shared_context.apply_mode_influence({"mode_distribution": mode_dict})
             except:
                 pass
         
@@ -819,7 +968,7 @@ class BlendedInputProcessor:
             }
             self.shared_context.apply_relationship_influence(relationship_data)
     
-    async def process_input(self, text: str, user_id: str = "default", context: Dict[str, Any] = None) -> Dict[str, Any]:
+    async def process_input(self, text: str, user_id: str = "default", context: Optional[Dict[str, Any]] = None) -> ProcessInputResult:
         """
         Process input text through conditioning system and return processing results
         
@@ -860,7 +1009,7 @@ class BlendedInputProcessor:
             behavior_prompt = f"""
             Evaluate which behaviors are appropriate based on these detected patterns:
             
-            DETECTED PATTERNS: {[p.dict() for p in detected_patterns]}
+            DETECTED PATTERNS: {[p.model_dump() for p in detected_patterns]}
             
             USER ID: {user_id}
             
@@ -889,8 +1038,7 @@ class BlendedInputProcessor:
             
             # Reinforcement for submission language (if detected)
             if any(p.pattern_name == "submission_language" for p in detected_patterns):
-                reinforcement = await self._process_operant_conditioning(
-                    RunContextWrapper(self.context),
+                cond_input = ProcessConditioningInput(
                     behavior="submission_language_response",
                     consequence_type="positive_reinforcement",
                     intensity=0.8,
@@ -899,12 +1047,15 @@ class BlendedInputProcessor:
                         "context_keys": ["conversation"]
                     }
                 )
+                reinforcement = await self._process_operant_conditioning(
+                    RunContextWrapper(self.context),
+                    cond_input
+                )
                 reinforcement_results.append(reinforcement)
             
             # Punishment for defiance (if detected)
             if any(p.pattern_name == "defiance" for p in detected_patterns):
-                punishment = await self._process_operant_conditioning(
-                    RunContextWrapper(self.context),
+                cond_input = ProcessConditioningInput(
                     behavior="tolerate_defiance",
                     consequence_type="positive_punishment",
                     intensity=0.7,
@@ -913,31 +1064,36 @@ class BlendedInputProcessor:
                         "context_keys": ["conversation"]
                     }
                 )
+                punishment = await self._process_operant_conditioning(
+                    RunContextWrapper(self.context),
+                    cond_input
+                )
                 reinforcement_results.append(punishment)
             
             # Get current mode distribution if available
             mode_distribution = {}
             if self.context.mode_manager and hasattr(self.context.mode_manager, 'context'):
                 try:
-                    mode_distribution = self.context.mode_manager.context.mode_distribution.dict()
+                    mode_dist = self.context.mode_manager.context.mode_distribution
+                    mode_distribution = mode_dist.model_dump() if hasattr(mode_dist, 'model_dump') else mode_dist.dict()
                 except:
                     pass
             
             # Collect results
-            return {
-                "input_text": text,
-                "user_id": user_id,
-                "detected_patterns": [p.dict() for p in detected_patterns],
-                "behavior_evaluations": [eval.dict() for eval in behavior_evaluations],
-                "recommended_behaviors": recommended_behaviors,
-                "avoided_behaviors": avoided_behaviors,
-                "reinforcement_results": reinforcement_results,
-                "mode_distribution": mode_distribution,
-                "adjusted_sensitivities": self.shared_context.get_adjusted_sensitivities(),
-                "behavior_scores": self.shared_context.get_behavior_scores()
-            }
+            return ProcessInputResult(
+                input_text=text,
+                user_id=user_id,
+                detected_patterns=detected_patterns,
+                behavior_evaluations=behavior_evaluations,
+                recommended_behaviors=recommended_behaviors,
+                avoided_behaviors=avoided_behaviors,
+                reinforcement_results=reinforcement_results,
+                mode_distribution=mode_distribution,
+                adjusted_sensitivities=self.shared_context.get_adjusted_sensitivities(),
+                behavior_scores=self.shared_context.get_behavior_scores()
+            )
     
-    async def modify_response(self, response_text: str, input_processing_results: Dict[str, Any]) -> str:
+    async def modify_response(self, response_text: str, input_processing_results: ProcessInputResult) -> str:
         """
         Modify response based on conditioning results and mode distribution
         
@@ -950,12 +1106,13 @@ class BlendedInputProcessor:
         """
         with trace(workflow_name="modify_conditioned_response", group_id=getattr(self.brain, 'trace_group_id', 'default')):
             # Check if mode distribution is available
-            mode_distribution = input_processing_results.get("mode_distribution", {})
+            mode_distribution = input_processing_results.mode_distribution
             
             # Fall back to current mode manager state if not in results
             if not mode_distribution and self.context.mode_manager and hasattr(self.context.mode_manager, 'context'):
                 try:
-                    mode_distribution = self.context.mode_manager.context.mode_distribution.dict()
+                    mode_dist = self.context.mode_manager.context.mode_distribution
+                    mode_distribution = mode_dist.model_dump() if hasattr(mode_dist, 'model_dump') else mode_dist.dict()
                 except:
                     pass
             
@@ -969,11 +1126,11 @@ class BlendedInputProcessor:
                 
                 MODE DISTRIBUTION: {mode_distribution}
                 
-                DETECTED PATTERNS: {input_processing_results.get('detected_patterns', [])}
+                DETECTED PATTERNS: {[p.model_dump() for p in input_processing_results.detected_patterns]}
                 
-                RECOMMENDED BEHAVIORS: {input_processing_results.get('recommended_behaviors', [])}
+                RECOMMENDED BEHAVIORS: {input_processing_results.recommended_behaviors}
                 
-                AVOIDED BEHAVIORS: {input_processing_results.get('avoided_behaviors', [])}
+                AVOIDED BEHAVIORS: {input_processing_results.avoided_behaviors}
                 
                 Modify the response to proportionally reflect all active modes in the distribution,
                 with higher-weighted modes having more influence on the final style and tone.
@@ -999,13 +1156,13 @@ class BlendedInputProcessor:
                 
                 ORIGINAL RESPONSE: {response_text}
                 
-                DETECTED PATTERNS: {input_processing_results.get('detected_patterns', [])}
+                DETECTED PATTERNS: {[p.model_dump() for p in input_processing_results.detected_patterns]}
                 
-                RECOMMENDED BEHAVIORS: {input_processing_results.get('recommended_behaviors', [])}
+                RECOMMENDED BEHAVIORS: {input_processing_results.recommended_behaviors}
                 
-                AVOIDED BEHAVIORS: {input_processing_results.get('avoided_behaviors', [])}
+                AVOIDED BEHAVIORS: {input_processing_results.avoided_behaviors}
                 
-                REINFORCEMENT RESULTS: {input_processing_results.get('reinforcement_results', [])}
+                REINFORCEMENT RESULTS: {[r.model_dump() for r in input_processing_results.reinforcement_results]}
                 
                 Modify the response to align with recommended behaviors while avoiding
                 behaviors that should be avoided. Ensure the modification is subtle but effective.
@@ -1017,7 +1174,7 @@ class BlendedInputProcessor:
                 
                 return modified_response
     
-    async def modify_blended_response(self, response_text: str, mode_distribution: Dict[str, float]) -> Dict[str, Any]:
+    async def modify_blended_response(self, response_text: str, mode_distribution: Dict[str, float]) -> BlendedResponseModification:
         """
         Modify response based purely on mode distribution
         
