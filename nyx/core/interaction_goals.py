@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 # Pydantic Models for structured data
 class GoalParameter(BaseModel):
     """Parameters for a goal step action"""
-    model_config = ConfigDict(extra='forbid')
+    model_config = ConfigDict(extra='allow')  # Changed from 'forbid' to 'allow' for flexibility
     
     # Common parameters - extend as needed
     focus: Optional[str] = Field(default=None, description="Focus area for the action")
@@ -39,10 +39,6 @@ class GoalParameter(BaseModel):
     style: Optional[str] = Field(default=None, description="Style parameter")
     response_type: Optional[str] = Field(default=None, description="Type of response")
     # Add more specific parameters as needed
-    
-    # Allow additional fields for flexibility
-    class Config:
-        extra = "allow"
 
 class GoalStep(BaseModel):
     """A step in a goal's plan"""
