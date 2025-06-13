@@ -93,7 +93,7 @@ class PredictionEngine:
             Your task is to determine how stable the current context is and what prediction horizon
             would be most appropriate. Consider factors like conversation history consistency,
             topic stability, and emotional state predictability.""",
-            tools=[function_tool(self._estimate_context_stability)],
+            tools=[self._create_estimate_context_stability_tool()],
             output_type=ContextAnalysisOutput
         )
         
@@ -103,7 +103,7 @@ class PredictionEngine:
             instructions="""You predict the user's next input based on conversation history and context.
             Your task is to identify patterns in the user's communication style, preferences, and
             current conversation flow to predict what they might say next.""",
-            tools=[function_tool(self._analyze_conversation_patterns)],
+            tools=[self._create_analyze_conversation_patterns_tool()],
             model_settings=ModelSettings(temperature=0.7)
         )
         
@@ -113,7 +113,7 @@ class PredictionEngine:
             instructions="""You predict the optimal response to the expected next user input.
             Your task is to anticipate what would be the most effective response given the
             conversation history, user's likely next input, and current context.""",
-            tools=[function_tool(self._analyze_response_patterns)],
+            tools=[self._create_analyze_response_patterns_tool()],
             model_settings=ModelSettings(temperature=0.7)
         )
         
@@ -123,201 +123,216 @@ class PredictionEngine:
             instructions="""You predict how emotional states will evolve based on context.
             Your task is to analyze emotional trajectories and predict future emotional states
             considering the current context and recent history.""",
-            tools=[function_tool(self._analyze_emotional_patterns_predict)],
+            tools=[self._create_analyze_emotional_patterns_predict_tool()],
             model_settings=ModelSettings(temperature=0.5)
         )
     
-    @function_tool
-    async def _estimate_context_stability(self, context: Dict[str, Any]) -> Dict[str, Any]:
-        """Estimate the stability of the current context"""
-        with custom_span("estimate_context_stability"):
-            # Extract key elements for stability estimation
-            stability_factors = {}
-            
-            # Topic consistency
-            if "topic" in context and context["topic"]:
-                stability_factors["topic_defined"] = 0.2
-            
-            # History length
-            history_length = len(context.get("history", []))
-            if history_length > 10:
-                stability_factors["substantial_history"] = 0.2
-            elif history_length > 5:
-                stability_factors["moderate_history"] = 0.1
-            
-            # Emotional state clarity
-            if "emotional_state" in context and context["emotional_state"]:
-                emotional_state = context["emotional_state"]
-                if "primary_emotion" in emotional_state and emotional_state["primary_emotion"]:
-                    primary_intensity = emotional_state.get("primary_intensity", 0.5)
-                    stability_factors["clear_emotion"] = primary_intensity * 0.2
-            
-            # Scenario type defined
-            if "scenario_type" in context and context["scenario_type"]:
-                stability_factors["scenario_defined"] = 0.15
-            
-            # Calculate base stability
-            base_stability = sum(stability_factors.values())
-            
-            # Calculate volatility factors (lower stability)
-            volatility_factors = {}
-            
-            # Recent context changes
-            if context.get("recent_context_change", False):
-                volatility_factors["recent_change"] = -0.2
-            
-            # Inconsistent history
-            if context.get("inconsistent_history", False):
-                volatility_factors["inconsistency"] = -0.15
-            
-            # High emotional intensity
-            if context.get("emotional_intensity", 0) > 0.8:
-                volatility_factors["high_emotions"] = -0.1
-            
-            # Apply volatility
-            volatility = sum(volatility_factors.values())
-            
-            # Calculate final stability (0-1 range)
-            stability = max(0.0, min(1.0, 0.5 + base_stability + volatility))
-            
-            return {
-                "stability_score": stability,
-                "stability_factors": stability_factors,
-                "volatility_factors": volatility_factors,
-                "analysis_time": datetime.datetime.now().isoformat()
-            }
-    
-    @function_tool
-    async def _analyze_conversation_patterns(self, history: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Analyze patterns in conversation history"""
-        with custom_span("analyze_conversation_patterns"):
-            # Extract patterns from history
-            if not history:
+    def _create_estimate_context_stability_tool(self):
+        """Create the estimate context stability tool with proper access to self"""
+        @function_tool
+        async def _estimate_context_stability(ctx: RunContextWrapper, context: Dict[str, Any]) -> Dict[str, Any]:
+            """Estimate the stability of the current context"""
+            with custom_span("estimate_context_stability"):
+                # Extract key elements for stability estimation
+                stability_factors = {}
+                
+                # Topic consistency
+                if "topic" in context and context["topic"]:
+                    stability_factors["topic_defined"] = 0.2
+                
+                # History length
+                history_length = len(context.get("history", []))
+                if history_length > 10:
+                    stability_factors["substantial_history"] = 0.2
+                elif history_length > 5:
+                    stability_factors["moderate_history"] = 0.1
+                
+                # Emotional state clarity
+                if "emotional_state" in context and context["emotional_state"]:
+                    emotional_state = context["emotional_state"]
+                    if "primary_emotion" in emotional_state and emotional_state["primary_emotion"]:
+                        primary_intensity = emotional_state.get("primary_intensity", 0.5)
+                        stability_factors["clear_emotion"] = primary_intensity * 0.2
+                
+                # Scenario type defined
+                if "scenario_type" in context and context["scenario_type"]:
+                    stability_factors["scenario_defined"] = 0.15
+                
+                # Calculate base stability
+                base_stability = sum(stability_factors.values())
+                
+                # Calculate volatility factors (lower stability)
+                volatility_factors = {}
+                
+                # Recent context changes
+                if context.get("recent_context_change", False):
+                    volatility_factors["recent_change"] = -0.2
+                
+                # Inconsistent history
+                if context.get("inconsistent_history", False):
+                    volatility_factors["inconsistency"] = -0.15
+                
+                # High emotional intensity
+                if context.get("emotional_intensity", 0) > 0.8:
+                    volatility_factors["high_emotions"] = -0.1
+                
+                # Apply volatility
+                volatility = sum(volatility_factors.values())
+                
+                # Calculate final stability (0-1 range)
+                stability = max(0.0, min(1.0, 0.5 + base_stability + volatility))
+                
                 return {
-                    "patterns": {},
-                    "message": "Insufficient history for pattern analysis"
+                    "stability_score": stability,
+                    "stability_factors": stability_factors,
+                    "volatility_factors": volatility_factors,
+                    "analysis_time": datetime.datetime.now().isoformat()
                 }
-            
-            # Analyze message lengths
-            message_lengths = [len(msg.get("text", "")) for msg in history]
-            avg_length = sum(message_lengths) / len(message_lengths) if message_lengths else 0
-            
-            # Analyze response times if available
-            response_times = []
-            for i in range(1, len(history)):
-                if "timestamp" in history[i] and "timestamp" in history[i-1]:
-                    try:
-                        t1 = datetime.datetime.fromisoformat(history[i-1]["timestamp"].replace("Z", "+00:00"))
-                        t2 = datetime.datetime.fromisoformat(history[i]["timestamp"].replace("Z", "+00:00"))
-                        response_times.append((t2 - t1).total_seconds())
-                    except (ValueError, TypeError):
-                        pass
-            
-            avg_response_time = sum(response_times) / len(response_times) if response_times else None
-            
-            # Extract topic transitions
-            topics = [msg.get("topic", "") for msg in history if "topic" in msg]
-            topic_transitions = []
-            for i in range(1, len(topics)):
-                if topics[i] != topics[i-1]:
-                    topic_transitions.append((topics[i-1], topics[i]))
-            
-            return {
-                "avg_message_length": avg_length,
-                "avg_response_time": avg_response_time,
-                "topic_transitions": topic_transitions,
-                "message_count": len(history),
-                "patterns": {
-                    "consistent_length": max(0, 1 - (sum(abs(l - avg_length) for l in message_lengths) / (avg_length * len(message_lengths)) if avg_length > 0 else 1)),
-                    "predictable_timing": max(0, 1 - (sum(abs(t - avg_response_time) for t in response_times) / (avg_response_time * len(response_times)) if avg_response_time and response_times else 1))
-                }
-            }
+        
+        return _estimate_context_stability
     
-    @function_tool
-    async def _analyze_response_patterns(self, history: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Analyze patterns in responses"""
-        with custom_span("analyze_response_patterns"):
-            if len(history) < 2:
-                return {
-                    "patterns": {},
-                    "message": "Insufficient history for response pattern analysis"
-                }
-            
-            # Extract pairs of user input and system response
-            pairs = []
-            for i in range(1, len(history)):
-                if history[i-1].get("role") == "user" and history[i].get("role") == "assistant":
-                    pairs.append((history[i-1].get("text", ""), history[i].get("text", "")))
-            
-            return {
-                "input_response_pairs": len(pairs),
-                "analysis_time": datetime.datetime.now().isoformat()
-            }
-    
-    @function_tool
-    async def _analyze_emotional_patterns_predict(self, history: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Analyze patterns in emotional states"""
-        with custom_span("analyze_emotional_patterns_predict"):
-            # Extract emotional states from history
-            emotional_states = []
-            for entry in history:
-                if "emotional_state" in entry:
-                    emotional_states.append(entry["emotional_state"])
-            
-            if not emotional_states:
-                return {
-                    "patterns": {},
-                    "message": "No emotional data in history"
-                }
-            
-            # Track emotion changes over time
-            emotion_trends = {}
-            for state in emotional_states:
-                if "primary_emotion" in state:
-                    emotion_name = state["primary_emotion"].get("name", "Neutral")
-                    intensity = state["primary_emotion"].get("intensity", 0.5)
-                    
-                    if emotion_name not in emotion_trends:
-                        emotion_trends[emotion_name] = []
-                    
-                    emotion_trends[emotion_name].append(intensity)
-            
-            # Analyze trends for each emotion
-            patterns = {}
-            for emotion, intensities in emotion_trends.items():
-                if len(intensities) > 1:
-                    # Calculate trend
-                    start = intensities[0]
-                    end = intensities[-1]
-                    change = end - start
-                    
-                    if abs(change) < 0.1:
-                        trend = "stable"
-                    elif change > 0:
-                        trend = "increasing"
-                    else:
-                        trend = "decreasing"
-                    
-                    # Calculate volatility
-                    volatility = sum(abs(intensities[i] - intensities[i-1]) 
-                                    for i in range(1, len(intensities))) / (len(intensities) - 1)
-                    
-                    patterns[emotion] = {
-                        "trend": trend,
-                        "volatility": volatility,
-                        "start_intensity": start,
-                        "current_intensity": end,
-                        "change": change,
-                        "occurrences": len(intensities)
+    def _create_analyze_conversation_patterns_tool(self):
+        """Create the analyze conversation patterns tool with proper access to self"""
+        @function_tool
+        async def _analyze_conversation_patterns(ctx: RunContextWrapper, history: List[Dict[str, Any]]) -> Dict[str, Any]:
+            """Analyze patterns in conversation history"""
+            with custom_span("analyze_conversation_patterns"):
+                # Extract patterns from history
+                if not history:
+                    return {
+                        "patterns": {},
+                        "message": "Insufficient history for pattern analysis"
                     }
-            
-            return {
-                "patterns": patterns,
-                "emotions_tracked": len(emotion_trends),
-                "analysis_time": datetime.datetime.now().isoformat()
-            }
+                
+                # Analyze message lengths
+                message_lengths = [len(msg.get("text", "")) for msg in history]
+                avg_length = sum(message_lengths) / len(message_lengths) if message_lengths else 0
+                
+                # Analyze response times if available
+                response_times = []
+                for i in range(1, len(history)):
+                    if "timestamp" in history[i] and "timestamp" in history[i-1]:
+                        try:
+                            t1 = datetime.datetime.fromisoformat(history[i-1]["timestamp"].replace("Z", "+00:00"))
+                            t2 = datetime.datetime.fromisoformat(history[i]["timestamp"].replace("Z", "+00:00"))
+                            response_times.append((t2 - t1).total_seconds())
+                        except (ValueError, TypeError):
+                            pass
+                
+                avg_response_time = sum(response_times) / len(response_times) if response_times else None
+                
+                # Extract topic transitions
+                topics = [msg.get("topic", "") for msg in history if "topic" in msg]
+                topic_transitions = []
+                for i in range(1, len(topics)):
+                    if topics[i] != topics[i-1]:
+                        topic_transitions.append((topics[i-1], topics[i]))
+                
+                return {
+                    "avg_message_length": avg_length,
+                    "avg_response_time": avg_response_time,
+                    "topic_transitions": topic_transitions,
+                    "message_count": len(history),
+                    "patterns": {
+                        "consistent_length": max(0, 1 - (sum(abs(l - avg_length) for l in message_lengths) / (avg_length * len(message_lengths)) if avg_length > 0 else 1)),
+                        "predictable_timing": max(0, 1 - (sum(abs(t - avg_response_time) for t in response_times) / (avg_response_time * len(response_times)) if avg_response_time and response_times else 1))
+                    }
+                }
+        
+        return _analyze_conversation_patterns
     
-    @function_tool
+    def _create_analyze_response_patterns_tool(self):
+        """Create the analyze response patterns tool with proper access to self"""
+        @function_tool
+        async def _analyze_response_patterns(ctx: RunContextWrapper, history: List[Dict[str, Any]]) -> Dict[str, Any]:
+            """Analyze patterns in responses"""
+            with custom_span("analyze_response_patterns"):
+                if len(history) < 2:
+                    return {
+                        "patterns": {},
+                        "message": "Insufficient history for response pattern analysis"
+                    }
+                
+                # Extract pairs of user input and system response
+                pairs = []
+                for i in range(1, len(history)):
+                    if history[i-1].get("role") == "user" and history[i].get("role") == "assistant":
+                        pairs.append((history[i-1].get("text", ""), history[i].get("text", "")))
+                
+                return {
+                    "input_response_pairs": len(pairs),
+                    "analysis_time": datetime.datetime.now().isoformat()
+                }
+        
+        return _analyze_response_patterns
+    
+    def _create_analyze_emotional_patterns_predict_tool(self):
+        """Create the analyze emotional patterns predict tool with proper access to self"""
+        @function_tool
+        async def _analyze_emotional_patterns_predict(ctx: RunContextWrapper, history: List[Dict[str, Any]]) -> Dict[str, Any]:
+            """Analyze patterns in emotional states"""
+            with custom_span("analyze_emotional_patterns_predict"):
+                # Extract emotional states from history
+                emotional_states = []
+                for entry in history:
+                    if "emotional_state" in entry:
+                        emotional_states.append(entry["emotional_state"])
+                
+                if not emotional_states:
+                    return {
+                        "patterns": {},
+                        "message": "No emotional data in history"
+                    }
+                
+                # Track emotion changes over time
+                emotion_trends = {}
+                for state in emotional_states:
+                    if "primary_emotion" in state:
+                        emotion_name = state["primary_emotion"].get("name", "Neutral")
+                        intensity = state["primary_emotion"].get("intensity", 0.5)
+                        
+                        if emotion_name not in emotion_trends:
+                            emotion_trends[emotion_name] = []
+                        
+                        emotion_trends[emotion_name].append(intensity)
+                
+                # Analyze trends for each emotion
+                patterns = {}
+                for emotion, intensities in emotion_trends.items():
+                    if len(intensities) > 1:
+                        # Calculate trend
+                        start = intensities[0]
+                        end = intensities[-1]
+                        change = end - start
+                        
+                        if abs(change) < 0.1:
+                            trend = "stable"
+                        elif change > 0:
+                            trend = "increasing"
+                        else:
+                            trend = "decreasing"
+                        
+                        # Calculate volatility
+                        volatility = sum(abs(intensities[i] - intensities[i-1]) 
+                                        for i in range(1, len(intensities))) / (len(intensities) - 1)
+                        
+                        patterns[emotion] = {
+                            "trend": trend,
+                            "volatility": volatility,
+                            "start_intensity": start,
+                            "current_intensity": end,
+                            "change": change,
+                            "occurrences": len(intensities)
+                        }
+                
+                return {
+                    "patterns": patterns,
+                    "emotions_tracked": len(emotion_trends),
+                    "analysis_time": datetime.datetime.now().isoformat()
+                }
+        
+        return _analyze_emotional_patterns_predict
+    
     async def generate_prediction(self, context: Dict[str, Any], 
                               history: List[Dict[str, Any]], 
                               query_type: Optional[str] = None) -> PredictionResult:
@@ -614,7 +629,6 @@ class PredictionEngine:
         # Join elements into a context key
         return "_".join(elements)
     
-    @function_tool
     async def evaluate_prediction(self,
                               prediction_id: str,
                               actual_data: Dict[str, Any]) -> PredictionEvaluation:
@@ -765,7 +779,6 @@ class PredictionEngine:
         
         return avg_error
     
-    @function_tool
     async def get_performance_metrics(self) -> Dict[str, Any]:
         """Get current performance metrics for predictions"""
         with custom_span("get_performance_metrics"):
