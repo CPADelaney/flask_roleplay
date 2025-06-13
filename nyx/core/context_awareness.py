@@ -223,6 +223,11 @@ class IncoherentPair(BaseModel):
     context2: str
     compatibility: float = Field(..., ge=0.0, le=1.0)
 
+class SignificantContext(BaseModel):
+    """A significant context with its weight"""
+    context: str = Field(..., description="Context name")
+    weight: float = Field(..., description="Context weight", ge=0.0, le=1.0)
+
 class ConfidenceThresholdResult(BaseModel):
     """Confidence threshold check result"""
     threshold_met: bool
@@ -373,101 +378,13 @@ class ContextSystemState(BaseModel):
     history: List[HistoryEntry] = Field(default_factory=list, description="Recent context history")
     emotional_baselines: Optional[EmotionalBaselinesMapping] = Field(None, description="Emotional baselines by context")
 
-# New Pydantic models to replace Dict return types
-class SignalInfo(BaseModel):
-    """Signal information"""
-    type: str = Field(..., description="Signal type")
-    value: str = Field(..., description="Signal value")
-    context: str = Field(..., description="Context type")
-    strength: float = Field(..., description="Signal strength")
-
-class CategorizedSignals(BaseModel):
-    """Categorized signals output"""
-    explicit: List[SignalInfo] = Field(default_factory=list)
-    implicit: List[SignalInfo] = Field(default_factory=list)
-    dominant: List[SignalInfo] = Field(default_factory=list)
-    casual: List[SignalInfo] = Field(default_factory=list)
-    intellectual: List[SignalInfo] = Field(default_factory=list)
-    empathic: List[SignalInfo] = Field(default_factory=list)
-    playful: List[SignalInfo] = Field(default_factory=list)
-    creative: List[SignalInfo] = Field(default_factory=list)
-    professional: List[SignalInfo] = Field(default_factory=list)
-
-class EmotionalBaselines(BaseModel):
-    """Emotional baselines"""
-    nyxamine: float = Field(0.5, ge=0.0, le=1.0)
-    oxynixin: float = Field(0.5, ge=0.0, le=1.0)
-    cortanyx: float = Field(0.3, ge=0.0, le=1.0)
-    adrenyx: float = Field(0.4, ge=0.0, le=1.0)
-    seranix: float = Field(0.5, ge=0.0, le=1.0)
-
-class ConfidenceThresholdResult(BaseModel):
-    """Confidence threshold check result"""
-    threshold_met: bool
-    confidence_threshold: float
-    confidence: float
-    significant_contexts: List[Tuple[str, float]]
-    has_significant_contexts: bool
-
-class ContextDetectionResult(BaseModel):
-    """Context detection result"""
-    context_distribution: ContextDistribution
-    confidence: float
-    signals: List[SignalInfo]
-    signal_based: bool
-    detection_method: str
-
-class MessageFeatures(BaseModel):
-    """Extracted message features"""
-    length: int
-    word_count: int
-    has_question: bool
-    capitalization_ratio: float
-    punctuation_count: int
-    dominance_terms: List[str]
-    emotional_terms: List[str]
-    has_dominance_terms: bool
-    has_emotional_terms: bool
-    likely_formal: bool
-    likely_casual: bool
-    likely_emotional: bool
-    likely_intellectual: bool
-    feature_distribution: Dict[str, float]
-
-class ContextDistributionDict(BaseModel):
-    """Context distribution as a dictionary structure"""
-    dominant: float = Field(0.0, ge=0.0, le=1.0)
-    casual: float = Field(0.0, ge=0.0, le=1.0)
-    intellectual: float = Field(0.0, ge=0.0, le=1.0)
-    empathic: float = Field(0.0, ge=0.0, le=1.0)
-    playful: float = Field(0.0, ge=0.0, le=1.0)
-    creative: float = Field(0.0, ge=0.0, le=1.0)
-    professional: float = Field(0.0, ge=0.0, le=1.0)
-
-class HistoryEntry(BaseModel):
-    """Context history entry"""
-    timestamp: str
-    message_snippet: str
-    detected_distribution: ContextDistributionDict
-    updated_distribution: ContextDistributionDict
-    confidence: float
-    primary_context_changed: bool
-    active_contexts: List[str]
-
-class CoherenceResult(BaseModel):
-    """Coherence check result"""
-    coherence_score: float
-    is_coherent: bool
-    active_contexts: List[str]
-    incoherent_pairs: List[Tuple[str, str, float]]
-
 class TransitionAnalysis(BaseModel):
     """Context transition analysis"""
     is_appropriate: bool
     is_gradual: bool
     total_change: float
     average_change: float
-    context_changes: Dict[str, Dict[str, Any]]
+    context_changes: List[ContextChangeInfo]
     significant_shifts: List[str]
 
 class CASystemContext:
