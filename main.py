@@ -4,7 +4,7 @@ import os
 import logging
 import time
 import json
-import aioredis 
+from redis import asyncio as redis_async
 import asyncio
 from typing import Dict, Any, Optional
 
@@ -254,45 +254,37 @@ async def initialize_systems(app: Quart):
         logger.info("Database connection pool initialized successfully.")
 
         # --- 2. Redis Connection Pools (Centralized Here) ---
-        logger.info("Initializing aioredis pools...")
+        logger.info("Initializing Redis async pools...")
         try:
-            # Ensure REDIS_URL is available on app.config or os.environ
-            # It's good practice for create_quart_app to load .env or set app.config['REDIS_URL']
-            # Defaulting here if not on app.config for robustness
-            redis_url_from_env = os.environ.get('REDIS_URL', 'redis://localhost:6379/0')
-            redis_url = app.config.get('REDIS_URL', redis_url_from_env)
-
+            redis_url = app.config.get('REDIS_URL', os.environ.get('REDIS_URL', 'redis://localhost:6379/0'))
+            
             if redis_url:
-                # For Rate Limiter & IP Blocking (shared pool)
-                # aioredis.from_url creates a connection pool internally
-                shared_redis_pool = await aioredis.from_url(
+                # Create connection pool
+                shared_redis_pool = await redis_async.from_url(
                     redis_url,
                     decode_responses=True,
-                    max_connections=int(os.getenv("REDIS_MAX_CONNECTIONS", 10)), # Make configurable
+                    max_connections=int(os.getenv("REDIS_MAX_CONNECTIONS", 10)),
                     socket_timeout=int(os.getenv("REDIS_SOCKET_TIMEOUT", 5)),
                     socket_connect_timeout=int(os.getenv("REDIS_CONNECT_TIMEOUT", 5))
                 )
-                await shared_redis_pool.ping() # Test connection
                 
-                app.aioredis_rate_limit_pool = shared_redis_pool
-                app.aioredis_ip_block_pool = shared_redis_pool # Use the same pool
-
-                logger.info("Shared aioredis pool for Rate Limiter and IP Blocking initialized.")
+                # Test connection
+                await shared_redis_pool.ping()
+                
+                # Store pools on app (you might want to rename these attributes)
+                app.redis_rate_limit_pool = shared_redis_pool
+                app.redis_ip_block_pool = shared_redis_pool
+                
+                logger.info("Redis async pools initialized successfully.")
             else:
-                logger.warning("REDIS_URL not configured. Distributed rate limiting and IP blocking will be unavailable or fall back to local.")
-                app.aioredis_rate_limit_pool = None
-                app.aioredis_ip_block_pool = None
-        except (aioredis.RedisError, ConnectionRefusedError, asyncio.TimeoutError) as e:
-            logger.error(f"Failed to initialize aioredis pools: {e}. This might affect rate limiting and IP blocking.")
-            app.aioredis_rate_limit_pool = None
-            app.aioredis_ip_block_pool = None
-            # Consider if this is a critical failure. If so, raise an error.
-            # raise RuntimeError(f"Critical Redis initialization failure: {e}")
+                logger.warning("REDIS_URL not configured.")
+                app.redis_rate_limit_pool = None
+                app.redis_ip_block_pool = None
+                
         except Exception as e:
-            logger.error(f"Unexpected error initializing aioredis pools: {e}", exc_info=True)
-            app.aioredis_rate_limit_pool = None
-            app.aioredis_ip_block_pool = None
-            # raise RuntimeError(f"Unexpected critical Redis initialization failure: {e}")
+            logger.error(f"Failed to initialize Redis: {e}", exc_info=True)
+            app.redis_rate_limit_pool = None
+            app.redis_ip_block_pool = None
 
         # --- 3. Core Application Logic (Nyx, MCP, etc.) ---
         logger.info("Initializing Nyx memory system...")
