@@ -5,8 +5,7 @@ import datetime
 import asyncio
 import random
 import uuid
-from typing import Dict, List, Any, Optional, Tuple, Union, TypedDict
-from typing_extensions import NotRequired  # For optional TypedDict fields
+from typing import Dict, List, Any, Optional, Tuple, Union
 from pydantic import BaseModel, Field
 
 from agents import Agent, Runner, ModelSettings, trace, function_tool, RunContextWrapper
@@ -153,7 +152,7 @@ class UserRelationshipPerspective(BaseModel):
 
 # =============== Function Tools ===============
 
-@function_tool
+@function_tool(strict_mode=False)
 async def format_relationship_history(user_id: str, 
                                    relationship: RelationshipStateModel, 
                                    interactions: List[InteractionModel],
@@ -1023,13 +1022,13 @@ class RelationshipReflectionSystem:
             
             # UPDATE HERE: Cast to proper type
             relationship_dict = relationship if isinstance(relationship, dict) else relationship.model_dump()
-            typed_relationship = RelationshipStateDict(**relationship_dict)
+            typed_relationship = RelationshipStateModel(**relationship_dict)
             
             # Get interaction history
             interactions = await self.relationship_manager.get_interaction_history(user_id, limit=10)
             
             # UPDATE HERE: Cast interactions to proper type
-            typed_interactions = [InteractionDict(**i) for i in interactions]
+            typed_interactions = [InteractionModel(**i) for i in interactions]
             
             # UPDATE HERE: Use typed versions
             # Format data
