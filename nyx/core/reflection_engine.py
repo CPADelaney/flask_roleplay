@@ -445,7 +445,7 @@ async def extract_neurochemical_influence(memory: RawMemory) -> Neurochemicals:
 
     return Neurochemicals(**base)
 
-@function_tool
+@function_tool(strict_mode=False)
 async def record_reflection(params: RecordReflectionInFixed) -> str:
     """Record a reflection with emotional and neurochemical data for future reference"""
     with custom_span("record_reflection"):
@@ -465,7 +465,7 @@ async def record_reflection(params: RecordReflectionInFixed) -> str:
         }
         return f"Reflection recorded with confidence {params.confidence:.2f}"
 
-@function_tool
+@function_tool(strict_mode=False)
 async def get_agent_stats() -> dict[str, Any]:
     """
     Gather real-time agent statistics from MemoryCore, EmotionalCore and an
@@ -542,7 +542,7 @@ async def get_agent_stats() -> dict[str, Any]:
             "interaction_history": interaction_stats,
         }
 
-@function_tool
+@function_tool(strict_mode=False)
 async def analyze_emotional_patterns_reflect(
     params: EmotionalHistoryInput
 ) -> dict[str, Any]:
@@ -598,7 +598,7 @@ async def analyze_emotional_patterns_reflect(
             "analysis_time": datetime.datetime.now().isoformat(),
         }
 
-@function_tool
+@function_tool(strict_mode=False)
 async def process_emotional_content(
     params: ProcessEmotionInFixed,
 ) -> Dict[str, Any]:
@@ -760,7 +760,7 @@ async def format_communications_for_reflection(
             }
         ).model_dump_json()
 
-@function_tool
+@function_tool(strict_mode=False)
 async def analyze_observation_patterns(
     params: ObservationInput
 ) -> Dict[str, Any]:
@@ -840,7 +840,7 @@ async def analyze_observation_patterns(
             "action_correlation": action_correlation
         }
 
-@function_tool
+@function_tool(strict_mode=False)
 async def analyze_communication_patterns(
     params: CommunicationInput
 ) -> Dict[str, Any]:
@@ -923,7 +923,7 @@ async def analyze_communication_patterns(
             "user_distribution": user_counts
         }
 
-@function_tool
+@function_tool(strict_mode=False)
 async def generate_observation_reflection(
     params: ObservationReflectionInput
 ) -> Dict[str, Any]:
@@ -1011,7 +1011,7 @@ async def generate_observation_reflection(
             "focus_areas": focus_areas
         }
 
-@function_tool
+@function_tool(strict_mode=False)
 async def generate_communication_reflection(
     params: CommunicationReflectionInput
 ) -> Dict[str, Any]:
@@ -2519,7 +2519,7 @@ class ReflectionEngine:
         
         return impacts
         
-@function_tool
+@function_tool(strict_mode=False)
 async def generate_summary_from_memories(
     params: SummaryRequestIn,
 ) -> SummaryOutput | None:
