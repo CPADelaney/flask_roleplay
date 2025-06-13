@@ -19,12 +19,17 @@ from nyx.core.input_processor import BlendedInputProcessor
 
 logger = logging.getLogger(__name__)
 
+# ===== INPUT/OUTPUT MODELS =====
+
 class ModeInput(BaseModel):
     """Input schema for mode processing"""
     message: str
     user_id: Optional[str] = None
     context: Optional[Dict[str, Any]] = None
     current_mode_distribution: Optional[Dict[str, float]] = None
+    
+    class Config:
+        extra = "forbid"
 
 class ModeOutput(BaseModel):
     """Output schema for mode processing"""
@@ -38,6 +43,9 @@ class ModeOutput(BaseModel):
     response_modifications: Optional[Dict[str, Any]] = None
     context_result: Optional[Dict[str, Any]] = None
     mode_result: Optional[Dict[str, Any]] = None
+    
+    class Config:
+        extra = "forbid"
 
 class ModeGuidance(BaseModel):
     """Structured guidance for response generation"""
@@ -50,6 +58,9 @@ class ModeGuidance(BaseModel):
     mode_description: str
     weighted_parameters: Dict[str, float] = Field(default_factory=dict)
     active_modes: Dict[str, float] = Field(default_factory=dict)
+    
+    class Config:
+        extra = "forbid"
 
 class FeedbackInput(BaseModel):
     """Input schema for feedback processing"""
@@ -57,6 +68,9 @@ class FeedbackInput(BaseModel):
     user_feedback: Optional[str] = None
     mode_distribution: Dict[str, float]
     context: Optional[Dict[str, Any]] = None
+    
+    class Config:
+        extra = "forbid"
 
 class FeedbackOutput(BaseModel):
     """Output schema for feedback processing"""
@@ -65,6 +79,138 @@ class FeedbackOutput(BaseModel):
     mode_adjustments: Dict[str, float] = Field(..., description="Suggested mode distribution adjustments")
     reward_value: float = Field(..., description="Calculated reward value for learning")
     feedback_summary: str = Field(..., description="Summary of the feedback analysis")
+    
+    class Config:
+        extra = "forbid"
+
+# ===== FUNCTION TOOL RETURN MODELS =====
+
+class ContextProcessingResult(BaseModel):
+    """Result from context processing"""
+    context_distribution: Dict[str, float] = Field(default_factory=dict)
+    primary_context: str = "undefined"
+    context_confidence: float = 0.0
+    active_contexts: List[str] = Field(default_factory=list)
+    error: Optional[str] = None
+    
+    class Config:
+        extra = "forbid"
+
+class ModeUpdateResult(BaseModel):
+    """Result from mode distribution update"""
+    mode_distribution: Dict[str, float] = Field(default_factory=dict)
+    primary_mode: str = "default"
+    mode_changed: bool = False
+    error: Optional[str] = None
+    
+    class Config:
+        extra = "forbid"
+
+class GoalAdditionResult(BaseModel):
+    """Result from adding goals"""
+    goals_added: bool = False
+    added_goal_ids: List[str] = Field(default_factory=list)
+    blended_goals: List[Dict[str, Any]] = Field(default_factory=list)
+    error: Optional[str] = None
+    
+    class Config:
+        extra = "forbid"
+
+class ResponseGuidanceResult(BaseModel):
+    """Result from getting response guidance"""
+    tone: str = "balanced"
+    formality_level: float = 0.5
+    verbosity: float = 0.5
+    key_phrases: List[str] = Field(default_factory=list)
+    avoid_phrases: List[str] = Field(default_factory=list)
+    content_focus: List[str] = Field(default_factory=list)
+    mode_description: str = "Blended mode"
+    primary_mode: str = "default"
+    active_modes: List[str] = Field(default_factory=list)
+    error: Optional[str] = None
+    
+    class Config:
+        extra = "forbid"
+
+class FeedbackAnalysisResult(BaseModel):
+    """Result from feedback analysis"""
+    sentiment: float = 0.0
+    reward_value: float = 0.0
+    positive_indicators: int = 0
+    negative_indicators: int = 0
+    feedback_summary: str = "Neutral feedback"
+    
+    class Config:
+        extra = "forbid"
+
+class ModeAdjustmentResult(BaseModel):
+    """Suggested mode adjustments"""
+    adjustments: Dict[str, float] = Field(default_factory=dict)
+    
+    class Config:
+        extra = "forbid"
+
+class ModeDistributionInfo(BaseModel):
+    """Current mode distribution information"""
+    mode_distribution: Dict[str, float] = Field(default_factory=dict)
+    primary_mode: Optional[str] = None
+    primary_weight: float = 0.0
+    active_modes: List[Tuple[str, float]] = Field(default_factory=list)
+    
+    class Config:
+        extra = "forbid"
+
+class ModeParameters(BaseModel):
+    """Parameters for a specific mode"""
+    parameters: Dict[str, Any] = Field(default_factory=dict)
+    
+    class Config:
+        extra = "forbid"
+
+class ConversationStyle(BaseModel):
+    """Conversation style for a mode"""
+    style: Dict[str, Any] = Field(default_factory=dict)
+    
+    class Config:
+        extra = "forbid"
+
+class BlendedGuidanceElements(BaseModel):
+    """Blended guidance elements from multiple modes"""
+    tone: str = "balanced"
+    formality_level: float = 0.5
+    verbosity: float = 0.5
+    key_phrases: List[str] = Field(default_factory=list)
+    avoid_phrases: List[str] = Field(default_factory=list)
+    content_focus: List[str] = Field(default_factory=list)
+    weighted_parameters: Dict[str, float] = Field(default_factory=dict)
+    active_modes: Dict[str, float] = Field(default_factory=dict)
+    
+    class Config:
+        extra = "forbid"
+
+class BlendedModeOutput(BaseModel):
+    """Blended output from multiple systems"""
+    context_processed: bool = True
+    mode_updated: bool = True
+    goals_added: bool = False
+    mode_distribution: Dict[str, float] = Field(default_factory=dict)
+    primary_mode: str = "default"
+    active_modes: List[Tuple[str, float]] = Field(default_factory=list)
+    context_result: ContextProcessingResult = Field(default_factory=ContextProcessingResult)
+    mode_result: ModeUpdateResult = Field(default_factory=ModeUpdateResult)
+    goals_result: GoalAdditionResult = Field(default_factory=GoalAdditionResult)
+    
+    class Config:
+        extra = "forbid"
+
+class CoherenceCheckResult(BaseModel):
+    """Result of coherence check between context and mode"""
+    coherence_score: float = 1.0
+    is_coherent: bool = True
+    misalignments: List[Dict[str, Any]] = Field(default_factory=list)
+    
+    class Config:
+        extra = "forbid"
 
 class ModeIntegrationManager:
     """
@@ -243,7 +389,7 @@ class ModeIntegrationManager:
                 function_tool(self._extract_blended_guidance)
             ],
             model="gpt-4.1-nano",
-            output_type=Dict[str, Any]
+            output_type=BlendedModeOutput
         )
         
         # Create input validation guardrail
@@ -610,6 +756,7 @@ class ModeIntegrationManager:
                 
                 # Simple enhancement with key phrases if available
                 if patterns and "key_phrases" in patterns and patterns["key_phrases"]:
+                    import random
                     key_phrases = patterns["key_phrases"]
                     # Maybe add a phrase at beginning
                     if random.random() < 0.3:  # 30% chance
@@ -694,9 +841,8 @@ class ModeIntegrationManager:
             }
     
     # Agent function tools
-    @staticmethod 
     @function_tool
-    async def _process_context(ctx: RunContextWrapper, message: str) -> Dict[str, Any]:
+    async def _process_context(self, ctx: RunContextWrapper, message: str) -> ContextProcessingResult:
         """
         Process message through context awareness system
         
@@ -707,18 +853,22 @@ class ModeIntegrationManager:
             Context processing results
         """
         if not self.context_system:
-            return {"error": "Context system not initialized"}
+            return ContextProcessingResult(error="Context system not initialized")
         
         try:
             context_result = await self.context_system.process_message(message)
-            return context_result
+            return ContextProcessingResult(
+                context_distribution=context_result.get("context_distribution", {}),
+                primary_context=context_result.get("primary_context", "undefined"),
+                context_confidence=context_result.get("overall_confidence", 0.0),
+                active_contexts=context_result.get("active_contexts", [])
+            )
         except Exception as e:
             logger.error(f"Error processing context: {e}")
-            return {"error": str(e)}
+            return ContextProcessingResult(error=str(e))
             
-    @staticmethod 
     @function_tool
-    async def _update_mode_distribution(ctx: RunContextWrapper, context_result: Dict[str, Any]) -> Dict[str, Any]:
+    async def _update_mode_distribution(self, ctx: RunContextWrapper, context_result: ContextProcessingResult) -> ModeUpdateResult:
         """
         Update mode distribution based on context
         
@@ -729,18 +879,24 @@ class ModeIntegrationManager:
             Mode update results
         """
         if not self.mode_manager:
-            return {"error": "Mode manager not initialized"}
+            return ModeUpdateResult(error="Mode manager not initialized")
         
         try:
-            mode_result = await self.mode_manager.update_interaction_mode(context_result)
-            return mode_result
+            # Convert back to dict for compatibility
+            context_dict = context_result.dict()
+            mode_result = await self.mode_manager.update_interaction_mode(context_dict)
+            
+            return ModeUpdateResult(
+                mode_distribution=mode_result.get("mode_distribution", {}),
+                primary_mode=mode_result.get("primary_mode", "default"),
+                mode_changed=mode_result.get("mode_changed", False)
+            )
         except Exception as e:
             logger.error(f"Error updating mode: {e}")
-            return {"error": str(e)}
+            return ModeUpdateResult(error=str(e))
 
-    @staticmethod
     @function_tool
-    async def _add_mode_goals(ctx: RunContextWrapper, mode_distribution: Dict[str, float]) -> Dict[str, Any]:
+    async def _add_mode_goals(self, ctx: RunContextWrapper, mode_distribution: Dict[str, float]) -> GoalAdditionResult:
         """
         Add goals based on mode distribution
         
@@ -751,7 +907,7 @@ class ModeIntegrationManager:
             Results of adding goals
         """
         if not self.goal_selector:
-            return {"error": "Goal selector not initialized"}
+            return GoalAdditionResult(error="Goal selector not initialized")
             
         try:
             blended_goals = await self.goal_selector.select_goals(mode_distribution)
@@ -769,28 +925,24 @@ class ModeIntegrationManager:
                     if goal_id:
                         added_goals.append(goal_id)
                         
-                return {
-                    "goals_added": len(added_goals) > 0,
-                    "added_goal_ids": added_goals,
-                    "blended_goals": blended_goals
-                }
+                return GoalAdditionResult(
+                    goals_added=len(added_goals) > 0,
+                    added_goal_ids=added_goals,
+                    blended_goals=blended_goals
+                )
             else:
-                return {
-                    "goals_added": False,
-                    "blended_goals": blended_goals,
-                    "error": "Goal manager not available to add goals"
-                }
+                return GoalAdditionResult(
+                    goals_added=False,
+                    blended_goals=blended_goals,
+                    error="Goal manager not available to add goals"
+                )
                 
         except Exception as e:
             logger.error(f"Error adding mode goals: {e}")
-            return {
-                "goals_added": False,
-                "error": str(e)
-            }
+            return GoalAdditionResult(error=str(e))
 
-    @staticmethod
     @function_tool
-    async def _get_response_guidance(ctx: RunContextWrapper, mode_distribution: Dict[str, float]) -> Dict[str, Any]:
+    async def _get_response_guidance(self, ctx: RunContextWrapper, mode_distribution: Dict[str, float]) -> ResponseGuidanceResult:
         """
         Get guidance for response generation based on mode distribution
         
@@ -801,41 +953,33 @@ class ModeIntegrationManager:
             Guidance for response generation
         """
         if not self.mode_manager:
-            return {"error": "Mode manager not initialized"}
+            return ResponseGuidanceResult(error="Mode manager not initialized")
             
         try:
             # Get guidance from mode manager
             raw_guidance = await self.mode_manager.get_current_mode_guidance()
             
             # Extract key elements for response generation
-            guidance = {
-                "tone": raw_guidance.get("tone", "balanced"),
-                "formality_level": raw_guidance.get("formality_level", 0.5),
-                "verbosity": raw_guidance.get("verbosity", 0.5),
-                "key_phrases": raw_guidance.get("key_phrases", []),
-                "avoid_phrases": raw_guidance.get("avoid_phrases", []),
-                "content_focus": raw_guidance.get("content_focus", []),
-                "mode_description": raw_guidance.get("description", "Blended mode"),
-                "primary_mode": raw_guidance.get("primary_mode", "default"),
-                "active_modes": [m for m, w in mode_distribution.items() if w >= 0.2]
-            }
-            
-            return guidance
+            return ResponseGuidanceResult(
+                tone=raw_guidance.get("tone", "balanced"),
+                formality_level=raw_guidance.get("formality_level", 0.5),
+                verbosity=raw_guidance.get("verbosity", 0.5),
+                key_phrases=raw_guidance.get("key_phrases", []),
+                avoid_phrases=raw_guidance.get("avoid_phrases", []),
+                content_focus=raw_guidance.get("content_focus", []),
+                mode_description=raw_guidance.get("description", "Blended mode"),
+                primary_mode=raw_guidance.get("primary_mode", "default"),
+                active_modes=[m for m, w in mode_distribution.items() if w >= 0.2]
+            )
             
         except Exception as e:
             logger.error(f"Error getting response guidance: {e}")
-            return {
-                "error": str(e),
-                "tone": "balanced",
-                "formality_level": 0.5,
-                "verbosity": 0.5
-            }
+            return ResponseGuidanceResult(error=str(e))
 
-    @staticmethod
     @function_tool
-    async def _analyze_feedback(ctx: RunContextWrapper, 
+    async def _analyze_feedback(self, ctx: RunContextWrapper, 
                              feedback: str, 
-                             interaction_success: bool) -> Dict[str, Any]:
+                             interaction_success: bool) -> FeedbackAnalysisResult:
         """
         Analyze user feedback about interaction
         
@@ -867,20 +1011,19 @@ class ModeIntegrationManager:
         sentiment_modifier = sentiment * 0.2  # Scale sentiment to +/- 0.2
         reward_value = base_reward + sentiment_modifier
         
-        return {
-            "sentiment": sentiment,
-            "reward_value": reward_value,
-            "positive_indicators": positive_matches,
-            "negative_indicators": negative_matches,
-            "feedback_summary": "Positive feedback" if sentiment > 0.3 else 
-                               ("Negative feedback" if sentiment < -0.3 else "Neutral feedback")
-        }
+        return FeedbackAnalysisResult(
+            sentiment=sentiment,
+            reward_value=reward_value,
+            positive_indicators=positive_matches,
+            negative_indicators=negative_matches,
+            feedback_summary="Positive feedback" if sentiment > 0.3 else 
+                            ("Negative feedback" if sentiment < -0.3 else "Neutral feedback")
+        )
 
-    @staticmethod
     @function_tool
-    async def _suggest_mode_adjustments(ctx: RunContextWrapper,
-                                    feedback_analysis: Dict[str, Any],
-                                    mode_distribution: Dict[str, float]) -> Dict[str, float]:
+    async def _suggest_mode_adjustments(self, ctx: RunContextWrapper,
+                                    feedback_analysis: FeedbackAnalysisResult,
+                                    mode_distribution: Dict[str, float]) -> ModeAdjustmentResult:
         """
         Suggest adjustments to mode distribution based on feedback
         
@@ -892,7 +1035,7 @@ class ModeIntegrationManager:
             Suggested mode adjustments
         """
         # Extract sentiment
-        sentiment = feedback_analysis.get("sentiment", 0.0)
+        sentiment = feedback_analysis.sentiment
         
         # Initialize adjustments
         adjustments = {}
@@ -949,12 +1092,11 @@ class ModeIntegrationManager:
                     secondary_mode = secondary_modes[0][0]
                     adjustments[secondary_mode] = 0.05
         
-        return adjustments
+        return ModeAdjustmentResult(adjustments=adjustments)
 
-    @staticmethod
     @function_tool
-    async def _calculate_feedback_reward(ctx: RunContextWrapper,
-                                    feedback_analysis: Dict[str, Any],
+    async def _calculate_feedback_reward(self, ctx: RunContextWrapper,
+                                    feedback_analysis: FeedbackAnalysisResult,
                                     interaction_success: bool) -> float:
         """
         Calculate reward value for feedback
@@ -967,7 +1109,7 @@ class ModeIntegrationManager:
             Reward value
         """
         # Extract sentiment
-        sentiment = feedback_analysis.get("sentiment", 0.0)
+        sentiment = feedback_analysis.sentiment
         
         # Base reward based on success
         base_reward = 0.3 if interaction_success else -0.2
@@ -983,9 +1125,8 @@ class ModeIntegrationManager:
         
         return reward
 
-    @staticmethod
     @function_tool
-    async def _get_mode_distribution(ctx: RunContextWrapper) -> Dict[str, Any]:
+    async def _get_mode_distribution(self, ctx: RunContextWrapper) -> ModeDistributionInfo:
         """
         Get the current mode distribution
         
@@ -993,11 +1134,7 @@ class ModeIntegrationManager:
             Current mode distribution information
         """
         if not self.mode_manager or not hasattr(self.mode_manager, 'context'):
-            return {
-                "mode_distribution": {},
-                "primary_mode": None,
-                "active_modes": []
-            }
+            return ModeDistributionInfo()
             
         try:
             # Get mode distribution
@@ -1009,23 +1146,18 @@ class ModeIntegrationManager:
             # Get active modes
             active_modes = self.mode_manager.context.mode_distribution.active_modes
             
-            return {
-                "mode_distribution": mode_distribution,
-                "primary_mode": primary_mode,
-                "primary_weight": primary_weight,
-                "active_modes": active_modes
-            }
+            return ModeDistributionInfo(
+                mode_distribution=mode_distribution,
+                primary_mode=primary_mode,
+                primary_weight=primary_weight,
+                active_modes=active_modes
+            )
         except Exception as e:
             logger.error(f"Error getting mode distribution: {e}")
-            return {
-                "mode_distribution": {},
-                "primary_mode": None,
-                "active_modes": []
-            }
+            return ModeDistributionInfo()
 
-    @staticmethod
     @function_tool
-    async def _get_mode_parameters(ctx: RunContextWrapper, mode: str) -> Dict[str, Any]:
+    async def _get_mode_parameters(self, ctx: RunContextWrapper, mode: str) -> ModeParameters:
         """
         Get parameters for a specific mode
         
@@ -1036,17 +1168,17 @@ class ModeIntegrationManager:
             Mode parameters
         """
         if not self.mode_manager:
-            return {}
+            return ModeParameters()
             
         try:
-            return self.mode_manager.get_mode_parameters(mode)
+            params = self.mode_manager.get_mode_parameters(mode)
+            return ModeParameters(parameters=params)
         except Exception as e:
             logger.error(f"Error getting mode parameters: {e}")
-            return {}
+            return ModeParameters()
 
-    @staticmethod
     @function_tool
-    async def _get_conversation_style(ctx: RunContextWrapper, mode: str) -> Dict[str, Any]:
+    async def _get_conversation_style(self, ctx: RunContextWrapper, mode: str) -> ConversationStyle:
         """
         Get conversation style for a specific mode
         
@@ -1057,20 +1189,18 @@ class ModeIntegrationManager:
             Conversation style
         """
         if not self.mode_manager:
-            return {}
+            return ConversationStyle()
             
         try:
-            return self.mode_manager.get_conversation_style(mode)
+            style = self.mode_manager.get_conversation_style(mode)
+            return ConversationStyle(style=style)
         except Exception as e:
             logger.error(f"Error getting conversation style: {e}")
-            return {}
+            return ConversationStyle()
 
-    @staticmethod
     @function_tool
-    async def _blend_guidance_elements(
-        ctx: RunContextWrapper,
-        mode_distribution: Dict[str, float]
-    ) -> Dict[str, Any]:
+    async def _blend_guidance_elements(self, ctx: RunContextWrapper,
+                                     mode_distribution: Dict[str, float]) -> BlendedGuidanceElements:
         """
         Blend guidance elements from multiple modes
         
@@ -1099,7 +1229,8 @@ class ModeIntegrationManager:
         for mode, norm_weight in normalized_weights.items():
             try:
                 # Get conversation style
-                style = await self._get_conversation_style(ctx, mode)
+                style_result = await self._get_conversation_style(ctx, mode)
+                style = style_result.style
                 
                 # Extract tone
                 if "tone" in style:
@@ -1160,7 +1291,8 @@ class ModeIntegrationManager:
         params = {}
         for mode, weight in normalized_weights.items():
             try:
-                mode_params = await self._get_mode_parameters(ctx, mode)
+                mode_params_result = await self._get_mode_parameters(ctx, mode)
+                mode_params = mode_params_result.parameters
                 
                 for param_name, param_value in mode_params.items():
                     if isinstance(param_value, (int, float)):
@@ -1172,25 +1304,22 @@ class ModeIntegrationManager:
             except:
                 continue
         
-        return {
-            "tone": tone_string,
-            "formality_level": params.get("formality", 0.5),
-            "verbosity": params.get("depth", 0.5),
-            "key_phrases": blended_elements["key_phrases"],
-            "avoid_phrases": blended_elements["avoid_phrases"],
-            "content_focus": blended_elements["content_focus"],
-            "weighted_parameters": params,
-            "active_modes": {mode: weight for mode, weight in normalized_weights.items()}
-        }
+        return BlendedGuidanceElements(
+            tone=tone_string,
+            formality_level=params.get("formality", 0.5),
+            verbosity=params.get("depth", 0.5),
+            key_phrases=blended_elements["key_phrases"],
+            avoid_phrases=blended_elements["avoid_phrases"],
+            content_focus=blended_elements["content_focus"],
+            weighted_parameters=params,
+            active_modes={mode: weight for mode, weight in normalized_weights.items()}
+        )
 
-    @staticmethod
     @function_tool
-    async def _blend_mode_outputs(
-        ctx: RunContextWrapper,
-        context_result: Dict[str, Any],
-        mode_result: Dict[str, Any],
-        goals_result: Dict[str, Any]
-    ) -> Dict[str, Any]:
+    async def _blend_mode_outputs(self, ctx: RunContextWrapper,
+                                context_result: ContextProcessingResult,
+                                mode_result: ModeUpdateResult,
+                                goals_result: GoalAdditionResult) -> BlendedModeOutput:
         """
         Blend outputs from multiple mode systems
         
@@ -1202,52 +1331,25 @@ class ModeIntegrationManager:
         Returns:
             Blended output
         """
-        # Extract key information
+        # Get active modes
+        active_modes = [(mode, weight) for mode, weight in mode_result.mode_distribution.items() if weight >= 0.2]
         
-        # Get context information
-        context_distribution = context_result.get("context_distribution", {})
-        primary_context = context_result.get("primary_context", "undefined")
-        context_confidence = context_result.get("overall_confidence", 0.0)
-        active_contexts = context_result.get("active_contexts", [])
-        
-        # Get mode information
-        mode_distribution = mode_result.get("mode_distribution", {})
-        primary_mode = mode_result.get("primary_mode", "default")
-        mode_changed = mode_result.get("mode_changed", False)
-        
-        # Get goals information
-        blended_goals = goals_result.get("blended_goals", [])
-        goals_added = goals_result.get("goals_added", False)
-        
-        # Create blended result
-        blended = {
-            "context_processed": True,
-            "mode_updated": True,
-            "goals_added": goals_added,
-            "mode_distribution": mode_distribution,
-            "primary_mode": primary_mode,
-            "active_modes": [(mode, weight) for mode, weight in mode_distribution.items() if weight >= 0.2],
-            "context_result": {
-                "context_distribution": context_distribution,
-                "primary_context": primary_context,
-                "context_confidence": context_confidence,
-                "active_contexts": active_contexts
-            },
-            "mode_result": mode_result,
-            "goals_result": {
-                "blended_goals": blended_goals
-            }
-        }
-        
-        return blended
+        return BlendedModeOutput(
+            context_processed=True,
+            mode_updated=True,
+            goals_added=goals_result.goals_added,
+            mode_distribution=mode_result.mode_distribution,
+            primary_mode=mode_result.primary_mode,
+            active_modes=active_modes,
+            context_result=context_result,
+            mode_result=mode_result,
+            goals_result=goals_result
+        )
 
-    @staticmethod
     @function_tool
-    async def _check_blend_coherence(
-        ctx: RunContextWrapper,
-        context_distribution: Dict[str, float],
-        mode_distribution: Dict[str, float]
-    ) -> Dict[str, Any]:
+    async def _check_blend_coherence(self, ctx: RunContextWrapper,
+                                   context_distribution: Dict[str, float],
+                                   mode_distribution: Dict[str, float]) -> CoherenceCheckResult:
         """
         Check coherence between context and mode distributions
         
@@ -1305,15 +1407,14 @@ class ModeIntegrationManager:
         else:
             correlation = 1.0  # Default if no pairs to check
             
-        return {
-            "coherence_score": correlation,
-            "is_coherent": correlation >= 0.7,
-            "misalignments": misalignments
-        }
+        return CoherenceCheckResult(
+            coherence_score=correlation,
+            is_coherent=correlation >= 0.7,
+            misalignments=misalignments
+        )
 
-    @staticmethod
     @function_tool
-    async def _extract_blended_guidance(ctx: RunContextWrapper, mode_distribution: Dict[str, float]) -> ModeGuidance:
+    async def _extract_blended_guidance(self, ctx: RunContextWrapper, mode_distribution: Dict[str, float]) -> ModeGuidance:
         """
         Extract response guidance from blended mode distribution
         
@@ -1327,16 +1428,14 @@ class ModeIntegrationManager:
         elements = await self._blend_guidance_elements(ctx, mode_distribution)
         
         # Create guidance object
-        guidance = ModeGuidance(
-            tone=elements.get("tone", "balanced"),
-            formality_level=elements.get("formality_level", 0.5),
-            verbosity=elements.get("verbosity", 0.5),
-            key_phrases=elements.get("key_phrases", []),
-            avoid_phrases=elements.get("avoid_phrases", []),
-            content_focus=elements.get("content_focus", []),
-            mode_description=f"Blended mode: {', '.join(elements.get('active_modes', {}).keys())}",
-            weighted_parameters=elements.get("weighted_parameters", {}),
-            active_modes=elements.get("active_modes", {})
+        return ModeGuidance(
+            tone=elements.tone,
+            formality_level=elements.formality_level,
+            verbosity=elements.verbosity,
+            key_phrases=elements.key_phrases,
+            avoid_phrases=elements.avoid_phrases,
+            content_focus=elements.content_focus,
+            mode_description=f"Blended mode: {', '.join(elements.active_modes.keys())}",
+            weighted_parameters=elements.weighted_parameters,
+            active_modes=elements.active_modes
         )
-        
-        return guidance
