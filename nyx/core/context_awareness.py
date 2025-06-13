@@ -213,6 +213,93 @@ class ContextSystemState(BaseModel):
     history: List[Dict[str, Any]] = Field(default_factory=list, description="Recent context history")
     emotional_baselines: Optional[Dict[str, Dict[str, float]]] = Field(None, description="Emotional baselines by context")
 
+# New Pydantic models to replace Dict return types
+class SignalInfo(BaseModel):
+    """Signal information"""
+    type: str = Field(..., description="Signal type")
+    value: str = Field(..., description="Signal value")
+    context: str = Field(..., description="Context type")
+    strength: float = Field(..., description="Signal strength")
+
+class CategorizedSignals(BaseModel):
+    """Categorized signals output"""
+    explicit: List[SignalInfo] = Field(default_factory=list)
+    implicit: List[SignalInfo] = Field(default_factory=list)
+    dominant: List[SignalInfo] = Field(default_factory=list)
+    casual: List[SignalInfo] = Field(default_factory=list)
+    intellectual: List[SignalInfo] = Field(default_factory=list)
+    empathic: List[SignalInfo] = Field(default_factory=list)
+    playful: List[SignalInfo] = Field(default_factory=list)
+    creative: List[SignalInfo] = Field(default_factory=list)
+    professional: List[SignalInfo] = Field(default_factory=list)
+
+class EmotionalBaselines(BaseModel):
+    """Emotional baselines"""
+    nyxamine: float = Field(0.5, ge=0.0, le=1.0)
+    oxynixin: float = Field(0.5, ge=0.0, le=1.0)
+    cortanyx: float = Field(0.3, ge=0.0, le=1.0)
+    adrenyx: float = Field(0.4, ge=0.0, le=1.0)
+    seranix: float = Field(0.5, ge=0.0, le=1.0)
+
+class ConfidenceThresholdResult(BaseModel):
+    """Confidence threshold check result"""
+    threshold_met: bool
+    confidence_threshold: float
+    confidence: float
+    significant_contexts: List[Tuple[str, float]]
+    has_significant_contexts: bool
+
+class ContextDetectionResult(BaseModel):
+    """Context detection result"""
+    context_distribution: ContextDistribution
+    confidence: float
+    signals: List[SignalInfo]
+    signal_based: bool
+    detection_method: str
+
+class MessageFeatures(BaseModel):
+    """Extracted message features"""
+    length: int
+    word_count: int
+    has_question: bool
+    capitalization_ratio: float
+    punctuation_count: int
+    dominance_terms: List[str]
+    emotional_terms: List[str]
+    has_dominance_terms: bool
+    has_emotional_terms: bool
+    likely_formal: bool
+    likely_casual: bool
+    likely_emotional: bool
+    likely_intellectual: bool
+    feature_distribution: Dict[str, float]
+
+class HistoryEntry(BaseModel):
+    """Context history entry"""
+    timestamp: str
+    message_snippet: str
+    detected_distribution: Dict[str, float]
+    updated_distribution: Dict[str, float]
+    confidence: float
+    primary_context_changed: bool
+    active_contexts: List[str]
+
+class CoherenceResult(BaseModel):
+    """Coherence check result"""
+    coherence_score: float
+    is_coherent: bool
+    active_contexts: List[str]
+    incoherent_pairs: List[Tuple[str, str, float]]
+
+class TransitionAnalysis(BaseModel):
+    """Context transition analysis"""
+    is_appropriate: bool
+    is_gradual: bool
+    total_change: float
+    average_change: float
+    context_changes: Dict[str, Dict[str, Any]]
+    significant_shifts: List[str]
+
 class CASystemContext:
     """Context object for the context awareness system"""
     def __init__(self, emotional_core=None):
@@ -581,7 +668,7 @@ class ContextAwarenessSystem:
     @staticmethod
     @function_tool
     async def _calculate_context_distribution(ctx: RunContextWrapper[CASystemContext], 
-                                         signals: List[Dict[str, Any]]) -> ContextDistribution:
+                                         signals: List[SignalInfo]) -> ContextDistribution:
         """
         Calculate context distribution based on detected signals
         
@@ -605,8 +692,8 @@ class ContextAwarenessSystem:
         # Calculate initial weights from signals
         signal_weights = {}
         for signal in signals:
-            context = signal.get("context", "").lower()
-            strength = signal.get("strength", 0.5)
+            context = signal.context.lower()
+            strength = signal.strength
             
             if context in distribution:
                 if context not in signal_weights:
@@ -630,13 +717,13 @@ class ContextAwarenessSystem:
             distribution[context] = min(1.0, total_weight)
         
         # Current context persistence factor
-        if self.context_distribution.sum_weights() > 0.1:
+        if ctx.context.context_distribution.sum_weights() > 0.1:
             # Add persistence influence from current distribution
             persistence_factor = 0.3
             
             # For each context, blend with current distribution
             for context in distribution:
-                current_weight = getattr(self.context_distribution, context, 0.0)
+                current_weight = getattr(ctx.context.context_distribution, context, 0.0)
                 distribution[context] = (distribution[context] * (1 - persistence_factor) + 
                                        current_weight * persistence_factor)
         
@@ -652,7 +739,7 @@ class ContextAwarenessSystem:
     @staticmethod
     @function_tool
     async def _verify_blend_coherence(ctx: RunContextWrapper[CASystemContext], 
-                                 distribution: ContextDistribution) -> Dict[str, Any]:
+                                 distribution: ContextDistribution) -> CoherenceResult:
         """
         Verify coherence of a context distribution blend
         
@@ -723,18 +810,18 @@ class ContextAwarenessSystem:
             # If only one or no active contexts, coherence is high
             overall_coherence = 0.9
         
-        return {
-            "coherence_score": overall_coherence,
-            "is_coherent": overall_coherence >= 0.5,
-            "active_contexts": [context for context, _ in active_contexts],
-            "incoherent_pairs": incoherent_pairs
-        }
+        return CoherenceResult(
+            coherence_score=overall_coherence,
+            is_coherent=overall_coherence >= 0.5,
+            active_contexts=[context for context, _ in active_contexts],
+            incoherent_pairs=incoherent_pairs
+        )
 
     @staticmethod
     @function_tool
     async def _analyze_distribution_transition(ctx: RunContextWrapper[CASystemContext], 
                                           from_distribution: ContextDistribution, 
-                                          to_distribution: ContextDistribution) -> Dict[str, Any]:
+                                          to_distribution: ContextDistribution) -> TransitionAnalysis:
         """
         Analyze appropriateness of context distribution transition
         
@@ -773,21 +860,21 @@ class ContextAwarenessSystem:
         
         # Determine if transition is appropriate
         is_gradual = avg_change <= 0.3
-        is_appropriate = is_gradual or self.context_distribution.sum_weights() < 0.2
+        is_appropriate = is_gradual or ctx.context.context_distribution.sum_weights() < 0.2
         
-        return {
-            "is_appropriate": is_appropriate,
-            "is_gradual": is_gradual,
-            "total_change": total_change,
-            "average_change": avg_change,
-            "context_changes": context_changes,
-            "significant_shifts": [context for context, data in context_changes.items() if data["change"] > 0.3]
-        }
+        return TransitionAnalysis(
+            is_appropriate=is_appropriate,
+            is_gradual=is_gradual,
+            total_change=total_change,
+            average_change=avg_change,
+            context_changes=context_changes,
+            significant_shifts=[context for context, data in context_changes.items() if data["change"] > 0.3]
+        )
 
     @staticmethod
     @function_tool
     async def _blend_emotional_baselines(ctx: RunContextWrapper[CASystemContext], 
-                                    distribution: ContextDistribution) -> Dict[str, float]:
+                                    distribution: ContextDistribution) -> EmotionalBaselines:
         """
         Calculate blended emotional baselines based on context distribution
         
@@ -812,12 +899,12 @@ class ContextAwarenessSystem:
         
         # For each context, add its weighted contribution
         for context_name, weight in distribution_dict.items():
-            if weight > self.emotional_blend_threshold:  # Only consider significant contexts
+            if weight > ctx.context.emotional_blend_threshold:  # Only consider significant contexts
                 try:
                     # Get baseline for this context
                     context_enum = InteractionContext(context_name)
-                    if context_enum in self.context_emotional_baselines:
-                        context_baselines = self.context_emotional_baselines[context_enum]
+                    if context_enum in ctx.context.context_emotional_baselines:
+                        context_baselines = ctx.context.context_emotional_baselines[context_enum]
                         
                         # Add weighted contribution
                         for chemical, value in context_baselines.items():
@@ -838,14 +925,14 @@ class ContextAwarenessSystem:
             for chemical in blended_baselines:
                 blended_baselines[chemical] = 0.5
         
-        return blended_baselines
+        return EmotionalBaselines(**blended_baselines)
     
     # Existing helper functions updated for blended context
 
     @staticmethod
     @function_tool
     async def _categorize_signals(ctx: RunContextWrapper[CASystemContext], 
-                              signals: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
+                              signals: List[SignalInfo]) -> CategorizedSignals:
         """
         Categorize signals by type and context
         
@@ -855,36 +942,26 @@ class ContextAwarenessSystem:
         Returns:
             Categorized signals
         """
-        categories = {
-            "explicit": [],
-            "implicit": [],
-            "dominant": [],
-            "casual": [],
-            "intellectual": [],
-            "empathic": [],
-            "playful": [],
-            "creative": [],
-            "professional": []
-        }
+        categorized = CategorizedSignals()
         
         for signal in signals:
             # Categorize by explicitness
-            if signal.get("type") in ["keyword", "phrase"]:
-                categories["explicit"].append(signal)
+            if signal.type in ["keyword", "phrase"]:
+                categorized.explicit.append(signal)
             else:
-                categories["implicit"].append(signal)
+                categorized.implicit.append(signal)
                 
             # Categorize by context
-            context = signal.get("context")
-            if context and context.lower() in categories:
-                categories[context.lower()].append(signal)
+            context = signal.context.lower()
+            if hasattr(categorized, context):
+                getattr(categorized, context).append(signal)
                 
-        return categories
+        return categorized
 
     @staticmethod
     @function_tool
     async def _identify_implicit_signals(ctx: RunContextWrapper[CASystemContext], 
-                                    message: str) -> List[Dict[str, Any]]:
+                                    message: str) -> List[SignalInfo]:
         """
         Identify implicit context signals in a message
         
@@ -901,64 +978,64 @@ class ContextAwarenessSystem:
         
         # Check for question patterns (intellectual context)
         if "?" in message and any(q in message_lower for q in ["why", "how", "what if", "explain"]):
-            implicit_signals.append({
-                "type": "implicit",
-                "value": "question_pattern",
-                "context": "intellectual",
-                "strength": 0.6
-            })
+            implicit_signals.append(SignalInfo(
+                type="implicit",
+                value="question_pattern",
+                context="intellectual",
+                strength=0.6
+            ))
             
         # Check for emotional expression patterns (empathic context)
         if any(em in message_lower for em in ["feel", "emotions", "hurts", "happy", "sad", "worried"]):
-            implicit_signals.append({
-                "type": "implicit",
-                "value": "emotional_expression",
-                "context": "empathic", 
-                "strength": 0.7
-            })
+            implicit_signals.append(SignalInfo(
+                type="implicit",
+                value="emotional_expression",
+                context="empathic", 
+                strength=0.7
+            ))
             
         # Check for playful tone
         if any(p in message_lower for p in ["haha", "lol", "😂", "😄", "joke"]):
-            implicit_signals.append({
-                "type": "implicit",
-                "value": "playful_tone",
-                "context": "playful",
-                "strength": 0.6
-            })
+            implicit_signals.append(SignalInfo(
+                type="implicit",
+                value="playful_tone",
+                context="playful",
+                strength=0.6
+            ))
             
         # Check for formal language (professional context)
         if "please" in message_lower and "would" in message_lower:
-            implicit_signals.append({
-                "type": "implicit",
-                "value": "formal_language",
-                "context": "professional",
-                "strength": 0.5
-            })
+            implicit_signals.append(SignalInfo(
+                type="implicit",
+                value="formal_language",
+                context="professional",
+                strength=0.5
+            ))
             
         # Check for creative prompt patterns
         if any(c in message_lower for c in ["imagine", "create", "story", "pretend"]):
-            implicit_signals.append({
-                "type": "implicit",
-                "value": "creative_prompt",
-                "context": "creative",
-                "strength": 0.7
-            })
+            implicit_signals.append(SignalInfo(
+                type="implicit",
+                value="creative_prompt",
+                context="creative",
+                strength=0.7
+            ))
             
         # Check for dominant language patterns
         if any(d in message_lower for d in ["must", "will", "now", "i want you to"]):
-            implicit_signals.append({
-                "type": "implicit",
-                "value": "directive_language",
-                "context": "dominant",
-                "strength": 0.5  # Lower strength for implicit signals
-            })
+            implicit_signals.append(SignalInfo(
+                type="implicit",
+                value="directive_language",
+                context="dominant",
+                strength=0.5  # Lower strength for implicit signals
+            ))
             
         return implicit_signals
 
     @staticmethod
     @function_tool
     async def _get_emotional_baselines(ctx: RunContextWrapper[CASystemContext], 
-                                  context_type: str) -> Dict[str, float]:
+                                  context_type: str) -> EmotionalBaselines:
         """
         Get emotional baselines for a specific context
         
@@ -978,23 +1055,18 @@ class ContextAwarenessSystem:
             context_enum = context_type
             
         # Get baselines for the context
-        if context_enum in self.context_emotional_baselines:
-            return self.context_emotional_baselines[context_enum]
+        if context_enum in ctx.context.context_emotional_baselines:
+            baselines = ctx.context.context_emotional_baselines[context_enum]
+            return EmotionalBaselines(**baselines)
         else:
             # Return default baselines
-            return {
-                "nyxamine": 0.5,
-                "oxynixin": 0.5,
-                "cortanyx": 0.3,
-                "adrenyx": 0.4,
-                "seranix": 0.5
-            }
+            return EmotionalBaselines()
 
     @staticmethod
     @function_tool
     async def _calculate_emotional_impact(ctx: RunContextWrapper[CASystemContext], 
-                                     old_baselines: Dict[str, float], 
-                                     new_baselines: Dict[str, float]) -> float:
+                                     old_baselines: EmotionalBaselines, 
+                                     new_baselines: EmotionalBaselines) -> float:
         """
         Calculate impact of baseline changes on emotional state
         
@@ -1008,10 +1080,13 @@ class ContextAwarenessSystem:
         total_diff = 0.0
         num_chemicals = 0
         
+        old_dict = old_baselines.dict()
+        new_dict = new_baselines.dict()
+        
         # Calculate absolute differences
-        for chemical, old_val in old_baselines.items():
-            if chemical in new_baselines:
-                diff = abs(new_baselines[chemical] - old_val)
+        for chemical, old_val in old_dict.items():
+            if chemical in new_dict:
+                diff = abs(new_dict[chemical] - old_val)
                 total_diff += diff
                 num_chemicals += 1
                 
@@ -1030,7 +1105,7 @@ class ContextAwarenessSystem:
     @function_tool
     async def _check_confidence_threshold(ctx: RunContextWrapper[CASystemContext], 
                                      distribution: ContextDistribution,
-                                     confidence: float) -> Dict[str, Any]:
+                                     confidence: float) -> ConfidenceThresholdResult:
         """
         Check if confidence meets threshold for significant contexts
         
@@ -1046,24 +1121,24 @@ class ContextAwarenessSystem:
         
         # Check if any context exceeds the threshold
         significant_contexts = [(context, weight) for context, weight in active_contexts 
-                              if weight >= self.significant_context_threshold]
+                              if weight >= ctx.context.significant_context_threshold]
         
         # Check confidence threshold
         confidence_threshold = 0.5  # Base confidence threshold
         threshold_met = confidence >= confidence_threshold
         
-        return {
-            "threshold_met": threshold_met,
-            "confidence_threshold": confidence_threshold,
-            "confidence": confidence,
-            "significant_contexts": significant_contexts,
-            "has_significant_contexts": len(significant_contexts) > 0
-        }
+        return ConfidenceThresholdResult(
+            threshold_met=threshold_met,
+            confidence_threshold=confidence_threshold,
+            confidence=confidence,
+            significant_contexts=significant_contexts,
+            has_significant_contexts=len(significant_contexts) > 0
+        )
 
     @staticmethod
     @function_tool
     async def _detect_context_signals(ctx: RunContextWrapper[CASystemContext], 
-                                 message: str) -> Dict[str, Any]:
+                                 message: str) -> ContextDetectionResult:
         """
         Detect context signals and calculate initial context distribution
         
@@ -1089,43 +1164,43 @@ class ContextAwarenessSystem:
         message_lower = message.lower()
         
         # Check for explicit context signals
-        for signal in self.context_signals:
+        for signal in ctx.context.context_signals:
             context_type = signal.context_type.value.lower()
             
             if signal.signal_type == "keyword" and signal.signal_value.lower() in message_lower:
                 context_scores[context_type] += signal.strength
-                detected_signals.append({
-                    "type": signal.signal_type,
-                    "value": signal.signal_value,
-                    "context": context_type,
-                    "strength": signal.strength
-                })
+                detected_signals.append(SignalInfo(
+                    type=signal.signal_type,
+                    value=signal.signal_value,
+                    context=context_type,
+                    strength=signal.strength
+                ))
             elif signal.signal_type == "phrase" and signal.signal_value.lower() in message_lower:
                 context_scores[context_type] += signal.strength * 1.2  # Phrases are stronger signals
-                detected_signals.append({
-                    "type": signal.signal_type,
-                    "value": signal.signal_value,
-                    "context": context_type,
-                    "strength": signal.strength * 1.2
-                })
+                detected_signals.append(SignalInfo(
+                    type=signal.signal_type,
+                    value=signal.signal_value,
+                    context=context_type,
+                    strength=signal.strength * 1.2
+                ))
             elif signal.signal_type == "greeting" and message_lower.startswith(signal.signal_value.lower()):
                 context_scores[context_type] += signal.strength * 0.8  # Greetings are moderate signals
-                detected_signals.append({
-                    "type": signal.signal_type,
-                    "value": signal.signal_value,
-                    "context": context_type,
-                    "strength": signal.strength * 0.8
-                })
+                detected_signals.append(SignalInfo(
+                    type=signal.signal_type,
+                    value=signal.signal_value,
+                    context=context_type,
+                    strength=signal.strength * 0.8
+                ))
         
         # Check for implicit signals
-        implicit_signals = await self._identify_implicit_signals(ctx, message)
+        implicit_signals = await _identify_implicit_signals(ctx, message)
         detected_signals.extend(implicit_signals)
         
         # Add implicit signal scores
         for signal in implicit_signals:
-            context_type = signal.get("context", "").lower()
+            context_type = signal.context.lower()
             if context_type in context_scores:
-                context_scores[context_type] += signal.get("strength", 0.3)
+                context_scores[context_type] += signal.strength
                 
         # Create context distribution
         distribution = ContextDistribution(**context_scores)
@@ -1152,18 +1227,18 @@ class ContextAwarenessSystem:
         if distribution.sum_weights() > 0:
             distribution = distribution.normalize()
             
-        return {
-            "context_distribution": distribution,
-            "confidence": confidence,
-            "signals": detected_signals,
-            "signal_based": True,
-            "detection_method": "composite_analysis"
-        }
+        return ContextDetectionResult(
+            context_distribution=distribution,
+            confidence=confidence,
+            signals=detected_signals,
+            signal_based=True,
+            detection_method="composite_analysis"
+        )
 
     @staticmethod
     @function_tool
     async def _extract_message_features(ctx: RunContextWrapper[CASystemContext], 
-                                   message: str) -> Dict[str, Any]:
+                                   message: str) -> MessageFeatures:
         """
         Extract features from a message for context analysis
         
@@ -1174,31 +1249,27 @@ class ContextAwarenessSystem:
             Extracted message features
         """
         # Basic features
-        features = {
-            "length": len(message),
-            "word_count": len(message.split()),
-            "has_question": "?" in message,
-            "capitalization_ratio": sum(1 for c in message if c.isupper()) / max(1, len(message)),
-            "punctuation_count": sum(1 for c in message if c in ".,;:!?-"),
-            "dominance_terms": [],
-            "emotional_terms": []
-        }
+        length = len(message)
+        word_count = len(message.split())
+        has_question = "?" in message
+        capitalization_ratio = sum(1 for c in message if c.isupper()) / max(1, len(message))
+        punctuation_count = sum(1 for c in message if c in ".,;:!?-")
         
         # Check for dominance-related terms
-        dominance_terms = ["mistress", "domme", "slave", "obey", "submit", "kneel", "worship", "serve"]
-        features["dominance_terms"] = [term for term in dominance_terms if term in message.lower()]
-        features["has_dominance_terms"] = len(features["dominance_terms"]) > 0
+        dominance_terms_list = ["mistress", "domme", "slave", "obey", "submit", "kneel", "worship", "serve"]
+        dominance_terms = [term for term in dominance_terms_list if term in message.lower()]
+        has_dominance_terms = len(dominance_terms) > 0
         
         # Check for emotional terms
-        emotional_terms = ["feel", "sad", "happy", "angry", "worried", "excited", "afraid", "love", "hate"]
-        features["emotional_terms"] = [term for term in emotional_terms if term in message.lower()]
-        features["has_emotional_terms"] = len(features["emotional_terms"]) > 0
+        emotional_terms_list = ["feel", "sad", "happy", "angry", "worried", "excited", "afraid", "love", "hate"]
+        emotional_terms = [term for term in emotional_terms_list if term in message.lower()]
+        has_emotional_terms = len(emotional_terms) > 0
         
         # Derive higher-level features
-        features["likely_formal"] = features["capitalization_ratio"] > 0.2 and features["punctuation_count"] >= 2
-        features["likely_casual"] = features["capitalization_ratio"] < 0.1 and "hi" in message.lower()
-        features["likely_emotional"] = features["has_emotional_terms"] and "?" not in message
-        features["likely_intellectual"] = features["word_count"] > 15 and features["has_question"]
+        likely_formal = capitalization_ratio > 0.2 and punctuation_count >= 2
+        likely_casual = capitalization_ratio < 0.1 and "hi" in message.lower()
+        likely_emotional = has_emotional_terms and "?" not in message
+        likely_intellectual = word_count > 15 and has_question
         
         # Derive context distribution from features
         feature_distribution = {
@@ -1212,32 +1283,45 @@ class ContextAwarenessSystem:
         }
         
         # Dominant features
-        if features["has_dominance_terms"]:
-            feature_distribution["dominant"] = 0.7 * (len(features["dominance_terms"]) / 2)
+        if has_dominance_terms:
+            feature_distribution["dominant"] = 0.7 * (len(dominance_terms) / 2)
             
         # Casual features
-        if features["likely_casual"]:
+        if likely_casual:
             feature_distribution["casual"] = 0.6
         
         # Intellectual features
-        if features["likely_intellectual"]:
+        if likely_intellectual:
             feature_distribution["intellectual"] = 0.7
             
         # Empathic features
-        if features["likely_emotional"]:
-            feature_distribution["empathic"] = 0.7 * (len(features["emotional_terms"]) / 2)
+        if likely_emotional:
+            feature_distribution["empathic"] = 0.7 * (len(emotional_terms) / 2)
             
         # Professional features
-        if features["likely_formal"]:
+        if likely_formal:
             feature_distribution["professional"] = 0.6
-            
-        features["feature_distribution"] = feature_distribution
         
-        return features
+        return MessageFeatures(
+            length=length,
+            word_count=word_count,
+            has_question=has_question,
+            capitalization_ratio=capitalization_ratio,
+            punctuation_count=punctuation_count,
+            dominance_terms=dominance_terms,
+            emotional_terms=emotional_terms,
+            has_dominance_terms=has_dominance_terms,
+            has_emotional_terms=has_emotional_terms,
+            likely_formal=likely_formal,
+            likely_casual=likely_casual,
+            likely_emotional=likely_emotional,
+            likely_intellectual=likely_intellectual,
+            feature_distribution=feature_distribution
+        )
 
     @staticmethod
     @function_tool
-    async def _get_context_history(ctx: RunContextWrapper[CASystemContext]) -> List[Dict[str, Any]]:
+    async def _get_context_history(ctx: RunContextWrapper[CASystemContext]) -> List[HistoryEntry]:
         """
         Get recent context history
         
@@ -1245,14 +1329,29 @@ class ContextAwarenessSystem:
             Recent context history
         """
         # Return last 5 context history items or fewer if not available
-        return self.context_history[-5:] if self.context_history else []
+        history = ctx.context.context_history[-5:] if ctx.context.context_history else []
+        
+        # Convert to HistoryEntry objects
+        history_entries = []
+        for item in history:
+            history_entries.append(HistoryEntry(
+                timestamp=item.get("timestamp", ""),
+                message_snippet=item.get("message_snippet", ""),
+                detected_distribution=item.get("detected_distribution", {}),
+                updated_distribution=item.get("updated_distribution", {}),
+                confidence=item.get("confidence", 0.0),
+                primary_context_changed=item.get("primary_context_changed", False),
+                active_contexts=item.get("active_contexts", [])
+            ))
+        
+        return history_entries
 
     @staticmethod
     @function_tool
     async def _calculate_context_confidence(ctx: RunContextWrapper[CASystemContext],
                                       distribution: ContextDistribution,
-                                      signals: List[Dict[str, Any]],
-                                      message_features: Dict[str, Any]) -> float:
+                                      signals: List[SignalInfo],
+                                      message_features: MessageFeatures) -> float:
         """
         Calculate confidence in detected context distribution
         
@@ -1269,7 +1368,7 @@ class ContextAwarenessSystem:
         
         # Calculate average signal strength
         if signals:
-            total_strength = sum(s.get("strength", 0.5) for s in signals)
+            total_strength = sum(s.strength for s in signals)
             avg_strength = total_strength / len(signals)
             strength_factor = avg_strength
         else:
@@ -1289,7 +1388,7 @@ class ContextAwarenessSystem:
             
         # Match with message features
         feature_confidence = 0.0
-        feature_distribution = message_features.get("feature_distribution", {})
+        feature_distribution = message_features.feature_distribution
         
         if feature_distribution:
             # Calculate correlation between detected distribution and feature distribution
@@ -1415,14 +1514,15 @@ class ContextAwarenessSystem:
                     )
                     
                     # Apply baseline adjustments
-                    for chemical, baseline in blended_baselines.items():
+                    blended_dict = blended_baselines.dict()
+                    for chemical, baseline in blended_dict.items():
                         # Only adjust if in emotional core
                         if chemical in self.system_context.emotional_core.neurochemicals:
                             # Create temporary baseline (not permanent changes)
                             self.system_context.emotional_core.neurochemicals[chemical]["temporary_baseline"] = baseline
                     
                     effects["emotional"] = True
-                    effects["baselines"] = blended_baselines
+                    effects["baselines"] = blended_dict
                     effects["active_contexts"] = [c for c, w in self.context_distribution.active_contexts]
                     
                     # Calculate emotional impact
