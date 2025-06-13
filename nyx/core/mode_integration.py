@@ -333,9 +333,9 @@ class ModeIntegrationManager:
             interaction mode system for future interactions.
             """,
             tools=[
-                function_tool(self._analyze_feedback),
-                function_tool(self._suggest_mode_adjustments),
-                function_tool(self._calculate_feedback_reward)
+                self._create_analyze_feedback_tool(),
+                self._create_suggest_mode_adjustments_tool(),
+                self._create_calculate_feedback_reward_tool()
             ],
             model="gpt-4.1-nano",
             output_type=FeedbackOutput
@@ -358,10 +358,10 @@ class ModeIntegrationManager:
             elements from all active modes in the current distribution.
             """,
             tools=[
-                function_tool(self._get_mode_distribution),
-                function_tool(self._get_mode_parameters),
-                function_tool(self._get_conversation_style),
-                function_tool(self._blend_guidance_elements)
+                self._create_get_mode_distribution_tool(),
+                self._create_get_mode_parameters_tool(),
+                self._create_get_conversation_style_tool(),
+                self._create_blend_guidance_elements_tool()
             ],
             model="gpt-4.1-nano",
             output_type=ModeGuidance
@@ -384,9 +384,9 @@ class ModeIntegrationManager:
             like separate modes stitched together.
             """,
             tools=[
-                function_tool(self._blend_mode_outputs),
-                function_tool(self._check_blend_coherence),
-                function_tool(self._extract_blended_guidance)
+                self._create_blend_mode_outputs_tool(),
+                self._create_check_blend_coherence_tool(),
+                self._create_extract_blended_guidance_tool()
             ],
             model="gpt-4.1-nano",
             output_type=BlendedModeOutput
@@ -439,10 +439,10 @@ class ModeIntegrationManager:
             blended experience that proportionally represents all active modes.
             """,
             tools=[
-                function_tool(self._process_context),
-                function_tool(self._update_mode_distribution),
-                function_tool(self._add_mode_goals),
-                function_tool(self._get_response_guidance)
+                self._create_process_context_tool(),
+                self._create_update_mode_distribution_tool(),
+                self._create_add_mode_goals_tool(),
+                self._create_get_response_guidance_tool()
             ],
             handoffs=[
                 handoff(self.feedback_agent, 
@@ -841,59 +841,66 @@ class ModeIntegrationManager:
             }
     
     # Agent function tools
-    @function_tool
-    async def _process_context(self, ctx: RunContextWrapper, message: str) -> ContextProcessingResult:
-        """
-        Process message through context awareness system
-        
-        Args:
-            message: User message
+    def _create_process_context_tool(self):
+        """Create the process context tool with proper access to self"""
+        @function_tool
+        async def _process_context(ctx: RunContextWrapper, message: str) -> ContextProcessingResult:
+            """
+            Process message through context awareness system
             
-        Returns:
-            Context processing results
-        """
-        if not self.context_system:
-            return ContextProcessingResult(error="Context system not initialized")
-        
-        try:
-            context_result = await self.context_system.process_message(message)
-            return ContextProcessingResult(
-                context_distribution=context_result.get("context_distribution", {}),
-                primary_context=context_result.get("primary_context", "undefined"),
-                context_confidence=context_result.get("overall_confidence", 0.0),
-                active_contexts=context_result.get("active_contexts", [])
-            )
-        except Exception as e:
-            logger.error(f"Error processing context: {e}")
-            return ContextProcessingResult(error=str(e))
+            Args:
+                message: User message
+                
+            Returns:
+                Context processing results
+            """
+            if not self.context_system:
+                return ContextProcessingResult(error="Context system not initialized")
             
-    @function_tool
-    async def _update_mode_distribution(self, ctx: RunContextWrapper, context_result: ContextProcessingResult) -> ModeUpdateResult:
-        """
-        Update mode distribution based on context
+            try:
+                context_result = await self.context_system.process_message(message)
+                return ContextProcessingResult(
+                    context_distribution=context_result.get("context_distribution", {}),
+                    primary_context=context_result.get("primary_context", "undefined"),
+                    context_confidence=context_result.get("overall_confidence", 0.0),
+                    active_contexts=context_result.get("active_contexts", [])
+                )
+            except Exception as e:
+                logger.error(f"Error processing context: {e}")
+                return ContextProcessingResult(error=str(e))
         
-        Args:
-            context_result: Result from context processing
+        return _process_context
+    def _create_update_mode_distribution_tool(self):
+        """Create the update mode distribution tool with proper access to self"""
+        @function_tool
+        async def _update_mode_distribution(ctx: RunContextWrapper, context_result: ContextProcessingResult) -> ModeUpdateResult:
+            """
+            Update mode distribution based on context
             
-        Returns:
-            Mode update results
-        """
-        if not self.mode_manager:
-            return ModeUpdateResult(error="Mode manager not initialized")
+            Args:
+                context_result: Result from context processing
+                
+            Returns:
+                Mode update results
+            """
+            if not self.mode_manager:
+                return ModeUpdateResult(error="Mode manager not initialized")
+            
+            try:
+                # Convert back to dict for compatibility
+                context_dict = context_result.dict()
+                mode_result = await self.mode_manager.update_interaction_mode(context_dict)
+                
+                return ModeUpdateResult(
+                    mode_distribution=mode_result.get("mode_distribution", {}),
+                    primary_mode=mode_result.get("primary_mode", "default"),
+                    mode_changed=mode_result.get("mode_changed", False)
+                )
+            except Exception as e:
+                logger.error(f"Error updating mode: {e}")
+                return ModeUpdateResult(error=str(e))
         
-        try:
-            # Convert back to dict for compatibility
-            context_dict = context_result.dict()
-            mode_result = await self.mode_manager.update_interaction_mode(context_dict)
-            
-            return ModeUpdateResult(
-                mode_distribution=mode_result.get("mode_distribution", {}),
-                primary_mode=mode_result.get("primary_mode", "default"),
-                mode_changed=mode_result.get("mode_changed", False)
-            )
-        except Exception as e:
-            logger.error(f"Error updating mode: {e}")
-            return ModeUpdateResult(error=str(e))
+        return _update_mode_distribution
 
     @function_tool
     async def _add_mode_goals(self, ctx: RunContextWrapper, mode_distribution: Dict[str, float]) -> GoalAdditionResult:
