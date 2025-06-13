@@ -374,7 +374,7 @@ async def format_memories_for_reflection(
             ).model_dump_json()
         )
 
-@function_tool
+@function_tool(strict_mode=False)
 async def extract_scenario_type(memory: RawMemory) -> str:
     """Infer scenario type from memory tags/metadata."""
     tags = [t.lower() for t in memory.tags]
@@ -388,7 +388,7 @@ async def extract_scenario_type(memory: RawMemory) -> str:
     return meta_val.lower() if isinstance(meta_val, str) else "general"
 
 
-@function_tool
+@function_tool(strict_mode=False)
 async def extract_neurochemical_influence(memory: RawMemory) -> Neurochemicals:
     """
     Map a memory’s emotional_context → digital neurochemicals.
