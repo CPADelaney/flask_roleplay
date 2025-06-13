@@ -207,8 +207,13 @@ class EmotionalBaselines(BaseModel):
     adrenyx: float = Field(0.4, ge=0.0, le=1.0)
     seranix: float = Field(0.5, ge=0.0, le=1.0)
 
-class SignificantContext(BaseModel):
-    """A context with significant weight"""
+class ActiveContext(BaseModel):
+    """An active context with its weight"""
+    context: str
+    weight: float = Field(..., ge=0.0, le=1.0)
+
+class PrimaryContext(BaseModel):
+    """Primary context information"""
     context: str
     weight: float = Field(..., ge=0.0, le=1.0)
 
@@ -296,14 +301,27 @@ class ContextChangeInfo(BaseModel):
     change: float = Field(..., ge=0.0)
     direction: str = Field(..., description="increase or decrease")
 
-class TransitionAnalysis(BaseModel):
-    """Context transition analysis"""
-    is_appropriate: bool
-    is_gradual: bool
-    total_change: float
-    average_change: float
-    context_changes: List[ContextChangeInfo]
-    significant_shifts: List[str]
+class ProcessMessageResult(BaseModel):
+    """Result of processing a message"""
+    context_distribution: Dict[str, float] = Field(..., description="Context distribution as dict")
+    primary_context: str = Field(..., description="Primary context name")
+    primary_confidence: float = Field(..., description="Primary context confidence", ge=0.0, le=1.0)
+    overall_confidence: float = Field(..., description="Overall confidence", ge=0.0, le=1.0)
+    active_contexts: List[str] = Field(..., description="List of active contexts")
+    context_changed: bool = Field(..., description="Whether context changed")
+    detection_method: str = Field(..., description="Detection method used")
+    detected_signals: List[Dict[str, Any]] = Field(..., description="Detected signals")
+    notes: Optional[str] = Field(None, description="Additional notes")
+    effects: Dict[str, Any] = Field(default_factory=dict, description="Applied effects")
+
+class CurrentContextInfo(BaseModel):
+    """Current context information"""
+    context_distribution: Dict[str, float] = Field(..., description="Context distribution as dict")
+    primary_context: str = Field(..., description="Primary context name")
+    primary_confidence: float = Field(..., description="Primary context confidence", ge=0.0, le=1.0)
+    active_contexts: List[str] = Field(..., description="List of active contexts")
+    overall_confidence: float = Field(..., description="Overall confidence", ge=0.0, le=1.0)
+    history: List[Dict[str, Any]] = Field(..., description="Recent history")
 
 class BlendedContextDetectionOutput(BaseModel):
     """Output schema for blended context detection"""
@@ -483,56 +501,56 @@ class ContextAwarenessSystem:
         self.context_signals: List[ContextSignal] = self._initialize_context_signals()
         
         # Context-specific emotional baselines
-        self.context_emotional_baselines: Dict[InteractionContext, Dict[str, float]] = {
-            InteractionContext.DOMINANT: {
-                "nyxamine": 0.7,    # High pleasure from dominance
-                "oxynixin": 0.3,    # Lower bonding/empathy in dominance
-                "cortanyx": 0.2,    # Low stress during dominance
-                "adrenyx": 0.6,     # High excitement/arousal
-                "seranix": 0.5      # Moderate mood stability
-            },
-            InteractionContext.CASUAL: {
-                "nyxamine": 0.5,    # Moderate pleasure
-                "oxynixin": 0.6,    # Higher bonding/connection
-                "cortanyx": 0.3,    # Moderate stress
-                "adrenyx": 0.4,     # Moderate arousal
-                "seranix": 0.6      # Good mood stability
-            },
-            InteractionContext.INTELLECTUAL: {
-                "nyxamine": 0.8,    # High pleasure from intellectual topics
-                "oxynixin": 0.4,    # Moderate empathy/connection
-                "cortanyx": 0.2,    # Low stress
-                "adrenyx": 0.3,     # Low arousal
-                "seranix": 0.7      # High stability
-            },
-            InteractionContext.EMPATHIC: {
-                "nyxamine": 0.4,    # Lower pleasure
-                "oxynixin": 0.9,    # Very high empathy/bonding
-                "cortanyx": 0.4,    # Moderate stress (from empathic concern)
-                "adrenyx": 0.3,     # Low arousal
-                "seranix": 0.6      # Good stability
-            },
-            InteractionContext.PLAYFUL: {
-                "nyxamine": 0.8,    # High pleasure from play
-                "oxynixin": 0.6,    # Good connection
-                "cortanyx": 0.1,    # Very low stress
-                "adrenyx": 0.6,     # High arousal/excitement
-                "seranix": 0.5      # Moderate stability
-            },
-            InteractionContext.CREATIVE: {
-                "nyxamine": 0.7,    # High pleasure from creativity
-                "oxynixin": 0.5,    # Moderate connection
-                "cortanyx": 0.2,    # Low stress
-                "adrenyx": 0.5,     # Moderate-high arousal
-                "seranix": 0.6      # Good stability
-            },
-            InteractionContext.PROFESSIONAL: {
-                "nyxamine": 0.4,    # Lower pleasure
-                "oxynixin": 0.3,    # Lower connection
-                "cortanyx": 0.4,    # Moderate stress
-                "adrenyx": 0.3,     # Low arousal
-                "seranix": 0.8      # High stability/formality
-            }
+        self.context_emotional_baselines = {
+            InteractionContext.DOMINANT: EmotionalBaselines(
+                nyxamine=0.7,    # High pleasure from dominance
+                oxynixin=0.3,    # Lower bonding/empathy in dominance
+                cortanyx=0.2,    # Low stress during dominance
+                adrenyx=0.6,     # High excitement/arousal
+                seranix=0.5      # Moderate mood stability
+            ),
+            InteractionContext.CASUAL: EmotionalBaselines(
+                nyxamine=0.5,    # Moderate pleasure
+                oxynixin=0.6,    # Higher bonding/connection
+                cortanyx=0.3,    # Moderate stress
+                adrenyx=0.4,     # Moderate arousal
+                seranix=0.6      # Good mood stability
+            ),
+            InteractionContext.INTELLECTUAL: EmotionalBaselines(
+                nyxamine=0.8,    # High pleasure from intellectual topics
+                oxynixin=0.4,    # Moderate empathy/connection
+                cortanyx=0.2,    # Low stress
+                adrenyx=0.3,     # Low arousal
+                seranix=0.7      # High stability
+            ),
+            InteractionContext.EMPATHIC: EmotionalBaselines(
+                nyxamine=0.4,    # Lower pleasure
+                oxynixin=0.9,    # Very high empathy/bonding
+                cortanyx=0.4,    # Moderate stress (from empathic concern)
+                adrenyx=0.3,     # Low arousal
+                seranix=0.6      # Good stability
+            ),
+            InteractionContext.PLAYFUL: EmotionalBaselines(
+                nyxamine=0.8,    # High pleasure from play
+                oxynixin=0.6,    # Good connection
+                cortanyx=0.1,    # Very low stress
+                adrenyx=0.6,     # High arousal/excitement
+                seranix=0.5      # Moderate stability
+            ),
+            InteractionContext.CREATIVE: EmotionalBaselines(
+                nyxamine=0.7,    # High pleasure from creativity
+                oxynixin=0.5,    # Moderate connection
+                cortanyx=0.2,    # Low stress
+                adrenyx=0.5,     # Moderate-high arousal
+                seranix=0.6      # Good stability
+            ),
+            InteractionContext.PROFESSIONAL: EmotionalBaselines(
+                nyxamine=0.4,    # Lower pleasure
+                oxynixin=0.3,    # Lower connection
+                cortanyx=0.4,    # Moderate stress
+                adrenyx=0.3,     # Low arousal
+                seranix=0.8      # High stability/formality
+            )
         }
         
         # Create system context
@@ -653,10 +671,10 @@ class ContextAwarenessSystem:
             evolution of contexts.
             """,
             tools=[
-                function_tool(self._detect_context_signals),
-                function_tool(self._extract_message_features),
-                function_tool(self._get_context_history),
-                function_tool(self._calculate_context_confidence)
+                function_tool(self._detect_context_signals, strict_mode=False),
+                function_tool(self._extract_message_features, strict_mode=False),
+                function_tool(self._get_context_history, strict_mode=False),
+                function_tool(self._calculate_context_confidence, strict_mode=False)
             ],
             handoffs=[
                 handoff(self.signal_analysis_agent,
@@ -702,9 +720,9 @@ class ContextAwarenessSystem:
             of contexts present in the message.
             """,
             tools=[
-                function_tool(self._categorize_signals),
-                function_tool(self._calculate_context_distribution),
-                function_tool(self._identify_implicit_signals)
+                function_tool(self._categorize_signals, strict_mode=False),
+                function_tool(self._calculate_context_distribution, strict_mode=False),
+                function_tool(self._identify_implicit_signals, strict_mode=False)
             ],
             output_type=SignalAnalysisOutput,
             model="gpt-4.1-nano-mini",
@@ -731,9 +749,9 @@ class ContextAwarenessSystem:
             mixture of contexts, rather than switching between discrete emotional profiles.
             """,
             tools=[
-                function_tool(self._get_emotional_baselines),
-                function_tool(self._blend_emotional_baselines),
-                function_tool(self._calculate_emotional_impact)
+                function_tool(self._get_emotional_baselines, strict_mode=False),
+                function_tool(self._blend_emotional_baselines, strict_mode=False),
+                function_tool(self._calculate_emotional_impact, strict_mode=False)
             ],
             output_type=EmotionalBaselineOutput,
             model="gpt-4.1-nano-mini",
@@ -761,9 +779,9 @@ class ContextAwarenessSystem:
             properly supported by evidence in the message.
             """,
             tools=[
-                function_tool(self._check_confidence_threshold),
-                function_tool(self._verify_blend_coherence),
-                function_tool(self._analyze_distribution_transition)
+                function_tool(self._check_confidence_threshold, strict_mode=False),
+                function_tool(self._verify_blend_coherence, strict_mode=False),
+                function_tool(self._analyze_distribution_transition, strict_mode=False)
             ],
             output_type=ContextValidationOutput,
             model="gpt-4.1-nano-mini",
@@ -819,7 +837,7 @@ class ContextAwarenessSystem:
     
     # Helper functions for blended context
     @staticmethod
-    @function_tool
+    @function_tool(strict_mode=False)
     async def _calculate_context_distribution(ctx: RunContextWrapper[CASystemContext], 
                                          signals: List[SignalInfo]) -> ContextDistribution:
         """
@@ -891,7 +909,7 @@ class ContextAwarenessSystem:
         return context_dist
                                              
     @staticmethod
-    @function_tool
+    @function_tool(strict_mode=False)
     async def _verify_blend_coherence(ctx: RunContextWrapper[CASystemContext], 
                                  distribution: ContextDistribution) -> CoherenceResult:
         """
@@ -976,7 +994,7 @@ class ContextAwarenessSystem:
         )
 
     @staticmethod
-    @function_tool
+    @function_tool(strict_mode=False)
     async def _analyze_distribution_transition(ctx: RunContextWrapper[CASystemContext], 
                                           from_distribution: ContextDistribution, 
                                           to_distribution: ContextDistribution) -> TransitionAnalysis:
@@ -1037,7 +1055,7 @@ class ContextAwarenessSystem:
         )
 
     @staticmethod
-    @function_tool
+    @function_tool(strict_mode=False)
     async def _blend_emotional_baselines(ctx: RunContextWrapper[CASystemContext], 
                                     distribution: ContextDistribution) -> EmotionalBaselines:
         """
@@ -1074,8 +1092,9 @@ class ContextAwarenessSystem:
                         context_baselines = cas.context_emotional_baselines[context_enum]
                         
                         # Add weighted contribution
-                        for chemical, value in context_baselines.items():
-                            if chemical in blended_baselines:
+                        for chemical in blended_baselines:
+                            if hasattr(context_baselines, chemical):
+                                value = getattr(context_baselines, chemical)
                                 blended_baselines[chemical] += value * weight
                                 
                         total_weight += weight
@@ -1097,7 +1116,7 @@ class ContextAwarenessSystem:
     # Existing helper functions updated for blended context
 
     @staticmethod
-    @function_tool
+    @function_tool(strict_mode=False)
     async def _categorize_signals(ctx: RunContextWrapper[CASystemContext], 
                               signals: List[SignalInfo]) -> CategorizedSignals:
         """
@@ -1126,7 +1145,7 @@ class ContextAwarenessSystem:
         return categorized
 
     @staticmethod
-    @function_tool
+    @function_tool(strict_mode=False)
     async def _identify_implicit_signals(ctx: RunContextWrapper[CASystemContext], 
                                     message: str) -> List[SignalInfo]:
         """
@@ -1200,7 +1219,7 @@ class ContextAwarenessSystem:
         return implicit_signals
 
     @staticmethod
-    @function_tool
+    @function_tool(strict_mode=False)
     async def _get_emotional_baselines(ctx: RunContextWrapper[CASystemContext], 
                                   context_type: str) -> EmotionalBaselines:
         """
@@ -1225,14 +1244,13 @@ class ContextAwarenessSystem:
         
         # Get baselines for the context
         if context_enum in cas.context_emotional_baselines:
-            baselines = cas.context_emotional_baselines[context_enum]
-            return EmotionalBaselines(**baselines)
+            return cas.context_emotional_baselines[context_enum]
         else:
             # Return default baselines
             return EmotionalBaselines()
 
     @staticmethod
-    @function_tool
+    @function_tool(strict_mode=False)
     async def _calculate_emotional_impact(ctx: RunContextWrapper[CASystemContext], 
                                      old_baselines: EmotionalBaselines, 
                                      new_baselines: EmotionalBaselines) -> float:
@@ -1271,7 +1289,7 @@ class ContextAwarenessSystem:
             return 0.0
 
     @staticmethod
-    @function_tool
+    @function_tool(strict_mode=False)
     async def _check_confidence_threshold(ctx: RunContextWrapper[CASystemContext], 
                                      distribution: ContextDistribution,
                                      confidence: float) -> ConfidenceThresholdResult:
@@ -1310,7 +1328,7 @@ class ContextAwarenessSystem:
         )
 
     @staticmethod
-    @function_tool
+    @function_tool(strict_mode=False)
     async def _detect_context_signals(ctx: RunContextWrapper[CASystemContext], 
                                  message: str) -> ContextDetectionResult:
         """
@@ -1412,7 +1430,7 @@ class ContextAwarenessSystem:
         )
 
     @staticmethod
-    @function_tool
+    @function_tool(strict_mode=False)
     async def _extract_message_features(ctx: RunContextWrapper[CASystemContext], 
                                    message: str) -> MessageFeatures:
         """
@@ -1476,7 +1494,7 @@ class ContextAwarenessSystem:
         )
 
     @staticmethod
-    @function_tool
+    @function_tool(strict_mode=False)
     async def _get_context_history(ctx: RunContextWrapper[CASystemContext]) -> List[HistoryEntry]:
         """
         Get recent context history
@@ -1508,7 +1526,7 @@ class ContextAwarenessSystem:
         return history_entries
 
     @staticmethod
-    @function_tool
+    @function_tool(strict_mode=False)
     async def _calculate_context_confidence(ctx: RunContextWrapper[CASystemContext],
                                       distribution: ContextDistribution,
                                       signals: List[SignalInfo],
@@ -1722,10 +1740,10 @@ class ContextAwarenessSystem:
         """Get the current system state"""
         # Convert emotional baselines to the new structure
         emotional_baselines_mapping = EmotionalBaselinesMapping()
-        for context_enum, baselines_dict in self.context_emotional_baselines.items():
+        for context_enum, baselines in self.context_emotional_baselines.items():
             context_name = context_enum.value.lower()
             if hasattr(emotional_baselines_mapping, context_name):
-                setattr(emotional_baselines_mapping, context_name, EmotionalBaselines(**baselines_dict))
+                setattr(emotional_baselines_mapping, context_name, baselines)
         
         # Convert history to HistoryEntry objects
         history_entries = []
