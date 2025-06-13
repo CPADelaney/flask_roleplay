@@ -292,13 +292,15 @@ class MemoryData(BaseModel):
     memory_text: str = Field(description="Content of the memory")
     memory_type: str = Field(description="Type of memory")
     significance: float = Field(description="Significance/importance of memory (0-10)")
-    metadata: Dict[str, Any] = Field(default_factory=dict, description="Memory metadata")
+    metadata: Dict[str, Union[str, float, int, bool]] = Field(default_factory=dict, description="Memory metadata")  # ← FIXED
     tags: List[str] = Field(default_factory=list, description="Tags for memory categorization")
+
+
 
 class MemoryFormat(BaseModel):
     memories: List[MemoryData] = Field(description="List of memory data")
     topic: Optional[str] = Field(None, description="Topic for reflection")
-    context: Optional[Dict[str, Any]] = Field(None, description="Additional context")
+    context: Optional[Dict[str, Union[str, float, int, bool]]] = Field(None, description="Additional context")  # ← FIXED
 
 class ReflectionContext(BaseModel):
     scenario_type: str = Field(description="Type of scenario for reflection")
@@ -341,7 +343,7 @@ def _coerce_raw_memories(memories: list[dict[str, Any]]) -> list[RawMemory]:
 
 # =============== Tool Functions ===============
 
-@function_tool
+@function_tool(strict_mode=False)
 async def format_memories_for_reflection(
     params: FormatMemoriesIn,          # ← the only exposed argument
 ) -> str:
@@ -690,7 +692,7 @@ async def process_emotional_content(
             "insight_level": insight_level,
         }
 
-@function_tool
+@function_tool(strict_mode=False)
 async def format_observations_for_reflection(
     params: ObservationInput
 ) -> str:
@@ -723,7 +725,7 @@ async def format_observations_for_reflection(
             }
         ).model_dump_json()
 
-@function_tool
+@function_tool(strict_mode=False)
 async def format_communications_for_reflection(
     params: CommunicationInput
 ) -> str:
