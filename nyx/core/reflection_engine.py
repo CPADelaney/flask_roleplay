@@ -50,6 +50,24 @@ class SummaryRequestIn(BaseModel):
     max_length: int = 150
     summary_type: Literal["summary", "abstraction"] = "summary"
 
+class EmotionalStateDict(BaseModel):
+    """Structured emotional state instead of Dict[str, Any]"""
+    primary_emotion: Optional[Dict[str, Union[str, float]]] = None
+    secondary_emotions: Optional[Dict[str, Dict[str, Union[str, float]]]] = None
+    valence: Optional[float] = None
+    arousal: Optional[float] = None
+    
+    model_config = {"extra": "allow"}  # Allow additional fields but structured
+
+class NeurochemicalStateDict(BaseModel):
+    """Structured neurochemical state instead of Dict[str, float]"""
+    nyxamine: float = 0.0
+    seranix: float = 0.0
+    oxynixin: float = 0.0
+    cortanyx: float = 0.0
+    adrenyx: float = 0.0
+    
+    model_config = {"extra": "forbid"}
 
 class Neurochemicals(BaseModel):
     nyxamine: float = 0.0
@@ -58,6 +76,61 @@ class Neurochemicals(BaseModel):
     cortanyx: float = 0.0
     adrenyx:  float = 0.0
 
+    model_config = {"extra": "forbid"}
+
+class ProcessEmotionInFixed(BaseModel):
+    """Fixed version without Dict[str, Any]"""
+    emotional_state: EmotionalStateDict = Field(default_factory=EmotionalStateDict)
+    neurochemical_state: NeurochemicalStateDict = Field(default_factory=NeurochemicalStateDict)
+    
+    model_config = {"extra": "forbid"}
+
+class RecordReflectionInFixed(BaseModel):
+    """Fixed version without Any fields"""
+    reflection: str
+    confidence: float
+    memory_ids: List[str]
+    scenario_type: str
+    emotional_context: EmotionalStateDict = Field(default_factory=EmotionalStateDict)
+    neurochemical_influence: NeurochemicalStateDict = Field(default_factory=NeurochemicalStateDict)
+    topic: Optional[str] = None
+    
+    model_config = {"extra": "forbid"}
+
+class EmotionalHistoryInput(BaseModel):
+    """Input for emotional pattern analysis"""
+    emotional_history: List[Dict[str, Union[str, float, Dict[str, Union[str, float]]]]]
+    
+    model_config = {"extra": "forbid"}
+
+class ObservationInput(BaseModel):
+    """Input for observation functions"""
+    observations: List[Dict[str, Union[str, float, List[str]]]]
+    topic: Optional[str] = None
+    
+    model_config = {"extra": "forbid"}
+
+class CommunicationInput(BaseModel):
+    """Input for communication functions"""
+    intents: List[Dict[str, Union[str, float, bool]]]
+    topic: Optional[str] = None
+    
+    model_config = {"extra": "forbid"}
+
+class ObservationReflectionInput(BaseModel):
+    """Input for observation reflection generation"""
+    observations: List[Dict[str, Union[str, float, List[str]]]]
+    topic: Optional[str] = None
+    neurochemical_state: Optional[NeurochemicalStateDict] = None
+    
+    model_config = {"extra": "forbid"}
+
+class CommunicationReflectionInput(BaseModel):
+    """Input for communication reflection generation"""
+    intents: List[Dict[str, Union[str, float, bool]]]
+    topic: Optional[str] = None
+    neurochemical_state: Optional[NeurochemicalStateDict] = None
+    
     model_config = {"extra": "forbid"}
 
 
@@ -371,19 +444,21 @@ async def extract_neurochemical_influence(memory: RawMemory) -> Neurochemicals:
     return Neurochemicals(**base)
 
 @function_tool
-async def record_reflection(params: _RecordReflectionIn) -> str:
+async def record_reflection(params: RecordReflectionInFixed) -> str:
     """Record a reflection with emotional and neurochemical data for future reference"""
     with custom_span("record_reflection"):
-        # This would normally store the reflection in a database
-        # Simplified for this example
+        # Convert structured models back to dicts for backward compatibility
+        emotional_context = params.emotional_context.model_dump() if params.emotional_context else {}
+        neurochemical_influence = params.neurochemical_influence.model_dump() if params.neurochemical_influence else {}
+        
         reflection_data = {
             "timestamp": datetime.datetime.now().isoformat(),
             "reflection": params.reflection,
             "confidence": params.confidence,
             "source_memory_ids": params.memory_ids,
             "scenario_type": params.scenario_type,
-            "emotional_context": params.emotional_context,
-            "neurochemical_influence": params.neurochemical_influence,
+            "emotional_context": emotional_context,
+            "neurochemical_influence": neurochemical_influence,
             "topic": params.topic,
         }
         return f"Reflection recorded with confidence {params.confidence:.2f}"
@@ -467,12 +542,12 @@ async def get_agent_stats() -> dict[str, Any]:
 
 @function_tool
 async def analyze_emotional_patterns_reflect(
-    emotional_history: list[dict[str, Any]]
+    params: EmotionalHistoryInput
 ) -> dict[str, Any]:
-    """
-    Analyze patterns in emotional history (ctx-free version).
-    """
+    """Analyze patterns in emotional history"""
     with custom_span("analyze_emotional_patterns_reflect"):
+        emotional_history = params.emotional_history
+        
         if not emotional_history:
             return {"message": "No emotional history available", "patterns": {}}
 
@@ -523,106 +598,107 @@ async def analyze_emotional_patterns_reflect(
 
 @function_tool
 async def process_emotional_content(
-    params: ProcessEmotionIn,
+    params: ProcessEmotionInFixed,
 ) -> Dict[str, Any]:
-    """
-    Same algorithm as before — now wrapped in a strict input schema.
-    """
-    # ---- keep original body untouched ----
-    emotional_state = params.emotional_state
-    neurochemical_state = params.neurochemical_state
+    """Process emotional content with structured input"""
+    with custom_span("process_emotional_content"):
+        # Convert structured models back to dicts for backward compatibility
+        emotional_state = params.emotional_state.model_dump() if params.emotional_state else {}
+        neurochemical_state = params.neurochemical_state.model_dump() if params.neurochemical_state else {}
 
-    # Extract key information
-    primary_emotion = emotional_state.get("primary_emotion", {}).get("name", "Neutral")
-    primary_intensity = emotional_state.get("primary_emotion", {}).get("intensity", 0.5)
-    valence = emotional_state.get("valence", 0.0)
-    arousal = emotional_state.get("arousal", 0.5)
-
-    # Analyse neurochemical balance
-    balance_analysis: Dict[str, Any] = {}
-    dominant_chemical = (
-        max(neurochemical_state.items(), key=lambda x: x[1])
-        if neurochemical_state
-        else ("unknown", 0.0)
-    )
-
-    chemical_descriptions = {
-        "nyxamine": "pleasure and curiosity",
-        "seranix": "calm and satisfaction",
-        "oxynixin": "connection and trust",
-        "cortanyx": "stress and anxiety",
-        "adrenyx": "excitement and alertness",
-    }
-
-    balance_analysis["dominant_chemical"] = {
-        "name":  dominant_chemical[0],
-        "level": dominant_chemical[1],
-        "description": chemical_descriptions.get(dominant_chemical[0], "unknown influence"),
-    }
-
-    # Check for chemical imbalances
-    imbalances: list[str] = []
-    if neurochemical_state.get("nyxamine", 0) < 0.3 and neurochemical_state.get("cortanyx", 0) > 0.6:
-        imbalances.append("Low pleasure with high stress")
-    if neurochemical_state.get("seranix", 0) < 0.3 and neurochemical_state.get("adrenyx", 0) > 0.6:
-        imbalances.append("Low calm with high alertness")
-    if neurochemical_state.get("oxynixin", 0) < 0.3 and neurochemical_state.get("cortanyx", 0) > 0.6:
-        imbalances.append("Low connection with high stress")
-
-    balance_analysis["imbalances"] = imbalances
-
-    # Compose insight text
-    insight_text = (
-        f"Processing emotional state dominated by {primary_emotion} "
-        f"(intensity: {primary_intensity:.2f})."
-    )
-
-    if valence > 0.3:
-        insight_text += f" The positive emotional tone (valence: {valence:.2f}) suggests satisfaction and engagement."
-    elif valence < -0.3:
-        insight_text += f" The negative emotional tone (valence: {valence:.2f}) indicates dissatisfaction or discomfort."
-    else:
-        insight_text += f" The neutral emotional tone (valence: {valence:.2f}) suggests a balanced state."
-
-    if arousal > 0.7:
-        insight_text += f" High arousal ({arousal:.2f}) indicates an energized, alert state."
-    elif arousal < 0.3:
-        insight_text += f" Low arousal ({arousal:.2f}) suggests a calm, relaxed state."
-
-    if dominant_chemical[0] in chemical_descriptions:
-        insight_text += (
-            f" Dominated by {dominant_chemical[0]} "
-            f"({chemical_descriptions[dominant_chemical[0]]}), indicating a focus on "
-            f"{chemical_descriptions[dominant_chemical[0]]}."
+        # Extract key information
+        primary_emotion = emotional_state.get("primary_emotion", {}).get("name", "Neutral")
+        primary_intensity = emotional_state.get("primary_emotion", {}).get("intensity", 0.5)
+        valence = emotional_state.get("valence", 0.0)
+        arousal = emotional_state.get("arousal", 0.5)
+    
+        # Analyse neurochemical balance
+        balance_analysis: Dict[str, Any] = {}
+        dominant_chemical = (
+            max(neurochemical_state.items(), key=lambda x: x[1])
+            if neurochemical_state
+            else ("unknown", 0.0)
         )
-
-    if imbalances:
-        insight_text += f" Notable imbalances: {', '.join(imbalances)}."
-
-    # Insight level
-    secondary_count = len(emotional_state.get("secondary_emotions", {}))
-    chemical_count = sum(1 for v in neurochemical_state.values() if v > 0.3)
-    insight_level = min(
-        1.0, 0.3 + secondary_count * 0.1 + chemical_count * 0.1 + primary_intensity * 0.2
-    )
-
-    return {
-        "insight_text": insight_text,
-        "primary_emotion": primary_emotion,
-        "valence": valence,
-        "arousal": arousal,
-        "dominant_chemical": dominant_chemical[0],
-        "chemical_balance": balance_analysis,
-        "insight_level": insight_level,
-    }
+    
+        chemical_descriptions = {
+            "nyxamine": "pleasure and curiosity",
+            "seranix": "calm and satisfaction",
+            "oxynixin": "connection and trust",
+            "cortanyx": "stress and anxiety",
+            "adrenyx": "excitement and alertness",
+        }
+    
+        balance_analysis["dominant_chemical"] = {
+            "name":  dominant_chemical[0],
+            "level": dominant_chemical[1],
+            "description": chemical_descriptions.get(dominant_chemical[0], "unknown influence"),
+        }
+    
+        # Check for chemical imbalances
+        imbalances: list[str] = []
+        if neurochemical_state.get("nyxamine", 0) < 0.3 and neurochemical_state.get("cortanyx", 0) > 0.6:
+            imbalances.append("Low pleasure with high stress")
+        if neurochemical_state.get("seranix", 0) < 0.3 and neurochemical_state.get("adrenyx", 0) > 0.6:
+            imbalances.append("Low calm with high alertness")
+        if neurochemical_state.get("oxynixin", 0) < 0.3 and neurochemical_state.get("cortanyx", 0) > 0.6:
+            imbalances.append("Low connection with high stress")
+    
+        balance_analysis["imbalances"] = imbalances
+    
+        # Compose insight text
+        insight_text = (
+            f"Processing emotional state dominated by {primary_emotion} "
+            f"(intensity: {primary_intensity:.2f})."
+        )
+    
+        if valence > 0.3:
+            insight_text += f" The positive emotional tone (valence: {valence:.2f}) suggests satisfaction and engagement."
+        elif valence < -0.3:
+            insight_text += f" The negative emotional tone (valence: {valence:.2f}) indicates dissatisfaction or discomfort."
+        else:
+            insight_text += f" The neutral emotional tone (valence: {valence:.2f}) suggests a balanced state."
+    
+        if arousal > 0.7:
+            insight_text += f" High arousal ({arousal:.2f}) indicates an energized, alert state."
+        elif arousal < 0.3:
+            insight_text += f" Low arousal ({arousal:.2f}) suggests a calm, relaxed state."
+    
+        if dominant_chemical[0] in chemical_descriptions:
+            insight_text += (
+                f" Dominated by {dominant_chemical[0]} "
+                f"({chemical_descriptions[dominant_chemical[0]]}), indicating a focus on "
+                f"{chemical_descriptions[dominant_chemical[0]]}."
+            )
+    
+        if imbalances:
+            insight_text += f" Notable imbalances: {', '.join(imbalances)}."
+    
+        # Insight level
+        secondary_count = len(emotional_state.get("secondary_emotions", {}))
+        chemical_count = sum(1 for v in neurochemical_state.values() if v > 0.3)
+        insight_level = min(
+            1.0, 0.3 + secondary_count * 0.1 + chemical_count * 0.1 + primary_intensity * 0.2
+        )
+    
+        return {
+            "insight_text": insight_text,
+            "primary_emotion": primary_emotion,
+            "valence": valence,
+            "arousal": arousal,
+            "dominant_chemical": dominant_chemical[0],
+            "chemical_balance": balance_analysis,
+            "insight_level": insight_level,
+        }
 
 @function_tool
 async def format_observations_for_reflection(
-    observations: List[Any],
-    topic: Optional[str] = None
+    params: ObservationInput
 ) -> str:
     """Format observation data into a structured representation for reflection"""
     with custom_span("format_observations_for_reflection"):
+        observations = params.observations
+        topic = params.topic
+        
         formatted_memories = []
         for obs in observations:
             formatted_memories.append(MemoryData(
@@ -649,11 +725,13 @@ async def format_observations_for_reflection(
 
 @function_tool
 async def format_communications_for_reflection(
-    intents: List[Any],
-    topic: Optional[str] = None
+    params: CommunicationInput
 ) -> str:
     """Format communication intent data into a structured representation for reflection"""
     with custom_span("format_communications_for_reflection"):
+        intents = params.intents
+        topic = params.topic
+        
         formatted_memories = []
         for intent in intents:
             formatted_memories.append(MemoryData(
@@ -682,10 +760,12 @@ async def format_communications_for_reflection(
 
 @function_tool
 async def analyze_observation_patterns(
-    observations: List[Any]
+    params: ObservationInput
 ) -> Dict[str, Any]:
     """Analyze patterns in observation data"""
     with custom_span("analyze_observation_patterns"):
+        observations = params.observations
+        
         if not observations:
             return {
                 "patterns": [],
@@ -760,10 +840,12 @@ async def analyze_observation_patterns(
 
 @function_tool
 async def analyze_communication_patterns(
-    intents: List[Any]
+    params: CommunicationInput
 ) -> Dict[str, Any]:
     """Analyze patterns in communication intents"""
     with custom_span("analyze_communication_patterns"):
+        intents = params.intents
+        
         if not intents:
             return {
                 "patterns": [],
@@ -841,12 +923,14 @@ async def analyze_communication_patterns(
 
 @function_tool
 async def generate_observation_reflection(
-    observations: List[Any],
-    topic: Optional[str] = None,
-    neurochemical_state: Dict[str, float] = None
+    params: ObservationReflectionInput
 ) -> Dict[str, Any]:
     """Generate reflection focused on observations"""
     with custom_span("generate_observation_reflection"):
+        observations = params.observations
+        topic = params.topic
+        neurochemical_state = params.neurochemical_state.model_dump() if params.neurochemical_state else None
+        
         if not observations:
             return {
                 "reflection_text": "I haven't made enough observations to form meaningful reflections yet.",
@@ -857,7 +941,9 @@ async def generate_observation_reflection(
             }
         
         # Analyze patterns
-        patterns_analysis = await analyze_observation_patterns(observations)
+        patterns_analysis = await analyze_observation_patterns(
+            ObservationInput(observations=observations)
+        )
         patterns = patterns_analysis.get("patterns", [])
         
         # Default neurochemical state if not provided
@@ -925,12 +1011,14 @@ async def generate_observation_reflection(
 
 @function_tool
 async def generate_communication_reflection(
-    intents: List[Any],
-    topic: Optional[str] = None,
-    neurochemical_state: Dict[str, float] = None
+    params: CommunicationReflectionInput
 ) -> Dict[str, Any]:
     """Generate reflection focused on communication patterns"""
     with custom_span("generate_communication_reflection"):
+        intents = params.intents
+        topic = params.topic
+        neurochemical_state = params.neurochemical_state.model_dump() if params.neurochemical_state else None
+        
         if not intents:
             return {
                 "reflection_text": "I haven't initiated enough communications to form meaningful reflections yet.",
@@ -939,9 +1027,11 @@ async def generate_communication_reflection(
                 "relationship_insights": {},
                 "improvement_areas": []
             }
-        
+            
         # Analyze patterns
-        patterns_analysis = await analyze_communication_patterns(intents)
+        patterns_analysis = await analyze_communication_patterns(
+            CommunicationInput(intents=intents)
+        )
         patterns = patterns_analysis.get("patterns", [])
         
         # Default neurochemical state if not provided
@@ -1496,9 +1586,9 @@ class ReflectionEngine:
     
                 # ---------- 5️⃣ deep emotion processing ------------------------
                 emotional_processing = await process_emotional_content(
-                    ProcessEmotionIn(
-                        emotional_state=combined_emotional_context,
-                        neurochemical_state=neurochemical_state,
+                    ProcessEmotionInFixed(
+                        emotional_state=EmotionalStateDict(**combined_emotional_context) if combined_emotional_context else EmotionalStateDict(),
+                        neurochemical_state=NeurochemicalStateDict(**neurochemical_state) if neurochemical_state else NeurochemicalStateDict(),
                     )
                 )
     
@@ -1574,13 +1664,13 @@ class ReflectionEngine:
     
                 # ---------- 9️⃣ persist reflection ----------------------------
                 await record_reflection(
-                    _RecordReflectionIn(
+                    RecordReflectionInFixed(
                         reflection=reflection_text,
                         confidence=confidence,
                         memory_ids=memory_ids,
                         scenario_type=dominant_scenario_type,
-                        emotional_context=combined_emotional_context,
-                        neurochemical_influence=neurochemical_state,
+                        emotional_context=EmotionalStateDict(**combined_emotional_context) if combined_emotional_context else EmotionalStateDict(),
+                        neurochemical_influence=NeurochemicalStateDict(**neurochemical_state) if neurochemical_state else NeurochemicalStateDict(),
                         topic=topic,
                     )
                 )
@@ -1639,8 +1729,10 @@ class ReflectionEngine:
                 
                 # Format observations for reflection
                 formatted_observations = await format_observations_for_reflection(
-                    observations,
-                    topic
+                    ObservationInput(
+                        observations=observations,
+                        topic=topic
+                    )
                 )
                 
                 # Create the orchestration request
@@ -1774,8 +1866,10 @@ class ReflectionEngine:
                 
                 # Format communications for reflection
                 formatted_communications = await format_communications_for_reflection(
-                    intents,
-                    topic
+                    CommunicationInput(
+                        intents=intents,
+                        topic=topic
+                    )
                 )
                 
                 # Create the orchestration request
@@ -2038,9 +2132,9 @@ class ReflectionEngine:
                 
                 # Process emotional content for abstraction guidance
                 emotional_processing = await process_emotional_content(
-                    ProcessEmotionIn(
-                        emotional_state=combined_emotional_context,
-                        neurochemical_state=neurochemical_state,
+                    ProcessEmotionInFixed(
+                        emotional_state=EmotionalStateDict(**combined_emotional_context) if combined_emotional_context else EmotionalStateDict(),
+                        neurochemical_state=NeurochemicalStateDict(**neurochemical_state) if neurochemical_state else NeurochemicalStateDict(),
                     )
                 )
                 
@@ -2153,13 +2247,15 @@ class ReflectionEngine:
                 
                 # Process emotional content for introspection guidance
                 emotional_processing = await process_emotional_content(
-                    ProcessEmotionIn(
-                        emotional_state=emotional_state,
-                        neurochemical_state=neurochemical_state,
+                    ProcessEmotionInFixed(
+                        emotional_state=EmotionalStateDict(**emotional_state) if emotional_state else EmotionalStateDict(),
+                        neurochemical_state=NeurochemicalStateDict(**neurochemical_state) if neurochemical_state else NeurochemicalStateDict(),
                     )
                 )
                 
-                emotional_patterns = await analyze_emotional_patterns_reflect(self.reflection_history)
+                emotional_patterns = await analyze_emotional_patterns_reflect(
+                    EmotionalHistoryInput(emotional_history=self.reflection_history)
+                )
                 
                 # Create orchestration request
                 orchestration_prompt = f"""Generate an introspective analysis of the system state with neurochemical awareness.
@@ -2264,16 +2360,18 @@ class ReflectionEngine:
     
             # ──────────────────────────────────────────────────────────── 2️⃣  low-level analysis
             emo_proc: dict[str, Any] = await process_emotional_content(
-                ProcessEmotionIn(
-                    emotional_state=emotional_state,
-                    neurochemical_state=neurochemical_state,
+                ProcessEmotionInFixed(
+                    emotional_state=EmotionalStateDict(**emotional_state) if emotional_state else EmotionalStateDict(),
+                    neurochemical_state=NeurochemicalStateDict(**neurochemical_state) if neurochemical_state else NeurochemicalStateDict(),
                 )
             )
-    
+                
             # ──────────────────────────────────────────────────────────── 3️⃣  history patterns
             history_patterns: dict[str, Any] = {}
             try:
-                history_patterns = await analyze_emotional_patterns_reflect(self.emotional_processing_history)
+                history_patterns = await analyze_emotional_patterns_reflect(
+                    EmotionalHistoryInput(emotional_history=self.emotional_processing_history)
+                )
 
             except Exception as hist_exc:  # pattern analysis should *never* break main flow
                 logger.warning("Could not analyse emotional history: %s", hist_exc, exc_info=True)
