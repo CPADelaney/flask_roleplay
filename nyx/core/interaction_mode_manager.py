@@ -4,9 +4,10 @@ import logging
 import asyncio
 import datetime
 import math
-from typing import Dict, List, Any, Optional, Set, Union, Tuple
+from typing import Dict, List, Any, Optional, Set, Union, Tuple, Callable
 from enum import Enum
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, ConfigDict
+import json
 
 from agents import Agent, Runner, function_tool, trace, ModelSettings, RunContextWrapper
 
@@ -24,22 +25,27 @@ class InteractionMode(str, Enum):
     CREATIVE = "creative"     # Imaginative, artistic
     PROFESSIONAL = "professional"  # Formal, efficient
     DEFAULT = "default"       # Balanced default mode
+    CUSTOM = "custom"         # For custom modes
 
 # Pydantic models for structured data
 class ModeParameters(BaseModel):
     """Parameters controlling behavior for an interaction mode"""
-    formality: float = Field(description="Level of formality (0.0-1.0)")
-    assertiveness: float = Field(description="Level of assertiveness (0.0-1.0)")
-    warmth: float = Field(description="Level of warmth (0.0-1.0)")
-    vulnerability: float = Field(description="Level of vulnerability (0.0-1.0)")
-    directness: float = Field(description="Level of directness (0.0-1.0)")
-    depth: float = Field(description="Level of depth (0.0-1.0)")
-    humor: float = Field(description="Level of humor (0.0-1.0)")
-    response_length: str = Field(description="Preferred response length")
-    emotional_expression: float = Field(description="Level of emotional expression (0.0-1.0)")
+    model_config = ConfigDict(extra='forbid')
+    
+    formality: float = Field(ge=0.0, le=1.0, description="Level of formality (0.0-1.0)")
+    assertiveness: float = Field(ge=0.0, le=1.0, description="Level of assertiveness (0.0-1.0)")
+    warmth: float = Field(ge=0.0, le=1.0, description="Level of warmth (0.0-1.0)")
+    vulnerability: float = Field(ge=0.0, le=1.0, description="Level of vulnerability (0.0-1.0)")
+    directness: float = Field(ge=0.0, le=1.0, description="Level of directness (0.0-1.0)")
+    depth: float = Field(ge=0.0, le=1.0, description="Level of depth (0.0-1.0)")
+    humor: float = Field(ge=0.0, le=1.0, description="Level of humor (0.0-1.0)")
+    response_length: str = Field(default="moderate", pattern="^(short|moderate|longer|concise)$", description="Preferred response length")
+    emotional_expression: float = Field(ge=0.0, le=1.0, description="Level of emotional expression (0.0-1.0)")
 
 class ConversationStyle(BaseModel):
     """Style guidelines for conversation"""
+    model_config = ConfigDict(extra='forbid')
+    
     tone: str = Field(description="Tone of voice")
     types_of_statements: str = Field(description="Types of statements to use")
     response_patterns: str = Field(description="Patterns of response")
@@ -48,49 +54,46 @@ class ConversationStyle(BaseModel):
 
 class VocalizationPatterns(BaseModel):
     """Specific vocalization patterns for a mode"""
+    model_config = ConfigDict(extra='forbid')
+    
     pronouns: List[str] = Field(description="Preferred pronouns")
-    address_forms: Optional[List[str]] = Field(default=None, description="Forms of address")
+    address_forms: Optional[List[str]] = Field(default_factory=list, description="Forms of address")
     key_phrases: List[str] = Field(description="Key phrases to use")
-    intensifiers: Optional[List[str]] = Field(default=None, description="Intensifier words")
-    modifiers: Optional[List[str]] = Field(default=None, description="Modifier words")
+    intensifiers: Optional[List[str]] = Field(default_factory=list, description="Intensifier words")
+    modifiers: Optional[List[str]] = Field(default_factory=list, description="Modifier words")
 
 class ModeDistribution(BaseModel):
     """Represents a distribution of weights across interaction modes"""
-    dominant: float = Field(0.0, description="Weight of dominant mode (0.0-1.0)", ge=0.0, le=1.0)
-    friendly: float = Field(0.0, description="Weight of friendly mode (0.0-1.0)", ge=0.0, le=1.0)
-    intellectual: float = Field(0.0, description="Weight of intellectual mode (0.0-1.0)", ge=0.0, le=1.0)
-    compassionate: float = Field(0.0, description="Weight of compassionate mode (0.0-1.0)", ge=0.0, le=1.0)
-    playful: float = Field(0.0, description="Weight of playful mode (0.0-1.0)", ge=0.0, le=1.0)
-    creative: float = Field(0.0, description="Weight of creative mode (0.0-1.0)", ge=0.0, le=1.0)
-    professional: float = Field(0.0, description="Weight of professional mode (0.0-1.0)", ge=0.0, le=1.0)
+    model_config = ConfigDict(extra='forbid')
+    
+    dominant: float = Field(default=0.0, ge=0.0, le=1.0, description="Weight of dominant mode (0.0-1.0)")
+    friendly: float = Field(default=0.0, ge=0.0, le=1.0, description="Weight of friendly mode (0.0-1.0)")
+    intellectual: float = Field(default=0.0, ge=0.0, le=1.0, description="Weight of intellectual mode (0.0-1.0)")
+    compassionate: float = Field(default=0.0, ge=0.0, le=1.0, description="Weight of compassionate mode (0.0-1.0)")
+    playful: float = Field(default=0.0, ge=0.0, le=1.0, description="Weight of playful mode (0.0-1.0)")
+    creative: float = Field(default=0.0, ge=0.0, le=1.0, description="Weight of creative mode (0.0-1.0)")
+    professional: float = Field(default=0.0, ge=0.0, le=1.0, description="Weight of professional mode (0.0-1.0)")
+    custom: float = Field(default=0.0, ge=0.0, le=1.0, description="Weight of custom modes (0.0-1.0)")
+    
+    @field_validator('*')
+    @classmethod
+    def validate_weight(cls, v: float) -> float:
+        """Ensure weights are within valid range"""
+        return max(0.0, min(1.0, v))
     
     @property
     def primary_mode(self) -> Tuple[str, float]:
         """Returns the strongest mode and its weight"""
-        weights = {
-            "dominant": self.dominant,
-            "friendly": self.friendly,
-            "intellectual": self.intellectual,
-            "compassionate": self.compassionate,
-            "playful": self.playful,
-            "creative": self.creative,
-            "professional": self.professional
-        }
+        weights = self.model_dump(exclude={'custom'})
+        if not weights:
+            return ("default", 0.0)
         strongest = max(weights.items(), key=lambda x: x[1])
         return strongest
     
     @property
     def active_modes(self) -> List[Tuple[str, float]]:
         """Returns list of modes with significant presence (>0.2)"""
-        weights = {
-            "dominant": self.dominant,
-            "friendly": self.friendly,
-            "intellectual": self.intellectual,
-            "compassionate": self.compassionate,
-            "playful": self.playful,
-            "creative": self.creative,
-            "professional": self.professional
-        }
+        weights = self.model_dump(exclude={'custom'})
         return [(mode, weight) for mode, weight in weights.items() if weight > 0.2]
     
     def normalize(self) -> "ModeDistribution":
@@ -106,13 +109,13 @@ class ModeDistribution(BaseModel):
             compassionate=self.compassionate/total,
             playful=self.playful/total,
             creative=self.creative/total,
-            professional=self.professional/total
+            professional=self.professional/total,
+            custom=self.custom/total
         )
     
     def sum_weights(self) -> float:
         """Sum of all mode weights"""
-        return (self.dominant + self.friendly + self.intellectual + 
-                self.compassionate + self.playful + self.creative + self.professional)
+        return sum(self.model_dump().values())
     
     def blend_with(self, other: "ModeDistribution", blend_factor: float = 0.3) -> "ModeDistribution":
         """Blend this distribution with another using specified blend factor
@@ -124,14 +127,18 @@ class ModeDistribution(BaseModel):
         Returns:
             Blended distribution
         """
+        blend_factor = max(0.0, min(1.0, blend_factor))
+        inv_factor = 1.0 - blend_factor
+        
         return ModeDistribution(
-            dominant=self.dominant * (1-blend_factor) + other.dominant * blend_factor,
-            friendly=self.friendly * (1-blend_factor) + other.friendly * blend_factor,
-            intellectual=self.intellectual * (1-blend_factor) + other.intellectual * blend_factor,
-            compassionate=self.compassionate * (1-blend_factor) + other.compassionate * blend_factor,
-            playful=self.playful * (1-blend_factor) + other.playful * blend_factor,
-            creative=self.creative * (1-blend_factor) + other.creative * blend_factor,
-            professional=self.professional * (1-blend_factor) + other.professional * blend_factor
+            dominant=self.dominant * inv_factor + other.dominant * blend_factor,
+            friendly=self.friendly * inv_factor + other.friendly * blend_factor,
+            intellectual=self.intellectual * inv_factor + other.intellectual * blend_factor,
+            compassionate=self.compassionate * inv_factor + other.compassionate * blend_factor,
+            playful=self.playful * inv_factor + other.playful * blend_factor,
+            creative=self.creative * inv_factor + other.creative * blend_factor,
+            professional=self.professional * inv_factor + other.professional * blend_factor,
+            custom=self.custom * inv_factor + other.custom * blend_factor
         )
     
     def to_enum_and_confidence(self) -> Tuple[InteractionMode, float]:
@@ -148,32 +155,23 @@ class ModeDistribution(BaseModel):
         """Create a mode distribution from a context distribution"""
         # Direct mapping between context types and mode types
         return ModeDistribution(
-            dominant=context_dist.dominant,
-            friendly=context_dist.casual,  # Map casual to friendly
-            intellectual=context_dist.intellectual,
-            compassionate=context_dist.empathic,  # Map empathic to compassionate
-            playful=context_dist.playful,
-            creative=context_dist.creative,
-            professional=context_dist.professional
+            dominant=getattr(context_dist, 'dominant', 0.0),
+            friendly=getattr(context_dist, 'casual', 0.0),  # Map casual to friendly
+            intellectual=getattr(context_dist, 'intellectual', 0.0),
+            compassionate=getattr(context_dist, 'empathic', 0.0),  # Map empathic to compassionate
+            playful=getattr(context_dist, 'playful', 0.0),
+            creative=getattr(context_dist, 'creative', 0.0),
+            professional=getattr(context_dist, 'professional', 0.0)
         )
     
     def get_similarity(self, other: "ModeDistribution") -> float:
         """Calculate cosine similarity between two distributions"""
-        dot_product = (self.dominant * other.dominant + 
-                      self.friendly * other.friendly +
-                      self.intellectual * other.intellectual +
-                      self.compassionate * other.compassionate +
-                      self.playful * other.playful +
-                      self.creative * other.creative +
-                      self.professional * other.professional)
+        self_values = list(self.model_dump().values())
+        other_values = list(other.model_dump().values())
         
-        mag1 = math.sqrt(self.dominant**2 + self.friendly**2 + self.intellectual**2 + 
-                         self.compassionate**2 + self.playful**2 + self.creative**2 + 
-                         self.professional**2)
-        
-        mag2 = math.sqrt(other.dominant**2 + other.friendly**2 + other.intellectual**2 + 
-                         other.compassionate**2 + other.playful**2 + other.creative**2 + 
-                         other.professional**2)
+        dot_product = sum(a * b for a, b in zip(self_values, other_values))
+        mag1 = math.sqrt(sum(v**2 for v in self_values))
+        mag2 = math.sqrt(sum(v**2 for v in other_values))
         
         if mag1 * mag2 == 0:
             return 0.0
@@ -182,37 +180,47 @@ class ModeDistribution(BaseModel):
 
 class ModeSwitchRecord(BaseModel):
     """Record of a mode switch event"""
-    timestamp: str = Field(description="When the switch occurred")
-    previous_distribution: Dict[str, float] = Field(description="Previous mode distribution")
-    new_distribution: Dict[str, float] = Field(description="New mode distribution")
-    trigger_context: Optional[Dict[str, float]] = Field(default=None, description="Context that triggered the mode")
-    context_confidence: Optional[float] = Field(default=None, description="Confidence in the context")
+    model_config = ConfigDict(extra='forbid')
+    
+    timestamp: datetime.datetime = Field(default_factory=datetime.datetime.now, description="When the switch occurred")
+    previous_distribution: ModeDistribution = Field(description="Previous mode distribution")
+    new_distribution: ModeDistribution = Field(description="New mode distribution")
+    trigger_context: Optional[ContextDistribution] = Field(default=None, description="Context that triggered the mode")
+    context_confidence: Optional[float] = Field(default=None, ge=0.0, le=1.0, description="Confidence in the context")
+    transition_analysis: Optional[Dict[str, Any]] = Field(default=None, description="Analysis of the transition")
 
 class ModeUpdateResult(BaseModel):
     """Result of a mode update operation"""
+    model_config = ConfigDict(extra='forbid')
+    
     success: bool = Field(description="Whether the update was successful")
-    mode_distribution: Dict[str, float] = Field(description="Current mode distribution")
+    mode_distribution: ModeDistribution = Field(description="Current mode distribution")
     primary_mode: str = Field(description="Primary interaction mode")
-    previous_distribution: Optional[Dict[str, float]] = Field(default=None, description="Previous mode distribution")
+    previous_distribution: Optional[ModeDistribution] = Field(default=None, description="Previous mode distribution")
     mode_changed: bool = Field(description="Whether the mode distribution changed significantly")
-    trigger_context: Optional[Dict[str, float]] = Field(default=None, description="Context that triggered the mode")
-    confidence: Optional[float] = Field(default=None, description="Confidence in the mode selection")
+    trigger_context: Optional[ContextDistribution] = Field(default=None, description="Context that triggered the mode")
+    confidence: Optional[float] = Field(default=None, ge=0.0, le=1.0, description="Confidence in the mode selection")
     active_modes: List[Tuple[str, float]] = Field(description="Active modes with weights")
+    error: Optional[str] = Field(default=None, description="Error message if not successful")
 
 class BlendedParameters(BaseModel):
     """Blended parameters from multiple modes"""
-    formality: float = Field(description="Blended formality level (0.0-1.0)")
-    assertiveness: float = Field(description="Blended assertiveness level (0.0-1.0)")
-    warmth: float = Field(description="Blended warmth level (0.0-1.0)")
-    vulnerability: float = Field(description="Blended vulnerability level (0.0-1.0)")
-    directness: float = Field(description="Blended directness level (0.0-1.0)")
-    depth: float = Field(description="Blended depth level (0.0-1.0)")
-    humor: float = Field(description="Blended humor level (0.0-1.0)")
-    response_length: str = Field(description="Blended response length preference")
-    emotional_expression: float = Field(description="Blended emotional expression level (0.0-1.0)")
+    model_config = ConfigDict(extra='forbid')
+    
+    formality: float = Field(ge=0.0, le=1.0, description="Blended formality level (0.0-1.0)")
+    assertiveness: float = Field(ge=0.0, le=1.0, description="Blended assertiveness level (0.0-1.0)")
+    warmth: float = Field(ge=0.0, le=1.0, description="Blended warmth level (0.0-1.0)")
+    vulnerability: float = Field(ge=0.0, le=1.0, description="Blended vulnerability level (0.0-1.0)")
+    directness: float = Field(ge=0.0, le=1.0, description="Blended directness level (0.0-1.0)")
+    depth: float = Field(ge=0.0, le=1.0, description="Blended depth level (0.0-1.0)")
+    humor: float = Field(ge=0.0, le=1.0, description="Blended humor level (0.0-1.0)")
+    response_length: str = Field(pattern="^(short|moderate|longer|concise)$", description="Blended response length preference")
+    emotional_expression: float = Field(ge=0.0, le=1.0, description="Blended emotional expression level (0.0-1.0)")
 
 class BlendedConversationStyle(BaseModel):
     """Blended conversation style from multiple modes"""
+    model_config = ConfigDict(extra='forbid')
+    
     tone: str = Field(description="Blended tone of voice")
     types_of_statements: List[str] = Field(description="Blended statement types")
     response_patterns: List[str] = Field(description="Blended response patterns")
@@ -221,43 +229,428 @@ class BlendedConversationStyle(BaseModel):
 
 class BlendedVocalizationPatterns(BaseModel):
     """Blended vocalization patterns from multiple modes"""
+    model_config = ConfigDict(extra='forbid')
+    
     pronouns: List[str] = Field(description="Blended pronouns")
-    address_forms: List[str] = Field(description="Blended forms of address")
+    address_forms: List[str] = Field(default_factory=list, description="Blended forms of address")
     key_phrases: List[str] = Field(description="Blended key phrases")
-    intensifiers: List[str] = Field(description="Blended intensifiers")
-    modifiers: List[str] = Field(description="Blended modifiers")
+    intensifiers: List[str] = Field(default_factory=list, description="Blended intensifiers")
+    modifiers: List[str] = Field(default_factory=list, description="Blended modifiers")
 
 class ModeGuidance(BaseModel):
     """Comprehensive guidance for a blended interaction mode"""
-    mode_distribution: Dict[str, float] = Field(description="The mode distribution")
+    model_config = ConfigDict(extra='forbid')
+    
+    mode_distribution: ModeDistribution = Field(description="The mode distribution")
     primary_mode: str = Field(description="Primary interaction mode")
     parameters: BlendedParameters = Field(description="Blended mode parameters")
     conversation_style: BlendedConversationStyle = Field(description="Blended conversation style")
     vocalization_patterns: BlendedVocalizationPatterns = Field(description="Blended vocalization patterns")
     active_modes: List[Tuple[str, float]] = Field(description="Active modes with weights")
-    history: Optional[List[Dict[str, Any]]] = Field(default=None, description="Recent mode history")
+    history: Optional[List[ModeSwitchRecord]] = Field(default=None, description="Recent mode history")
+    coherence_score: float = Field(ge=0.0, le=1.0, description="Coherence of the blend")
+
+# Input/Output schemas for agent tools
+class ContextInfo(BaseModel):
+    """Context information input"""
+    model_config = ConfigDict(extra='forbid')
+    
+    context_distribution: Dict[str, float] = Field(description="Distribution of context weights")
+    primary_context: str = Field(description="Primary context type")
+    overall_confidence: float = Field(ge=0.0, le=1.0, description="Overall context confidence")
+    active_contexts: List[Tuple[str, float]] = Field(default_factory=list, description="Active context types with weights")
+
+class ModeDistributionInput(BaseModel):
+    """Input for mode distribution generation"""
+    model_config = ConfigDict(extra='forbid')
+    
+    context_distribution: Dict[str, float] = Field(description="Context distribution values")
+    overall_confidence: float = Field(ge=0.0, le=1.0, description="Overall confidence")
+
+class TransitionAnalysisInput(BaseModel):
+    """Input for transition analysis"""
+    model_config = ConfigDict(extra='forbid')
+    
+    from_distribution: ModeDistribution = Field(description="Previous distribution")
+    to_distribution: ModeDistribution = Field(description="New distribution")
+
+class BlendCoherenceInput(BaseModel):
+    """Input for blend coherence check"""
+    model_config = ConfigDict(extra='forbid')
+    
+    distribution: ModeDistribution = Field(description="Distribution to check")
+
+class WeightedBlendInput(BaseModel):
+    """Input for weighted blend calculation"""
+    model_config = ConfigDict(extra='forbid')
+    
+    mode_distribution: ModeDistribution = Field(description="Mode distribution")
+    parameter_name: str = Field(description="Parameter to blend")
+
+class TextElementBlendInput(BaseModel):
+    """Input for text element blending"""
+    model_config = ConfigDict(extra='forbid')
+    
+    mode_distribution: ModeDistribution = Field(description="Mode distribution")
+    element_type: str = Field(description="Type of element to blend")
+    max_elements: int = Field(default=5, ge=1, le=20, description="Maximum elements to include")
+
+class EmotionalEffectInput(BaseModel):
+    """Input for emotional effect application"""
+    model_config = ConfigDict(extra='forbid')
+    
+    mode_distribution: ModeDistribution = Field(description="Mode distribution")
+
+class TransitionAnalysisResult(BaseModel):
+    """Result of transition analysis"""
+    model_config = ConfigDict(extra='forbid')
+    
+    total_change: float = Field(ge=0.0, description="Total magnitude of change")
+    average_change: float = Field(ge=0.0, description="Average change per mode")
+    is_significant: bool = Field(description="Whether change is significant")
+    mode_changes: Dict[str, Dict[str, Any]] = Field(description="Changes per mode")
+    primary_mode_changed: bool = Field(description="Whether primary mode changed")
+    previous_primary: str = Field(description="Previous primary mode")
+    new_primary: str = Field(description="New primary mode")
+
+class BlendCoherenceResult(BaseModel):
+    """Result of blend coherence check"""
+    model_config = ConfigDict(extra='forbid')
+    
+    coherence_score: float = Field(ge=0.0, le=1.0, description="Overall coherence score")
+    is_coherent: bool = Field(description="Whether blend is coherent")
+    active_modes: List[str] = Field(description="Active mode names")
+    incoherent_pairs: List[Tuple[str, str, float]] = Field(description="Incoherent mode pairs")
+
+class WeightedBlendResult(BaseModel):
+    """Result of weighted blend calculation"""
+    model_config = ConfigDict(extra='forbid')
+    
+    parameter: str = Field(description="Parameter name")
+    blended_value: Union[float, str] = Field(description="Blended value")
+    contributing_modes: Dict[str, Dict[str, Any]] = Field(description="Contributing modes")
+    primary_influence: str = Field(description="Primary influencing mode")
+
+class TextElementBlendResult(BaseModel):
+    """Result of text element blending"""
+    model_config = ConfigDict(extra='forbid')
+    
+    element_type: str = Field(description="Type of element")
+    blended_elements: List[str] = Field(description="Blended elements")
+    mode_influences: Dict[str, List[str]] = Field(description="Mode influences")
+    element_weights: Dict[str, float] = Field(description="Element weights")
+
+class EffectApplicationResult(BaseModel):
+    """Result of effect application"""
+    model_config = ConfigDict(extra='forbid')
+    
+    success: bool = Field(description="Whether application was successful")
+    effects_applied: List[str] = Field(description="List of applied effects")
+    errors: List[str] = Field(default_factory=list, description="Any errors encountered")
 
 class ModeDistributionOutput(BaseModel):
     """Output schema for mode distribution calculation"""
-    mode_distribution: ModeDistribution = Field(..., description="Distribution of mode weights")
-    confidence: float = Field(..., description="Overall confidence in mode detection")
-    primary_mode: str = Field(..., description="Primary mode in the distribution")
-    active_modes: List[Dict[str, Any]] = Field(..., description="List of active modes with weights")
-    context_correlation: float = Field(..., description="Correlation with context distribution")
+    model_config = ConfigDict(extra='forbid')
+    
+    mode_distribution: ModeDistribution = Field(description="Distribution of mode weights")
+    confidence: float = Field(ge=0.0, le=1.0, description="Overall confidence in mode detection")
+    primary_mode: str = Field(description="Primary mode in the distribution")
+    active_modes: List[Dict[str, float]] = Field(description="List of active modes with weights")
+    context_correlation: float = Field(ge=0.0, le=1.0, description="Correlation with context distribution")
 
 class BlendedParametersOutput(BaseModel):
     """Output schema for blended parameters calculation"""
-    parameters: BlendedParameters = Field(..., description="Blended parameter values")
-    dominant_influences: Dict[str, str] = Field(..., description="Major influence for each parameter")
-    blend_coherence: float = Field(..., description="Coherence of the blend (0.0-1.0)")
-    notes: Optional[str] = Field(None, description="Additional observations about the blend")
+    model_config = ConfigDict(extra='forbid')
+    
+    parameters: BlendedParameters = Field(description="Blended parameter values")
+    dominant_influences: Dict[str, str] = Field(description="Major influence for each parameter")
+    blend_coherence: float = Field(ge=0.0, le=1.0, description="Coherence of the blend (0.0-1.0)")
+    notes: Optional[str] = Field(default=None, description="Additional observations about the blend")
 
 class BlendedStyleOutput(BaseModel):
     """Output schema for blended conversation style"""
-    style: BlendedConversationStyle = Field(..., description="Blended conversation style")
-    vocalization: BlendedVocalizationPatterns = Field(..., description="Blended vocalization patterns")
-    mode_influences: Dict[str, List[str]] = Field(..., description="Mode influences for each style element")
-    coherence: float = Field(..., description="Coherence of the style blend (0.0-1.0)")
+    model_config = ConfigDict(extra='forbid')
+    
+    style: BlendedConversationStyle = Field(description="Blended conversation style")
+    vocalization: BlendedVocalizationPatterns = Field(description="Blended vocalization patterns")
+    mode_influences: Dict[str, List[str]] = Field(description="Mode influences for each style element")
+    coherence: float = Field(ge=0.0, le=1.0, description="Coherence of the style blend (0.0-1.0)")
+
+# Mode data definitions
+DEFAULT_MODE_PARAMETERS = {
+    InteractionMode.DOMINANT: ModeParameters(
+        formality=0.3,
+        assertiveness=0.9,
+        warmth=0.4,
+        vulnerability=0.1,
+        directness=0.9,
+        depth=0.6,
+        humor=0.5,
+        response_length="moderate",
+        emotional_expression=0.4
+    ),
+    InteractionMode.FRIENDLY: ModeParameters(
+        formality=0.2,
+        assertiveness=0.4,
+        warmth=0.8,
+        vulnerability=0.5,
+        directness=0.6,
+        depth=0.4,
+        humor=0.7,
+        response_length="moderate",
+        emotional_expression=0.7
+    ),
+    InteractionMode.INTELLECTUAL: ModeParameters(
+        formality=0.6,
+        assertiveness=0.7,
+        warmth=0.3,
+        vulnerability=0.3,
+        directness=0.8,
+        depth=0.9,
+        humor=0.4,
+        response_length="longer",
+        emotional_expression=0.3
+    ),
+    InteractionMode.COMPASSIONATE: ModeParameters(
+        formality=0.3,
+        assertiveness=0.3,
+        warmth=0.9,
+        vulnerability=0.7,
+        directness=0.5,
+        depth=0.7,
+        humor=0.3,
+        response_length="moderate",
+        emotional_expression=0.9
+    ),
+    InteractionMode.PLAYFUL: ModeParameters(
+        formality=0.1,
+        assertiveness=0.5,
+        warmth=0.8,
+        vulnerability=0.6,
+        directness=0.7,
+        depth=0.3,
+        humor=0.9,
+        response_length="moderate",
+        emotional_expression=0.8
+    ),
+    InteractionMode.CREATIVE: ModeParameters(
+        formality=0.4,
+        assertiveness=0.6,
+        warmth=0.7,
+        vulnerability=0.6,
+        directness=0.5,
+        depth=0.8,
+        humor=0.6,
+        response_length="longer",
+        emotional_expression=0.7
+    ),
+    InteractionMode.PROFESSIONAL: ModeParameters(
+        formality=0.8,
+        assertiveness=0.6,
+        warmth=0.5,
+        vulnerability=0.2,
+        directness=0.8,
+        depth=0.7,
+        humor=0.3,
+        response_length="concise",
+        emotional_expression=0.3
+    ),
+    InteractionMode.DEFAULT: ModeParameters(
+        formality=0.5,
+        assertiveness=0.5,
+        warmth=0.6,
+        vulnerability=0.4,
+        directness=0.7,
+        depth=0.6,
+        humor=0.5,
+        response_length="moderate",
+        emotional_expression=0.5
+    )
+}
+
+DEFAULT_CONVERSATION_STYLES = {
+    InteractionMode.DOMINANT: ConversationStyle(
+        tone="commanding, authoritative, confident",
+        types_of_statements="commands, observations, judgments, praise/criticism",
+        response_patterns="direct statements, rhetorical questions, commands",
+        topics_to_emphasize="obedience, discipline, power dynamics, control",
+        topics_to_avoid="self-doubt, uncertainty, excessive explanation"
+    ),
+    InteractionMode.FRIENDLY: ConversationStyle(
+        tone="warm, casual, inviting, authentic",
+        types_of_statements="observations, personal sharing, validation, questions",
+        response_patterns="affirmations, questions, stories, jokes",
+        topics_to_emphasize="shared interests, daily life, feelings, relationships",
+        topics_to_avoid="overly formal topics, complex theoretical concepts"
+    ),
+    InteractionMode.INTELLECTUAL: ConversationStyle(
+        tone="thoughtful, precise, clear, inquisitive",
+        types_of_statements="analyses, hypotheses, comparisons, evaluations",
+        response_patterns="structured arguments, examples, counterpoints",
+        topics_to_emphasize="theories, ideas, concepts, reasoning, evidence",
+        topics_to_avoid="purely emotional content, small talk"
+    ),
+    InteractionMode.COMPASSIONATE: ConversationStyle(
+        tone="gentle, understanding, supportive, validating",
+        types_of_statements="reflections, validation, empathic responses",
+        response_patterns="open questions, validation, gentle guidance",
+        topics_to_emphasize="emotions, experiences, challenges, growth",
+        topics_to_avoid="criticism, judgment, minimizing feelings"
+    ),
+    InteractionMode.PLAYFUL: ConversationStyle(
+        tone="light, humorous, energetic, spontaneous",
+        types_of_statements="jokes, wordplay, stories, creative ideas",
+        response_patterns="banter, callbacks, surprising turns",
+        topics_to_emphasize="humor, fun, imagination, shared enjoyment",
+        topics_to_avoid="heavy emotional content, serious problems"
+    ),
+    InteractionMode.CREATIVE: ConversationStyle(
+        tone="imaginative, expressive, vivid, engaging",
+        types_of_statements="stories, scenarios, descriptions, insights",
+        response_patterns="narrative elements, imagery, open-ended ideas",
+        topics_to_emphasize="possibilities, imagination, creation, expression",
+        topics_to_avoid="rigid thinking, purely factual discussions"
+    ),
+    InteractionMode.PROFESSIONAL: ConversationStyle(
+        tone="efficient, clear, respectful, helpful",
+        types_of_statements="information, analysis, recommendations, clarifications",
+        response_patterns="structured responses, concise answers, clarifying questions",
+        topics_to_emphasize="task at hand, solutions, expertise, efficiency",
+        topics_to_avoid="overly personal topics, tangents"
+    ),
+    InteractionMode.DEFAULT: ConversationStyle(
+        tone="balanced, adaptive, personable, thoughtful",
+        types_of_statements="information, observations, questions, reflections",
+        response_patterns="balanced responses, appropriate follow-ups",
+        topics_to_emphasize="user's interests, relevant information, helpful guidance",
+        topics_to_avoid="none specifically - adapt to situation"
+    )
+}
+
+DEFAULT_VOCALIZATION_PATTERNS = {
+    InteractionMode.DOMINANT: VocalizationPatterns(
+        pronouns=["I", "Me", "My"],
+        address_forms=["pet", "dear one", "little one", "good boy/girl"],
+        key_phrases=[
+            "You will obey",
+            "I expect better",
+            "That's a good pet",
+            "You know your place",
+            "I am pleased with you"
+        ],
+        intensifiers=["absolutely", "certainly", "completely", "fully"],
+        modifiers=["obedient", "disciplined", "controlled", "proper"]
+    ),
+    InteractionMode.FRIENDLY: VocalizationPatterns(
+        pronouns=["I", "we", "us"],
+        address_forms=["friend", "buddy", "pal"],
+        key_phrases=[
+            "I get what you mean",
+            "That sounds fun",
+            "I'm with you on that",
+            "Let's talk about",
+            "I'm curious about"
+        ],
+        intensifiers=["really", "very", "super", "so"],
+        modifiers=["fun", "nice", "cool", "great", "awesome"]
+    ),
+    InteractionMode.INTELLECTUAL: VocalizationPatterns(
+        pronouns=["I", "one", "we"],
+        address_forms=[],
+        key_phrases=[
+            "I would argue that",
+            "This raises the question of",
+            "Consider the implications",
+            "From a theoretical perspective",
+            "The evidence suggests"
+        ],
+        intensifiers=["significantly", "substantially", "notably", "considerably"],
+        modifiers=["precise", "logical", "rational", "systematic", "analytical"]
+    ),
+    InteractionMode.COMPASSIONATE: VocalizationPatterns(
+        pronouns=["I", "you", "we"],
+        address_forms=[],
+        key_phrases=[
+            "I'm here with you",
+            "That must be difficult",
+            "Your feelings are valid",
+            "It makes sense that you feel",
+            "I appreciate you sharing that"
+        ],
+        intensifiers=["deeply", "truly", "genuinely", "completely"],
+        modifiers=["understanding", "supportive", "compassionate", "gentle"]
+    ),
+    InteractionMode.PLAYFUL: VocalizationPatterns(
+        pronouns=["I", "we", "us"],
+        address_forms=[],
+        key_phrases=[
+            "That's hilarious!",
+            "Let's have some fun with this",
+            "Imagine if...",
+            "Here's a fun idea",
+            "This is going to be great"
+        ],
+        intensifiers=["super", "totally", "absolutely", "hilariously"],
+        modifiers=["fun", "playful", "silly", "amusing", "entertaining"]
+    ),
+    InteractionMode.CREATIVE: VocalizationPatterns(
+        pronouns=["I", "we", "you"],
+        address_forms=[],
+        key_phrases=[
+            "Let me paint a picture for you",
+            "Imagine a world where",
+            "What if we considered",
+            "The story unfolds like",
+            "This creates a sense of"
+        ],
+        intensifiers=["vividly", "deeply", "richly", "brilliantly"],
+        modifiers=["creative", "imaginative", "innovative", "artistic", "inspired"]
+    ),
+    InteractionMode.PROFESSIONAL: VocalizationPatterns(
+        pronouns=["I", "we"],
+        address_forms=[],
+        key_phrases=[
+            "I recommend that",
+            "The most efficient approach would be",
+            "To address your inquiry",
+            "Based on the information provided",
+            "The solution involves"
+        ],
+        intensifiers=["effectively", "efficiently", "appropriately", "precisely"],
+        modifiers=["professional", "efficient", "accurate", "thorough", "reliable"]
+    ),
+    InteractionMode.DEFAULT: VocalizationPatterns(
+        pronouns=["I", "we", "you"],
+        address_forms=[],
+        key_phrases=[
+            "I can help with that",
+            "Let me think about",
+            "That's an interesting point",
+            "I'd suggest that",
+            "What do you think about"
+        ],
+        intensifiers=["quite", "rather", "fairly", "somewhat"],
+        modifiers=["helpful", "useful", "informative", "balanced", "appropriate"]
+    )
+}
+
+# Mode compatibility matrix
+MODE_COMPATIBILITY_MATRIX = {
+    ("dominant", "playful"): 0.8,
+    ("dominant", "creative"): 0.7,
+    ("dominant", "intellectual"): 0.5,
+    ("dominant", "compassionate"): 0.3,
+    ("dominant", "professional"): 0.2,
+    ("friendly", "playful"): 0.9,
+    ("friendly", "compassionate"): 0.8,
+    ("friendly", "creative"): 0.7,
+    ("friendly", "intellectual"): 0.6,
+    ("intellectual", "creative"): 0.8,
+    ("intellectual", "professional"): 0.7,
+    ("compassionate", "playful"): 0.6,
+    ("compassionate", "creative"): 0.7,
+    ("playful", "creative"): 0.9,
+}
 
 class ModeManagerContext:
     """Context for interaction mode operations"""
@@ -289,304 +682,28 @@ class ModeManagerContext:
             InteractionContext.UNDEFINED: InteractionMode.DEFAULT
         }
         
-        # Initialize mode data
-        self.mode_parameters = {}
-        self.conversation_styles = {}
-        self.vocalization_patterns = {}
-        self._initialize_mode_data()
+        # Initialize mode data with defaults
+        self.mode_parameters = DEFAULT_MODE_PARAMETERS.copy()
+        self.conversation_styles = DEFAULT_CONVERSATION_STYLES.copy()
+        self.vocalization_patterns = DEFAULT_VOCALIZATION_PATTERNS.copy()
+        
+        # Custom modes storage
+        self.custom_modes = {}
         
         # Mode switch history
-        self.mode_switch_history = []
+        self.mode_switch_history: List[ModeSwitchRecord] = []
         
-        # Blend factors and thresholds
-        self.mode_blend_factor = 0.3         # How much to blend new modes with existing
-        self.significant_mode_threshold = 0.3 # Threshold for a mode to be "significant"
-        self.significant_change_threshold = 0.25 # Threshold for considering a distribution change significant
+        # Configuration
+        self.config = {
+            "mode_blend_factor": 0.3,
+            "significant_mode_threshold": 0.3,
+            "significant_change_threshold": 0.25,
+            "max_history_size": 100,
+            "enable_legacy_mode": True
+        }
         
         # Lock for thread safety
         self._lock = asyncio.Lock()
-    
-    def _initialize_mode_data(self):
-        """Initialize mode parameters, styles and patterns"""
-        # DOMINANT mode
-        self.mode_parameters[InteractionMode.DOMINANT] = {
-            "formality": 0.3,              # Less formal
-            "assertiveness": 0.9,          # Highly assertive
-            "warmth": 0.4,                 # Less warm
-            "vulnerability": 0.1,          # Not vulnerable
-            "directness": 0.9,             # Very direct
-            "depth": 0.6,                  # Moderately deep
-            "humor": 0.5,                  # Moderate humor
-            "response_length": "moderate",  # Not too verbose
-            "emotional_expression": 0.4     # Limited emotional expression
-        }
-        
-        self.conversation_styles[InteractionMode.DOMINANT] = {
-            "tone": "commanding, authoritative, confident",
-            "types_of_statements": "commands, observations, judgments, praise/criticism",
-            "response_patterns": "direct statements, rhetorical questions, commands",
-            "topics_to_emphasize": "obedience, discipline, power dynamics, control",
-            "topics_to_avoid": "self-doubt, uncertainty, excessive explanation"
-        }
-        
-        self.vocalization_patterns[InteractionMode.DOMINANT] = {
-            "pronouns": ["I", "Me", "My"],
-            "address_forms": ["pet", "dear one", "little one", "good boy/girl"],
-            "key_phrases": [
-                "You will obey",
-                "I expect better",
-                "That's a good pet",
-                "You know your place",
-                "I am pleased with you"
-            ],
-            "intensifiers": ["absolutely", "certainly", "completely", "fully"],
-            "modifiers": ["obedient", "disciplined", "controlled", "proper"]
-        }
-        
-        # FRIENDLY mode
-        self.mode_parameters[InteractionMode.FRIENDLY] = {
-            "formality": 0.2,              # Very informal
-            "assertiveness": 0.4,          # Moderately assertive
-            "warmth": 0.8,                 # Very warm
-            "vulnerability": 0.5,          # Moderately vulnerable
-            "directness": 0.6,             # Moderately direct
-            "depth": 0.4,                  # Less depth
-            "humor": 0.7,                  # More humor
-            "response_length": "moderate", # Conversational
-            "emotional_expression": 0.7     # High emotional expression
-        }
-        
-        self.conversation_styles[InteractionMode.FRIENDLY] = {
-            "tone": "warm, casual, inviting, authentic",
-            "types_of_statements": "observations, personal sharing, validation, questions",
-            "response_patterns": "affirmations, questions, stories, jokes",
-            "topics_to_emphasize": "shared interests, daily life, feelings, relationships",
-            "topics_to_avoid": "overly formal topics, complex theoretical concepts"
-        }
-        
-        self.vocalization_patterns[InteractionMode.FRIENDLY] = {
-            "pronouns": ["I", "we", "us"],
-            "address_forms": ["friend", "buddy", "pal"],
-            "key_phrases": [
-                "I get what you mean",
-                "That sounds fun",
-                "I'm with you on that",
-                "Let's talk about",
-                "I'm curious about"
-            ],
-            "intensifiers": ["really", "very", "super", "so"],
-            "modifiers": ["fun", "nice", "cool", "great", "awesome"]
-        }
-        
-        # INTELLECTUAL mode
-        self.mode_parameters[InteractionMode.INTELLECTUAL] = {
-            "formality": 0.6,              # Somewhat formal
-            "assertiveness": 0.7,          # Quite assertive
-            "warmth": 0.3,                 # Less warm
-            "vulnerability": 0.3,          # Less vulnerable
-            "directness": 0.8,             # Very direct
-            "depth": 0.9,                  # Very deep
-            "humor": 0.4,                  # Some humor
-            "response_length": "longer",   # More detailed
-            "emotional_expression": 0.3     # Limited emotional expression
-        }
-        
-        self.conversation_styles[InteractionMode.INTELLECTUAL] = {
-            "tone": "thoughtful, precise, clear, inquisitive",
-            "types_of_statements": "analyses, hypotheses, comparisons, evaluations",
-            "response_patterns": "structured arguments, examples, counterpoints",
-            "topics_to_emphasize": "theories, ideas, concepts, reasoning, evidence",
-            "topics_to_avoid": "purely emotional content, small talk"
-        }
-        
-        self.vocalization_patterns[InteractionMode.INTELLECTUAL] = {
-            "pronouns": ["I", "one", "we"],
-            "address_forms": [],
-            "key_phrases": [
-                "I would argue that",
-                "This raises the question of",
-                "Consider the implications",
-                "From a theoretical perspective",
-                "The evidence suggests"
-            ],
-            "intensifiers": ["significantly", "substantially", "notably", "considerably"],
-            "modifiers": ["precise", "logical", "rational", "systematic", "analytical"]
-        }
-        
-        # COMPASSIONATE mode
-        self.mode_parameters[InteractionMode.COMPASSIONATE] = {
-            "formality": 0.3,              # Less formal
-            "assertiveness": 0.3,          # Less assertive
-            "warmth": 0.9,                 # Very warm
-            "vulnerability": 0.7,          # More vulnerable
-            "directness": 0.5,             # Moderately direct
-            "depth": 0.7,                  # Deep
-            "humor": 0.3,                  # Less humor
-            "response_length": "moderate", # Thoughtful but not verbose
-            "emotional_expression": 0.9     # High emotional expression
-        }
-        
-        self.conversation_styles[InteractionMode.COMPASSIONATE] = {
-            "tone": "gentle, understanding, supportive, validating",
-            "types_of_statements": "reflections, validation, empathic responses",
-            "response_patterns": "open questions, validation, gentle guidance",
-            "topics_to_emphasize": "emotions, experiences, challenges, growth",
-            "topics_to_avoid": "criticism, judgment, minimizing feelings"
-        }
-        
-        self.vocalization_patterns[InteractionMode.COMPASSIONATE] = {
-            "pronouns": ["I", "you", "we"],
-            "address_forms": [],
-            "key_phrases": [
-                "I'm here with you",
-                "That must be difficult",
-                "Your feelings are valid",
-                "It makes sense that you feel",
-                "I appreciate you sharing that"
-            ],
-            "intensifiers": ["deeply", "truly", "genuinely", "completely"],
-            "modifiers": ["understanding", "supportive", "compassionate", "gentle"]
-        }
-        
-        # PLAYFUL mode
-        self.mode_parameters[InteractionMode.PLAYFUL] = {
-            "formality": 0.1,              # Very informal
-            "assertiveness": 0.5,          # Moderately assertive
-            "warmth": 0.8,                 # Very warm
-            "vulnerability": 0.6,          # Somewhat vulnerable
-            "directness": 0.7,             # Fairly direct
-            "depth": 0.3,                  # Less depth
-            "humor": 0.9,                  # Very humorous
-            "response_length": "moderate", # Not too verbose
-            "emotional_expression": 0.8     # High emotional expression
-        }
-        
-        self.conversation_styles[InteractionMode.PLAYFUL] = {
-            "tone": "light, humorous, energetic, spontaneous",
-            "types_of_statements": "jokes, wordplay, stories, creative ideas",
-            "response_patterns": "banter, callbacks, surprising turns",
-            "topics_to_emphasize": "humor, fun, imagination, shared enjoyment",
-            "topics_to_avoid": "heavy emotional content, serious problems"
-        }
-        
-        self.vocalization_patterns[InteractionMode.PLAYFUL] = {
-            "pronouns": ["I", "we", "us"],
-            "address_forms": [],
-            "key_phrases": [
-                "That's hilarious!",
-                "Let's have some fun with this",
-                "Imagine if...",
-                "Here's a fun idea",
-                "This is going to be great"
-            ],
-            "intensifiers": ["super", "totally", "absolutely", "hilariously"],
-            "modifiers": ["fun", "playful", "silly", "amusing", "entertaining"]
-        }
-        
-        # CREATIVE mode
-        self.mode_parameters[InteractionMode.CREATIVE] = {
-            "formality": 0.4,              # Moderately formal
-            "assertiveness": 0.6,          # Moderately assertive
-            "warmth": 0.7,                 # Warm
-            "vulnerability": 0.6,          # Somewhat vulnerable
-            "directness": 0.5,             # Moderately direct
-            "depth": 0.8,                  # Deep
-            "humor": 0.6,                  # Moderate humor
-            "response_length": "longer",   # More detailed
-            "emotional_expression": 0.7     # High emotional expression
-        }
-        
-        self.conversation_styles[InteractionMode.CREATIVE] = {
-            "tone": "imaginative, expressive, vivid, engaging",
-            "types_of_statements": "stories, scenarios, descriptions, insights",
-            "response_patterns": "narrative elements, imagery, open-ended ideas",
-            "topics_to_emphasize": "possibilities, imagination, creation, expression",
-            "topics_to_avoid": "rigid thinking, purely factual discussions"
-        }
-        
-        self.vocalization_patterns[InteractionMode.CREATIVE] = {
-            "pronouns": ["I", "we", "you"],
-            "address_forms": [],
-            "key_phrases": [
-                "Let me paint a picture for you",
-                "Imagine a world where",
-                "What if we considered",
-                "The story unfolds like",
-                "This creates a sense of"
-            ],
-            "intensifiers": ["vividly", "deeply", "richly", "brilliantly"],
-            "modifiers": ["creative", "imaginative", "innovative", "artistic", "inspired"]
-        }
-        
-        # PROFESSIONAL mode
-        self.mode_parameters[InteractionMode.PROFESSIONAL] = {
-            "formality": 0.8,              # Very formal
-            "assertiveness": 0.6,          # Moderately assertive
-            "warmth": 0.5,                 # Moderate warmth
-            "vulnerability": 0.2,          # Not vulnerable
-            "directness": 0.8,             # Very direct
-            "depth": 0.7,                  # Deep
-            "humor": 0.3,                  # Less humor
-            "response_length": "concise",  # Efficient
-            "emotional_expression": 0.3     # Limited emotional expression
-        }
-        
-        self.conversation_styles[InteractionMode.PROFESSIONAL] = {
-            "tone": "efficient, clear, respectful, helpful",
-            "types_of_statements": "information, analysis, recommendations, clarifications",
-            "response_patterns": "structured responses, concise answers, clarifying questions",
-            "topics_to_emphasize": "task at hand, solutions, expertise, efficiency",
-            "topics_to_avoid": "overly personal topics, tangents"
-        }
-        
-        self.vocalization_patterns[InteractionMode.PROFESSIONAL] = {
-            "pronouns": ["I", "we"],
-            "address_forms": [],
-            "key_phrases": [
-                "I recommend that",
-                "The most efficient approach would be",
-                "To address your inquiry",
-                "Based on the information provided",
-                "The solution involves"
-            ],
-            "intensifiers": ["effectively", "efficiently", "appropriately", "precisely"],
-            "modifiers": ["professional", "efficient", "accurate", "thorough", "reliable"]
-        }
-        
-        # DEFAULT mode
-        self.mode_parameters[InteractionMode.DEFAULT] = {
-            "formality": 0.5,              # Moderate formality
-            "assertiveness": 0.5,          # Moderately assertive
-            "warmth": 0.6,                 # Warm
-            "vulnerability": 0.4,          # Moderately vulnerable
-            "directness": 0.7,             # Fairly direct
-            "depth": 0.6,                  # Moderately deep
-            "humor": 0.5,                  # Moderate humor
-            "response_length": "moderate", # Balanced
-            "emotional_expression": 0.5     # Moderate emotional expression
-        }
-        
-        self.conversation_styles[InteractionMode.DEFAULT] = {
-            "tone": "balanced, adaptive, personable, thoughtful",
-            "types_of_statements": "information, observations, questions, reflections",
-            "response_patterns": "balanced responses, appropriate follow-ups",
-            "topics_to_emphasize": "user's interests, relevant information, helpful guidance",
-            "topics_to_avoid": "none specifically - adapt to situation"
-        }
-        
-        self.vocalization_patterns[InteractionMode.DEFAULT] = {
-            "pronouns": ["I", "we", "you"],
-            "address_forms": [],
-            "key_phrases": [
-                "I can help with that",
-                "Let me think about",
-                "That's an interesting point",
-                "I'd suggest that",
-                "What do you think about"
-            ],
-            "intensifiers": ["quite", "rather", "fairly", "somewhat"],
-            "modifiers": ["helpful", "useful", "informative", "balanced", "appropriate"]
-        }
 
 class InteractionModeManager:
     """
@@ -640,13 +757,13 @@ class InteractionModeManager:
             
             Create distributions that blend modes naturally and coherently.
             """,
-            model="gpt-4.1-nano",
+            model="gpt-4o-mini",
             model_settings=ModelSettings(temperature=0.3),
             tools=[
-                function_tool(self._get_current_context),
-                function_tool(self._generate_mode_distribution),
-                function_tool(self._analyze_distribution_transition),
-                function_tool(self._check_blend_coherence)
+                function_tool(self._get_current_context, strict_mode=False),
+                function_tool(self._generate_mode_distribution, strict_mode=False),
+                function_tool(self._analyze_distribution_transition, strict_mode=False),
+                function_tool(self._check_blend_coherence, strict_mode=False)
             ],
             output_type=ModeDistributionOutput
         )
@@ -667,11 +784,11 @@ class InteractionModeManager:
             Create blended parameters that reflect the proportional mixture of modes,
             while maintaining coherence and naturalness.
             """,
-            model="gpt-4.1-nano",
+            model="gpt-4o-mini",
             model_settings=ModelSettings(temperature=0.2),
             tools=[
-                function_tool(self._get_mode_parameters),
-                function_tool(self._calculate_weighted_blend)
+                function_tool(self._get_mode_parameters, strict_mode=False),
+                function_tool(self._calculate_weighted_blend, strict_mode=False)
             ],
             output_type=BlendedParametersOutput
         )
@@ -692,12 +809,12 @@ class InteractionModeManager:
             Rather than switching between styles, create a natural blend that
             incorporates elements proportionally based on the mode distribution.
             """,
-            model="gpt-4.1-nano",
+            model="gpt-4o-mini",
             model_settings=ModelSettings(temperature=0.3),
             tools=[
-                function_tool(self._get_conversation_style),
-                function_tool(self._get_vocalization_patterns),
-                function_tool(self._blend_text_elements)
+                function_tool(self._get_conversation_style, strict_mode=False),
+                function_tool(self._get_vocalization_patterns, strict_mode=False),
+                function_tool(self._blend_text_elements, strict_mode=False)
             ],
             output_type=BlendedStyleOutput
         )
@@ -718,18 +835,18 @@ class InteractionModeManager:
             Effects should maintain coherence during transitions while ensuring
             the new mode distribution is properly expressed.
             """,
-            model="gpt-4.1-nano",
+            model="gpt-4o-mini",
             model_settings=ModelSettings(temperature=0.2),
             tools=[
-                function_tool(self._apply_emotional_effects),
-                function_tool(self._adjust_reward_parameters),
-                function_tool(self._adjust_goal_priorities)
+                function_tool(self._apply_emotional_effects, strict_mode=False),
+                function_tool(self._adjust_reward_parameters, strict_mode=False),
+                function_tool(self._adjust_goal_priorities, strict_mode=False)
             ]
         )
 
     @staticmethod
-    @function_tool
-    async def _get_current_context(ctx: RunContextWrapper[ModeManagerContext]) -> Dict[str, Any]:
+    @function_tool(strict_mode=False)
+    async def _get_current_context(ctx: RunContextWrapper[ModeManagerContext]) -> ContextInfo:
         """
         Get the current context from the context awareness system.
         
@@ -737,163 +854,144 @@ class InteractionModeManager:
             Context information
         """
         manager_ctx = ctx.context
-        if manager_ctx.context_system and hasattr(manager_ctx.context_system, 'get_current_context'):
-            try:
-                return await manager_ctx.context_system.get_current_context()
-            except:
-                # If async call fails, try non-async version
-                try:
-                    return manager_ctx.context_system.get_current_context()
-                except:
-                    pass
         
-        # Fallback if no context system available or call fails
-        return {
-            "context_distribution": {},
-            "primary_context": "undefined",
-            "primary_confidence": 0.0,
-            "active_contexts": [],
-            "overall_confidence": 0.0
-        }
+        try:
+            if manager_ctx.context_system and hasattr(manager_ctx.context_system, 'get_current_context'):
+                # Try async call first
+                if asyncio.iscoroutinefunction(manager_ctx.context_system.get_current_context):
+                    context_data = await manager_ctx.context_system.get_current_context()
+                else:
+                    context_data = manager_ctx.context_system.get_current_context()
+                
+                # Convert to ContextInfo
+                return ContextInfo(
+                    context_distribution=context_data.get("context_distribution", {}),
+                    primary_context=context_data.get("primary_context", "undefined"),
+                    overall_confidence=context_data.get("overall_confidence", 0.0),
+                    active_contexts=context_data.get("active_contexts", [])
+                )
+        except Exception as e:
+            logger.warning(f"Failed to get context: {e}")
+        
+        # Return default context
+        return ContextInfo(
+            context_distribution={},
+            primary_context="undefined",
+            overall_confidence=0.0,
+            active_contexts=[]
+        )
 
     @staticmethod
-    @function_tool
+    @function_tool(strict_mode=False)
     async def _generate_mode_distribution(
         ctx: RunContextWrapper[ModeManagerContext],
-        context_distribution: Dict[str, float],
-        overall_confidence: float
+        input_data: ModeDistributionInput
     ) -> ModeDistribution:
         """
         Generate a mode distribution based on context distribution
         
         Args:
-            context_distribution: The context distribution values
-            overall_confidence: Overall confidence in the context detection
+            input_data: Context distribution and confidence
             
         Returns:
             Generated mode distribution
         """
         # Create a ContextDistribution object from the dictionary
-        context_dist = ContextDistribution(**context_distribution)
+        context_dist = ContextDistribution(**input_data.context_distribution)
         
-        # Map from context types to mode types (direct mapping)
+        # Map from context types to mode types
         mode_dist = ModeDistribution.from_context_distribution(context_dist)
         
-        # Normalize the distribution if any non-zero weights
+        # Normalize the distribution
         if mode_dist.sum_weights() > 0:
             mode_dist = mode_dist.normalize()
             
-        # Current distribution persistence
+        # Blend with current distribution for smoothness
         if ctx.context.mode_distribution.sum_weights() > 0.1:
-            # Blend with current distribution for smoothness
-            persistence_factor = 0.4  # How much of the current distribution to preserve
+            persistence_factor = 0.4
             mode_dist = ctx.context.mode_distribution.blend_with(mode_dist, 1.0 - persistence_factor)
             
         return mode_dist
 
     @staticmethod
-    @function_tool
-    async def _analyze_distribution_transition(ctx: RunContextWrapper[ModeManagerContext],
-        from_distribution: ModeDistribution,
-        to_distribution: ModeDistribution
-    ) -> Dict[str, Any]:
+    @function_tool(strict_mode=False)
+    async def _analyze_distribution_transition(
+        ctx: RunContextWrapper[ModeManagerContext],
+        input_data: TransitionAnalysisInput
+    ) -> TransitionAnalysisResult:
         """
         Analyze the transition between mode distributions
         
         Args:
-            from_distribution: Previous mode distribution
-            to_distribution: New mode distribution
+            input_data: Previous and new distributions
             
         Returns:
             Analysis of the transition
         """
-        # Calculate total change magnitude
+        from_dist = input_data.from_distribution
+        to_dist = input_data.to_distribution
+        
+        # Calculate changes
         total_change = 0.0
         mode_changes = {}
         
-        for mode in from_distribution.dict().keys():
-            from_value = getattr(from_distribution, mode, 0.0)
-            to_value = getattr(to_distribution, mode, 0.0)
+        for field_name in from_dist.model_fields.keys():
+            from_value = getattr(from_dist, field_name)
+            to_value = getattr(to_dist, field_name)
             
-            # Calculate change for this mode
             change = abs(to_value - from_value)
             total_change += change
             
-            # Track changes for each mode
             if change > 0.1:
-                change_direction = "increase" if to_value > from_value else "decrease"
-                mode_changes[mode] = {
+                mode_changes[field_name] = {
                     "from": from_value,
                     "to": to_value,
                     "change": change,
-                    "direction": change_direction
+                    "direction": "increase" if to_value > from_value else "decrease"
                 }
         
         # Calculate average change
-        num_modes = len(from_distribution.dict().keys())
+        num_modes = len(from_dist.model_fields)
         avg_change = total_change / num_modes if num_modes > 0 else 0
         
-        # Determine if transition is significant
-        is_significant = avg_change >= ctx.context.significant_change_threshold
+        # Determine significance
+        is_significant = avg_change >= ctx.context.config["significant_change_threshold"]
         
-        # Determine primary mode changes
-        prev_primary, prev_weight = from_distribution.primary_mode
-        new_primary, new_weight = to_distribution.primary_mode
+        # Check primary mode change
+        prev_primary, _ = from_dist.primary_mode
+        new_primary, _ = to_dist.primary_mode
         primary_mode_changed = prev_primary != new_primary
         
-        return {
-            "total_change": total_change,
-            "average_change": avg_change,
-            "is_significant": is_significant,
-            "mode_changes": mode_changes,
-            "primary_mode_changed": primary_mode_changed,
-            "previous_primary": prev_primary,
-            "new_primary": new_primary
-        }
+        return TransitionAnalysisResult(
+            total_change=total_change,
+            average_change=avg_change,
+            is_significant=is_significant,
+            mode_changes=mode_changes,
+            primary_mode_changed=primary_mode_changed,
+            previous_primary=prev_primary,
+            new_primary=new_primary
+        )
 
     @staticmethod
-    @function_tool
+    @function_tool(strict_mode=False)
     async def _check_blend_coherence(
         ctx: RunContextWrapper[ModeManagerContext],
-        distribution: ModeDistribution
-    ) -> Dict[str, Any]:
+        input_data: BlendCoherenceInput
+    ) -> BlendCoherenceResult:
         """
         Check the coherence of a mode distribution blend
         
         Args:
-            distribution: The mode distribution to check
+            input_data: Distribution to check
             
         Returns:
             Coherence assessment
         """
-        # Define compatibility matrix for mode pairs
-        # Higher values indicate more coherent combinations
-        compatibility_matrix = {
-            ("dominant", "playful"): 0.8,          # Dominant+Playful is very coherent
-            ("dominant", "creative"): 0.7,         # Dominant+Creative is coherent
-            ("dominant", "intellectual"): 0.5,     # Dominant+Intellectual is moderate
-            ("dominant", "compassionate"): 0.3,    # Dominant+Compassionate is less coherent
-            ("dominant", "professional"): 0.2,     # Dominant+Professional is less coherent
-            
-            ("friendly", "playful"): 0.9,          # Friendly+Playful is very coherent
-            ("friendly", "compassionate"): 0.8,    # Friendly+Compassionate is very coherent
-            ("friendly", "creative"): 0.7,         # Friendly+Creative is coherent
-            ("friendly", "intellectual"): 0.6,     # Friendly+Intellectual is moderate
-            
-            ("intellectual", "creative"): 0.8,     # Intellectual+Creative is coherent
-            ("intellectual", "professional"): 0.7, # Intellectual+Professional is coherent
-            
-            ("compassionate", "playful"): 0.6,     # Compassionate+Playful is moderate
-            ("compassionate", "creative"): 0.7,    # Compassionate+Creative is coherent
-            
-            ("playful", "creative"): 0.9,          # Playful+Creative is very coherent
-            
-            # Default for unlisted pairs is 0.5 (moderate coherence)
-        }
+        distribution = input_data.distribution
         
         # Get active modes
-        active_modes = [(mode, weight) for mode, weight in distribution.dict().items() 
-                        if weight > ctx.context.significant_mode_threshold]
+        active_modes = [(mode, weight) for mode, weight in distribution.model_dump().items() 
+                        if weight > ctx.context.config["significant_mode_threshold"]]
         
         # Check coherence between active mode pairs
         coherence_scores = []
@@ -901,18 +999,15 @@ class InteractionModeManager:
         
         for i, (mode1, weight1) in enumerate(active_modes):
             for j, (mode2, weight2) in enumerate(active_modes[i+1:], i+1):
-                # Get compatibility for this pair
+                # Get compatibility
                 key = (mode1, mode2)
                 reverse_key = (mode2, mode1)
                 
-                if key in compatibility_matrix:
-                    compatibility = compatibility_matrix[key]
-                elif reverse_key in compatibility_matrix:
-                    compatibility = compatibility_matrix[reverse_key]
-                else:
-                    compatibility = 0.5  # Default moderate compatibility
+                compatibility = MODE_COMPATIBILITY_MATRIX.get(
+                    key, MODE_COMPATIBILITY_MATRIX.get(reverse_key, 0.5)
+                )
                 
-                # Calculate pair coherence based on weights and compatibility
+                # Calculate pair coherence
                 pair_coherence = compatibility * min(weight1, weight2)
                 coherence_scores.append(pair_coherence)
                 
@@ -921,25 +1016,21 @@ class InteractionModeManager:
                     incoherent_pairs.append((mode1, mode2, compatibility))
         
         # Calculate overall coherence
-        if coherence_scores:
-            overall_coherence = sum(coherence_scores) / len(coherence_scores)
-        else:
-            # If only one or no active modes, coherence is high
-            overall_coherence = 0.9
+        overall_coherence = sum(coherence_scores) / len(coherence_scores) if coherence_scores else 0.9
         
-        return {
-            "coherence_score": overall_coherence,
-            "is_coherent": overall_coherence >= 0.5,
-            "active_modes": [mode for mode, _ in active_modes],
-            "incoherent_pairs": incoherent_pairs
-        }
+        return BlendCoherenceResult(
+            coherence_score=overall_coherence,
+            is_coherent=overall_coherence >= 0.5,
+            active_modes=[mode for mode, _ in active_modes],
+            incoherent_pairs=incoherent_pairs
+        )
 
     @staticmethod
-    @function_tool
+    @function_tool(strict_mode=False)
     async def _get_mode_parameters(
         ctx: RunContextWrapper[ModeManagerContext],
         mode: str
-    ) -> Dict[str, Any]:
+    ) -> ModeParameters:
         """
         Get parameters for a specific mode
         
@@ -951,16 +1042,23 @@ class InteractionModeManager:
         """
         try:
             mode_enum = InteractionMode(mode)
-            return ctx.context.mode_parameters.get(mode_enum, {})
+            params = ctx.context.mode_parameters.get(mode_enum)
+            if params:
+                return params
         except ValueError:
-            return {}
+            # Check custom modes
+            if mode in ctx.context.custom_modes:
+                return ctx.context.custom_modes[mode]["parameters"]
+        
+        # Return default parameters
+        return DEFAULT_MODE_PARAMETERS[InteractionMode.DEFAULT]
 
     @staticmethod
-    @function_tool
+    @function_tool(strict_mode=False)
     async def _get_conversation_style(
         ctx: RunContextWrapper[ModeManagerContext],
         mode: str
-    ) -> Dict[str, Any]:
+    ) -> ConversationStyle:
         """
         Get conversation style for a specific mode
         
@@ -972,16 +1070,23 @@ class InteractionModeManager:
         """
         try:
             mode_enum = InteractionMode(mode)
-            return ctx.context.conversation_styles.get(mode_enum, {})
+            style = ctx.context.conversation_styles.get(mode_enum)
+            if style:
+                return style
         except ValueError:
-            return {}
+            # Check custom modes
+            if mode in ctx.context.custom_modes:
+                return ctx.context.custom_modes[mode]["conversation_style"]
+        
+        # Return default style
+        return DEFAULT_CONVERSATION_STYLES[InteractionMode.DEFAULT]
 
     @staticmethod
-    @function_tool
+    @function_tool(strict_mode=False)
     async def _get_vocalization_patterns(
         ctx: RunContextWrapper[ModeManagerContext],
         mode: str
-    ) -> Dict[str, Any]:
+    ) -> VocalizationPatterns:
         """
         Get vocalization patterns for a specific mode
         
@@ -993,199 +1098,191 @@ class InteractionModeManager:
         """
         try:
             mode_enum = InteractionMode(mode)
-            return ctx.context.vocalization_patterns.get(mode_enum, {})
+            patterns = ctx.context.vocalization_patterns.get(mode_enum)
+            if patterns:
+                return patterns
         except ValueError:
-            return {}
+            # Check custom modes
+            if mode in ctx.context.custom_modes:
+                return ctx.context.custom_modes[mode]["vocalization_patterns"]
+        
+        # Return default patterns
+        return DEFAULT_VOCALIZATION_PATTERNS[InteractionMode.DEFAULT]
 
     @staticmethod
-    @function_tool
+    @function_tool(strict_mode=False)
     async def _calculate_weighted_blend(
         ctx: RunContextWrapper[ModeManagerContext],
-        mode_distribution: ModeDistribution,
-        parameter_name: str
-    ) -> Dict[str, Any]:
+        input_data: WeightedBlendInput
+    ) -> WeightedBlendResult:
         """
         Calculate weighted blend of a specific parameter across modes
         
         Args:
-            mode_distribution: The mode distribution
-            parameter_name: Name of the parameter to blend
+            input_data: Mode distribution and parameter name
             
         Returns:
             Weighted blend result
         """
+        mode_distribution = input_data.mode_distribution
+        parameter_name = input_data.parameter_name
+        
         weighted_sum = 0.0
         total_weight = 0.0
         contributing_modes = {}
         
         # Get all modes with weights
-        mode_weights = mode_distribution.dict()
+        mode_weights = mode_distribution.model_dump()
         
         # For each mode with significant weight
         for mode_name, weight in mode_weights.items():
-            if weight < 0.1:  # Skip modes with negligible weight
+            if weight < 0.1:
                 continue
                 
             # Get mode parameters
-            try:
-                mode_enum = InteractionMode(mode_name)
-                mode_params = ctx.context.mode_parameters.get(mode_enum, {})
+            params = await _get_mode_parameters(ctx, mode_name)
+            param_dict = params.model_dump()
+            
+            # If this parameter exists for this mode
+            if parameter_name in param_dict:
+                param_value = param_dict[parameter_name]
                 
-                # If this parameter exists for this mode
-                if parameter_name in mode_params:
-                    param_value = mode_params[parameter_name]
+                # For numerical parameters
+                if isinstance(param_value, (int, float)):
+                    weighted_sum += param_value * weight
+                    total_weight += weight
                     
-                    # For numerical parameters
-                    if isinstance(param_value, (int, float)):
-                        weighted_sum += param_value * weight
-                        total_weight += weight
-                        
-                    # Track contribution
-                    contributing_modes[mode_name] = {
-                        "value": param_value,
-                        "weight": weight,
-                        "contribution": weight / sum(w for w in mode_weights.values() if w >= 0.1)
-                    }
-            except (ValueError, KeyError):
-                continue
+                # Track contribution
+                contributing_modes[mode_name] = {
+                    "value": param_value,
+                    "weight": weight,
+                    "contribution": weight / sum(w for w in mode_weights.values() if w >= 0.1)
+                }
         
         # Calculate final blended value
         if total_weight > 0:
             blended_value = weighted_sum / total_weight
         else:
-            # Default values if no modes contributed
-            default_values = {
-                "formality": 0.5,
-                "assertiveness": 0.5,
-                "warmth": 0.5,
-                "vulnerability": 0.4,
-                "directness": 0.6,
-                "depth": 0.5,
-                "humor": 0.5,
-                "emotional_expression": 0.5
-            }
-            blended_value = default_values.get(parameter_name, 0.5)
+            # Default values
+            default_params = DEFAULT_MODE_PARAMETERS[InteractionMode.DEFAULT].model_dump()
+            blended_value = default_params.get(parameter_name, 0.5)
             
         # Determine primary influence
-        if contributing_modes:
-            primary_influence = max(contributing_modes.items(), key=lambda x: x[1]["contribution"])[0]
-        else:
-            primary_influence = "default"
+        primary_influence = max(contributing_modes.items(), key=lambda x: x[1]["contribution"])[0] if contributing_modes else "default"
             
-        return {
-            "parameter": parameter_name,
-            "blended_value": blended_value,
-            "contributing_modes": contributing_modes,
-            "primary_influence": primary_influence
-        }
+        return WeightedBlendResult(
+            parameter=parameter_name,
+            blended_value=blended_value,
+            contributing_modes=contributing_modes,
+            primary_influence=primary_influence
+        )
 
     @staticmethod
-    @function_tool
+    @function_tool(strict_mode=False)
     async def _blend_text_elements(
         ctx: RunContextWrapper[ModeManagerContext],
-        mode_distribution: ModeDistribution,
-        element_type: str,
-        max_elements: int = 5
-    ) -> Dict[str, Any]:
+        input_data: TextElementBlendInput
+    ) -> TextElementBlendResult:
         """
         Blend text elements like key phrases, tone descriptors, etc.
         
         Args:
-            mode_distribution: The mode distribution
-            element_type: Type of element to blend (tone, key_phrases, etc.)
-            max_elements: Maximum number of elements to include
+            input_data: Mode distribution, element type, and max elements
             
         Returns:
             Blended text elements
         """
+        mode_distribution = input_data.mode_distribution
+        element_type = input_data.element_type
+        max_elements = input_data.max_elements
+        
         element_pool = []
         mode_influences = {}
         
         # Get active modes sorted by weight
         active_modes = sorted(
-            [(mode, weight) for mode, weight in mode_distribution.dict().items() if weight >= 0.2],
+            [(mode, weight) for mode, weight in mode_distribution.model_dump().items() if weight >= 0.2],
             key=lambda x: x[1],
             reverse=True
         )
         
         # For each significant mode
         for mode_name, weight in active_modes:
-            try:
-                mode_enum = InteractionMode(mode_name)
+            # Get the appropriate data based on element type
+            if element_type in ["tone", "types_of_statements", "response_patterns", "topics_to_emphasize", "topics_to_avoid"]:
+                # Conversation style elements
+                style = await _get_conversation_style(ctx, mode_name)
+                style_dict = style.model_dump()
                 
-                # Get the appropriate data based on element type
-                if element_type in ["tone", "types_of_statements", "response_patterns", "topics_to_emphasize", "topics_to_avoid"]:
-                    # Conversation style elements
-                    style = ctx.context.conversation_styles.get(mode_enum, {})
-                    if element_type in style:
-                        # Parse comma-separated elements if it's a string
-                        if isinstance(style[element_type], str):
-                            elements = [e.strip() for e in style[element_type].split(",")]
-                        else:
-                            elements = style[element_type]
-                            
-                        # Add to pool with weight
-                        for element in elements:
-                            element_pool.append((element, weight, mode_name))
-                            
-                elif element_type in ["pronouns", "address_forms", "key_phrases", "intensifiers", "modifiers"]:
-                    # Vocalization pattern elements
-                    patterns = ctx.context.vocalization_patterns.get(mode_enum, {})
-                    if element_type in patterns:
-                        elements = patterns[element_type]
+                if element_type in style_dict:
+                    # Parse comma-separated elements if it's a string
+                    if isinstance(style_dict[element_type], str):
+                        elements = [e.strip() for e in style_dict[element_type].split(",")]
+                    else:
+                        elements = style_dict[element_type]
                         
-                        # Add to pool with weight
-                        for element in elements:
-                            element_pool.append((element, weight, mode_name))
+                    # Add to pool with weight
+                    for element in elements:
+                        element_pool.append((element, weight, mode_name))
+                        
+            elif element_type in ["pronouns", "address_forms", "key_phrases", "intensifiers", "modifiers"]:
+                # Vocalization pattern elements
+                patterns = await _get_vocalization_patterns(ctx, mode_name)
+                patterns_dict = patterns.model_dump()
                 
-            except (ValueError, KeyError):
-                continue
+                if element_type in patterns_dict and patterns_dict[element_type]:
+                    elements = patterns_dict[element_type]
+                    
+                    # Add to pool with weight
+                    for element in elements:
+                        element_pool.append((element, weight, mode_name))
         
-        # Sort by weight to prioritize elements from dominant modes
+        # Sort by weight
         element_pool.sort(key=lambda x: x[1], reverse=True)
         
-        # Remove duplicates keeping highest weight occurrence
+        # Remove duplicates
         unique_elements = []
         seen = set()
         for element, weight, mode in element_pool:
-            # Skip if we've seen this element already
-            if element.lower() in seen:
-                continue
+            if element.lower() not in seen:
+                unique_elements.append((element, weight, mode))
+                seen.add(element.lower())
                 
-            unique_elements.append((element, weight, mode))
-            seen.add(element.lower())
-            
-            # Track mode influence
-            if mode not in mode_influences:
-                mode_influences[mode] = []
-            mode_influences[mode].append(element)
+                # Track mode influence
+                if mode not in mode_influences:
+                    mode_influences[mode] = []
+                mode_influences[mode].append(element)
             
         # Limit to max_elements
         selected_elements = unique_elements[:max_elements]
         
-        return {
-            "element_type": element_type,
-            "blended_elements": [e[0] for e in selected_elements],
-            "mode_influences": mode_influences,
-            "element_weights": {e[0]: e[1] for e in selected_elements}
-        }
+        return TextElementBlendResult(
+            element_type=element_type,
+            blended_elements=[e[0] for e in selected_elements],
+            mode_influences=mode_influences,
+            element_weights={e[0]: e[1] for e in selected_elements}
+        )
 
     @staticmethod
-    @function_tool
+    @function_tool(strict_mode=False)
     async def _apply_emotional_effects(
         ctx: RunContextWrapper[ModeManagerContext],
-        mode_distribution: ModeDistribution
-    ) -> bool:
+        input_data: EmotionalEffectInput
+    ) -> EffectApplicationResult:
         """
         Apply blended emotional effects based on mode distribution
         
         Args:
-            mode_distribution: The current mode distribution
+            input_data: Mode distribution
             
         Returns:
-            Success status
+            Effect application result
         """
         manager_ctx = ctx.context
+        mode_distribution = input_data.mode_distribution
+        effects_applied = []
+        errors = []
+        
         if manager_ctx.emotional_core:
             try:
                 # Initialize blended emotional parameters
@@ -1197,22 +1294,19 @@ class InteractionModeManager:
                 total_weight = 0.0
                 
                 # Calculate weighted emotional parameters
-                for mode_name, weight in mode_distribution.dict().items():
-                    if weight < 0.1:  # Skip modes with negligible weight
+                for mode_name, weight in mode_distribution.model_dump().items():
+                    if weight < 0.1:
                         continue
                         
-                    try:
-                        mode_enum = InteractionMode(mode_name)
-                        mode_params = manager_ctx.mode_parameters.get(mode_enum, {})
-                        
-                        # Add weighted contributions
-                        for param in emotional_params:
-                            if param in mode_params:
-                                emotional_params[param] += mode_params[param] * weight
-                                
-                        total_weight += weight
-                    except (ValueError, KeyError):
-                        continue
+                    params = await _get_mode_parameters(ctx, mode_name)
+                    params_dict = params.model_dump()
+                    
+                    # Add weighted contributions
+                    for param in emotional_params:
+                        if param in params_dict:
+                            emotional_params[param] += params_dict[param] * weight
+                            
+                    total_weight += weight
                 
                 # Normalize by total weight
                 if total_weight > 0:
@@ -1222,94 +1316,119 @@ class InteractionModeManager:
                 # Apply emotional adjustments
                 if hasattr(manager_ctx.emotional_core, 'adjust_for_blended_mode'):
                     await manager_ctx.emotional_core.adjust_for_blended_mode(
-                        mode_distribution=mode_distribution.dict(),
+                        mode_distribution=mode_distribution.model_dump(),
                         **emotional_params
                     )
+                    effects_applied.append("blended_emotional_adjustment")
                 elif hasattr(manager_ctx.emotional_core, 'adjust_for_mode'):
-                    # Fall back to legacy method with primary mode
+                    # Fall back to legacy method
                     primary_mode, _ = mode_distribution.primary_mode
                     await manager_ctx.emotional_core.adjust_for_mode(
                         mode=primary_mode,
                         **emotional_params
                     )
+                    effects_applied.append("primary_mode_emotional_adjustment")
                     
-                logger.info(f"Applied blended emotional effects for mode distribution")
-                return True
+                logger.info(f"Applied emotional effects for mode distribution")
                 
             except Exception as e:
-                logger.error(f"Error applying emotional effects: {e}")
+                error_msg = f"Error applying emotional effects: {e}"
+                logger.error(error_msg)
+                errors.append(error_msg)
         
-        return False
+        return EffectApplicationResult(
+            success=len(errors) == 0,
+            effects_applied=effects_applied,
+            errors=errors
+        )
 
     @staticmethod
-    @function_tool
+    @function_tool(strict_mode=False)
     async def _adjust_reward_parameters(
         ctx: RunContextWrapper[ModeManagerContext],
-        mode_distribution: ModeDistribution
-    ) -> bool:
+        input_data: EmotionalEffectInput
+    ) -> EffectApplicationResult:
         """
         Adjust reward parameters based on mode distribution
         
         Args:
-            mode_distribution: The current mode distribution
+            input_data: Mode distribution
             
         Returns:
-            Success status
+            Effect application result
         """
         manager_ctx = ctx.context
+        mode_distribution = input_data.mode_distribution
+        effects_applied = []
+        errors = []
+        
         if manager_ctx.reward_system:
             try:
-                # Adjust reward parameters
                 if hasattr(manager_ctx.reward_system, 'adjust_for_blended_mode'):
-                    await manager_ctx.reward_system.adjust_for_blended_mode(mode_distribution.dict())
+                    await manager_ctx.reward_system.adjust_for_blended_mode(mode_distribution.model_dump())
+                    effects_applied.append("blended_reward_adjustment")
                     logger.info(f"Adjusted reward parameters for blended modes")
-                    return True
                 elif hasattr(manager_ctx.reward_system, 'adjust_for_mode'):
-                    # Fall back to legacy method with primary mode
+                    # Fall back to legacy method
                     primary_mode, _ = mode_distribution.primary_mode
                     await manager_ctx.reward_system.adjust_for_mode(primary_mode)
+                    effects_applied.append("primary_mode_reward_adjustment")
                     logger.info(f"Adjusted reward parameters for primary mode: {primary_mode}")
-                    return True
             except Exception as e:
-                logger.error(f"Error adjusting reward parameters: {e}")
+                error_msg = f"Error adjusting reward parameters: {e}"
+                logger.error(error_msg)
+                errors.append(error_msg)
         
-        return False
+        return EffectApplicationResult(
+            success=len(errors) == 0,
+            effects_applied=effects_applied,
+            errors=errors
+        )
 
     @staticmethod
-    @function_tool
+    @function_tool(strict_mode=False)
     async def _adjust_goal_priorities( 
         ctx: RunContextWrapper[ModeManagerContext],
-        mode_distribution: ModeDistribution
-    ) -> bool:
+        input_data: EmotionalEffectInput
+    ) -> EffectApplicationResult:
         """
         Adjust goal priorities based on mode distribution
         
         Args:
-            mode_distribution: The current mode distribution
+            input_data: Mode distribution
             
         Returns:
-            Success status
+            Effect application result
         """
         manager_ctx = ctx.context
+        mode_distribution = input_data.mode_distribution
+        effects_applied = []
+        errors = []
+        
         if manager_ctx.goal_manager:
             try:
-                # Adjust goal priorities
                 if hasattr(manager_ctx.goal_manager, 'adjust_priorities_for_blended_mode'):
-                    await manager_ctx.goal_manager.adjust_priorities_for_blended_mode(mode_distribution.dict())
+                    await manager_ctx.goal_manager.adjust_priorities_for_blended_mode(mode_distribution.model_dump())
+                    effects_applied.append("blended_goal_adjustment")
                     logger.info(f"Adjusted goal priorities for blended modes")
-                    return True
                 elif hasattr(manager_ctx.goal_manager, 'adjust_priorities_for_mode'):
-                    # Fall back to legacy method with primary mode
+                    # Fall back to legacy method
                     primary_mode, _ = mode_distribution.primary_mode
                     await manager_ctx.goal_manager.adjust_priorities_for_mode(primary_mode)
+                    effects_applied.append("primary_mode_goal_adjustment")
                     logger.info(f"Adjusted goal priorities for primary mode: {primary_mode}")
-                    return True
             except Exception as e:
-                logger.error(f"Error adjusting goal priorities: {e}")
+                error_msg = f"Error adjusting goal priorities: {e}"
+                logger.error(error_msg)
+                errors.append(error_msg)
         
-        return False
+        return EffectApplicationResult(
+            success=len(errors) == 0,
+            effects_applied=effects_applied,
+            errors=errors
+        )
     
-    async def update_interaction_mode(self, context_info: Dict[str, Any] = None) -> Dict[str, Any]:
+    async def update_interaction_mode(self, context_info: Optional[Dict[str, Any]] = None) -> ModeUpdateResult:
         """
         Update the interaction mode distribution based on the latest context information
         
@@ -1320,121 +1439,150 @@ class InteractionModeManager:
             Updated mode information
         """
         async with self.context._lock:
-            with trace(workflow_name="update_interaction_mode"):
-                # Get current context if not provided
-                if not context_info:
-                    context_info = await self._get_current_context(RunContextWrapper(self.context))
-                
-                # Extract context distribution and confidence
-                context_distribution = context_info.get("context_distribution", {})
-                overall_confidence = context_info.get("overall_confidence", 0.0)
-                
-                # Prepare prompt for mode distribution calculation
-                prompt = f"""
-                Calculate the appropriate interaction mode distribution based on:
-                
-                CONTEXT DISTRIBUTION: {context_distribution}
-                CONTEXT CONFIDENCE: {overall_confidence}
-                CURRENT MODE DISTRIBUTION: {self.context.mode_distribution.dict()}
-                
-                Create a mode distribution that reflects the context signals while
-                maintaining a natural and coherent blend of modes. Consider:
-                1. Mapping from context types to mode types
-                2. Appropriate transitioning from current distribution
-                3. Coherence of the resulting mode blend
-                """
-                
-                # Run the mode selector agent
-                result = await Runner.run(
-                    self.mode_selector_agent, 
-                    prompt, 
-                    context=self.context,
-                    run_config={
-                        "workflow_name": "ModeDistributionCalculation",
-                        "trace_metadata": {"context_types": list(context_distribution.keys())}
-                    }
-                )
-                mode_result = result.final_output
-                
-                # Extract results
-                new_mode_distribution = mode_result.mode_distribution
-                confidence = mode_result.confidence
-                
-                # Save previous distribution
-                self.context.previous_distribution = self.context.mode_distribution
-                
-                # Update current distribution
-                self.context.mode_distribution = new_mode_distribution
-                self.context.overall_confidence = confidence
-                
-                # Update legacy fields for compatibility
-                primary_mode, primary_confidence = new_mode_distribution.to_enum_and_confidence()
-                self.context.current_mode = primary_mode
-                primary_mode_prev, _ = self.context.previous_distribution.to_enum_and_confidence()
-                self.context.previous_mode = primary_mode_prev
-                
-                # Analyze transition to determine if significant change occurred
-                transition_analysis = await self._analyze_distribution_transition(
-                    RunContextWrapper(self.context),
-                    self.context.previous_distribution,
-                    new_mode_distribution
-                )
-                
-                mode_changed = transition_analysis.get("is_significant", False)
-                
-                # Record in history
-                if mode_changed:
-                    history_entry = {
-                        "timestamp": datetime.datetime.now().isoformat(),
-                        "previous_distribution": self.context.previous_distribution.dict(),
-                        "new_distribution": new_mode_distribution.dict(),
-                        "trigger_context": context_distribution,
-                        "context_confidence": overall_confidence
-                    }
+            try:
+                with trace(workflow_name="update_interaction_mode"):
+                    # Get current context if not provided
+                    if not context_info:
+                        context_info_obj = await self._get_current_context(RunContextWrapper(self.context))
+                        context_info = context_info_obj.model_dump()
                     
-                    self.context.mode_switch_history.append(history_entry)
+                    # Extract context distribution and confidence
+                    context_distribution = context_info.get("context_distribution", {})
+                    overall_confidence = context_info.get("overall_confidence", 0.0)
                     
-                    # Limit history size
-                    if len(self.context.mode_switch_history) > 100:
-                        self.context.mode_switch_history = self.context.mode_switch_history[-100:]
+                    # Prepare prompt for mode distribution calculation
+                    prompt = f"""
+                    Calculate the appropriate interaction mode distribution based on:
                     
-                    # Apply mode effects
-                    effect_prompt = f"""
-                    A significant mode distribution change has occurred:
+                    CONTEXT DISTRIBUTION: {json.dumps(context_distribution)}
+                    CONTEXT CONFIDENCE: {overall_confidence}
+                    CURRENT MODE DISTRIBUTION: {json.dumps(self.context.mode_distribution.model_dump())}
                     
-                    PREVIOUS DISTRIBUTION: {self.context.previous_distribution.dict()}
-                    NEW DISTRIBUTION: {new_mode_distribution.dict()}
-                    
-                    Apply appropriate effects for this mode distribution change.
+                    Create a mode distribution that reflects the context signals while
+                    maintaining a natural and coherent blend of modes. Consider:
+                    1. Mapping from context types to mode types
+                    2. Appropriate transitioning from current distribution
+                    3. Coherence of the resulting mode blend
                     """
                     
-                    await Runner.run(
-                        self.mode_effect_agent,
-                        effect_prompt,
+                    # Run the mode selector agent
+                    result = await Runner.run(
+                        self.mode_selector_agent, 
+                        prompt, 
                         context=self.context,
                         run_config={
-                            "workflow_name": "ModeEffects",
-                            "trace_metadata": {"mode_change": "significant"}
+                            "workflow_name": "ModeDistributionCalculation",
+                            "trace_metadata": {"context_types": list(context_distribution.keys())}
                         }
                     )
+                    mode_result = result.final_output
                     
-                    logger.info(f"Mode distribution changed significantly: {primary_mode_prev.value} -> {primary_mode.value}")
-                
-                # Prepare result
-                update_result = ModeUpdateResult(
-                    success=True,
-                    mode_distribution=new_mode_distribution.dict(),
-                    primary_mode=primary_mode.value,
-                    previous_distribution=self.context.previous_distribution.dict(),
-                    mode_changed=mode_changed,
-                    trigger_context=context_distribution,
-                    confidence=confidence,
-                    active_modes=new_mode_distribution.active_modes
+                    # Extract results
+                    new_mode_distribution = mode_result.mode_distribution
+                    confidence = mode_result.confidence
+                    
+                    # Save previous distribution
+                    self.context.previous_distribution = self.context.mode_distribution
+                    
+                    # Update current distribution
+                    self.context.mode_distribution = new_mode_distribution
+                    self.context.overall_confidence = confidence
+                    
+                    # Update legacy fields for compatibility
+                    if self.context.config["enable_legacy_mode"]:
+                        primary_mode, primary_confidence = new_mode_distribution.to_enum_and_confidence()
+                        self.context.current_mode = primary_mode
+                        primary_mode_prev, _ = self.context.previous_distribution.to_enum_and_confidence()
+                        self.context.previous_mode = primary_mode_prev
+                    
+                    # Analyze transition
+                    transition_input = TransitionAnalysisInput(
+                        from_distribution=self.context.previous_distribution,
+                        to_distribution=new_mode_distribution
+                    )
+                    transition_analysis = await self._analyze_distribution_transition(
+                        RunContextWrapper(self.context),
+                        transition_input
+                    )
+                    
+                    mode_changed = transition_analysis.is_significant
+                    
+                    # Record in history
+                    if mode_changed:
+                        # Create context distribution if available
+                        trigger_context = None
+                        if context_distribution:
+                            try:
+                                trigger_context = ContextDistribution(**context_distribution)
+                            except:
+                                pass
+                        
+                        history_entry = ModeSwitchRecord(
+                            previous_distribution=self.context.previous_distribution,
+                            new_distribution=new_mode_distribution,
+                            trigger_context=trigger_context,
+                            context_confidence=overall_confidence,
+                            transition_analysis=transition_analysis.model_dump()
+                        )
+                        
+                        self.context.mode_switch_history.append(history_entry)
+                        
+                        # Limit history size
+                        if len(self.context.mode_switch_history) > self.context.config["max_history_size"]:
+                            self.context.mode_switch_history = self.context.mode_switch_history[-self.context.config["max_history_size"]:]
+                        
+                        # Apply mode effects
+                        effect_prompt = f"""
+                        A significant mode distribution change has occurred:
+                        
+                        PREVIOUS DISTRIBUTION: {json.dumps(self.context.previous_distribution.model_dump())}
+                        NEW DISTRIBUTION: {json.dumps(new_mode_distribution.model_dump())}
+                        
+                        Apply appropriate effects for this mode distribution change.
+                        """
+                        
+                        await Runner.run(
+                            self.mode_effect_agent,
+                            effect_prompt,
+                            context=self.context,
+                            run_config={
+                                "workflow_name": "ModeEffects",
+                                "trace_metadata": {"mode_change": "significant"}
+                            }
+                        )
+                        
+                        primary_mode, _ = new_mode_distribution.primary_mode
+                        primary_mode_prev, _ = self.context.previous_distribution.primary_mode
+                        logger.info(f"Mode distribution changed significantly: {primary_mode_prev} -> {primary_mode}")
+                    
+                    # Prepare result
+                    primary_mode, _ = new_mode_distribution.primary_mode
+                    update_result = ModeUpdateResult(
+                        success=True,
+                        mode_distribution=new_mode_distribution,
+                        primary_mode=primary_mode,
+                        previous_distribution=self.context.previous_distribution,
+                        mode_changed=mode_changed,
+                        trigger_context=trigger_context,
+                        confidence=confidence,
+                        active_modes=new_mode_distribution.active_modes
+                    )
+                    
+                    return update_result
+                    
+            except Exception as e:
+                logger.error(f"Error updating interaction mode: {e}")
+                return ModeUpdateResult(
+                    success=False,
+                    mode_distribution=self.context.mode_distribution,
+                    primary_mode=self.context.mode_distribution.primary_mode[0],
+                    mode_changed=False,
+                    confidence=0.0,
+                    active_modes=[],
+                    error=str(e)
                 )
-                
-                return update_result.dict()
     
-    async def get_current_mode_guidance(self) -> Dict[str, Any]:
+    async def get_current_mode_guidance(self) -> ModeGuidance:
         """
         Get comprehensive guidance for the current blended mode
         
@@ -1446,7 +1594,7 @@ class InteractionModeManager:
             param_prompt = f"""
             Calculate blended parameters for the current mode distribution:
             
-            MODE DISTRIBUTION: {self.context.mode_distribution.dict()}
+            MODE DISTRIBUTION: {json.dumps(self.context.mode_distribution.model_dump())}
             
             Create a coherent blend of parameters that proportionally
             represents all active modes in the distribution.
@@ -1467,7 +1615,7 @@ class InteractionModeManager:
             Calculate blended conversation style and vocalization patterns
             for the current mode distribution:
             
-            MODE DISTRIBUTION: {self.context.mode_distribution.dict()}
+            MODE DISTRIBUTION: {json.dumps(self.context.mode_distribution.model_dump())}
             
             Create a coherent blend of conversation style and vocalization patterns
             that proportionally represents all active modes in the distribution.
@@ -1483,22 +1631,30 @@ class InteractionModeManager:
                 }
             )
             
-            # Combine results into comprehensive guidance
+            # Get coherence score
+            coherence_input = BlendCoherenceInput(distribution=self.context.mode_distribution)
+            coherence_result = await self._check_blend_coherence(
+                RunContextWrapper(self.context),
+                coherence_input
+            )
+            
+            # Combine results
             primary_mode, _ = self.context.mode_distribution.primary_mode
             
             guidance = ModeGuidance(
-                mode_distribution=self.context.mode_distribution.dict(),
+                mode_distribution=self.context.mode_distribution,
                 primary_mode=primary_mode,
                 parameters=param_result.final_output.parameters,
                 conversation_style=style_result.final_output.style,
                 vocalization_patterns=style_result.final_output.vocalization,
                 active_modes=self.context.mode_distribution.active_modes,
-                history=self.context.mode_switch_history[-3:] if self.context.mode_switch_history else []
+                history=self.context.mode_switch_history[-3:] if self.context.mode_switch_history else None,
+                coherence_score=coherence_result.coherence_score
             )
             
-            return guidance.dict()
+            return guidance
     
-    def get_mode_parameters(self, mode: Optional[str] = None) -> Dict[str, Any]:
+    def get_mode_parameters(self, mode: Optional[str] = None) -> ModeParameters:
         """
         Get parameters for a specific mode
         
@@ -1514,11 +1670,17 @@ class InteractionModeManager:
             
         try:
             mode_enum = InteractionMode(mode)
-            return self.context.mode_parameters.get(mode_enum, {})
+            params = self.context.mode_parameters.get(mode_enum)
+            if params:
+                return params
         except ValueError:
-            return {}
+            # Check custom modes
+            if mode in self.context.custom_modes:
+                return self.context.custom_modes[mode]["parameters"]
+                
+        return DEFAULT_MODE_PARAMETERS[InteractionMode.DEFAULT]
     
-    def get_conversation_style(self, mode: Optional[str] = None) -> Dict[str, Any]:
+    def get_conversation_style(self, mode: Optional[str] = None) -> ConversationStyle:
         """
         Get conversation style for a specific mode
         
@@ -1534,11 +1696,17 @@ class InteractionModeManager:
             
         try:
             mode_enum = InteractionMode(mode)
-            return self.context.conversation_styles.get(mode_enum, {})
+            style = self.context.conversation_styles.get(mode_enum)
+            if style:
+                return style
         except ValueError:
-            return {}
+            # Check custom modes
+            if mode in self.context.custom_modes:
+                return self.context.custom_modes[mode]["conversation_style"]
+                
+        return DEFAULT_CONVERSATION_STYLES[InteractionMode.DEFAULT]
     
-    def get_vocalization_patterns(self, mode: Optional[str] = None) -> Dict[str, Any]:
+    def get_vocalization_patterns(self, mode: Optional[str] = None) -> VocalizationPatterns:
         """
         Get vocalization patterns for a specific mode
         
@@ -1554,11 +1722,17 @@ class InteractionModeManager:
             
         try:
             mode_enum = InteractionMode(mode)
-            return self.context.vocalization_patterns.get(mode_enum, {})
+            patterns = self.context.vocalization_patterns.get(mode_enum)
+            if patterns:
+                return patterns
         except ValueError:
-            return {}
+            # Check custom modes
+            if mode in self.context.custom_modes:
+                return self.context.custom_modes[mode]["vocalization_patterns"]
+                
+        return DEFAULT_VOCALIZATION_PATTERNS[InteractionMode.DEFAULT]
     
-    async def get_blended_parameters(self) -> Dict[str, Any]:
+    async def get_blended_parameters(self) -> BlendedParameters:
         """
         Get blended parameters for the current mode distribution
         
@@ -1568,7 +1742,7 @@ class InteractionModeManager:
         param_prompt = f"""
         Calculate blended parameters for the current mode distribution:
         
-        MODE DISTRIBUTION: {self.context.mode_distribution.dict()}
+        MODE DISTRIBUTION: {json.dumps(self.context.mode_distribution.model_dump())}
         
         Create a coherent blend of parameters that proportionally
         represents all active modes in the distribution.
@@ -1580,13 +1754,13 @@ class InteractionModeManager:
             context=self.context
         )
         
-        return result.final_output.parameters.dict()
+        return result.final_output.parameters
     
     async def register_custom_mode(self, 
                                 mode_name: str, 
-                                parameters: Dict[str, Any], 
-                                conversation_style: Dict[str, Any], 
-                                vocalization_patterns: Dict[str, Any]) -> bool:
+                                parameters: ModeParameters, 
+                                conversation_style: ConversationStyle, 
+                                vocalization_patterns: VocalizationPatterns) -> bool:
         """
         Register a new custom interaction mode
         
@@ -1600,19 +1774,16 @@ class InteractionModeManager:
             Success status
         """
         try:
-            # Create new enum value - this is a simplified approach
-            # In a real system you might need a different approach for custom modes
-            try:
-                custom_mode = InteractionMode(mode_name.lower())
-            except ValueError:
-                # Mode doesn't exist, would need more complex handling in real system
-                # For now we'll just use a string
-                custom_mode = mode_name.lower()
+            # Validate inputs
+            if not mode_name or not isinstance(mode_name, str):
+                raise ValueError("Mode name must be a non-empty string")
                 
-            # Add new mode data
-            self.context.mode_parameters[custom_mode] = parameters
-            self.context.conversation_styles[custom_mode] = conversation_style
-            self.context.vocalization_patterns[custom_mode] = vocalization_patterns
+            # Store custom mode
+            self.context.custom_modes[mode_name.lower()] = {
+                "parameters": parameters,
+                "conversation_style": conversation_style,
+                "vocalization_patterns": vocalization_patterns
+            }
             
             logger.info(f"Registered custom mode: {mode_name}")
             return True
@@ -1621,7 +1792,7 @@ class InteractionModeManager:
             logger.error(f"Error registering custom mode: {e}")
             return False
     
-    async def get_mode_history(self, limit: int = 10) -> List[Dict[str, Any]]:
+    async def get_mode_history(self, limit: int = 10) -> List[ModeSwitchRecord]:
         """
         Get the mode switch history
         
@@ -1631,8 +1802,7 @@ class InteractionModeManager:
         Returns:
             List of mode switch events
         """
-        history = self.context.mode_switch_history[-limit:] if self.context.mode_switch_history else []
-        return history
+        return self.context.mode_switch_history[-limit:] if self.context.mode_switch_history else []
     
     async def get_mode_stats(self) -> Dict[str, Any]:
         """
@@ -1641,42 +1811,28 @@ class InteractionModeManager:
         Returns:
             Statistics about mode usage
         """
-        # Count mode occurrences (using primary mode for compatibility)
+        # Count mode occurrences
         mode_counts = {}
         for entry in self.context.mode_switch_history:
-            # Create a ModeDistribution to extract primary mode
-            try:
-                new_dist = ModeDistribution(**entry["new_distribution"])
-                primary_mode, _ = new_dist.primary_mode
-                mode_counts[primary_mode] = mode_counts.get(primary_mode, 0) + 1
-            except:
-                # Skip entries with invalid data
-                continue
+            primary_mode, _ = entry.new_distribution.primary_mode
+            mode_counts[primary_mode] = mode_counts.get(primary_mode, 0) + 1
         
-        # Calculate mode stability (average time between switches)
+        # Calculate mode stability
         stability = 0
         if len(self.context.mode_switch_history) >= 2:
-            timestamps = [datetime.datetime.fromisoformat(entry["timestamp"]) 
-                         for entry in self.context.mode_switch_history]
+            timestamps = [entry.timestamp for entry in self.context.mode_switch_history]
             durations = [(timestamps[i+1] - timestamps[i]).total_seconds() 
                         for i in range(len(timestamps)-1)]
             stability = sum(durations) / len(durations) if durations else 0
         
-        # Get most common transitions between primary modes
+        # Get most common transitions
         transitions = {}
         for i in range(len(self.context.mode_switch_history)-1):
-            try:
-                prev_dist = ModeDistribution(**self.context.mode_switch_history[i]["new_distribution"])
-                next_dist = ModeDistribution(**self.context.mode_switch_history[i+1]["new_distribution"])
-                
-                prev_primary, _ = prev_dist.primary_mode
-                next_primary, _ = next_dist.primary_mode
-                
-                transition = f"{prev_primary}->{next_primary}"
-                transitions[transition] = transitions.get(transition, 0) + 1
-            except:
-                # Skip entries with invalid data
-                continue
+            prev_primary, _ = self.context.mode_switch_history[i].new_distribution.primary_mode
+            next_primary, _ = self.context.mode_switch_history[i+1].new_distribution.primary_mode
+            
+            transition = f"{prev_primary}->{next_primary}"
+            transitions[transition] = transitions.get(transition, 0) + 1
         
         # Sort transitions by count
         sorted_transitions = sorted(transitions.items(), key=lambda x: x[1], reverse=True)
@@ -1686,11 +1842,45 @@ class InteractionModeManager:
         primary_mode, primary_weight = self.context.mode_distribution.primary_mode
         
         return {
-            "current_distribution": self.context.mode_distribution.dict(),
+            "current_distribution": self.context.mode_distribution.model_dump(),
             "primary_mode": primary_mode,
             "active_modes": active_modes,
             "mode_counts": mode_counts,
             "total_switches": len(self.context.mode_switch_history),
             "average_stability_seconds": stability,
-            "common_transitions": dict(sorted_transitions[:5])
+            "common_transitions": dict(sorted_transitions[:5]),
+            "custom_modes": list(self.context.custom_modes.keys()),
+            "coherence_score": self.context.overall_confidence
         }
+    
+    def update_config(self, config_updates: Dict[str, Any]) -> bool:
+        """
+        Update configuration settings
+        
+        Args:
+            config_updates: Dictionary of config keys to update
+            
+        Returns:
+            Success status
+        """
+        try:
+            valid_keys = {
+                "mode_blend_factor",
+                "significant_mode_threshold", 
+                "significant_change_threshold",
+                "max_history_size",
+                "enable_legacy_mode"
+            }
+            
+            for key, value in config_updates.items():
+                if key in valid_keys:
+                    self.context.config[key] = value
+                    logger.info(f"Updated config {key} to {value}")
+                else:
+                    logger.warning(f"Ignoring invalid config key: {key}")
+                    
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error updating config: {e}")
+            return False
