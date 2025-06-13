@@ -183,20 +183,26 @@ class BlendedContextDetectionOutput(BaseModel):
     """Output schema for blended context detection"""
     context_distribution: ContextDistribution = Field(..., description="Distribution of context weights")
     confidence: float = Field(..., description="Overall confidence in detection (0.0-1.0)", ge=0.0, le=1.0)
-    signals: List[Dict[str, Any]] = Field(..., description="Detected signals that informed the decision")
+    signals: List[SignalInfo] = Field(..., description="Detected signals that informed the decision")
     notes: Optional[str] = Field(None, description="Additional observations about the context blend")
 
 class EmotionalBaselineOutput(BaseModel):
     """Output schema for emotional baseline adaptation"""
-    baselines: Dict[str, float] = Field(..., description="Adjusted emotional baselines")
+    baselines: EmotionalBaselines = Field(..., description="Adjusted emotional baselines")
     reasoning: str = Field(..., description="Reasoning for adaptations")
     estimated_impact: float = Field(..., description="Estimated impact on emotional state (0.0-1.0)", ge=0.0, le=1.0)
 
+class RecommendedFocus(BaseModel):
+    """Recommended context focus"""
+    context: str = Field(..., description="Context name")
+    weight: float = Field(..., description="Recommended weight", ge=0.0, le=1.0)
+    reason: str = Field(..., description="Reason for recommendation")
+
 class SignalAnalysisOutput(BaseModel):
     """Output schema for signal analysis"""
-    signal_categories: Dict[str, List[Dict[str, Any]]] = Field(..., description="Categorized signals")
+    signal_categories: CategorizedSignals = Field(..., description="Categorized signals")
     context_distribution: ContextDistribution = Field(..., description="Distributed signal strengths by context")
-    recommended_focus: List[Dict[str, Any]] = Field(..., description="Recommended context focus distribution")
+    recommended_focus: List[RecommendedFocus] = Field(..., description="Recommended context focus distribution")
 
 class ContextValidationOutput(BaseModel):
     """Output schema for context validation"""
@@ -205,13 +211,23 @@ class ContextValidationOutput(BaseModel):
     issues: List[str] = Field(default_factory=list, description="Issues with context detection")
     blend_coherence: float = Field(0.7, description="How coherent the context blend is (0.0-1.0)", ge=0.0, le=1.0)
 
+class EmotionalBaselinesMapping(BaseModel):
+    """Mapping of context to emotional baselines"""
+    dominant: EmotionalBaselines = Field(default_factory=EmotionalBaselines)
+    casual: EmotionalBaselines = Field(default_factory=EmotionalBaselines)
+    intellectual: EmotionalBaselines = Field(default_factory=EmotionalBaselines)
+    empathic: EmotionalBaselines = Field(default_factory=EmotionalBaselines)
+    playful: EmotionalBaselines = Field(default_factory=EmotionalBaselines)
+    creative: EmotionalBaselines = Field(default_factory=EmotionalBaselines)
+    professional: EmotionalBaselines = Field(default_factory=EmotionalBaselines)
+
 class ContextSystemState(BaseModel):
     """Schema for the current state of the context awareness system"""
     context_distribution: ContextDistribution = Field(..., description="Distribution of context weights")
     overall_confidence: float = Field(..., description="Overall confidence in context detection (0.0-1.0)", ge=0.0, le=1.0)
     previous_distribution: Optional[ContextDistribution] = Field(None, description="Previous context distribution")
-    history: List[Dict[str, Any]] = Field(default_factory=list, description="Recent context history")
-    emotional_baselines: Optional[Dict[str, Dict[str, float]]] = Field(None, description="Emotional baselines by context")
+    history: List[HistoryEntry] = Field(default_factory=list, description="Recent context history")
+    emotional_baselines: Optional[EmotionalBaselinesMapping] = Field(None, description="Emotional baselines by context")
 
 # New Pydantic models to replace Dict return types
 class SignalInfo(BaseModel):
@@ -274,12 +290,22 @@ class MessageFeatures(BaseModel):
     likely_intellectual: bool
     feature_distribution: Dict[str, float]
 
+class ContextDistributionDict(BaseModel):
+    """Context distribution as a dictionary structure"""
+    dominant: float = Field(0.0, ge=0.0, le=1.0)
+    casual: float = Field(0.0, ge=0.0, le=1.0)
+    intellectual: float = Field(0.0, ge=0.0, le=1.0)
+    empathic: float = Field(0.0, ge=0.0, le=1.0)
+    playful: float = Field(0.0, ge=0.0, le=1.0)
+    creative: float = Field(0.0, ge=0.0, le=1.0)
+    professional: float = Field(0.0, ge=0.0, le=1.0)
+
 class HistoryEntry(BaseModel):
     """Context history entry"""
     timestamp: str
     message_snippet: str
-    detected_distribution: Dict[str, float]
-    updated_distribution: Dict[str, float]
+    detected_distribution: ContextDistributionDict
+    updated_distribution: ContextDistributionDict
     confidence: float
     primary_context_changed: bool
     active_contexts: List[str]
@@ -302,7 +328,8 @@ class TransitionAnalysis(BaseModel):
 
 class CASystemContext:
     """Context object for the context awareness system"""
-    def __init__(self, emotional_core=None):
+    def __init__(self, context_awareness_system=None, emotional_core=None):
+        self.context_awareness_system = context_awareness_system
         self.emotional_core = emotional_core
         self.trace_id = f"context_awareness_{datetime.datetime.now().isoformat()}"
 
@@ -383,7 +410,7 @@ class ContextAwarenessSystem:
         }
         
         # Create system context
-        self.system_context = CASystemContext(emotional_core=emotional_core)
+        self.system_context = CASystemContext(context_awareness_system=self, emotional_core=emotional_core)
         
         # Initialize agent system
         self._initialize_agents()
@@ -717,13 +744,14 @@ class ContextAwarenessSystem:
             distribution[context] = min(1.0, total_weight)
         
         # Current context persistence factor
-        if ctx.context.context_distribution.sum_weights() > 0.1:
+        cas = ctx.context.context_awareness_system
+        if cas.context_distribution.sum_weights() > 0.1:
             # Add persistence influence from current distribution
             persistence_factor = 0.3
             
             # For each context, blend with current distribution
             for context in distribution:
-                current_weight = getattr(ctx.context.context_distribution, context, 0.0)
+                current_weight = getattr(cas.context_distribution, context, 0.0)
                 distribution[context] = (distribution[context] * (1 - persistence_factor) + 
                                        current_weight * persistence_factor)
         
@@ -801,7 +829,11 @@ class ContextAwarenessSystem:
                 
                 # Track incoherent pairs
                 if compatibility < 0.4 and min(weight1, weight2) > 0.3:
-                    incoherent_pairs.append((context1, context2, compatibility))
+                    incoherent_pairs.append(IncoherentPair(
+                        context1=context1,
+                        context2=context2,
+                        compatibility=compatibility
+                    ))
         
         # Calculate overall coherence
         if coherence_scores:
@@ -834,7 +866,8 @@ class ContextAwarenessSystem:
         """
         # Calculate total change magnitude
         total_change = 0.0
-        context_changes = {}
+        context_changes = []
+        significant_shifts = []
         
         for context in from_distribution.dict().keys():
             from_value = getattr(from_distribution, context, 0.0)
@@ -847,20 +880,26 @@ class ContextAwarenessSystem:
             # Track changes for each context
             if change > 0.1:
                 change_direction = "increase" if to_value > from_value else "decrease"
-                context_changes[context] = {
-                    "from": from_value,
-                    "to": to_value,
-                    "change": change,
-                    "direction": change_direction
-                }
+                context_changes.append(ContextChangeInfo(
+                    context_name=context,
+                    from_value=from_value,
+                    to_value=to_value,
+                    change=change,
+                    direction=change_direction
+                ))
+                
+                if change > 0.3:
+                    significant_shifts.append(context)
         
         # Calculate average change
         num_contexts = len(from_distribution.dict().keys())
         avg_change = total_change / num_contexts if num_contexts > 0 else 0
         
+        cas = ctx.context.context_awareness_system
+        
         # Determine if transition is appropriate
         is_gradual = avg_change <= 0.3
-        is_appropriate = is_gradual or ctx.context.context_distribution.sum_weights() < 0.2
+        is_appropriate = is_gradual or cas.context_distribution.sum_weights() < 0.2
         
         return TransitionAnalysis(
             is_appropriate=is_appropriate,
@@ -868,7 +907,7 @@ class ContextAwarenessSystem:
             total_change=total_change,
             average_change=avg_change,
             context_changes=context_changes,
-            significant_shifts=[context for context, data in context_changes.items() if data["change"] > 0.3]
+            significant_shifts=significant_shifts
         )
 
     @staticmethod
@@ -897,14 +936,16 @@ class ContextAwarenessSystem:
         distribution_dict = distribution.dict()
         total_weight = 0.0
         
+        cas = ctx.context.context_awareness_system
+        
         # For each context, add its weighted contribution
         for context_name, weight in distribution_dict.items():
-            if weight > ctx.context.emotional_blend_threshold:  # Only consider significant contexts
+            if weight > cas.emotional_blend_threshold:  # Only consider significant contexts
                 try:
                     # Get baseline for this context
                     context_enum = InteractionContext(context_name)
-                    if context_enum in ctx.context.context_emotional_baselines:
-                        context_baselines = ctx.context.context_emotional_baselines[context_enum]
+                    if context_enum in cas.context_emotional_baselines:
+                        context_baselines = cas.context_emotional_baselines[context_enum]
                         
                         # Add weighted contribution
                         for chemical, value in context_baselines.items():
@@ -1054,9 +1095,11 @@ class ContextAwarenessSystem:
         else:
             context_enum = context_type
             
+        cas = ctx.context.context_awareness_system
+        
         # Get baselines for the context
-        if context_enum in ctx.context.context_emotional_baselines:
-            baselines = ctx.context.context_emotional_baselines[context_enum]
+        if context_enum in cas.context_emotional_baselines:
+            baselines = cas.context_emotional_baselines[context_enum]
             return EmotionalBaselines(**baselines)
         else:
             # Return default baselines
@@ -1119,9 +1162,14 @@ class ContextAwarenessSystem:
         # Get active contexts and weights
         active_contexts = distribution.active_contexts
         
+        cas = ctx.context.context_awareness_system
+        
         # Check if any context exceeds the threshold
-        significant_contexts = [(context, weight) for context, weight in active_contexts 
-                              if weight >= ctx.context.significant_context_threshold]
+        significant_contexts = [
+            SignificantContext(context=context, weight=weight)
+            for context, weight in active_contexts 
+            if weight >= cas.significant_context_threshold
+        ]
         
         # Check confidence threshold
         confidence_threshold = 0.5  # Base confidence threshold
@@ -1163,8 +1211,10 @@ class ContextAwarenessSystem:
         # Convert message to lowercase for case-insensitive matching
         message_lower = message.lower()
         
+        cas = ctx.context.context_awareness_system
+        
         # Check for explicit context signals
-        for signal in ctx.context.context_signals:
+        for signal in cas.context_signals:
             context_type = signal.context_type.value.lower()
             
             if signal.signal_type == "keyword" and signal.signal_value.lower() in message_lower:
@@ -1193,7 +1243,7 @@ class ContextAwarenessSystem:
                 ))
         
         # Check for implicit signals
-        implicit_signals = await _identify_implicit_signals(ctx, message)
+        implicit_signals = await ContextAwarenessSystem._identify_implicit_signals(ctx, message)
         detected_signals.extend(implicit_signals)
         
         # Add implicit signal scores
@@ -1272,35 +1322,15 @@ class ContextAwarenessSystem:
         likely_intellectual = word_count > 15 and has_question
         
         # Derive context distribution from features
-        feature_distribution = {
-            "dominant": 0.0,
-            "casual": 0.0,
-            "intellectual": 0.0,
-            "empathic": 0.0,
-            "playful": 0.0,
-            "creative": 0.0,
-            "professional": 0.0
-        }
-        
-        # Dominant features
-        if has_dominance_terms:
-            feature_distribution["dominant"] = 0.7 * (len(dominance_terms) / 2)
-            
-        # Casual features
-        if likely_casual:
-            feature_distribution["casual"] = 0.6
-        
-        # Intellectual features
-        if likely_intellectual:
-            feature_distribution["intellectual"] = 0.7
-            
-        # Empathic features
-        if likely_emotional:
-            feature_distribution["empathic"] = 0.7 * (len(emotional_terms) / 2)
-            
-        # Professional features
-        if likely_formal:
-            feature_distribution["professional"] = 0.6
+        feature_distribution = FeatureDistribution(
+            dominant=0.7 * (len(dominance_terms) / 2) if has_dominance_terms else 0.0,
+            casual=0.6 if likely_casual else 0.0,
+            intellectual=0.7 if likely_intellectual else 0.0,
+            empathic=0.7 * (len(emotional_terms) / 2) if likely_emotional else 0.0,
+            playful=0.0,
+            creative=0.0,
+            professional=0.6 if likely_formal else 0.0
+        )
         
         return MessageFeatures(
             length=length,
@@ -1328,17 +1358,22 @@ class ContextAwarenessSystem:
         Returns:
             Recent context history
         """
+        cas = ctx.context.context_awareness_system
+        
         # Return last 5 context history items or fewer if not available
-        history = ctx.context.context_history[-5:] if ctx.context.context_history else []
+        history = cas.context_history[-5:] if cas.context_history else []
         
         # Convert to HistoryEntry objects
         history_entries = []
         for item in history:
+            detected_dist = item.get("detected_distribution", {})
+            updated_dist = item.get("updated_distribution", {})
+            
             history_entries.append(HistoryEntry(
                 timestamp=item.get("timestamp", ""),
                 message_snippet=item.get("message_snippet", ""),
-                detected_distribution=item.get("detected_distribution", {}),
-                updated_distribution=item.get("updated_distribution", {}),
+                detected_distribution=ContextDistributionDict(**detected_dist),
+                updated_distribution=ContextDistributionDict(**updated_dist),
                 confidence=item.get("confidence", 0.0),
                 primary_context_changed=item.get("primary_context_changed", False),
                 active_contexts=item.get("active_contexts", [])
@@ -1388,11 +1423,11 @@ class ContextAwarenessSystem:
             
         # Match with message features
         feature_confidence = 0.0
-        feature_distribution = message_features.feature_distribution
+        feature_dist_dict = message_features.feature_distribution.dict()
         
-        if feature_distribution:
+        if feature_dist_dict:
             # Calculate correlation between detected distribution and feature distribution
-            correlation = sum(min(distribution.dict().get(context, 0.0), feature_distribution.get(context, 0.0)) 
+            correlation = sum(min(distribution.dict().get(context, 0.0), feature_dist_dict.get(context, 0.0)) 
                              for context in distribution.dict().keys())
             
             feature_confidence = correlation
@@ -1494,7 +1529,7 @@ class ContextAwarenessSystem:
                     "active_contexts": [c for c, w in self.context_distribution.active_contexts],
                     "context_changed": context_changed,
                     "detection_method": "blended_context",
-                    "detected_signals": detection_result.signals,
+                    "detected_signals": [signal.dict() for signal in detection_result.signals],
                     "notes": detection_result.notes,
                     "effects": effects
                 }
@@ -1559,12 +1594,35 @@ class ContextAwarenessSystem:
     
     def get_system_state(self) -> ContextSystemState:
         """Get the current system state"""
+        # Convert emotional baselines to the new structure
+        emotional_baselines_mapping = EmotionalBaselinesMapping()
+        for context_enum, baselines_dict in self.context_emotional_baselines.items():
+            context_name = context_enum.value.lower()
+            if hasattr(emotional_baselines_mapping, context_name):
+                setattr(emotional_baselines_mapping, context_name, EmotionalBaselines(**baselines_dict))
+        
+        # Convert history to HistoryEntry objects
+        history_entries = []
+        for item in (self.context_history[-5:] if self.context_history else []):
+            detected_dist = item.get("detected_distribution", {})
+            updated_dist = item.get("updated_distribution", {})
+            
+            history_entries.append(HistoryEntry(
+                timestamp=item.get("timestamp", ""),
+                message_snippet=item.get("message_snippet", ""),
+                detected_distribution=ContextDistributionDict(**detected_dist),
+                updated_distribution=ContextDistributionDict(**updated_dist),
+                confidence=item.get("confidence", 0.0),
+                primary_context_changed=item.get("primary_context_changed", False),
+                active_contexts=item.get("active_contexts", [])
+            ))
+        
         return ContextSystemState(
             context_distribution=self.context_distribution,
             overall_confidence=self.overall_confidence,
             previous_distribution=self.previous_distribution,
-            history=self.context_history[-5:] if self.context_history else [],
-            emotional_baselines=self.context_emotional_baselines
+            history=history_entries,
+            emotional_baselines=emotional_baselines_mapping
         )
     
     def add_context_signal(self, signal: ContextSignal) -> bool:
