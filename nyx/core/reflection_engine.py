@@ -137,11 +137,11 @@ class CommunicationReflectionInput(BaseModel):
 class EmotionState(BaseModel):
     primary_emotion: Optional[str] = None
     primary_intensity: float | None = None
-    secondary_emotions: Dict[str, Union[str, float]] = Field(default_factory=dict)  # ← Fixed
+    secondary_emotions: Dict[str, Union[str, float, Dict[str, Union[str, float]]]] = Field(default_factory=dict)  # ← FIXED
     valence: float | None = None
     arousal: float | None = None
 
-    model_config = {"extra": "allow"}  # ← Add this too
+    model_config = {"extra": "allow"}  # ← FIXED - allow additional properties
 
 
 # ---------- Memory-related ----------
