@@ -212,7 +212,7 @@ async def format_relationship_history(user_id: str,
         perspective=perspective
     )
                                        
-@function_tool
+@function_tool(strict_mode=False)
 async def analyze_relationship_patterns(interactions: List[InteractionModel]) -> PatternAnalysisResultModel:
     """
     Analyze patterns in relationship interactions
@@ -318,7 +318,7 @@ async def analyze_relationship_patterns(interactions: List[InteractionModel]) ->
     )
 
 
-@function_tool
+@function_tool(strict_mode=False)
 async def detect_relationship_milestones(relationship: RelationshipStateModel, 
                                       previous_state: RelationshipStateModel) -> Optional[MilestoneModel]:
     """
@@ -414,7 +414,7 @@ async def detect_relationship_milestones(relationship: RelationshipStateModel,
     
     return milestone
                                           
-@function_tool
+@function_tool(strict_mode=False)
 async def identify_relationship_identity_impacts(relationship: RelationshipStateModel,
                                            interactions: List[InteractionModel],
                                            user_model: Optional[UserModelModel] = None) -> IdentityImpactModel:
@@ -496,7 +496,7 @@ async def identify_relationship_identity_impacts(relationship: RelationshipState
     
     return identity_impacts
 
-@function_tool
+@function_tool(strict_mode=False)
 async def record_relationship_reflection(user_id: str, reflection_text: str, 
                                     reflection_type: str, 
                                     confidence: float,
