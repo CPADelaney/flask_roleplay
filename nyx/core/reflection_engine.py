@@ -137,11 +137,11 @@ class CommunicationReflectionInput(BaseModel):
 class EmotionState(BaseModel):
     primary_emotion: Optional[str] = None
     primary_intensity: float | None = None
-    secondary_emotions: Dict[str, Any] = Field(default_factory=dict)
+    secondary_emotions: Dict[str, Union[str, float]] = Field(default_factory=dict)  # ← Fixed
     valence: float | None = None
     arousal: float | None = None
 
-    model_config = {"extra": "forbid"}
+    model_config = {"extra": "allow"}  # ← Add this too
 
 
 # ---------- Memory-related ----------
@@ -150,10 +150,10 @@ class RawMemory(BaseModel):
     memory_text: str | None = None
     memory_type: str | None = "unknown"
     significance: float | None = 5.0
-    metadata: Dict[str, Any] = Field(default_factory=dict)
+    metadata: Dict[str, Union[str, float, int, bool]] = Field(default_factory=dict)  # ← Fixed
     tags: List[str] = Field(default_factory=list)
 
-    model_config = {"extra": "forbid"}
+    model_config = {"extra": "allow"}  # Allow additional fields
 
 
 class FormatMemoriesIn(BaseModel):
@@ -2116,10 +2116,14 @@ class ReflectionEngine:
                             break
                 
                 # Format memories for the abstraction agent
+                raw_memories = _coerce_raw_memories(memories)
+                
                 formatted_memories = await format_memories_for_reflection(
-                    memories, 
-                    pattern_type, 
-                    combined_emotional_context
+                    FormatMemoriesIn(
+                        memories=raw_memories,
+                        topic=pattern_type,
+                        emotional_context=EmotionState(**combined_emotional_context) if combined_emotional_context else None
+                    )
                 )
                 
                 # Context for function tools
@@ -2560,16 +2564,16 @@ async def generate_summary_from_memories(
         )
 
         prompt = f"""Please analyze the following source memories:
-{source_context}
-
-Instructions:
-- {type_instruction}
-- {topic_instruction}
-- Ensure the output is no more than approximately {max_length} characters.
-- Synthesize the information, don't just list points.
-- Base the output *only* on the provided sources.
-
-Generated {summary_type.capitalize()}:"""
+        {joined}
+        
+        Instructions:
+        - {type_instr}
+        - {topic_instr}
+        - Ensure the output is no more than approximately {params.max_length} characters.
+        - Synthesize the information, don't just list points.
+        - Base the output *only* on the provided sources.
+        
+        Generated {params.summary_type.capitalize()}:"""
 
         summarisation_agent = Agent(
             name="Summarisation Agent",
@@ -2595,6 +2599,14 @@ Generated {summary_type.capitalize()}:"""
         min_fid = min(m.get("metadata", {}).get("fidelity", 1.0) for m in src)
         pen     = 0.1 if params.summary_type == "summary" else 0.2
         fidelity = max(0.1, min_fid - pen)
+
+        all_tags = set()
+        for m in src:
+            all_tags.update(m.get("tags", []))
+        all_tags.add(params.summary_type)
+        if params.topic:
+            all_tags.add(params.topic)
+        final_tags = list(all_tags)
 
         # tags & scope same logic …
         create_params = MemoryCreateParams(
