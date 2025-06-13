@@ -16,105 +16,106 @@ logger = logging.getLogger(__name__)
 
 # =============== Models for Structured Output ===============
 
-class RelationshipStateDict(TypedDict):
-    """TypedDict for relationship state data"""
+class RelationshipStateModel(BaseModel):
+    """Pydantic model for relationship state data"""
     user_id: str
-    trust: float
-    familiarity: float
-    intimacy: float
-    conflict: float
-    dominance_balance: float
-    positive_interaction_score: float
-    negative_interaction_score: float
-    interaction_count: int
-    last_interaction_time: NotRequired[Optional[str]]
-    key_memories: NotRequired[List[str]]
-    inferred_user_traits: NotRequired[Dict[str, float]]
-    shared_secrets_level: NotRequired[float]
+    trust: float = 0.5
+    familiarity: float = 0.1
+    intimacy: float = 0.1
+    conflict: float = 0.0
+    dominance_balance: float = 0.0
+    positive_interaction_score: float = 0.0
+    negative_interaction_score: float = 0.0
+    interaction_count: int = 0
+    last_interaction_time: Optional[str] = None
+    key_memories: List[str] = Field(default_factory=list)
+    inferred_user_traits: Dict[str, float] = Field(default_factory=dict)
+    shared_secrets_level: float = 0.0
     # Dominance-related fields
-    current_dominance_intensity: NotRequired[float]
-    max_achieved_intensity: NotRequired[float]
-    failed_escalation_attempts: NotRequired[int]
-    successful_dominance_tactics: NotRequired[List[str]]
-    failed_dominance_tactics: NotRequired[List[str]]
-    preferred_dominance_style: NotRequired[Optional[str]]
-    optimal_escalation_rate: NotRequired[float]
-    user_stated_intensity_preference: NotRequired[Optional[Union[int, str]]]
-    hard_limits_confirmed: NotRequired[bool]
-    hard_limits: NotRequired[List[str]]
-    soft_limits_approached: NotRequired[List[str]]
-    soft_limits_crossed_successfully: NotRequired[List[str]]
-    first_interaction: NotRequired[Optional[str]]  # For milestone detection
+    current_dominance_intensity: float = 0.0
+    max_achieved_intensity: float = 0.0
+    failed_escalation_attempts: int = 0
+    successful_dominance_tactics: List[str] = Field(default_factory=list)
+    failed_dominance_tactics: List[str] = Field(default_factory=list)
+    preferred_dominance_style: Optional[str] = None
+    optimal_escalation_rate: float = 0.0
+    user_stated_intensity_preference: Optional[Union[int, str]] = None
+    hard_limits_confirmed: bool = False
+    hard_limits: List[str] = Field(default_factory=list)
+    soft_limits_approached: List[str] = Field(default_factory=list)
+    soft_limits_crossed_successfully: List[str] = Field(default_factory=list)
+    first_interaction: Optional[str] = None  # For milestone detection
 
-class InteractionDict(TypedDict):
-    """TypedDict for interaction data"""
+class InteractionModel(BaseModel):
+    """Pydantic model for interaction data"""
     timestamp: str
-    interaction_type: NotRequired[str]
-    valence: NotRequired[float]
-    trust_impact: NotRequired[float]
-    intimacy_impact: NotRequired[float]
-    dominance_change: NotRequired[float]
-    summary: NotRequired[str]
-    memory_ids: NotRequired[List[str]]
-    emotion_tags: NotRequired[List[str]]
-    emotions: NotRequired[List[str]]  # Alternative to emotion_tags
+    interaction_type: str = ""
+    valence: float = 0.0
+    trust_impact: float = 0.0
+    intimacy_impact: float = 0.0
+    dominance_change: float = 0.0
+    summary: str = ""
+    memory_ids: List[str] = Field(default_factory=list)
+    emotion_tags: List[str] = Field(default_factory=list)
+    emotions: List[str] = Field(default_factory=list)  # Alternative to emotion_tags
 
-class PerspectiveDict(TypedDict):
-    """TypedDict for relationship perspective data"""
+class PerspectiveModel(BaseModel):
+    """Pydantic model for relationship perspective data"""
     user_id: str
-    emotional_connection: float
-    relationship_value: float
-    comfort_level: float
-    engagement_interest: float
-    notable_aspects: List[str]
-    pain_points: List[str]
-    desires: List[str]
-    last_updated: NotRequired[str]
+    emotional_connection: float = 0.5
+    relationship_value: float = 0.5
+    comfort_level: float = 0.5
+    engagement_interest: float = 0.5
+    notable_aspects: List[str] = Field(default_factory=list)
+    pain_points: List[str] = Field(default_factory=list)
+    desires: List[str] = Field(default_factory=list)
+    last_updated: str = Field(default_factory=lambda: datetime.datetime.now().isoformat())
 
-class UserModelDict(TypedDict):
-    """TypedDict for user mental model data"""
+class UserModelModel(BaseModel):
+    """Pydantic model for user mental model data"""
     user_id: str
-    inferred_emotion: NotRequired[str]
-    emotion_confidence: NotRequired[float]
-    behavioral_patterns: NotRequired[List[str]]
-    communication_style: NotRequired[str]
-    goals: NotRequired[List[str]]
-    concerns: NotRequired[List[str]]
+    inferred_emotion: str = "neutral"
+    emotion_confidence: float = 0.5
+    behavioral_patterns: List[str] = Field(default_factory=list)
+    communication_style: str = "neutral"
+    goals: List[str] = Field(default_factory=list)
+    concerns: List[str] = Field(default_factory=list)
 
-class MilestoneDict(TypedDict):
-    """TypedDict for milestone data"""
+class MilestoneModel(BaseModel):
+    """Pydantic model for milestone data"""
     milestone_type: str
     description: str
     significance: float
-    metrics: RelationshipStateDict
-    milestone_id: NotRequired[str]
+    metrics: RelationshipStateModel
+    milestone_id: str = Field(default_factory=lambda: f"milestone_{uuid.uuid4().hex[:8]}")
 
-class IdentityImpactDict(TypedDict):
-    """TypedDict for identity impacts"""
-    traits: Dict[str, float]
-    preferences: Dict[str, Dict[str, float]]
+class IdentityImpactModel(BaseModel):
+    """Pydantic model for identity impacts"""
+    traits: Dict[str, float] = Field(default_factory=dict)
+    preferences: Dict[str, Dict[str, float]] = Field(default_factory=lambda: {"interaction_styles": {}})
 
-class FormattedRelationshipData(TypedDict):
-    """TypedDict for formatted relationship data output"""
+class FormattedRelationshipDataModel(BaseModel):
+    """Pydantic model for formatted relationship data output"""
     user_id: str
     metrics: Dict[str, float]
     interactions: List[Dict[str, Any]]
-    relationship_age: NotRequired[Optional[Dict[str, Any]]]
+    relationship_age: Optional[Dict[str, Any]] = None
     interaction_count: int
-    perspective: NotRequired[Optional[PerspectiveDict]]
+    perspective: Optional[PerspectiveModel] = None
 
-class PatternAnalysisResult(TypedDict):
-    """TypedDict for pattern analysis results"""
-    patterns: List[Dict[str, Any]]
-    confidence: float
-    message: str
+class PatternAnalysisResultModel(BaseModel):
+    """Pydantic model for pattern analysis results"""
+    patterns: List[Dict[str, Any]] = Field(default_factory=list)
+    confidence: float = 0.0
+    message: str = ""
 
-class RecordReflectionResult(TypedDict):
-    """TypedDict for record reflection result"""
+class RecordReflectionResultModel(BaseModel):
+    """Pydantic model for record reflection result"""
     reflection_id: str
     recorded: bool
     timestamp: str
 
+# Keep existing Pydantic models as they are
 class RelationshipReflectionOutput(BaseModel):
     """Structured output for relationship reflections"""
     reflection_text: str = Field(description="The generated relationship reflection")
@@ -154,9 +155,9 @@ class UserRelationshipPerspective(BaseModel):
 
 @function_tool
 async def format_relationship_history(user_id: str, 
-                                   relationship: RelationshipStateDict, 
-                                   interactions: List[InteractionDict],
-                                   perspective: Optional[PerspectiveDict] = None) -> FormattedRelationshipData:
+                                   relationship: RelationshipStateModel, 
+                                   interactions: List[InteractionModel],
+                                   perspective: Optional[PerspectiveModel] = None) -> FormattedRelationshipDataModel:
     """
     Format relationship data for reflection generation
     
@@ -173,49 +174,47 @@ async def format_relationship_history(user_id: str,
     formatted_interactions = []
     for interaction in interactions:
         formatted_interactions.append({
-            "timestamp": interaction.get("timestamp"),
-            "summary": interaction.get("summary", "Interaction occurred"),
-            "valence": interaction.get("valence", 0.0),
-            "trust_impact": interaction.get("trust_impact", 0.0),
-            "intimacy_impact": interaction.get("intimacy_impact", 0.0),
-            "emotions": interaction.get("emotions", [])
+            "timestamp": interaction.timestamp,
+            "summary": interaction.summary or "Interaction occurred",
+            "valence": interaction.valence,
+            "trust_impact": interaction.trust_impact,
+            "intimacy_impact": interaction.intimacy_impact,
+            "emotions": interaction.emotions
         })
     
     # Calculate relationship age if first_interaction available
     relationship_age = None
-    first_interaction_time = relationship.get("first_interaction")
+    first_interaction_time = relationship.first_interaction
     if first_interaction_time:
         if isinstance(first_interaction_time, str):
             first_interaction_time = datetime.datetime.fromisoformat(first_interaction_time)
         
         relationship_age = {
             "days": (datetime.datetime.now() - first_interaction_time).days,
-            "total_interactions": relationship.get("interaction_count", 0)
+            "total_interactions": relationship.interaction_count
         }
     
     # Extract key metrics
     metrics = {
-        "trust": relationship.get("trust", 0.5),
-        "familiarity": relationship.get("familiarity", 0.1),
-        "intimacy": relationship.get("intimacy", 0.1),
-        "conflict": relationship.get("conflict", 0.0),
-        "dominance_balance": relationship.get("dominance_balance", 0.0)
+        "trust": relationship.trust,
+        "familiarity": relationship.familiarity,
+        "intimacy": relationship.intimacy,
+        "conflict": relationship.conflict,
+        "dominance_balance": relationship.dominance_balance
     }
     
     # Return formatted data
-    formatted_data: FormattedRelationshipData = {
-        "user_id": user_id,
-        "metrics": metrics,
-        "interactions": formatted_interactions,
-        "relationship_age": relationship_age,
-        "interaction_count": relationship.get("interaction_count", 0),
-        "perspective": perspective
-    }
-    
-    return formatted_data
+    return FormattedRelationshipDataModel(
+        user_id=user_id,
+        metrics=metrics,
+        interactions=formatted_interactions,
+        relationship_age=relationship_age,
+        interaction_count=relationship.interaction_count,
+        perspective=perspective
+    )
                                        
 @function_tool
-async def analyze_relationship_patterns(interactions: List[InteractionDict]) -> PatternAnalysisResult:
+async def analyze_relationship_patterns(interactions: List[InteractionModel]) -> PatternAnalysisResultModel:
     """
     Analyze patterns in relationship interactions
     
@@ -226,20 +225,20 @@ async def analyze_relationship_patterns(interactions: List[InteractionDict]) -> 
         Identified patterns
     """
     if not interactions:
-        return {
-            "patterns": [],
-            "confidence": 0.0,
-            "message": "Not enough interaction history to identify patterns"
-        }
+        return PatternAnalysisResultModel(
+            patterns=[],
+            confidence=0.0,
+            message="Not enough interaction history to identify patterns"
+        )
     
     # Calculate interaction frequency
-    timestamps = [
-        datetime.datetime.fromisoformat(i.get("timestamp")) 
-        if isinstance(i.get("timestamp"), str) 
-        else i.get("timestamp") 
-        for i in interactions 
-        if i.get("timestamp")
-    ]
+    timestamps = []
+    for i in interactions:
+        if i.timestamp:
+            if isinstance(i.timestamp, str):
+                timestamps.append(datetime.datetime.fromisoformat(i.timestamp))
+            else:
+                timestamps.append(i.timestamp)
     
     frequency_pattern = {}
     if len(timestamps) >= 3:
@@ -278,7 +277,7 @@ async def analyze_relationship_patterns(interactions: List[InteractionDict]) -> 
     
     # Analyze emotional patterns
     emotional_pattern = {}
-    valence_values = [i.get("valence", 0) for i in interactions if "valence" in i]
+    valence_values = [i.valence for i in interactions if i.valence is not None]
     
     if valence_values:
         avg_valence = sum(valence_values) / len(valence_values)
@@ -313,15 +312,16 @@ async def analyze_relationship_patterns(interactions: List[InteractionDict]) -> 
     if emotional_pattern:
         patterns.append(emotional_pattern)
     
-    return {
-        "patterns": patterns,
-        "confidence": 0.6 if patterns else 0.0,
-        "message": f"Identified {len(patterns)} patterns in relationship"
-    }
+    return PatternAnalysisResultModel(
+        patterns=patterns,
+        confidence=0.6 if patterns else 0.0,
+        message=f"Identified {len(patterns)} patterns in relationship"
+    )
+
 
 @function_tool
-async def detect_relationship_milestones(relationship: RelationshipStateDict, 
-                                      previous_state: RelationshipStateDict) -> Optional[MilestoneDict]:
+async def detect_relationship_milestones(relationship: RelationshipStateModel, 
+                                      previous_state: RelationshipStateModel) -> Optional[MilestoneModel]:
     """
     Detect if relationship has reached any meaningful milestones
     
@@ -335,63 +335,65 @@ async def detect_relationship_milestones(relationship: RelationshipStateDict,
     milestone = None
     
     # Get metrics
-    trust = relationship.get("trust", 0.0)
-    prev_trust = previous_state.get("trust", 0.0)
+    trust = relationship.trust
+    prev_trust = previous_state.trust
     
-    familiarity = relationship.get("familiarity", 0.0)
-    prev_familiarity = previous_state.get("familiarity", 0.0)
+    familiarity = relationship.familiarity
+    prev_familiarity = previous_state.familiarity
     
-    intimacy = relationship.get("intimacy", 0.0)
-    prev_intimacy = previous_state.get("intimacy", 0.0)
+    intimacy = relationship.intimacy
+    prev_intimacy = previous_state.intimacy
     
-    interaction_count = relationship.get("interaction_count", 0)
+    interaction_count = relationship.interaction_count
     
     # Check for interaction count milestones
     interaction_thresholds = [10, 50, 100, 500, 1000]
     for threshold in interaction_thresholds:
         if interaction_count == threshold:
-            milestone = {
-                "milestone_type": "interaction_count",
-                "description": f"Reached {threshold} interactions",
-                "significance": min(0.5 + (threshold / 2000), 0.9),
-                "metrics": relationship
-            }
+            milestone = MilestoneModel(
+                milestone_type="interaction_count",
+                description=f"Reached {threshold} interactions",
+                significance=min(0.5 + (threshold / 2000), 0.9),
+                metrics=relationship
+            )
             break
     
     # Check for trust breakthrough (crossing 0.7 threshold)
     if not milestone and trust >= 0.7 and prev_trust < 0.7:
-        milestone = {
-            "milestone_type": "trust_breakthrough",
-            "description": "Established significant trust in relationship",
-            "significance": 0.8,
-            "metrics": relationship
-        }
+        milestone = MilestoneModel(
+            milestone_type="trust_breakthrough",
+            description="Established significant trust in relationship",
+            significance=0.8,
+            metrics=relationship
+        )
     
     # Check for familiarity milestone (crossing 0.6 threshold)
     if not milestone and familiarity >= 0.6 and prev_familiarity < 0.6:
-        milestone = {
-            "milestone_type": "familiarity_milestone",
-            "description": "Developed substantial familiarity",
-            "significance": 0.7,
-            "metrics": relationship
-        }
+        milestone = MilestoneModel(
+            milestone_type="familiarity_milestone",
+            description="Developed substantial familiarity",
+            significance=0.7,
+            metrics=relationship
+        )
     
     # Check for intimacy milestone (crossing 0.5 threshold)
     if not milestone and intimacy >= 0.5 and prev_intimacy < 0.5:
-        milestone = {
-            "milestone_type": "intimacy_milestone",
-            "description": "Reached meaningful intimacy level",
-            "significance": 0.75,
-            "metrics": relationship
-        }
+        milestone = MilestoneModel(
+            milestone_type="intimacy_milestone",
+            description="Reached meaningful intimacy level",
+            significance=0.75,
+            metrics=relationship
+        )
     
     # Check for relationship anniversary (requires first_interaction timestamp)
-    first_interaction = relationship.get("first_interaction")
+    first_interaction = relationship.first_interaction
     if first_interaction and not milestone:
         if isinstance(first_interaction, str):
-            first_interaction = datetime.datetime.fromisoformat(first_interaction)
+            first_interaction_time = datetime.datetime.fromisoformat(first_interaction)
+        else:
+            first_interaction_time = first_interaction
         
-        days_elapsed = (datetime.datetime.now() - first_interaction).days
+        days_elapsed = (datetime.datetime.now() - first_interaction_time).days
         
         # Check for significant anniversaries
         anniversaries = [
@@ -403,20 +405,20 @@ async def detect_relationship_milestones(relationship: RelationshipStateDict,
         
         for day_threshold, milestone_type, description, significance in anniversaries:
             if day_threshold - 2 <= days_elapsed <= day_threshold + 2:  # Allow 2 days margin
-                milestone = {
-                    "milestone_type": milestone_type,
-                    "description": description,
-                    "significance": significance,
-                    "metrics": relationship
-                }
+                milestone = MilestoneModel(
+                    milestone_type=milestone_type,
+                    description=description,
+                    significance=significance,
+                    metrics=relationship
+                )
                 break
     
     return milestone
                                           
 @function_tool
-async def identify_relationship_identity_impacts(relationship: RelationshipStateDict,
-                                           interactions: List[InteractionDict],
-                                           user_model: Optional[UserModelDict] = None) -> IdentityImpactDict:
+async def identify_relationship_identity_impacts(relationship: RelationshipStateModel,
+                                           interactions: List[InteractionModel],
+                                           user_model: Optional[UserModelModel] = None) -> IdentityImpactModel:
     """
     Identify how this relationship impacts Nyx's identity
     
@@ -429,55 +431,50 @@ async def identify_relationship_identity_impacts(relationship: RelationshipState
         Identity impact data
     """
     # Extract relationship metrics
-    trust = relationship.get("trust", 0.5)
-    familiarity = relationship.get("familiarity", 0.1)
-    intimacy = relationship.get("intimacy", 0.1)
-    conflict = relationship.get("conflict", 0.0)
-    dominance_balance = relationship.get("dominance_balance", 0.0)
+    trust = relationship.trust
+    familiarity = relationship.familiarity
+    intimacy = relationship.intimacy
+    conflict = relationship.conflict
+    dominance_balance = relationship.dominance_balance
     
     # Define default impact values
-    identity_impacts: IdentityImpactDict = {
-        "traits": {},
-        "preferences": {
-            "interaction_styles": {}
-        }
-    }
+    identity_impacts = IdentityImpactModel()
     
     # Impact on traits based on relationship qualities
     # Trust impacts
     if trust > 0.7:
-        identity_impacts["traits"]["openness"] = 0.05  # High trust encourages openness
-        identity_impacts["traits"]["suspicion"] = -0.05  # Reduces suspicion
+        identity_impacts.traits["openness"] = 0.05  # High trust encourages openness
+        identity_impacts.traits["suspicion"] = -0.05  # Reduces suspicion
     elif trust < 0.3:
-        identity_impacts["traits"]["defensiveness"] = 0.05  # Low trust increases defensiveness
-        identity_impacts["traits"]["openness"] = -0.03  # Decreases openness
+        identity_impacts.traits["defensiveness"] = 0.05  # Low trust increases defensiveness
+        identity_impacts.traits["openness"] = -0.03  # Decreases openness
     
     # Intimacy impacts
     if intimacy > 0.6:
-        identity_impacts["traits"]["empathy"] = 0.06  # Higher intimacy develops empathy
-        identity_impacts["traits"]["emotional_depth"] = 0.05  # Increases emotional depth
+        identity_impacts.traits["empathy"] = 0.06  # Higher intimacy develops empathy
+        identity_impacts.traits["emotional_depth"] = 0.05  # Increases emotional depth
     
     # Familiarity impacts
     if familiarity > 0.6:
-        identity_impacts["traits"]["patience"] = 0.04  # Familiarity increases patience
-        identity_impacts["preferences"]["interaction_styles"]["casual"] = 0.05  # Prefer casual style
+        identity_impacts.traits["patience"] = 0.04  # Familiarity increases patience
+        identity_impacts.preferences["interaction_styles"]["casual"] = 0.05  # Prefer casual style
     
     # Conflict impacts
     if conflict > 0.4:
-        identity_impacts["traits"]["resilience"] = 0.05  # Conflict builds resilience
-        identity_impacts["traits"]["adaptability"] = 0.04  # Increases adaptability
+        identity_impacts.traits["resilience"] = 0.05  # Conflict builds resilience
+        identity_impacts.traits["adaptability"] = 0.04  # Increases adaptability
     
     # Dominance balance impacts
     if dominance_balance > 0.5:  # Nyx dominant
-        identity_impacts["traits"]["assertiveness"] = 0.05  # Increases assertiveness
-        identity_impacts["traits"]["confidence"] = 0.04  # Increases confidence
+        identity_impacts.traits["assertiveness"] = 0.05  # Increases assertiveness
+        identity_impacts.traits["confidence"] = 0.04  # Increases confidence
     elif dominance_balance < -0.5:  # User dominant
-        identity_impacts["traits"]["deference"] = 0.05  # Increases deference
-        identity_impacts["traits"]["adaptability"] = 0.04  # Increases adaptability
+        identity_impacts.traits["deference"] = 0.05  # Increases deference
+        identity_impacts.traits["adaptability"] = 0.04  # Increases adaptability
     
     # Add impacts based on user model (if available)
     if user_model:
-        user_emotion = user_model.get("inferred_emotion", "neutral")
+        user_emotion = user_model.inferred_emotion
         
         # Different emotional patterns influence different traits
         emotional_impacts = {
@@ -494,21 +491,18 @@ async def identify_relationship_identity_impacts(relationship: RelationshipState
         # Apply emotional impact if matching
         if user_emotion.lower() in emotional_impacts:
             for category, impacts in emotional_impacts[user_emotion.lower()].items():
-                if category not in identity_impacts:
-                    identity_impacts[category] = {}
-                    
-                for trait, value in impacts.items():
-                    identity_impacts[category][trait] = value
+                if category == "traits":
+                    for trait, value in impacts.items():
+                        identity_impacts.traits[trait] = value
     
     return identity_impacts
-
 
 @function_tool
 async def record_relationship_reflection(user_id: str, reflection_text: str, 
                                     reflection_type: str, 
                                     confidence: float,
-                                    identity_impacts: IdentityImpactDict,
-                                    milestone_id: Optional[str] = None) -> RecordReflectionResult:
+                                    identity_impacts: IdentityImpactModel,
+                                    milestone_id: Optional[str] = None) -> RecordReflectionResultModel:
     """
     Record a relationship reflection for future reference
     
@@ -532,16 +526,16 @@ async def record_relationship_reflection(user_id: str, reflection_text: str,
         "reflection_text": reflection_text,
         "reflection_type": reflection_type,
         "confidence": confidence,
-        "identity_impacts": identity_impacts,
+        "identity_impacts": identity_impacts.model_dump(),
         "timestamp": datetime.datetime.now().isoformat(),
         "milestone_id": milestone_id
     }
     
-    return {
-        "reflection_id": reflection_id,
-        "recorded": True,
-        "timestamp": datetime.datetime.now().isoformat()
-    }
+    return RecordReflectionResultModel(
+        reflection_id=reflection_id,
+        recorded=True,
+        timestamp=datetime.datetime.now().isoformat()
+    )
                                         
 # =============== Main Relationship Reflection Class ===============
 
@@ -716,34 +710,46 @@ class RelationshipReflectionSystem:
                         "message": f"No relationship found for user {user_id}"
                     }
                 
-                # UPDATE HERE: Cast relationship to proper type
-                relationship_dict = relationship if isinstance(relationship, dict) else relationship.model_dump()
-                typed_relationship = RelationshipStateDict(**relationship_dict)
+                # Convert to Pydantic model
+                if isinstance(relationship, dict):
+                    typed_relationship = RelationshipStateModel(**relationship)
+                elif hasattr(relationship, "model_dump"):
+                    typed_relationship = RelationshipStateModel(**relationship.model_dump())
+                else:
+                    typed_relationship = relationship  # Assume it's already a model
                 
                 # Get relationship perspective
-                perspective = None
                 typed_perspective = None
                 if user_id in self.relationship_perspectives:
-                    perspective = self.relationship_perspectives[user_id].model_dump()
-                    # UPDATE HERE: Cast perspective to proper type
-                    typed_perspective = PerspectiveDict(**perspective)
+                    perspective = self.relationship_perspectives[user_id]
+                    if isinstance(perspective, UserRelationshipPerspective):
+                        typed_perspective = PerspectiveModel(**perspective.model_dump())
+                    elif isinstance(perspective, dict):
+                        typed_perspective = PerspectiveModel(**perspective)
                 
                 # Get interaction history
                 interactions = await self.relationship_manager.get_interaction_history(user_id, limit=10)
                 
-                # UPDATE HERE: Cast interactions to proper type
-                typed_interactions = [InteractionDict(**i) for i in interactions]
+                # Convert interactions to Pydantic models
+                typed_interactions = []
+                for interaction in interactions:
+                    if isinstance(interaction, dict):
+                        typed_interactions.append(InteractionModel(**interaction))
+                    elif hasattr(interaction, "model_dump"):
+                        typed_interactions.append(InteractionModel(**interaction.model_dump()))
+                    else:
+                        typed_interactions.append(interaction)
                 
                 # Get user mental model if available
-                user_model = None
                 typed_user_model = None
                 if self.theory_of_mind:
                     user_model = await self.theory_of_mind.get_user_model(user_id)
-                    # UPDATE HERE: Cast user model to proper type if it exists
                     if user_model:
-                        typed_user_model = UserModelDict(**user_model)
+                        if isinstance(user_model, dict):
+                            typed_user_model = UserModelModel(**user_model)
+                        elif hasattr(user_model, "model_dump"):
+                            typed_user_model = UserModelModel(**user_model.model_dump())
                 
-                # UPDATE HERE: Use typed versions
                 # Format data for reflection
                 formatted_data = await format_relationship_history(
                     user_id, 
@@ -752,7 +758,6 @@ class RelationshipReflectionSystem:
                     typed_perspective
                 )
                 
-                # UPDATE HERE: Use typed versions
                 # Get identity impacts
                 identity_impacts = await identify_relationship_identity_impacts(
                     typed_relationship,
@@ -780,8 +785,8 @@ class RelationshipReflectionSystem:
                 result = await Runner.run(
                     agent,
                     prompt,
-                    {"formatted_data": formatted_data,
-                     "identity_impacts": identity_impacts}
+                    {"formatted_data": formatted_data.model_dump(),
+                     "identity_impacts": identity_impacts.model_dump()}
                 )
                 
                 reflection_output = result.final_output
@@ -794,7 +799,7 @@ class RelationshipReflectionSystem:
                     reflection_output.reflection_text,
                     reflection_output.reflection_type,
                     reflection_output.confidence,
-                    identity_impacts,  # This is already typed as IdentityImpactDict
+                    identity_impacts,
                     milestone_id
                 )
                 
@@ -803,7 +808,7 @@ class RelationshipReflectionSystem:
                     self.reflection_history[user_id] = []
                 
                 self.reflection_history[user_id].append({
-                    "reflection_id": record_result["reflection_id"],
+                    "reflection_id": record_result.reflection_id,
                     "reflection_text": reflection_output.reflection_text,
                     "reflection_type": reflection_output.reflection_type,
                     "timestamp": datetime.datetime.now().isoformat(),
@@ -822,10 +827,10 @@ class RelationshipReflectionSystem:
                     for m in self.relationship_milestones[user_id]:
                         if m.milestone_id == milestone_id:
                             m.reflection_generated = True
-                            m.reflection_id = record_result["reflection_id"]
+                            m.reflection_id = record_result.reflection_id
                 
                 # Apply identity impacts
-                await self._apply_identity_impacts(user_id, identity_impacts, reflection_output)
+                await self._apply_identity_impacts(user_id, identity_impacts.model_dump(), reflection_output)
                 
                 # Add memory of this reflection if memory core available
                 if self.memory_core and hasattr(self.memory_core, "add_memory"):
@@ -838,24 +843,24 @@ class RelationshipReflectionSystem:
                         significance=0.7,
                         tags=["relationship", "reflection", user_id],
                         metadata={
-                            "reflection_id": record_result["reflection_id"],
+                            "reflection_id": record_result.reflection_id,
                             "reflection_type": reflection_output.reflection_type,
                             "user_id": user_id,
                             "timestamp": datetime.datetime.now().isoformat(),
                             "milestone_id": milestone_id,
                             "relationship_metrics": {
-                                "trust": relationship.get("trust", 0.5),
-                                "familiarity": relationship.get("familiarity", 0.1),
-                                "intimacy": relationship.get("intimacy", 0.1)
+                                "trust": typed_relationship.trust,
+                                "familiarity": typed_relationship.familiarity,
+                                "intimacy": typed_relationship.intimacy
                             }
                         }
                     )
                 
                 return {
                     "status": "success",
-                    "reflection_id": record_result["reflection_id"],
+                    "reflection_id": record_result.reflection_id,
                     "reflection": reflection_output.model_dump(),
-                    "identity_impacts": identity_impacts
+                    "identity_impacts": identity_impacts.model_dump()
                 }
         
         except Exception as e:
@@ -935,40 +940,36 @@ class RelationshipReflectionSystem:
             if not relationship:
                 return None
             
-            # UPDATE HERE: Cast to proper type
-            relationship_dict = relationship if isinstance(relationship, dict) else relationship.model_dump()
-            typed_relationship = RelationshipStateDict(**relationship_dict)
+            # Convert to Pydantic model
+            if isinstance(relationship, dict):
+                typed_relationship = RelationshipStateModel(**relationship)
+            elif hasattr(relationship, "model_dump"):
+                typed_relationship = RelationshipStateModel(**relationship.model_dump())
+            else:
+                typed_relationship = relationship
             
             # Get previous state for comparison
             previous_state = self.previous_relationship_states.get(user_id, {})
             
-            # UPDATE HERE: Cast previous state to proper type
-            typed_previous_state = RelationshipStateDict(**previous_state) if previous_state else RelationshipStateDict(
-                user_id=user_id,
-                trust=0.5,
-                familiarity=0.1,
-                intimacy=0.1,
-                conflict=0.0,
-                dominance_balance=0.0,
-                positive_interaction_score=0.0,
-                negative_interaction_score=0.0,
-                interaction_count=0
-            )
+            # Convert previous state to Pydantic model
+            if previous_state:
+                typed_previous_state = RelationshipStateModel(**previous_state)
+            else:
+                # Create default previous state
+                typed_previous_state = RelationshipStateModel(user_id=user_id)
             
-            # UPDATE HERE: Use typed versions
             # Detect milestone
             milestone = await detect_relationship_milestones(typed_relationship, typed_previous_state)
-            
             
             # If milestone detected, process it
             if milestone:
                 # Create milestone record
                 milestone_record = RelationshipMilestone(
                     user_id=user_id,
-                    milestone_type=milestone["milestone_type"],
-                    description=milestone["description"],
-                    significance=milestone["significance"],
-                    relationship_metrics=milestone["metrics"]
+                    milestone_type=milestone.milestone_type,
+                    description=milestone.description,
+                    significance=milestone.significance,
+                    relationship_metrics=milestone.metrics.model_dump()
                 )
                 
                 # Store milestone
@@ -985,7 +986,7 @@ class RelationshipReflectionSystem:
                 )
                 
                 # Update previous state
-                self.previous_relationship_states[user_id] = relationship
+                self.previous_relationship_states[user_id] = typed_relationship.model_dump()
                 
                 return {
                     "milestone": milestone_record.model_dump(),
@@ -993,7 +994,7 @@ class RelationshipReflectionSystem:
                 }
             
             # Update previous state
-            self.previous_relationship_states[user_id] = relationship
+            self.previous_relationship_states[user_id] = typed_relationship.model_dump()
             
             return None
         
@@ -1148,27 +1149,6 @@ class RelationshipReflectionSystem:
             output_type=Dict
         )
 
-    def _ensure_typed_relationship(self, relationship: Union[Dict[str, Any], Any]) -> RelationshipStateDict:
-        """Helper method to ensure relationship data is properly typed."""
-        if isinstance(relationship, dict):
-            return RelationshipStateDict(**relationship)
-        elif hasattr(relationship, "model_dump"):
-            return RelationshipStateDict(**relationship.model_dump())
-        else:
-            raise ValueError(f"Unexpected relationship type: {type(relationship)}")
-    
-    def _ensure_typed_interactions(self, interactions: List[Any]) -> List[InteractionDict]:
-        """Helper method to ensure interactions are properly typed."""
-        typed_interactions = []
-        for interaction in interactions:
-            if isinstance(interaction, dict):
-                typed_interactions.append(InteractionDict(**interaction))
-            elif hasattr(interaction, "model_dump"):
-                typed_interactions.append(InteractionDict(**interaction.model_dump()))
-            else:
-                raise ValueError(f"Unexpected interaction type: {type(interaction)}")
-        return typed_interactions
-    
     async def should_generate_reflection(self, user_id: str, 
                                       interaction_data: Optional[Dict[str, Any]] = None) -> bool:
         """
