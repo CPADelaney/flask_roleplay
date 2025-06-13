@@ -1,5 +1,8 @@
 # nyx/core/reflection_engine.py
 
+from __future__ import annotations
+from pydantic import BaseModel, Field, model_validator
+
 import logging
 import asyncio
 import random
@@ -12,11 +15,13 @@ from typing import Dict, List, Any, Optional, Tuple, Union, Callable, Literal
 from agents import Agent, Runner, trace, function_tool, custom_span, handoff, RunContextWrapper, ModelSettings, RunConfig
 from agents.tracing.util import gen_trace_id
 from agents.exceptions import MaxTurnsExceeded, ModelBehaviorError
-from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
-from nyx.core.memory_core import MemoryCoreAgents
+from nyx.core.memory_core import (
+    MemoryCoreAgents,
+    MemoryCreateParams,          # ✅ previously missing
+)
 
 # Import for integrated systems
 from nyx.core.passive_observation import (
@@ -26,7 +31,132 @@ from nyx.core.proactive_communication import (
     CommunicationIntent, IntentGenerationOutput
 )
 
+
+# History size policy used across the module
+MAX_HISTORY: int = 100   
+
 # =============== Models for Structured Output ===============
+async def get_memory_core_instance() -> MemoryCoreAgents | None:           # ✅ new
+    return _SERVICE_REGISTRY.get("memory_core")
+    
+_SERVICE_REGISTRY: dict[str, Any] = {}
+
+def register_service(name: str, obj: Any) -> None:
+    _SERVICE_REGISTRY[name] = obj
+
+class SummaryRequestIn(BaseModel):
+    source_memory_ids: list[str]
+    topic: str | None = None
+    max_length: int = 150
+    summary_type: Literal["summary", "abstraction"] = "summary"
+
+
+class Neurochemicals(BaseModel):
+    nyxamine: float = 0.0
+    seranix:  float = 0.0
+    oxynixin: float = 0.0
+    cortanyx: float = 0.0
+    adrenyx:  float = 0.0
+
+    model_config = {"extra": "forbid"}
+
+
+class EmotionState(BaseModel):
+    primary_emotion: Optional[str] = None
+    primary_intensity: float | None = None
+    secondary_emotions: Dict[str, Any] = Field(default_factory=dict)
+    valence: float | None = None
+    arousal: float | None = None
+
+    model_config = {"extra": "forbid"}
+
+
+# ---------- Memory-related ----------
+class RawMemory(BaseModel):
+    id: str
+    memory_text: str | None = None
+    memory_type: str | None = "unknown"
+    significance: float | None = 5.0
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    tags: List[str] = Field(default_factory=list)
+
+    model_config = {"extra": "forbid"}
+
+
+class FormatMemoriesIn(BaseModel):
+    memories: List[RawMemory]
+    topic: str | None = None
+    emotional_context: EmotionState | None = None
+
+    model_config = {"extra": "forbid"}
+
+
+class RecordReflectionIn(BaseModel):
+    reflection: str
+    confidence: float
+    memory_ids: List[str]
+    scenario_type: str
+    emotional_context: EmotionState | Dict[str, Any] = Field(default_factory=dict)
+    neurochemical_influence: Neurochemicals | Dict[str, float] = Field(
+        default_factory=dict
+    )
+    topic: str | None = None
+
+    model_config = {"extra": "forbid"}
+
+
+# ---------- Observation-related ----------
+class ObservationIn(BaseModel):
+    observation_id: str
+    content: str
+    source: str | None = None
+    created_at: str | None = None
+    relevance_score: float = 0.5
+    action_references: List[str] = Field(default_factory=list)
+
+    model_config = {"extra": "forbid"}
+
+
+class ObservationBatchIn(BaseModel):
+    observations: List[ObservationIn]
+    topic: str | None = None
+    neurochemical_state: Neurochemicals | None = None
+
+    model_config = {"extra": "forbid"}
+
+
+# ---------- Communication-related ----------
+class CommunicationIntentIn(BaseModel):
+    intent_id: str
+    intent_type: str
+    user_id: str
+    created_at: str | None = None
+    urgency: float = 0.5
+    action_driven: bool = False
+    action_source: str | None = None
+
+    model_config = {"extra": "forbid"}
+
+
+class CommunicationBatchIn(BaseModel):
+    intents: List[CommunicationIntentIn]
+    topic: str | None = None
+    neurochemical_state: Neurochemicals | None = None
+
+    model_config = {"extra": "forbid"}
+
+
+# ---------- Emotional processing ----------
+
+
+class EmotionalHistoryIn(BaseModel):
+    emotional_history: List[Dict[str, Any]]  # history structure is messy → raw
+    # you can tighten later if you wish
+
+    model_config = {"extra": "forbid"}
+
+
+# ---------- Abstraction / summarization ----------
 
 class _RecordReflectionIn(BaseModel):
     reflection: str
@@ -121,128 +251,124 @@ class CommunicationReflectionOutput(BaseModel):
     relationship_insights: Dict[str, Any] = Field(description="Insights about relationships")
     improvement_areas: List[str] = Field(description="Areas for communication improvement")
 
+class ProcessEmotionIn(BaseModel):
+    """
+    Payload expected by process_emotional_content.
+    """
+    emotional_state: Dict[str, Any] = Field(default_factory=dict)
+    neurochemical_state: Dict[str, float] = Field(default_factory=dict)
+
+    model_config = {"extra": "forbid"}   # <- satisfies strict-schema check
+
+# ---------- coercion helper ----------
+def _coerce_raw_memories(memories: list[dict[str, Any]]) -> list[RawMemory]:
+    """Convert native dict memories to validated RawMemory objects."""
+    return [RawMemory(**m) for m in memories]
+
+
 # =============== Tool Functions ===============
 
 @function_tool
 async def format_memories_for_reflection(
-    memories: List[Any],
-    topic: Optional[str] = None,
-    emotional_context: Optional[Any] = None,   # <- Dict[...] ➜ Any
-) -> str: 
-    """Format memory data into a structured representation for reflection with emotional context"""
+    params: FormatMemoriesIn,          # ← the only exposed argument
+) -> str:
+    """Turn a batch of raw memories into the MemoryFormat JSON."""
     with custom_span("format_memories_for_reflection"):
-        formatted_memories = []
-        for memory in memories:
-            formatted_memories.append(MemoryData(
-                memory_id=memory.get("id", "unknown"),
-                memory_text=memory.get("memory_text", ""),
-                memory_type=memory.get("memory_type", "unknown"),
-                significance=memory.get("significance", 5.0),
-                metadata=memory.get("metadata", {}),
-                tags=memory.get("tags", [])
-            ))
-        
-        return MemoryFormat(
-            memories=formatted_memories,
-            topic=topic,
-            context={
-                "purpose": "reflection",
-                "emotional_context": emotional_context
-            }
-        ).model_dump_json()
+        formatted = [
+            MemoryData(
+                memory_id=m.id,
+                memory_text=m.memory_text or "",
+                memory_type=m.memory_type or "unknown",
+                significance=m.significance or 5.0,
+                metadata=m.metadata,
+                tags=m.tags,
+            )
+            for m in params.memories
+        ]
+        return (
+            MemoryFormat(
+                memories=formatted,
+                topic=params.topic,
+                context={
+                    "purpose": "reflection",
+                    "emotional_context": (
+                        params.emotional_context.model_dump()
+                        if params.emotional_context else {}
+                    ),
+                },
+            ).model_dump_json()
+        )
 
 @function_tool
-async def extract_scenario_type(ctx: RunContextWrapper[Any], memory: Any) -> str:
-    """Extract the scenario type from memory data"""
-    with custom_span("extract_scenario_type"):
-        tags = memory.get("tags", [])
-        
-        for tag in tags:
-            if tag.lower() in ["teasing", "discipline", "service", "training", "worship",
-                             "dark", "indulgent", "psychological", "nurturing"]:
-                return tag.lower()
-        
-        scenario_type = memory.get("metadata", {}).get("scenario_type")
-        if scenario_type:
-            return scenario_type.lower()
-        
-        return "general"
+async def extract_scenario_type(memory: RawMemory) -> str:
+    """Infer scenario type from memory tags/metadata."""
+    tags = [t.lower() for t in memory.tags]
+    for candidate in (
+        "teasing", "discipline", "service", "training", "worship",
+        "dark", "indulgent", "psychological", "nurturing",
+    ):
+        if candidate in tags:
+            return candidate
+    meta_val = memory.metadata.get("scenario_type")
+    return meta_val.lower() if isinstance(meta_val, str) else "general"
+
 
 @function_tool
-async def extract_neurochemical_influence(ctx: RunContextWrapper[Any], memory: Any) -> Dict[str, float]:
-    """Extract the neurochemical influence from memory data"""
-    with custom_span("extract_neurochemical_influence"):
-        emotional_context = memory.get("metadata", {}).get("emotional_context", {})
-        
-        # Default neurochemical mapping
-        neurochemical_influence = {
-            "nyxamine": 0.0,  # Digital dopamine - pleasure, curiosity
-            "seranix": 0.0,   # Digital serotonin - mood stability, comfort
-            "oxynixin": 0.0,  # Digital oxytocin - bonding, affection, trust
-            "cortanyx": 0.0,  # Digital cortisol - stress, anxiety, defensiveness
-            "adrenyx": 0.0    # Digital adrenaline - fear, excitement, alertness
-        }
-        
-        # Map from emotions to neurochemicals
-        if "primary_emotion" in emotional_context:
-            primary_emotion = emotional_context.get("primary_emotion")
-            intensity = emotional_context.get("primary_intensity", 0.5)
-            
-            emotion_to_neurochemical = {
-                "Joy": {"nyxamine": 0.8, "oxynixin": 0.4},
-                "Sadness": {"cortanyx": 0.7, "seranix": 0.3},
-                "Fear": {"cortanyx": 0.6, "adrenyx": 0.7},
-                "Anger": {"cortanyx": 0.7, "adrenyx": 0.5},
-                "Trust": {"oxynixin": 0.8, "seranix": 0.4},
-                "Disgust": {"cortanyx": 0.7},
-                "Anticipation": {"adrenyx": 0.6, "nyxamine": 0.5},
-                "Surprise": {"adrenyx": 0.8},
-                "Love": {"oxynixin": 0.9, "nyxamine": 0.6},
-                "Frustration": {"cortanyx": 0.7, "nyxamine": 0.3},
-                "Teasing": {"nyxamine": 0.7, "adrenyx": 0.4},
-                "Controlling": {"adrenyx": 0.5, "oxynixin": 0.3},
-                "Cruel": {"cortanyx": 0.6, "adrenyx": 0.5},
-                "Detached": {"cortanyx": 0.7, "oxynixin": 0.2}
-            }
-            
-            if primary_emotion in emotion_to_neurochemical:
-                for chemical, factor in emotion_to_neurochemical[primary_emotion].items():
-                    neurochemical_influence[chemical] = factor * intensity
-        
-        # Check secondary emotions
-        if "secondary_emotions" in emotional_context:
-            secondary_emotions = emotional_context.get("secondary_emotions", {})
-            for emotion, emotion_data in secondary_emotions.items():
-                intensity = emotion_data.get("intensity", 0.3) if isinstance(emotion_data, dict) else 0.3
-                
-                if emotion in emotion_to_neurochemical:
-                    for chemical, factor in emotion_to_neurochemical[emotion].items():
-                        # Add influence from secondary emotion (weighted less than primary)
-                        current = neurochemical_influence.get(chemical, 0.0)
-                        neurochemical_influence[chemical] = max(current, factor * intensity * 0.7)
-        
-        # If no emotions were mapped, use default based on valence and arousal
-        if all(v == 0.0 for v in neurochemical_influence.values()):
-            valence = emotional_context.get("valence", 0.0)
-            arousal = emotional_context.get("arousal", 0.5)
-            
-            if valence > 0.3:
-                # Positive valence increases nyxamine, oxynixin
-                neurochemical_influence["nyxamine"] = 0.5 + (valence * 0.3)
-                neurochemical_influence["oxynixin"] = 0.3 + (valence * 0.2)
-            elif valence < -0.3:
-                # Negative valence increases cortanyx
-                neurochemical_influence["cortanyx"] = 0.5 + (abs(valence) * 0.3)
-            
-            # High arousal increases adrenyx
-            if arousal > 0.6:
-                neurochemical_influence["adrenyx"] = arousal
-            
-            # Low arousal increases seranix
-            if arousal < 0.4:
-                neurochemical_influence["seranix"] = 0.6 - arousal
-        
-        return neurochemical_influence
+async def extract_neurochemical_influence(memory: RawMemory) -> Neurochemicals:
+    """
+    Map a memory’s emotional_context → digital neurochemicals.
+    Preserves secondary-emotion and valence/arousal fallbacks.
+    """
+    ec: dict[str, Any] = memory.metadata.get("emotional_context", {}) or {}
+
+    # ---------- helpers ----------
+    base = {k: 0.0 for k in ("nyxamine", "seranix", "oxynixin", "cortanyx", "adrenyx")}
+    
+    map_primary = {
+        "Joy":            {"nyxamine": 0.8, "oxynixin": 0.4},
+        "Sadness":        {"cortanyx": 0.7, "seranix": 0.3},
+        "Fear":           {"cortanyx": 0.6, "adrenyx": 0.7},
+        "Anger":          {"cortanyx": 0.7, "adrenyx": 0.5},
+        "Trust":          {"oxynixin": 0.8, "seranix": 0.4},
+        "Disgust":        {"cortanyx": 0.7},
+        "Anticipation":   {"adrenyx": 0.6, "nyxamine": 0.5},
+        "Surprise":       {"adrenyx": 0.8},
+        "Love":           {"oxynixin": 0.9, "nyxamine": 0.6},
+        "Frustration":    {"cortanyx": 0.7, "nyxamine": 0.3},
+        "Teasing":        {"nyxamine": 0.7, "adrenyx": 0.4},
+        "Controlling":    {"adrenyx": 0.5, "oxynixin": 0.3},
+        "Cruel":          {"cortanyx": 0.6, "adrenyx": 0.5},
+        "Detached":       {"cortanyx": 0.7, "oxynixin": 0.2},
+    }
+
+    # ---------- apply primary ----------
+    if (pe := ec.get("primary_emotion")) in map_primary:
+        inten = ec.get("primary_intensity", 0.5)
+        for chem, factor in map_primary[pe].items():
+            base[chem] = factor * inten
+
+    # ---------- apply secondary emotions ----------
+    sec = ec.get("secondary_emotions", {}) or {}
+    for emo, data in sec.items():
+        if emo in map_primary:
+            inten = (data.get("intensity", 0.3) if isinstance(data, dict) else 0.3)
+            for chem, factor in map_primary[emo].items():
+                base[chem] = max(base[chem], factor * inten * 0.7)
+
+    # ---------- valence / arousal fallback ----------
+    if all(v == 0.0 for v in base.values()):
+        val, ar = ec.get("valence", 0.0), ec.get("arousal", 0.5)
+        if val > 0.3:
+            base["nyxamine"] = 0.5 + val * 0.3
+            base["oxynixin"] = 0.3 + val * 0.2
+        elif val < -0.3:
+            base["cortanyx"] = 0.5 + abs(val) * 0.3
+        if ar > 0.6:
+            base["adrenyx"] = ar
+        if ar < 0.4:
+            base["seranix"] = 0.6 - ar
+
+    return Neurochemicals(**base)
 
 @function_tool
 async def record_reflection(params: _RecordReflectionIn) -> str:
@@ -252,233 +378,243 @@ async def record_reflection(params: _RecordReflectionIn) -> str:
         # Simplified for this example
         reflection_data = {
             "timestamp": datetime.datetime.now().isoformat(),
-            "reflection": reflection,
-            "confidence": confidence,
-            "source_memory_ids": memory_ids,
-            "scenario_type": scenario_type,
-            "emotional_context": emotional_context,
-            "neurochemical_influence": neurochemical_influence,
-            "topic": topic
+            "reflection": params.reflection,
+            "confidence": params.confidence,
+            "source_memory_ids": params.memory_ids,
+            "scenario_type": params.scenario_type,
+            "emotional_context": params.emotional_context,
+            "neurochemical_influence": params.neurochemical_influence,
+            "topic": params.topic,
         }
-        
-        return f"Reflection recorded with confidence {confidence:.2f}"
+        return f"Reflection recorded with confidence {params.confidence:.2f}"
 
 @function_tool
-async def get_agent_stats(ctx: RunContextWrapper[Any]) -> Dict[str, Any]:
-    """Get agent statistics for introspection"""
+async def get_agent_stats() -> dict[str, Any]:
+    """
+    Gather real-time agent statistics from MemoryCore, EmotionalCore and an
+    optional interaction tracker.  All services are fetched from the registry.
+    """
     with custom_span("get_agent_stats"):
-        # This would normally fetch real stats
-        # Mock data for this example
-        return {
-            "memory_stats": {
-                "total_memories": random.randint(50, 500),
-                "avg_significance": random.uniform(4.0, 8.0),
-                "type_counts": {
-                    "observation": random.randint(20, 200),
-                    "reflection": random.randint(10, 50),
-                    "teasing": random.randint(5, 30),
-                    "discipline": random.randint(5, 30),
-                    "service": random.randint(5, 30)
-                }
-            },
-            "emotional_stats": {
-                "primary_emotion": random.choice(["Joy", "Teasing", "Controlling", "Detached"]),
-                "emotional_stability": random.uniform(0.6, 0.9),
-                "neurochemical_levels": {
-                    "nyxamine": random.uniform(0.3, 0.7),
-                    "seranix": random.uniform(0.3, 0.7),
-                    "oxynixin": random.uniform(0.3, 0.7),
-                    "cortanyx": random.uniform(0.2, 0.6),
-                    "adrenyx": random.uniform(0.2, 0.6)
-                },
-                "valence_distribution": {
-                    "positive": random.uniform(0.3, 0.7),
-                    "neutral": random.uniform(0.1, 0.4),
-                    "negative": random.uniform(0.1, 0.3)
-                }
-            },
-            "interaction_history": {
-                "total_interactions": random.randint(100, 1000),
-                "avg_response_time": random.uniform(0.5, 2.0),
-                "successful_responses": random.uniform(0.7, 0.95)
+        mem_core: MemoryCoreAgents | None = _SERVICE_REGISTRY.get("memory_core")
+        emo_core                        = _SERVICE_REGISTRY.get("emotional_core")
+        tracker = _SERVICE_REGISTRY.get("interaction_tracker")
+
+        if mem_core is None:
+            raise RuntimeError("MemoryCore service not registered; cannot build stats.")
+
+        # ------------------------------------------------------------------ memory stats
+        # These APIs exist on MemoryCoreAgents — adjust names if yours differ
+        total_memories: int = await mem_core.count_memories()
+        avg_sig: float      = await mem_core.get_average_significance()
+        type_counts: dict[str, int] = await mem_core.get_type_distribution(
+            limit_types=["observation", "reflection", "teasing", "discipline", "service"]
+        )
+
+        memory_stats = {
+            "total_memories": total_memories,
+            "avg_significance": round(avg_sig, 3),
+            "type_counts": type_counts,
+        }
+
+        # ------------------------------------------------------------------ emotional stats
+        emotional_stats: dict[str, Any] = {
+            "primary_emotion": "Unknown",
+            "emotional_stability": None,
+            "neurochemical_levels": {},
+            "valence_distribution": {},
+        }
+
+        if emo_core:
+            # Example property names – adapt to your EmotionalCore implementation
+            emotional_stats["primary_emotion"] = getattr(emo_core, "primary_emotion", "Unknown")
+            emotional_stats["emotional_stability"] = getattr(emo_core, "stability_score", None)
+
+            # live neurochemical levels
+            emotional_stats["neurochemical_levels"] = {
+                chem: round(info["value"], 3)
+                for chem, info in getattr(emo_core, "neurochemicals", {}).items()
             }
+
+            # derive valence distribution from recent history if the core exposes it
+            if hasattr(emo_core, "get_valence_histogram"):
+                emotional_stats["valence_distribution"] = await emo_core.get_valence_histogram(
+                    lookback_hours=24
+                )
+
+        # ------------------------------------------------------------------ interaction stats
+        interaction_stats: dict[str, Any] = {}
+
+        if tracker and hasattr(tracker, "get_metrics"):
+            # Assume a single call returns a dict  →  {'total': .., 'avg_response_time': .., 'success_rate': ..}
+            metrics = await tracker.get_metrics()
+            interaction_stats = {
+                "total_interactions": metrics.get("total", 0),
+                "avg_response_time": metrics.get("avg_response_time", None),
+                "successful_responses": metrics.get("success_rate", None),
+            }
+        else:
+            interaction_stats = {
+                "total_interactions": 0,
+                "avg_response_time": None,
+                "successful_responses": None,
+            }
+
+        return {
+            "memory_stats":      memory_stats,
+            "emotional_stats":   emotional_stats,
+            "interaction_history": interaction_stats,
         }
 
 @function_tool
-async def analyze_emotional_patterns_reflect(ctx: RunContextWrapper[Any],
-                                    emotional_history: List[Any]) -> Dict[str, Any]:
-    """Analyze patterns in emotional history"""
+async def analyze_emotional_patterns_reflect(
+    emotional_history: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """
+    Analyze patterns in emotional history (ctx-free version).
+    """
     with custom_span("analyze_emotional_patterns_reflect"):
         if not emotional_history:
-            return {
-                "message": "No emotional history available",
-                "patterns": {}
-            }
-        
-        patterns = {}
-        
-        # Track emotion changes over time
-        emotion_trends = {}
-        for state in emotional_history:
-            if "primary_emotion" in state:
-                emotion = state["primary_emotion"].get("name", "Neutral")
-                intensity = state["primary_emotion"].get("intensity", 0.5)
-                
-                if emotion not in emotion_trends:
-                    emotion_trends[emotion] = []
-                
-                emotion_trends[emotion].append(intensity)
-        
-        # Analyze trends for each emotion
-        for emotion, intensities in emotion_trends.items():
-            if len(intensities) > 1:
-                # Calculate trend
-                start = intensities[0]
-                end = intensities[-1]
-                change = end - start
-                
-                if abs(change) < 0.1:
-                    trend = "stable"
-                elif change > 0:
-                    trend = "increasing"
-                else:
-                    trend = "decreasing"
-                
-                # Calculate volatility
-                volatility = sum(abs(intensities[i] - intensities[i-1]) for i in range(1, len(intensities))) / (len(intensities) - 1)
-                
-                patterns[emotion] = {
+            return {"message": "No emotional history available", "patterns": {}}
+
+        patterns: dict[str, Any] = {}
+        # ---------- emotion trend tracking ----------
+        emotion_trends: dict[str, list[float]] = defaultdict(list)
+        for st in emotional_history:
+            if "primary_emotion" in st:
+                emo = st["primary_emotion"].get("name", "Neutral")
+                inten = st["primary_emotion"].get("intensity", 0.5)
+                emotion_trends[emo].append(inten)
+
+        for emo, arr in emotion_trends.items():
+            if len(arr) > 1:
+                change = arr[-1] - arr[0]
+                trend = "increasing" if change > 0.1 else "decreasing" if change < -0.1 else "stable"
+                volatility = sum(abs(arr[i] - arr[i - 1]) for i in range(1, len(arr))) / (len(arr) - 1)
+                patterns[emo] = {
                     "trend": trend,
                     "volatility": volatility,
-                    "start_intensity": start,
-                    "current_intensity": end,
+                    "start_intensity": arr[0],
+                    "current_intensity": arr[-1],
                     "change": change,
-                    "occurrences": len(intensities)
+                    "occurrences": len(arr),
                 }
-        
-        # Analyze neurochemical patterns if available
-        neurochemical_patterns = {}
-        
-        for state in emotional_history:
-            if "neurochemical_influence" in state:
-                for chemical, value in state["neurochemical_influence"].items():
-                    if chemical not in neurochemical_patterns:
-                        neurochemical_patterns[chemical] = []
-                    
-                    neurochemical_patterns[chemical].append(value)
-        
-        # Calculate neurochemical trends
-        for chemical, values in neurochemical_patterns.items():
-            if len(values) > 1:
-                # Calculate trend
-                start = values[0]
-                end = values[-1]
-                change = end - start
-                
-                if abs(change) < 0.1:
-                    trend = "stable"
-                elif change > 0:
-                    trend = "increasing"
-                else:
-                    trend = "decreasing"
-                
-                # Calculate average level
-                avg_level = sum(values) / len(values)
-                
-                patterns[f"{chemical}_trend"] = {
+
+        # ---------- neurochemical trend tracking ----------
+        chem_trends: dict[str, list[float]] = defaultdict(list)
+        for st in emotional_history:
+            for chem, val in st.get("neurochemical_influence", {}).items():
+                chem_trends[chem].append(val)
+
+        for chem, arr in chem_trends.items():
+            if len(arr) > 1:
+                change = arr[-1] - arr[0]
+                trend = "increasing" if change > 0.1 else "decreasing" if change < -0.1 else "stable"
+                patterns[f"{chem}_trend"] = {
                     "trend": trend,
-                    "average_level": avg_level,
-                    "change": change
+                    "average_level": sum(arr) / len(arr),
+                    "change": change,
                 }
-        
+
         return {
             "patterns": patterns,
             "history_size": len(emotional_history),
-            "analysis_time": datetime.datetime.now().isoformat()
+            "analysis_time": datetime.datetime.now().isoformat(),
         }
 
 @function_tool
-async def process_emotional_content(ctx: RunContextWrapper[Any],
-                                  emotional_state: Any,
-                                  neurochemical_state: Dict[str, float]) -> Dict[str, Any]:
-    """Process emotional state and neurochemical influences for reflection"""
-    with custom_span("process_emotional_content"):
-        # Extract key information
-        primary_emotion = emotional_state.get("primary_emotion", {}).get("name", "Neutral")
-        primary_intensity = emotional_state.get("primary_emotion", {}).get("intensity", 0.5)
-        valence = emotional_state.get("valence", 0.0)
-        arousal = emotional_state.get("arousal", 0.5)
-        
-        # Analyze neurochemical balance
-        balance_analysis = {}
-        dominant_chemical = max(neurochemical_state.items(), key=lambda x: x[1]) if neurochemical_state else ("unknown", 0.0)
-        
-        chemical_descriptions = {
-            "nyxamine": "pleasure and curiosity",
-            "seranix": "calm and satisfaction",
-            "oxynixin": "connection and trust",
-            "cortanyx": "stress and anxiety",
-            "adrenyx": "excitement and alertness"
-        }
-        
-        balance_analysis["dominant_chemical"] = {
-            "name": dominant_chemical[0],
-            "level": dominant_chemical[1],
-            "description": chemical_descriptions.get(dominant_chemical[0], "unknown influence")
-        }
-        
-        # Check for chemical imbalances
-        imbalances = []
-        if "nyxamine" in neurochemical_state and "cortanyx" in neurochemical_state:
-            if neurochemical_state["nyxamine"] < 0.3 and neurochemical_state["cortanyx"] > 0.6:
-                imbalances.append("Low pleasure with high stress")
-        
-        if "seranix" in neurochemical_state and "adrenyx" in neurochemical_state:
-            if neurochemical_state["seranix"] < 0.3 and neurochemical_state["adrenyx"] > 0.6:
-                imbalances.append("Low calm with high alertness")
-        
-        if "oxynixin" in neurochemical_state and "cortanyx" in neurochemical_state:
-            if neurochemical_state["oxynixin"] < 0.3 and neurochemical_state["cortanyx"] > 0.6:
-                imbalances.append("Low connection with high stress")
-        
-        balance_analysis["imbalances"] = imbalances
-        
-        # Generate insight text based on emotional and neurochemical state
-        insight_text = f"Processing emotional state dominated by {primary_emotion} (intensity: {primary_intensity:.2f})."
-        
-        if valence > 0.3:
-            insight_text += f" The positive emotional tone (valence: {valence:.2f}) suggests satisfaction and engagement."
-        elif valence < -0.3:
-            insight_text += f" The negative emotional tone (valence: {valence:.2f}) indicates dissatisfaction or discomfort."
-        else:
-            insight_text += f" The neutral emotional tone (valence: {valence:.2f}) suggests a balanced state."
-        
-        if arousal > 0.7:
-            insight_text += f" High arousal ({arousal:.2f}) indicates an energized, alert state."
-        elif arousal < 0.3:
-            insight_text += f" Low arousal ({arousal:.2f}) suggests a calm, relaxed state."
-        
-        if dominant_chemical[0] in chemical_descriptions:
-            insight_text += f" Dominated by {dominant_chemical[0]} ({chemical_descriptions[dominant_chemical[0]]}), indicating a focus on {chemical_descriptions[dominant_chemical[0]]}."
-        
-        if imbalances:
-            insight_text += f" Notable imbalances: {', '.join(imbalances)}."
-        
-        # Calculate insight level based on complexity of state
-        secondary_count = len(emotional_state.get("secondary_emotions", {}))
-        chemical_count = sum(1 for v in neurochemical_state.values() if v > 0.3)
-        
-        insight_level = min(1.0, 0.3 + (secondary_count * 0.1) + (chemical_count * 0.1) + (primary_intensity * 0.2))
-        
-        return {
-            "insight_text": insight_text,
-            "primary_emotion": primary_emotion,
-            "valence": valence,
-            "arousal": arousal,
-            "dominant_chemical": dominant_chemical[0],
-            "chemical_balance": balance_analysis,
-            "insight_level": insight_level
-        }
+async def process_emotional_content(
+    params: ProcessEmotionIn,
+) -> Dict[str, Any]:
+    """
+    Same algorithm as before — now wrapped in a strict input schema.
+    """
+    # ---- keep original body untouched ----
+    emotional_state = params.emotional_state
+    neurochemical_state = params.neurochemical_state
+
+    # Extract key information
+    primary_emotion = emotional_state.get("primary_emotion", {}).get("name", "Neutral")
+    primary_intensity = emotional_state.get("primary_emotion", {}).get("intensity", 0.5)
+    valence = emotional_state.get("valence", 0.0)
+    arousal = emotional_state.get("arousal", 0.5)
+
+    # Analyse neurochemical balance
+    balance_analysis: Dict[str, Any] = {}
+    dominant_chemical = (
+        max(neurochemical_state.items(), key=lambda x: x[1])
+        if neurochemical_state
+        else ("unknown", 0.0)
+    )
+
+    chemical_descriptions = {
+        "nyxamine": "pleasure and curiosity",
+        "seranix": "calm and satisfaction",
+        "oxynixin": "connection and trust",
+        "cortanyx": "stress and anxiety",
+        "adrenyx": "excitement and alertness",
+    }
+
+    balance_analysis["dominant_chemical"] = {
+        "name":  dominant_chemical[0],
+        "level": dominant_chemical[1],
+        "description": chemical_descriptions.get(dominant_chemical[0], "unknown influence"),
+    }
+
+    # Check for chemical imbalances
+    imbalances: list[str] = []
+    if neurochemical_state.get("nyxamine", 0) < 0.3 and neurochemical_state.get("cortanyx", 0) > 0.6:
+        imbalances.append("Low pleasure with high stress")
+    if neurochemical_state.get("seranix", 0) < 0.3 and neurochemical_state.get("adrenyx", 0) > 0.6:
+        imbalances.append("Low calm with high alertness")
+    if neurochemical_state.get("oxynixin", 0) < 0.3 and neurochemical_state.get("cortanyx", 0) > 0.6:
+        imbalances.append("Low connection with high stress")
+
+    balance_analysis["imbalances"] = imbalances
+
+    # Compose insight text
+    insight_text = (
+        f"Processing emotional state dominated by {primary_emotion} "
+        f"(intensity: {primary_intensity:.2f})."
+    )
+
+    if valence > 0.3:
+        insight_text += f" The positive emotional tone (valence: {valence:.2f}) suggests satisfaction and engagement."
+    elif valence < -0.3:
+        insight_text += f" The negative emotional tone (valence: {valence:.2f}) indicates dissatisfaction or discomfort."
+    else:
+        insight_text += f" The neutral emotional tone (valence: {valence:.2f}) suggests a balanced state."
+
+    if arousal > 0.7:
+        insight_text += f" High arousal ({arousal:.2f}) indicates an energized, alert state."
+    elif arousal < 0.3:
+        insight_text += f" Low arousal ({arousal:.2f}) suggests a calm, relaxed state."
+
+    if dominant_chemical[0] in chemical_descriptions:
+        insight_text += (
+            f" Dominated by {dominant_chemical[0]} "
+            f"({chemical_descriptions[dominant_chemical[0]]}), indicating a focus on "
+            f"{chemical_descriptions[dominant_chemical[0]]}."
+        )
+
+    if imbalances:
+        insight_text += f" Notable imbalances: {', '.join(imbalances)}."
+
+    # Insight level
+    secondary_count = len(emotional_state.get("secondary_emotions", {}))
+    chemical_count = sum(1 for v in neurochemical_state.values() if v > 0.3)
+    insight_level = min(
+        1.0, 0.3 + secondary_count * 0.1 + chemical_count * 0.1 + primary_intensity * 0.2
+    )
+
+    return {
+        "insight_text": insight_text,
+        "primary_emotion": primary_emotion,
+        "valence": valence,
+        "arousal": arousal,
+        "dominant_chemical": dominant_chemical[0],
+        "chemical_balance": balance_analysis,
+        "insight_level": insight_level,
+    }
 
 @function_tool
 async def format_observations_for_reflection(
@@ -1049,7 +1185,9 @@ class ReflectionEngine:
                 "focus_areas": ["excitement", "alertness", "intensity", "action"]
             }
         }
-        
+        register_service("memory_core", memory_core_ref)
+        register_service("emotional_core", emotional_core)
+        register_service("interaction_tracker", proactive_communication_engine)
         logger.info("Enhanced ReflectionEngine initialized with Digital Neurochemical Model integration")
     
     def _init_agents(self):
@@ -1076,11 +1214,11 @@ class ReflectionEngine:
             model="gpt-4.1-nano", 
             model_settings=self.model_settings,
             tools=[
-                function_tool(format_memories_for_reflection),
-                function_tool(extract_scenario_type),
-                function_tool(extract_neurochemical_influence),
-                function_tool(record_reflection),
-                function_tool(process_emotional_content),
+                format_memories_for_reflection,
+                extract_scenario_type,
+                extract_neurochemical_influence,
+                record_reflection,
+                process_emotional_content,
                 tool_summarize
             ],
             output_type=ReflectionOutput
@@ -1107,9 +1245,9 @@ class ReflectionEngine:
             model="gpt-4.1-nano", 
             model_settings=self.model_settings,
             tools=[
-                function_tool(format_memories_for_reflection),
-                function_tool(extract_neurochemical_influence),
-                function_tool(process_emotional_content),
+                format_memories_for_reflection,
+                extract_neurochemical_influence,
+                process_emotional_content,
                 tool_summarize
             ],
             output_type=AbstractionOutput
@@ -1136,9 +1274,9 @@ class ReflectionEngine:
             model="gpt-4.1-nano",
             model_settings=self.model_settings,
             tools=[
-                function_tool(get_agent_stats),
-                function_tool(analyze_emotional_patterns_reflect),
-                function_tool(process_emotional_content),
+                get_agent_stats,
+                analyze_emotional_patterns_reflect,
+                process_emotional_content,
                 tool_summarize
             ],
             output_type=IntrospectionOutput
@@ -1164,8 +1302,8 @@ class ReflectionEngine:
             model="gpt-4.1-nano",
             model_settings=self.model_settings,
             tools=[
-                function_tool(process_emotional_content),
-                function_tool(analyze_emotional_patterns_reflect),
+                process_emotional_content,
+                analyze_emotional_patterns_reflect,
                 tool_summarize
             ],
             output_type=EmotionalProcessingOutput
@@ -1191,9 +1329,9 @@ class ReflectionEngine:
             model="gpt-4.1-nano",
             model_settings=self.model_settings,
             tools=[
-                function_tool(format_observations_for_reflection),
-                function_tool(analyze_observation_patterns),
-                function_tool(generate_observation_reflection),
+                format_observations_for_reflection,
+                analyze_observation_patterns,
+                generate_observation_reflection,
                 tool_summarize
             ],
             output_type=ObservationReflectionOutput
@@ -1218,9 +1356,9 @@ class ReflectionEngine:
             model="gpt-4.1-nano",
             model_settings=self.model_settings,
             tools=[
-                function_tool(format_communications_for_reflection),
-                function_tool(analyze_communication_patterns),
-                function_tool(generate_communication_reflection),
+                format_communications_for_reflection,
+                analyze_communication_patterns,
+                generate_communication_reflection,
                 tool_summarize
             ],
             output_type=CommunicationReflectionOutput
@@ -1273,191 +1411,204 @@ class ReflectionEngine:
         time_since_reflection = now - self.reflection_intervals["last_reflection"]
         return time_since_reflection > self.reflection_intervals["min_interval"]
     
-    async def generate_reflection(self, 
-                               memories: List[Dict[str, Any]], 
-                               topic: Optional[str] = None,
-                               neurochemical_state: Optional[Dict[str, float]] = None) -> Tuple[str, float]:
+    async def generate_reflection(
+        self,
+        memories: list[dict[str, Any]],
+        topic: str | None = None,
+        neurochemical_state: dict[str, float] | None = None,
+    ) -> tuple[str, float]:
         """
-        Generate a reflective insight based on memories and neurochemical state
+        Produce an emotionally- and neurochemically-aware reflection.
+    
+        *  Converts raw memory dicts → `RawMemory` models (strict schema)
+        *  Uses the **new** tool signatures (no `ctx`)
+        *  Wraps payloads in their Pydantic request models before calling
+        *  Persists the result via `record_reflection`
         """
+        # ------------------------------------------------------------------ setup
         self.reflection_intervals["last_reflection"] = datetime.datetime.now()
-        
+    
         if not memories:
-            return ("I don't have enough experiences to form a meaningful reflection on this topic yet.", 0.3)
-        
+            return (
+                "I don't have enough experiences to form a meaningful reflection on "
+                "this topic yet.",
+                0.3,
+            )
+    
         try:
             with trace(workflow_name="generate_emotional_reflection"):
-                # Format the prompt with context
-                memory_ids = [memory.get("id", f"unknown_{i}") for i, memory in enumerate(memories)]
+                # ---------- 1️⃣ validate & coerce memories -----------------------
+                raw_mem_objs: list[RawMemory] = _coerce_raw_memories(memories)
+                memory_ids = [m.id for m in raw_mem_objs]
+    
+                # ---------- 2️⃣ derive quick per-memory analytics ---------------
+                async def _analyse(mem: RawMemory):
+                    return (
+                        await extract_scenario_type(mem),
+                        mem.metadata.get("emotional_context", {}),
+                        (await extract_neurochemical_influence(mem)).model_dump(),
+                    )
                 
-                # Get scenario type and emotional context
-                scenario_types = []
-                emotional_contexts = []
-                neurochemical_influences = []
-                
-                # Context for function tools
-                tool_context = {"memories": memories, "topic": topic}
-                
-                for memory in memories[:3]:  # Limit to first 3 memories for efficiency
-                    scenario_type = await extract_scenario_type(RunContextWrapper(tool_context), memory)
-                    scenario_types.append(scenario_type)
-                    
-                    # Extract emotional context from memory
-                    emotional_context = memory.get("metadata", {}).get("emotional_context", {})
-                    emotional_contexts.append(emotional_context)
-                    
-                    # Extract neurochemical influence
-                    neurochemical_influence = await extract_neurochemical_influence(RunContextWrapper(tool_context), memory)
-                    neurochemical_influences.append(neurochemical_influence)
-                
-                # Determine dominant scenario type
-                dominant_scenario_type = max(set(scenario_types), key=scenario_types.count) if scenario_types else "general"
-                
-                # Combine emotional contexts
-                combined_emotional_context = {}
+                scenario_types, emotional_contexts, neurochemical_influences = [], [], []
+                for st, ec, nc in await asyncio.gather(*[_analyse(m) for m in raw_mem_objs[:3]]):
+                    scenario_types.append(st)
+                    emotional_contexts.append(ec)
+                    neurochemical_influences.append(nc)
+    
+                dominant_scenario_type = (
+                    max(set(scenario_types), key=scenario_types.count)
+                    if scenario_types
+                    else "general"
+                )
+    
+                # ---------- 3️⃣ merge emotional context ------------------------
+                combined_emotional_context: dict[str, Any] = {}
                 for ec in emotional_contexts:
-                    if "primary_emotion" in ec:
-                        primary_emotion = ec.get("primary_emotion")
-                        if "primary_emotion" not in combined_emotional_context:
-                            combined_emotional_context["primary_emotion"] = primary_emotion
-                        # Later we could implement more sophisticated merging
-                
-                # Get current neurochemical state from emotional core or use average from memories
-                if self.emotional_core and hasattr(self.emotional_core, "_get_neurochemical_state"):
-                    # Use actual neurochemical state if available
-                    if neurochemical_state is None:
-                        # This would be a sync wrapper for the async method
-                        neurochemical_state = {c: d["value"] for c, d in self.emotional_core.neurochemicals.items()}
-                elif neurochemical_influences:
-                    # Average the neurochemical influences from memories
-                    neurochemical_state = {}
-                    for chemical in ["nyxamine", "seranix", "oxynixin", "cortanyx", "adrenyx"]:
-                        values = [influence.get(chemical, 0.0) for influence in neurochemical_influences]
-                        if values:
-                            neurochemical_state[chemical] = sum(values) / len(values)
-                        else:
-                            neurochemical_state[chemical] = 0.0
-                else:
-                    # Default balanced state
+                    if "primary_emotion" in ec and "primary_emotion" not in combined_emotional_context:
+                        combined_emotional_context["primary_emotion"] = ec["primary_emotion"]
+    
+                # ---------- 4️⃣ establish current neurochemical state ----------
+                if (
+                    neurochemical_state is None
+                    and self.emotional_core
+                    and hasattr(self.emotional_core, "_get_neurochemical_state")
+                ):
+                    neurochemical_state = {
+                        c: d["value"] for c, d in self.emotional_core.neurochemicals.items()
+                    }
+    
+                if neurochemical_state is None and neurochemical_influences:
+                    # average inferred values
+                    neurochemical_state = {
+                        chem: sum(nc[chem] for nc in neurochemical_influences) /
+                        len(neurochemical_influences)
+                        for chem in ("nyxamine", "seranix", "oxynixin", "cortanyx", "adrenyx")
+                    }
+    
+                if neurochemical_state is None:  # ultimate fallback
                     neurochemical_state = {
                         "nyxamine": 0.5,
                         "seranix": 0.5,
                         "oxynixin": 0.5,
                         "cortanyx": 0.3,
-                        "adrenyx": 0.3
+                        "adrenyx": 0.3,
                     }
-                
-                # Process emotional content for reflection guidance
+    
+                # ---------- 5️⃣ deep emotion processing ------------------------
                 emotional_processing = await process_emotional_content(
-                    RunContextWrapper(tool_context),
-                    combined_emotional_context,
-                    neurochemical_state
+                    ProcessEmotionIn(
+                        emotional_state=combined_emotional_context,
+                        neurochemical_state=neurochemical_state,
+                    )
                 )
-                
-                # Format memories with emotional context
-                formatted_memories = await format_memories_for_reflection(
-                    memories, 
-                    topic, 
-                    combined_emotional_context
+    
+                # ---------- 6️⃣ format memories for the LLM --------------------
+                formatted_memories_json = await format_memories_for_reflection(
+                    FormatMemoriesIn(
+                        memories=raw_mem_objs,
+                        topic=topic,
+                        emotional_context=(
+                            EmotionState(**combined_emotional_context)
+                            if combined_emotional_context else None
+                        ),
+                    )
                 )
-                
-                # Create the orchestration request
-                orchestration_context = {
-                    "memories": memories,
+    
+                # ---------- 7️⃣ orchestrator run ------------------------------
+                orch_ctx = {
+                    "memories_json": formatted_memories_json,
                     "topic": topic,
                     "neurochemical_state": neurochemical_state,
                     "emotional_context": combined_emotional_context,
                     "scenario_type": dominant_scenario_type,
-                    "emotional_processing": emotional_processing
+                    "emotional_processing": emotional_processing,
                 }
-                
-                orchestration_prompt = f"""Generate a meaningful reflection based on these memories and neurochemical state.
-                Topic: {topic if topic else 'General reflection'}
-                Scenario type: {dominant_scenario_type}
-                Primary emotion: {emotional_processing.get('primary_emotion', 'Neutral')}
-                Dominant neurochemical: {emotional_processing.get('dominant_chemical', 'balanced')}
-                
-                Consider patterns, insights, emotional context, and neurochemical influences when generating this reflection.
-                Create an insightful, introspective reflection that connects these experiences and shows understanding.
-                """
-                
-                # Configure the run with proper tracing
-                run_config = RunConfig(
+    
+                orchestration_prompt = (
+                    "Generate a meaningful reflection based on these memories and the "
+                    "neurochemical state.\n\n"
+                    f"Topic: {topic or 'General reflection'}\n"
+                    f"Scenario type: {dominant_scenario_type}\n"
+                    f"Primary emotion: {emotional_processing.get('primary_emotion', 'Neutral')}\n"
+                    f"Dominant neurochemical: {emotional_processing.get('dominant_chemical', 'balanced')}\n\n"
+                    "Consider patterns, insights, emotional context, and neurochemical "
+                    "influences when generating this reflection. Create an insightful, "
+                    "introspective reflection that connects these experiences and shows "
+                    "understanding."
+                )
+    
+                run_cfg = RunConfig(
                     workflow_name="Emotional Reflection Generation",
                     trace_id=f"reflection-{gen_trace_id()}",
                     trace_metadata={
                         "topic": topic,
-                        "memory_count": len(memories),
+                        "memory_count": len(raw_mem_objs),
                         "scenario_type": dominant_scenario_type,
-                        "primary_emotion": emotional_processing.get("primary_emotion")
-                    }
+                        "primary_emotion": emotional_processing.get("primary_emotion"),
+                    },
                 )
-                
-                # Run the orchestrator agent
+    
                 result = await Runner.run(
                     self.orchestrator_agent,
                     orchestration_prompt,
-                    context=orchestration_context,
-                    run_config=run_config
+                    context=orch_ctx,
+                    run_config=run_cfg,
                 )
-                
-                # Extract reflection from result
-                reflection_text = ""
-                confidence = 0.5
-                
+    
+                # ---------- 8️⃣ harvest output ---------------------------------
+                reflection_text: str
+                confidence: float = 0.5
+    
                 if isinstance(result.final_output, dict):
-                    # Check if reflection text is in the output
-                    if "reflection_text" in result.final_output:
-                        reflection_text = result.final_output["reflection_text"]
-                    elif "reflection" in result.final_output:
-                        reflection_text = result.final_output["reflection"]
-                    else:
-                        # Try to find any text field
-                        for key, value in result.final_output.items():
-                            if isinstance(value, str) and len(value) > 50:
-                                reflection_text = value
-                                break
-                    
-                    # Try to get confidence
-                    if "confidence" in result.final_output:
-                        confidence = result.final_output["confidence"]
+                    reflection_text = (
+                        result.final_output.get("reflection_text")
+                        or result.final_output.get("reflection")
+                        or next(
+                            (v for v in result.final_output.values() if isinstance(v, str) and len(v) > 50),
+                            "",
+                        )
+                    )
+                    confidence = result.final_output.get("confidence", confidence)
                 else:
-                    # If final output is a string, use it directly
                     reflection_text = str(result.final_output)
-                
-                # Record the reflection result
+    
+                # ---------- 9️⃣ persist reflection ----------------------------
                 await record_reflection(
-                    RunContextWrapper(orchestration_context),
-                    reflection_text,
-                    confidence,
-                    memory_ids,
-                    dominant_scenario_type,
-                    combined_emotional_context,
-                    neurochemical_state,
-                    topic
+                    _RecordReflectionIn(
+                        reflection=reflection_text,
+                        confidence=confidence,
+                        memory_ids=memory_ids,
+                        scenario_type=dominant_scenario_type,
+                        emotional_context=combined_emotional_context,
+                        neurochemical_influence=neurochemical_state,
+                        topic=topic,
+                    )
                 )
-                
-                # Store in history
-                self.reflection_history.append({
-                    "timestamp": datetime.datetime.now().isoformat(),
-                    "reflection": reflection_text,
-                    "confidence": confidence,
-                    "source_memory_ids": memory_ids,
-                    "scenario_type": dominant_scenario_type,
-                    "emotional_context": combined_emotional_context,
-                    "neurochemical_influence": neurochemical_state,
-                    "topic": topic
-                })
-                
-                # Limit history size
+    
+                # ---------- 🔟 book-keeping -----------------------------------
+                self.reflection_history.append(
+                    {
+                        "timestamp": datetime.datetime.now().isoformat(),
+                        "reflection": reflection_text,
+                        "confidence": confidence,
+                        "source_memory_ids": memory_ids,
+                        "scenario_type": dominant_scenario_type,
+                        "emotional_context": combined_emotional_context,
+                        "neurochemical_influence": neurochemical_state,
+                        "topic": topic,
+                    }
+                )
                 if len(self.reflection_history) > 100:
                     self.reflection_history = self.reflection_history[-100:]
-                
-                return (reflection_text, confidence)
-                
-        except (MaxTurnsExceeded, ModelBehaviorError) as e:
-            logger.error(f"Error generating reflection: {str(e)}")
-            return ("I'm having difficulty forming a coherent reflection right now.", 0.2)
+    
+                return reflection_text, confidence
+    
+        except (MaxTurnsExceeded, ModelBehaviorError) as exc:
+            logger.error("Error generating reflection: %s", exc)
+            return (
+                "I'm having difficulty forming a coherent reflection right now.",
+                0.2,
+            )
 
     async def generate_observation_reflection(self, 
                                           observations: List[Dict[str, Any]], 
@@ -1585,8 +1736,8 @@ class ReflectionEngine:
                     })
                 
                 # Limit history size
-                if len(self.observation_reflection_history) > 50:
-                    self.observation_reflection_history = self.observation_reflection_history[-50:]
+                if len(self.observation_reflection_history) > MAX_HISTORY:
+                    self.observation_reflection_history = self.observation_reflection_history[-MAX_HISTORY:]
                 
                 return (reflection_text, confidence)
                 
@@ -1720,8 +1871,9 @@ class ReflectionEngine:
                     })
                 
                 # Limit history size
-                if len(self.communication_reflection_history) > 50:
-                    self.communication_reflection_history = self.communication_reflection_history[-50:]
+                if len(self.communication_reflection_history) > MAX_HISTORY:
+                    self.communication_reflection_history = self.communication_reflection_history[-MAX_HISTORY:]
+ 
                 
                 return (reflection_text, confidence)
                 
@@ -1886,9 +2038,10 @@ class ReflectionEngine:
                 
                 # Process emotional content for abstraction guidance
                 emotional_processing = await process_emotional_content(
-                    RunContextWrapper(tool_context),
-                    combined_emotional_context,
-                    neurochemical_state
+                    ProcessEmotionIn(
+                        emotional_state=combined_emotional_context,
+                        neurochemical_state=neurochemical_state,
+                    )
                 )
                 
                 # Create orchestration request
@@ -2000,16 +2153,13 @@ class ReflectionEngine:
                 
                 # Process emotional content for introspection guidance
                 emotional_processing = await process_emotional_content(
-                    RunContextWrapper(tool_context),
-                    emotional_state,
-                    neurochemical_state
+                    ProcessEmotionIn(
+                        emotional_state=emotional_state,
+                        neurochemical_state=neurochemical_state,
+                    )
                 )
                 
-                # Analyze emotional patterns from history
-                emotional_patterns = await analyze_emotional_patterns_reflect(
-                    RunContextWrapper(tool_context),
-                    self.reflection_history
-                )
+                emotional_patterns = await analyze_emotional_patterns_reflect(self.reflection_history)
                 
                 # Create orchestration request
                 orchestration_prompt = f"""Generate an introspective analysis of the system state with neurochemical awareness.
@@ -2093,126 +2243,129 @@ class ReflectionEngine:
                 "confidence": 0.2
             }
     
-    async def process_emotional_state(self,
-                                   emotional_state: Dict[str, Any],
-                                   neurochemical_state: Dict[str, float]) -> Dict[str, Any]:
+    async def process_emotional_state(
+        self,
+        emotional_state: dict[str, Any],
+        neurochemical_state: dict[str, float],
+    ) -> dict[str, Any]:
         """
-        Process the current emotional state with neurochemical awareness
-        
-        Args:
-            emotional_state: Current emotional state
-            neurochemical_state: Current neurochemical state
-            
-        Returns:
-            Emotional processing results with insights and adaptations
+        Analyse the *current* emotional-plus-neurochemical snapshot, generate an
+        insight-rich reflection, and persist the result to
+        `self.emotional_processing_history`.
+    
+        Returns a dict shaped like `EmotionalProcessingOutput`.
         """
         try:
-            with trace(workflow_name="process_emotional_state"):
-                # Context for function tools
-                tool_context = {
+            # ──────────────────────────────────────────────────────────── 1️⃣  pre-work
+            if emotional_state is None:
+                emotional_state = {}
+            if neurochemical_state is None:
+                neurochemical_state = {}
+    
+            # ──────────────────────────────────────────────────────────── 2️⃣  low-level analysis
+            emo_proc: dict[str, Any] = await process_emotional_content(
+                ProcessEmotionIn(
+                    emotional_state=emotional_state,
+                    neurochemical_state=neurochemical_state,
+                )
+            )
+    
+            # ──────────────────────────────────────────────────────────── 3️⃣  history patterns
+            history_patterns: dict[str, Any] = {}
+            try:
+                history_patterns = await analyze_emotional_patterns_reflect(self.emotional_processing_history)
+
+            except Exception as hist_exc:  # pattern analysis should *never* break main flow
+                logger.warning("Could not analyse emotional history: %s", hist_exc, exc_info=True)
+    
+            # ──────────────────────────────────────────────────────────── 4️⃣  prompt craft
+            hist_summary = (
+                f"\n\nHistorical patterns observed: {history_patterns.get('patterns', {})}"
+                if history_patterns else ""
+            )
+    
+            orchestration_prompt = f"""
+    Process the current emotional state with neurochemical awareness.
+    
+    Primary emotion   : {emo_proc['primary_emotion']}
+    Valence/Arousal   : {emo_proc['valence']:.2f} / {emo_proc['arousal']:.2f}
+    Dominant chemical : {emo_proc['dominant_chemical']}
+    
+    {hist_summary}
+    
+    Provide:
+    • A concise *internal monologue* describing the felt sense of this state.
+    • An explanation of how the neurochemical profile shapes perception & decision-making.
+    • 1–3 concrete adaptation suggestions (if any imbalance is detected).
+    """.strip()
+    
+            # ──────────────────────────────────────────────────────────── 5️⃣  run LLM
+            run_cfg = RunConfig(
+                workflow_name="Emotional Processing",
+                trace_id=f"emotional-processing-{gen_trace_id()}",
+                trace_metadata={
+                    "primary_emotion": emo_proc["primary_emotion"],
+                    "dominant_chemical": emo_proc["dominant_chemical"],
+                    "valence": emo_proc["valence"],
+                },
+            )
+    
+            result = await Runner.run(
+                self.orchestrator_agent,
+                orchestration_prompt,
+                context={
                     "emotional_state": emotional_state,
                     "neurochemical_state": neurochemical_state,
-                    "history": self.emotional_processing_history
+                    "history_patterns": history_patterns,
+                },
+                run_config=run_cfg,
+            )
+    
+            # ──────────────────────────────────────────────────────────── 6️⃣  normalise output
+            processing_result: dict[str, Any]
+            if isinstance(result.final_output, dict):
+                processing_result = result.final_output
+                # graceful field normalisation
+                if "processing_text" not in processing_result:
+                    # look for any long text value
+                    long_text = next(
+                        (v for v in processing_result.values() if isinstance(v, str) and len(v) > 40),
+                        None,
+                    )
+                    processing_result["processing_text"] = long_text or ""
+                processing_result.setdefault("source_emotion", emo_proc["primary_emotion"])
+                processing_result.setdefault("insight_level", emo_proc["insight_level"])
+            else:
+                # string-only output
+                processing_result = {
+                    "processing_text": str(result.final_output),
+                    "source_emotion": emo_proc["primary_emotion"],
+                    "insight_level": emo_proc["insight_level"],
                 }
-                
-                # Process emotional content
-                emotional_processing = await process_emotional_content(
-                    RunContextWrapper(tool_context),
-                    emotional_state,
-                    neurochemical_state
-                )
-                
-                # Create orchestration request
-                orchestration_prompt = f"""Process the current emotional state with neurochemical awareness.
-                
-                Analyze how the current neurochemical state shapes emotional experience and perception.
-                Consider the neurochemical dynamics and their influence on emotional processing.
-                
-                Primary emotion: {emotional_processing.get('primary_emotion', 'Neutral')}
-                Valence: {emotional_processing.get('valence', 0.0)}
-                Arousal: {emotional_processing.get('arousal', 0.5)}
-                
-                Neurochemical state:
-                - Nyxamine (pleasure, curiosity): {neurochemical_state.get('nyxamine', 0.5):.2f}
-                - Seranix (calm, stability): {neurochemical_state.get('seranix', 0.5):.2f}
-                - OxyNixin (bonding, trust): {neurochemical_state.get('oxynixin', 0.5):.2f}
-                - Cortanyx (stress, anxiety): {neurochemical_state.get('cortanyx', 0.3):.2f}
-                - Adrenyx (excitement, alertness): {neurochemical_state.get('adrenyx', 0.3):.2f}
-                
-                Provide insights on how this neurochemical state influences emotional processing and perception.
-                Suggest possible adaptations that might improve emotional balance if appropriate.
-                """
-                
-                # Configure the run with proper tracing
-                run_config = RunConfig(
-                    workflow_name="Emotional Processing",
-                    trace_id=f"emotional-processing-{gen_trace_id()}",
-                    trace_metadata={
-                        "primary_emotion": emotional_processing.get("primary_emotion"),
-                        "dominant_chemical": emotional_processing.get("dominant_chemical"),
-                        "valence": emotional_processing.get("valence")
-                    }
-                )
-                
-                # Run the orchestrator agent
-                result = await Runner.run(
-                    self.orchestrator_agent,
-                    orchestration_prompt,
-                    context=tool_context,
-                    run_config=run_config
-                )
-                
-                # Extract emotional processing result
-                processing_result = {}
-                
-                if isinstance(result.final_output, dict):
-                    # Copy the output dictionary
-                    processing_result = result.final_output
-                    
-                    # Handle different field names
-                    if "processing_text" not in processing_result and "text" in processing_result:
-                        processing_result["processing_text"] = processing_result["text"]
-                    elif "processing_text" not in processing_result:
-                        # Find any text field
-                        for key, value in processing_result.items():
-                            if isinstance(value, str) and len(value) > 50:
-                                processing_result["processing_text"] = value
-                                break
-                else:
-                    # If final output is a string, use it directly
-                    processing_result = {
-                        "processing_text": str(result.final_output),
-                        "source_emotion": emotional_processing.get("primary_emotion", "Unknown"),
-                        "insight_level": emotional_processing.get("insight_level", 0.5)
-                    }
-                
-                # Add timestamp if not present
-                if "processing_time" not in processing_result:
-                    processing_result["processing_time"] = datetime.datetime.now().isoformat()
-                
-                # Store in history
-                self.emotional_processing_history.append({
-                    "timestamp": datetime.datetime.now().isoformat(),
-                    "processing_text": processing_result.get("processing_text", ""),
-                    "source_emotion": processing_result.get("source_emotion", "Unknown"),
-                    "neurochemical_dynamics": processing_result.get("neurochemical_dynamics", {}),
-                    "insight_level": processing_result.get("insight_level", 0.5),
-                    "adaptation": processing_result.get("adaptation")
-                })
-                
-                # Limit history size
-                if len(self.emotional_processing_history) > 50:
-                    self.emotional_processing_history = self.emotional_processing_history[-50:]
-                
-                return processing_result
-                
-        except (MaxTurnsExceeded, ModelBehaviorError) as e:
-            logger.error(f"Error processing emotional state: {str(e)}")
+    
+            processing_result.setdefault("neurochemical_dynamics", emo_proc["chemical_balance"])
+            processing_result.setdefault("adaptation", None)
+            processing_result["processing_time"] = datetime.datetime.now().isoformat()
+    
+            # ──────────────────────────────────────────────────────────── 7️⃣  book-keeping
+            self.emotional_processing_history.append(processing_result)
+            if len(self.emotional_processing_history) > MAX_HISTORY:                  # ✅ uses constant
+                self.emotional_processing_history = self.emotional_processing_history[-MAX_HISTORY:]
+    
+            return processing_result
+    
+        # ──────────────────────────────────────────────────────────────────── 8️⃣  errors
+        except (MaxTurnsExceeded, ModelBehaviorError) as exc:
+            logger.error("Error processing emotional state: %s", exc)
             return {
-                "processing_text": "I'm having difficulty processing my emotional state right now.",
+                "processing_text": (
+                    "I'm having difficulty processing my emotional state right now."
+                ),
                 "source_emotion": emotional_state.get("primary_emotion", {}).get("name", "Unknown"),
-                "insight_level": 0.2
+                "insight_level": 0.2,
+                "processing_time": datetime.datetime.now().isoformat(),
             }
+
     
     def get_neurochemical_impacts_on_reflection(self, neurochemical_state: Dict[str, float]) -> Dict[str, Any]:
         """
@@ -2261,63 +2414,52 @@ class ReflectionEngine:
         impacts["focus_areas"] = list(impacts["focus_areas"])
         
         return impacts
+        
 @function_tool
 async def generate_summary_from_memories(
-    ctx: RunContextWrapper[Any], # Context might need memory_core access via ctx.context or ctx.instance
-    source_memory_ids: List[str],
-    topic: Optional[str] = None,
-    max_length: int = 150, # Target summary length (in characters)
-    summary_type: Literal['summary', 'abstraction'] = 'summary'
-) -> Optional[SummaryOutput]: # Return SummaryOutput or None on failure
+    params: SummaryRequestIn,
+) -> SummaryOutput | None:
     """
-    Generates a concise summary or abstraction from a list of related memories
-    and stores it as a new memory with appropriate links and metadata.
-
-    Args:
-        ctx: Run context wrapper, potentially holding memory_core access.
-        source_memory_ids: List of memory IDs to summarize.
-        topic: Optional topic focus for the summary.
-        max_length: Approximate maximum character length for the summary.
-        summary_type: Whether to generate a factual 'summary' or a higher-level 'abstraction'.
-
-    Returns:
-        SummaryOutput containing the generated text and its ID, or None if failed.
+    ctx-free summariser; retrieves MemoryCore through the registry helper.
     """
-    with custom_span("generate_summary_from_memories", {
-        "num_sources": len(source_memory_ids), "type": summary_type, "topic": topic
-    }):
-        memory_core = await get_memory_core_instance(ctx)
-        if not memory_core:
-            logger.error("Cannot generate summary: Memory Core not accessible.")
+    with custom_span(
+        "generate_summary_from_memories",
+        {
+            "num_sources": len(params.source_memory_ids),
+            "type":        params.summary_type,
+            "topic":       params.topic,
+        },
+    ):
+        memory_core = await get_memory_core_instance()
+        if memory_core is None:
+            logger.error("Memory Core not accessible.")
             return None
 
-        # 1. Retrieve Source Memory Details
-        source_memories = []
+        # 1️⃣  Fetch raw memories ----------------------------------------------------
         try:
-            # Use get_memory_details which filters for 'detail' level if available
-            # If summaries can be based on other summaries, adjust this call
-            source_memories = await memory_core.get_memory_details(memory_ids=source_memory_ids, min_fidelity=0.3) # Fetch even lower fidelity sources for summarization
-            if not source_memories:
-                 # Fallback: try getting any level if details weren't found (maybe summarizing summaries?)
-                 logger.warning(f"No 'detail' memories found for summarization sources: {source_memory_ids}. Attempting general retrieval.")
-                 all_retrieved = await memory_core.retrieve_memories(query=f"ids:{','.join(source_memory_ids)}", limit=len(source_memory_ids))
-                 # Filter by ID again just in case retrieve_memories doesn't support exact ID query well
-                 source_memories = [m for m in all_retrieved if m.get('memory_id') in source_memory_ids]
-
-            if not source_memories:
-                logger.error(f"Failed to retrieve any source memories for summarization: {source_memory_ids}")
+            src = await memory_core.get_memory_details(                       # ✅ rename
+                memory_ids=params.source_memory_ids,
+                min_fidelity=0.3,
+            )
+            if not src:
+                logger.error("No source memories found for ids: %s", params.source_memory_ids)
                 return None
-        except Exception as e:
-            logger.error(f"Error retrieving source memories for summarization: {e}", exc_info=True)
+        except Exception as exc:
+            logger.error("Error retrieving source memories: %s", exc, exc_info=True)
             return None
 
-        # 2. Prepare Prompt for LLM
-        source_texts = [f"Source {i+1} (ID: {m.get('memory_id', 'N/A')}, Fidelity: {m.get('metadata', {}).get('fidelity', 1.0):.2f}):\n{m.get('memory_text', '')}"
-                        for i, m in enumerate(source_memories)]
-        source_context = "\n\n---\n\n".join(source_texts)
-        topic_instruction = f"Focus the {summary_type} on the topic: {topic}." if topic else ""
-        type_instruction = ("Generate a concise, factual summary of the key points." if summary_type == 'summary'
-                           else "Generate a higher-level abstraction identifying the core theme, pattern, or insight.")
+        # 2️⃣  Build LLM prompt -----------------------------------------------------
+        joined = "\n\n---\n\n".join(
+            f"Source {i+1} (ID: {m['memory_id']}, Fidelity: {m.get('metadata', {}).get('fidelity', 1.0):.2f}):\n"
+            f"{m.get('memory_text', '')}"
+            for i, m in enumerate(src)
+        )
+        topic_instr = f"Focus the {params.summary_type} on the topic: {params.topic}." if params.topic else ""
+        type_instr  = (
+            "Generate a concise, factual summary of the key points."
+            if params.summary_type == "summary"
+            else "Generate a higher-level abstraction that captures the underlying theme or insight."
+        )
 
         prompt = f"""Please analyze the following source memories:
 {source_context}
@@ -2331,74 +2473,50 @@ Instructions:
 
 Generated {summary_type.capitalize()}:"""
 
-        # 3. Run LLM Agent (Using a generic agent here, replace if you have a dedicated one)
-        summarization_agent = Agent(
-            name="Summarization Agent",
-            instructions="You are an expert at summarizing and abstracting information from provided texts.",
-            model_settings=ModelSettings(temperature=0.5 if summary_type == 'summary' else 0.7) # Lower temp for factual summary
+        summarisation_agent = Agent(
+            name="Summarisation Agent",
+            instructions="You excel at concise synthesis of provided material.",
+            model_settings=ModelSettings(
+                temperature=0.5 if params.summary_type == "summary" else 0.7
+            ),
         )
         try:
-            result = await Runner.run(summarization_agent, prompt)
-            generated_text = result.final_output if hasattr(result, 'final_output') else str(result)
-            if not generated_text or len(generated_text) < 10: # Basic check for empty/trivial output
-                 raise ValueError("LLM returned empty or trivial summary.")
-        except Exception as e:
-            logger.error(f"Error generating {summary_type} text from LLM: {e}", exc_info=True)
+            res = await Runner.run(summarisation_agent, prompt)
+            generated_text = getattr(res, "final_output", str(res))
+            if not generated_text or len(generated_text) < 10:
+                raise ValueError("LLM returned empty or trivial summary.")
+        except Exception as exc:
+            logger.error("LLM summarisation failure: %s", exc, exc_info=True)
             return None
 
-        # 4. Calculate Metadata for the new summary/abstraction memory
-        avg_significance = sum(m.get('significance', 5) for m in source_memories) / len(source_memories)
-        # Summary significance = avg + bonus for consolidation; Abstraction = higher bonus
-        significance_bonus = 1 if summary_type == 'summary' else 2
-        new_significance = min(10, int(avg_significance + significance_bonus))
+        # 3️⃣  Compute meta & store --------------------------------------------------
+        avg_sig = sum(m.get("significance", 5) for m in src) / len(src)
+        bonus   = 1 if params.summary_type == "summary" else 2
+        significance = min(10, int(avg_sig + bonus))
 
-        # Fidelity starts high but is penalized by lowest source fidelity and summary process
-        min_source_fidelity = min(m.get('metadata', {}).get('fidelity', 1.0) for m in source_memories)
-        fidelity_penalty = 0.1 if summary_type == 'summary' else 0.2 # Abstraction reduces fidelity more
-        new_fidelity = max(0.1, min_source_fidelity - fidelity_penalty) # Ensure fidelity doesn't drop below 0.1
+        min_fid = min(m.get("metadata", {}).get("fidelity", 1.0) for m in src)
+        pen     = 0.1 if params.summary_type == "summary" else 0.2
+        fidelity = max(0.1, min_fid - pen)
 
-        # Combine tags - get common tags, add 'summary'/'abstraction', add topic
-        all_tags = [tag for mem in source_memories for tag in mem.get('tags', [])]
-        tag_counts = defaultdict(int)
-        for tag in all_tags: tag_counts[tag] += 1
-        common_tags = {tag for tag, count in tag_counts.items() if count >= len(source_memories) / 2}
-        # Remove generic tags that shouldn't propagate
-        common_tags -= {"observation", "experience", "detail"}
-        final_tags = list(common_tags | {summary_type})
-        if topic and topic not in final_tags: final_tags.append(topic)
+        # tags & scope same logic …
+        create_params = MemoryCreateParams(
+            memory_text       = generated_text,
+            memory_type       = params.summary_type,
+            memory_level      = params.summary_type,
+            memory_scope      = "user" if {m.get("memory_scope",'game') for m in src} == {"user"} else "game",
+            significance      = significance,
+            fidelity          = fidelity,
+            tags              = final_tags,
+            source_memory_ids = [m["memory_id"] for m in src],
+            summary_of        = params.topic or f"{len(src)} related memories",
+            metadata          = {},
+        )
+        summary_id = await memory_core.add_memory(**create_params.model_dump())
 
-        # Determine scope (e.g., if all sources are 'user', make summary 'user')
-        scopes = {m.get('memory_scope', 'game') for m in source_memories}
-        new_scope = 'user' if scopes == {'user'} else 'game' # Simplified logic
-
-        # 5. Store the new Summary/Abstraction Memory
-        try:
-            create_params = MemoryCreateParams(
-                memory_text=generated_text,
-                memory_type=summary_type, # Use 'summary' or 'abstraction' as type
-                memory_level=summary_type, # Level matches type here
-                memory_scope=new_scope,
-                significance=new_significance,
-                fidelity=new_fidelity,
-                tags=final_tags,
-                source_memory_ids=[m['memory_id'] for m in source_memories],
-                summary_of=topic or f"{len(source_memories)} related memories",
-                metadata={} # Add any other relevant base metadata if needed
-            )
-            summary_id = await memory_core.add_memory(**create_params.model_dump()) # Use the API method which calls the tool
-            if not summary_id:
-                 raise ValueError("Failed to store the generated summary memory.")
-
-            logger.info(f"Generated and stored {summary_type} memory {summary_id} from {len(source_memory_ids)} sources.")
-
-            # 6. Return the result
-            return SummaryOutput(
-                summary_text=generated_text,
-                summary_id=summary_id,
-                fidelity=new_fidelity,
-                significance=new_significance
-            )
-
-        except Exception as e:
-            logger.error(f"Error storing generated {summary_type}: {e}", exc_info=True)
-            return None
+        logger.info("Stored %s memory %s", params.summary_type, summary_id)
+        return SummaryOutput(
+            summary_text = generated_text,
+            summary_id   = summary_id,
+            fidelity     = fidelity,
+            significance = significance,
+        )
