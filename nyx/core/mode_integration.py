@@ -2,7 +2,6 @@
 
 import logging
 import asyncio
-import json
 from typing import Dict, List, Any, Optional, Set, Union, Tuple
 from pydantic import BaseModel, Field
 
@@ -870,6 +869,7 @@ class ModeIntegrationManager:
                 return ContextProcessingResult(error=str(e))
         
         return _process_context
+    
     def _create_update_mode_distribution_tool(self):
         """Create the update mode distribution tool with proper access to self"""
         @function_tool
@@ -902,547 +902,598 @@ class ModeIntegrationManager:
         
         return _update_mode_distribution
 
-    @function_tool
-    async def _add_mode_goals(self, ctx: RunContextWrapper, mode_distribution: Dict[str, float]) -> GoalAdditionResult:
-        """
-        Add goals based on mode distribution
-        
-        Args:
-            mode_distribution: Current mode distribution
+    def _create_add_mode_goals_tool(self):
+        """Create the add mode goals tool with proper access to self"""
+        @function_tool
+        async def _add_mode_goals(ctx: RunContextWrapper, mode_distribution: Dict[str, float]) -> GoalAdditionResult:
+            """
+            Add goals based on mode distribution
             
-        Returns:
-            Results of adding goals
-        """
-        if not self.goal_selector:
-            return GoalAdditionResult(error="Goal selector not initialized")
-            
-        try:
-            blended_goals = await self.goal_selector.select_goals(mode_distribution)
-            
-            if self.goal_manager:
-                # Add goals to goal manager if available
-                added_goals = []
-                for goal in blended_goals:
-                    goal_id = await self.goal_manager.add_goal(
-                        description=goal.get("description", ""),
-                        priority=goal.get("priority", 0.5),
-                        source="mode_integration",
-                        plan=goal.get("plan", [])
-                    )
-                    if goal_id:
-                        added_goals.append(goal_id)
-                        
-                return GoalAdditionResult(
-                    goals_added=len(added_goals) > 0,
-                    added_goal_ids=added_goals,
-                    blended_goals=blended_goals
-                )
-            else:
-                return GoalAdditionResult(
-                    goals_added=False,
-                    blended_goals=blended_goals,
-                    error="Goal manager not available to add goals"
-                )
+            Args:
+                mode_distribution: Current mode distribution
                 
-        except Exception as e:
-            logger.error(f"Error adding mode goals: {e}")
-            return GoalAdditionResult(error=str(e))
-
-    @function_tool
-    async def _get_response_guidance(self, ctx: RunContextWrapper, mode_distribution: Dict[str, float]) -> ResponseGuidanceResult:
-        """
-        Get guidance for response generation based on mode distribution
-        
-        Args:
-            mode_distribution: Current mode distribution
-            
-        Returns:
-            Guidance for response generation
-        """
-        if not self.mode_manager:
-            return ResponseGuidanceResult(error="Mode manager not initialized")
-            
-        try:
-            # Get guidance from mode manager
-            raw_guidance = await self.mode_manager.get_current_mode_guidance()
-            
-            # Extract key elements for response generation
-            return ResponseGuidanceResult(
-                tone=raw_guidance.get("tone", "balanced"),
-                formality_level=raw_guidance.get("formality_level", 0.5),
-                verbosity=raw_guidance.get("verbosity", 0.5),
-                key_phrases=raw_guidance.get("key_phrases", []),
-                avoid_phrases=raw_guidance.get("avoid_phrases", []),
-                content_focus=raw_guidance.get("content_focus", []),
-                mode_description=raw_guidance.get("description", "Blended mode"),
-                primary_mode=raw_guidance.get("primary_mode", "default"),
-                active_modes=[m for m, w in mode_distribution.items() if w >= 0.2]
-            )
-            
-        except Exception as e:
-            logger.error(f"Error getting response guidance: {e}")
-            return ResponseGuidanceResult(error=str(e))
-
-    @function_tool
-    async def _analyze_feedback(self, ctx: RunContextWrapper, 
-                             feedback: str, 
-                             interaction_success: bool) -> FeedbackAnalysisResult:
-        """
-        Analyze user feedback about interaction
-        
-        Args:
-            feedback: User feedback text
-            interaction_success: Whether interaction was successful
-            
-        Returns:
-            Analysis of feedback
-        """
-        # Simple sentiment and keyword analysis
-        positive_indicators = ["good", "great", "like", "helpful", "excellent", "perfect"]
-        negative_indicators = ["bad", "wrong", "not helpful", "didn't like", "confused", "frustrated"]
-        
-        sentiment = 0.0  # Neutral
-        positive_matches = 0
-        negative_matches = 0
-        
-        if feedback:
-            feedback_lower = feedback.lower()
-            positive_matches = sum(1 for word in positive_indicators if word in feedback_lower)
-            negative_matches = sum(1 for word in negative_indicators if word in feedback_lower)
-            
-            if positive_matches + negative_matches > 0:
-                sentiment = (positive_matches - negative_matches) / (positive_matches + negative_matches)
-        
-        # Calculate reward value
-        base_reward = 0.3 if interaction_success else -0.2
-        sentiment_modifier = sentiment * 0.2  # Scale sentiment to +/- 0.2
-        reward_value = base_reward + sentiment_modifier
-        
-        return FeedbackAnalysisResult(
-            sentiment=sentiment,
-            reward_value=reward_value,
-            positive_indicators=positive_matches,
-            negative_indicators=negative_matches,
-            feedback_summary="Positive feedback" if sentiment > 0.3 else 
-                            ("Negative feedback" if sentiment < -0.3 else "Neutral feedback")
-        )
-
-    @function_tool
-    async def _suggest_mode_adjustments(self, ctx: RunContextWrapper,
-                                    feedback_analysis: FeedbackAnalysisResult,
-                                    mode_distribution: Dict[str, float]) -> ModeAdjustmentResult:
-        """
-        Suggest adjustments to mode distribution based on feedback
-        
-        Args:
-            feedback_analysis: Analysis of feedback
-            mode_distribution: Current mode distribution
-            
-        Returns:
-            Suggested mode adjustments
-        """
-        # Extract sentiment
-        sentiment = feedback_analysis.sentiment
-        
-        # Initialize adjustments
-        adjustments = {}
-        
-        # Check for active modes (weight >= 0.2)
-        active_modes = {mode: weight for mode, weight in mode_distribution.items() if weight >= 0.2}
-        
-        # Primary mode
-        primary_mode = max(mode_distribution.items(), key=lambda x: x[1])[0] if mode_distribution else None
-        
-        # Base adjustment scales based on sentiment
-        if sentiment > 0.5:  # Very positive
-            # Reinforce current distribution - slight increase to primary mode
-            if primary_mode:
-                adjustments[primary_mode] = 0.05
+            Returns:
+                Results of adding goals
+            """
+            if not self.goal_selector:
+                return GoalAdditionResult(error="Goal selector not initialized")
                 
-        elif sentiment > 0.1:  # Somewhat positive
-            # Minimal adjustment - slight increase to primary mode
-            if primary_mode:
-                adjustments[primary_mode] = 0.03
-                
-        elif sentiment < -0.5:  # Very negative
-            # Significant adjustment away from primary mode
-            if primary_mode:
-                adjustments[primary_mode] = -0.1
-                
-                # Find a secondary mode to increase
-                secondary_modes = sorted(
-                    [(m, w) for m, w in active_modes.items() if m != primary_mode],
-                    key=lambda x: x[1],
-                    reverse=True
-                )
-                
-                if secondary_modes:
-                    secondary_mode = secondary_modes[0][0]
-                    adjustments[secondary_mode] = 0.1
-                else:
-                    # If no secondary mode, try a default mode
-                    adjustments["friendly"] = 0.1
-                    
-        elif sentiment < -0.1:  # Somewhat negative
-            # Moderate adjustment away from primary mode
-            if primary_mode:
-                adjustments[primary_mode] = -0.05
-                
-                # Small increase to second highest mode
-                secondary_modes = sorted(
-                    [(m, w) for m, w in active_modes.items() if m != primary_mode],
-                    key=lambda x: x[1],
-                    reverse=True
-                )
-                
-                if secondary_modes:
-                    secondary_mode = secondary_modes[0][0]
-                    adjustments[secondary_mode] = 0.05
-        
-        return ModeAdjustmentResult(adjustments=adjustments)
-
-    @function_tool
-    async def _calculate_feedback_reward(self, ctx: RunContextWrapper,
-                                    feedback_analysis: FeedbackAnalysisResult,
-                                    interaction_success: bool) -> float:
-        """
-        Calculate reward value for feedback
-        
-        Args:
-            feedback_analysis: Analysis of feedback
-            interaction_success: Whether interaction was successful
-            
-        Returns:
-            Reward value
-        """
-        # Extract sentiment
-        sentiment = feedback_analysis.sentiment
-        
-        # Base reward based on success
-        base_reward = 0.3 if interaction_success else -0.2
-        
-        # Adjust based on sentiment
-        sentiment_modifier = sentiment * 0.3  # Scale sentiment impact
-        
-        # Calculate final reward
-        reward = base_reward + sentiment_modifier
-        
-        # Ensure in valid range (-1.0 to 1.0)
-        reward = max(-1.0, min(1.0, reward))
-        
-        return reward
-
-    @function_tool
-    async def _get_mode_distribution(self, ctx: RunContextWrapper) -> ModeDistributionInfo:
-        """
-        Get the current mode distribution
-        
-        Returns:
-            Current mode distribution information
-        """
-        if not self.mode_manager or not hasattr(self.mode_manager, 'context'):
-            return ModeDistributionInfo()
-            
-        try:
-            # Get mode distribution
-            mode_distribution = self.mode_manager.context.mode_distribution.dict()
-            
-            # Get primary mode
-            primary_mode, primary_weight = self.mode_manager.context.mode_distribution.primary_mode
-            
-            # Get active modes
-            active_modes = self.mode_manager.context.mode_distribution.active_modes
-            
-            return ModeDistributionInfo(
-                mode_distribution=mode_distribution,
-                primary_mode=primary_mode,
-                primary_weight=primary_weight,
-                active_modes=active_modes
-            )
-        except Exception as e:
-            logger.error(f"Error getting mode distribution: {e}")
-            return ModeDistributionInfo()
-
-    @function_tool
-    async def _get_mode_parameters(self, ctx: RunContextWrapper, mode: str) -> ModeParameters:
-        """
-        Get parameters for a specific mode
-        
-        Args:
-            mode: Mode to get parameters for
-            
-        Returns:
-            Mode parameters
-        """
-        if not self.mode_manager:
-            return ModeParameters()
-            
-        try:
-            params = self.mode_manager.get_mode_parameters(mode)
-            return ModeParameters(parameters=params)
-        except Exception as e:
-            logger.error(f"Error getting mode parameters: {e}")
-            return ModeParameters()
-
-    @function_tool
-    async def _get_conversation_style(self, ctx: RunContextWrapper, mode: str) -> ConversationStyle:
-        """
-        Get conversation style for a specific mode
-        
-        Args:
-            mode: Mode to get style for
-            
-        Returns:
-            Conversation style
-        """
-        if not self.mode_manager:
-            return ConversationStyle()
-            
-        try:
-            style = self.mode_manager.get_conversation_style(mode)
-            return ConversationStyle(style=style)
-        except Exception as e:
-            logger.error(f"Error getting conversation style: {e}")
-            return ConversationStyle()
-
-    @function_tool
-    async def _blend_guidance_elements(self, ctx: RunContextWrapper,
-                                     mode_distribution: Dict[str, float]) -> BlendedGuidanceElements:
-        """
-        Blend guidance elements from multiple modes
-        
-        Args:
-            mode_distribution: Mode distribution
-            
-        Returns:
-            Blended guidance elements
-        """
-        # Initialize blended elements
-        blended_elements = {
-            "tone": [],
-            "key_phrases": [],
-            "avoid_phrases": [],
-            "content_focus": []
-        }
-        
-        # Get significant modes (weight >= 0.2)
-        significant_modes = {mode: weight for mode, weight in mode_distribution.items() if weight >= 0.2}
-        
-        # Normalize significant mode weights
-        total_weight = sum(significant_modes.values())
-        normalized_weights = {mode: weight/total_weight for mode, weight in significant_modes.items()} if total_weight > 0 else {}
-        
-        # For each significant mode
-        for mode, norm_weight in normalized_weights.items():
             try:
-                # Get conversation style
-                style_result = await self._get_conversation_style(ctx, mode)
-                style = style_result.style
+                blended_goals = await self.goal_selector.select_goals(mode_distribution)
                 
-                # Extract tone
-                if "tone" in style:
-                    tone_elements = [t.strip() for t in style["tone"].split(",")] if isinstance(style["tone"], str) else []
-                    
-                    # Number of elements to include based on weight
-                    num_elements = max(1, round(len(tone_elements) * norm_weight))
-                    
-                    # Add top elements
-                    blended_elements["tone"].extend(tone_elements[:num_elements])
-                
-                # Extract topics to emphasize
-                if "topics_to_emphasize" in style:
-                    topics = style["topics_to_emphasize"]
-                    topic_elements = [t.strip() for t in topics.split(",")] if isinstance(topics, str) else []
-                    
-                    # Number of elements to include
-                    num_elements = max(1, round(len(topic_elements) * norm_weight))
-                    
-                    # Add top elements
-                    blended_elements["content_focus"].extend(topic_elements[:num_elements])
-                
-                # Extract topics to avoid
-                if "topics_to_avoid" in style:
-                    avoid_topics = style["topics_to_avoid"]
-                    avoid_elements = [t.strip() for t in avoid_topics.split(",")] if isinstance(avoid_topics, str) else []
-                    
-                    # Number of elements to include
-                    num_elements = max(1, round(len(avoid_elements) * norm_weight))
-                    
-                    # Add top elements
-                    blended_elements["avoid_phrases"].extend(avoid_elements[:num_elements])
-                
-                # Add key phrases
-                vocalization = self.mode_manager.get_vocalization_patterns(mode)
-                if vocalization and "key_phrases" in vocalization:
-                    key_phrases = vocalization["key_phrases"]
-                    
-                    # Number of phrases to include
-                    num_phrases = max(1, round(len(key_phrases) * norm_weight))
-                    
-                    # Add top phrases
-                    blended_elements["key_phrases"].extend(key_phrases[:num_phrases])
+                if self.goal_manager:
+                    # Add goals to goal manager if available
+                    added_goals = []
+                    for goal in blended_goals:
+                        goal_id = await self.goal_manager.add_goal(
+                            description=goal.get("description", ""),
+                            priority=goal.get("priority", 0.5),
+                            source="mode_integration",
+                            plan=goal.get("plan", [])
+                        )
+                        if goal_id:
+                            added_goals.append(goal_id)
+                            
+                    return GoalAdditionResult(
+                        goals_added=len(added_goals) > 0,
+                        added_goal_ids=added_goals,
+                        blended_goals=blended_goals
+                    )
+                else:
+                    return GoalAdditionResult(
+                        goals_added=False,
+                        blended_goals=blended_goals,
+                        error="Goal manager not available to add goals"
+                    )
                     
             except Exception as e:
-                logger.warning(f"Error blending guidance elements for mode {mode}: {e}")
-                continue
+                logger.error(f"Error adding mode goals: {e}")
+                return GoalAdditionResult(error=str(e))
         
-        # Remove duplicates while preserving order
-        for element_type in blended_elements:
-            seen = set()
-            blended_elements[element_type] = [x for x in blended_elements[element_type] if x and not (x in seen or seen.add(x))]
-        
-        # Create blended tone string
-        tone_string = ", ".join(blended_elements["tone"]) if blended_elements["tone"] else "balanced"
-        
-        # Calculate weighted parameters
-        params = {}
-        for mode, weight in normalized_weights.items():
+        return _add_mode_goals
+
+    def _create_get_response_guidance_tool(self):
+        """Create the get response guidance tool with proper access to self"""
+        @function_tool
+        async def _get_response_guidance(ctx: RunContextWrapper, mode_distribution: Dict[str, float]) -> ResponseGuidanceResult:
+            """
+            Get guidance for response generation based on mode distribution
+            
+            Args:
+                mode_distribution: Current mode distribution
+                
+            Returns:
+                Guidance for response generation
+            """
+            if not self.mode_manager:
+                return ResponseGuidanceResult(error="Mode manager not initialized")
+                
             try:
-                mode_params_result = await self._get_mode_parameters(ctx, mode)
-                mode_params = mode_params_result.parameters
+                # Get guidance from mode manager
+                raw_guidance = await self.mode_manager.get_current_mode_guidance()
                 
-                for param_name, param_value in mode_params.items():
-                    if isinstance(param_value, (int, float)):
-                        if param_name not in params:
-                            params[param_name] = 0.0
-                            
-                        # Add weighted contribution
-                        params[param_name] += param_value * weight
-            except:
-                continue
+                # Extract key elements for response generation
+                return ResponseGuidanceResult(
+                    tone=raw_guidance.get("tone", "balanced"),
+                    formality_level=raw_guidance.get("formality_level", 0.5),
+                    verbosity=raw_guidance.get("verbosity", 0.5),
+                    key_phrases=raw_guidance.get("key_phrases", []),
+                    avoid_phrases=raw_guidance.get("avoid_phrases", []),
+                    content_focus=raw_guidance.get("content_focus", []),
+                    mode_description=raw_guidance.get("description", "Blended mode"),
+                    primary_mode=raw_guidance.get("primary_mode", "default"),
+                    active_modes=[m for m, w in mode_distribution.items() if w >= 0.2]
+                )
+                
+            except Exception as e:
+                logger.error(f"Error getting response guidance: {e}")
+                return ResponseGuidanceResult(error=str(e))
         
-        return BlendedGuidanceElements(
-            tone=tone_string,
-            formality_level=params.get("formality", 0.5),
-            verbosity=params.get("depth", 0.5),
-            key_phrases=blended_elements["key_phrases"],
-            avoid_phrases=blended_elements["avoid_phrases"],
-            content_focus=blended_elements["content_focus"],
-            weighted_parameters=params,
-            active_modes={mode: weight for mode, weight in normalized_weights.items()}
-        )
+        return _get_response_guidance
 
-    @function_tool
-    async def _blend_mode_outputs(self, ctx: RunContextWrapper,
-                                context_result: ContextProcessingResult,
-                                mode_result: ModeUpdateResult,
-                                goals_result: GoalAdditionResult) -> BlendedModeOutput:
-        """
-        Blend outputs from multiple mode systems
-        
-        Args:
-            context_result: Result from context system
-            mode_result: Result from mode manager
-            goals_result: Result from goal selector
+    def _create_analyze_feedback_tool(self):
+        """Create the analyze feedback tool with proper access to self"""
+        @function_tool
+        async def _analyze_feedback(ctx: RunContextWrapper, 
+                                    feedback: str, 
+                                    interaction_success: bool) -> FeedbackAnalysisResult:
+            """
+            Analyze user feedback about interaction
             
-        Returns:
-            Blended output
-        """
-        # Get active modes
-        active_modes = [(mode, weight) for mode, weight in mode_result.mode_distribution.items() if weight >= 0.2]
+            Args:
+                feedback: User feedback text
+                interaction_success: Whether interaction was successful
+                
+            Returns:
+                Analysis of feedback
+            """
+            # Simple sentiment and keyword analysis
+            positive_indicators = ["good", "great", "like", "helpful", "excellent", "perfect"]
+            negative_indicators = ["bad", "wrong", "not helpful", "didn't like", "confused", "frustrated"]
+            
+            sentiment = 0.0  # Neutral
+            positive_matches = 0
+            negative_matches = 0
+            
+            if feedback:
+                feedback_lower = feedback.lower()
+                positive_matches = sum(1 for word in positive_indicators if word in feedback_lower)
+                negative_matches = sum(1 for word in negative_indicators if word in feedback_lower)
+                
+                if positive_matches + negative_matches > 0:
+                    sentiment = (positive_matches - negative_matches) / (positive_matches + negative_matches)
+            
+            # Calculate reward value
+            base_reward = 0.3 if interaction_success else -0.2
+            sentiment_modifier = sentiment * 0.2  # Scale sentiment to +/- 0.2
+            reward_value = base_reward + sentiment_modifier
+            
+            return FeedbackAnalysisResult(
+                sentiment=sentiment,
+                reward_value=reward_value,
+                positive_indicators=positive_matches,
+                negative_indicators=negative_matches,
+                feedback_summary="Positive feedback" if sentiment > 0.3 else 
+                                ("Negative feedback" if sentiment < -0.3 else "Neutral feedback")
+            )
         
-        return BlendedModeOutput(
-            context_processed=True,
-            mode_updated=True,
-            goals_added=goals_result.goals_added,
-            mode_distribution=mode_result.mode_distribution,
-            primary_mode=mode_result.primary_mode,
-            active_modes=active_modes,
-            context_result=context_result,
-            mode_result=mode_result,
-            goals_result=goals_result
-        )
+        return _analyze_feedback
 
-    @function_tool
-    async def _check_blend_coherence(self, ctx: RunContextWrapper,
-                                   context_distribution: Dict[str, float],
-                                   mode_distribution: Dict[str, float]) -> CoherenceCheckResult:
-        """
-        Check coherence between context and mode distributions
-        
-        Args:
-            context_distribution: Context distribution
-            mode_distribution: Mode distribution
+    def _create_suggest_mode_adjustments_tool(self):
+        """Create the suggest mode adjustments tool with proper access to self"""
+        @function_tool
+        async def _suggest_mode_adjustments(ctx: RunContextWrapper,
+                                            feedback_analysis: FeedbackAnalysisResult,
+                                            mode_distribution: Dict[str, float]) -> ModeAdjustmentResult:
+            """
+            Suggest adjustments to mode distribution based on feedback
             
-        Returns:
-            Coherence analysis
-        """
-        # Check alignment between context and mode distributions
-        # There should be a direct mapping between them
-        
-        correlation = 0.0
-        misalignments = []
-        
-        # Map context types to corresponding mode types
-        context_to_mode = {
-            "dominant": "dominant",
-            "casual": "friendly",
-            "intellectual": "intellectual",
-            "empathic": "compassionate",
-            "playful": "playful",
-            "creative": "creative",
-            "professional": "professional"
-        }
-        
-        # Check correlation for each context-mode pair
-        total_pairs = 0
-        for context, context_weight in context_distribution.items():
-            if context in context_to_mode:
-                mode = context_to_mode[context]
-                mode_weight = mode_distribution.get(mode, 0.0)
+            Args:
+                feedback_analysis: Analysis of feedback
+                mode_distribution: Current mode distribution
                 
-                # Calculate weight difference
-                diff = abs(context_weight - mode_weight)
-                
-                # If significant difference, record misalignment
-                if diff > 0.2 and (context_weight >= 0.2 or mode_weight >= 0.2):
-                    misalignments.append({
-                        "context": context,
-                        "context_weight": context_weight,
-                        "mode": mode,
-                        "mode_weight": mode_weight,
-                        "difference": diff
-                    })
-                
-                # Add to correlation
-                correlation += (1.0 - diff)
-                total_pairs += 1
-        
-        # Calculate average correlation
-        if total_pairs > 0:
-            correlation /= total_pairs
-        else:
-            correlation = 1.0  # Default if no pairs to check
+            Returns:
+                Suggested mode adjustments
+            """
+            # Extract sentiment
+            sentiment = feedback_analysis.sentiment
             
-        return CoherenceCheckResult(
-            coherence_score=correlation,
-            is_coherent=correlation >= 0.7,
-            misalignments=misalignments
-        )
+            # Initialize adjustments
+            adjustments = {}
+            
+            # Check for active modes (weight >= 0.2)
+            active_modes = {mode: weight for mode, weight in mode_distribution.items() if weight >= 0.2}
+            
+            # Primary mode
+            primary_mode = max(mode_distribution.items(), key=lambda x: x[1])[0] if mode_distribution else None
+            
+            # Base adjustment scales based on sentiment
+            if sentiment > 0.5:  # Very positive
+                # Reinforce current distribution - slight increase to primary mode
+                if primary_mode:
+                    adjustments[primary_mode] = 0.05
+                    
+            elif sentiment > 0.1:  # Somewhat positive
+                # Minimal adjustment - slight increase to primary mode
+                if primary_mode:
+                    adjustments[primary_mode] = 0.03
+                    
+            elif sentiment < -0.5:  # Very negative
+                # Significant adjustment away from primary mode
+                if primary_mode:
+                    adjustments[primary_mode] = -0.1
+                    
+                    # Find a secondary mode to increase
+                    secondary_modes = sorted(
+                        [(m, w) for m, w in active_modes.items() if m != primary_mode],
+                        key=lambda x: x[1],
+                        reverse=True
+                    )
+                    
+                    if secondary_modes:
+                        secondary_mode = secondary_modes[0][0]
+                        adjustments[secondary_mode] = 0.1
+                    else:
+                        # If no secondary mode, try a default mode
+                        adjustments["friendly"] = 0.1
+                        
+            elif sentiment < -0.1:  # Somewhat negative
+                # Moderate adjustment away from primary mode
+                if primary_mode:
+                    adjustments[primary_mode] = -0.05
+                    
+                    # Small increase to second highest mode
+                    secondary_modes = sorted(
+                        [(m, w) for m, w in active_modes.items() if m != primary_mode],
+                        key=lambda x: x[1],
+                        reverse=True
+                    )
+                    
+                    if secondary_modes:
+                        secondary_mode = secondary_modes[0][0]
+                        adjustments[secondary_mode] = 0.05
+            
+            return ModeAdjustmentResult(adjustments=adjustments)
+        
+        return _suggest_mode_adjustments
 
-    @function_tool
-    async def _extract_blended_guidance(self, ctx: RunContextWrapper, mode_distribution: Dict[str, float]) -> ModeGuidance:
-        """
-        Extract response guidance from blended mode distribution
-        
-        Args:
-            mode_distribution: Mode distribution
+    def _create_calculate_feedback_reward_tool(self):
+        """Create the calculate feedback reward tool with proper access to self"""
+        @function_tool
+        async def _calculate_feedback_reward(ctx: RunContextWrapper,
+                                            feedback_analysis: FeedbackAnalysisResult,
+                                            interaction_success: bool) -> float:
+            """
+            Calculate reward value for feedback
             
-        Returns:
-            Blended guidance
-        """
-        # Get elements based on mode distribution
-        elements = await self._blend_guidance_elements(ctx, mode_distribution)
+            Args:
+                feedback_analysis: Analysis of feedback
+                interaction_success: Whether interaction was successful
+                
+            Returns:
+                Reward value
+            """
+            # Extract sentiment
+            sentiment = feedback_analysis.sentiment
+            
+            # Base reward based on success
+            base_reward = 0.3 if interaction_success else -0.2
+            
+            # Adjust based on sentiment
+            sentiment_modifier = sentiment * 0.3  # Scale sentiment impact
+            
+            # Calculate final reward
+            reward = base_reward + sentiment_modifier
+            
+            # Ensure in valid range (-1.0 to 1.0)
+            reward = max(-1.0, min(1.0, reward))
+            
+            return reward
         
-        # Create guidance object
-        return ModeGuidance(
-            tone=elements.tone,
-            formality_level=elements.formality_level,
-            verbosity=elements.verbosity,
-            key_phrases=elements.key_phrases,
-            avoid_phrases=elements.avoid_phrases,
-            content_focus=elements.content_focus,
-            mode_description=f"Blended mode: {', '.join(elements.active_modes.keys())}",
-            weighted_parameters=elements.weighted_parameters,
-            active_modes=elements.active_modes
-        )
+        return _calculate_feedback_reward
+
+    def _create_get_mode_distribution_tool(self):
+        """Create the get mode distribution tool with proper access to self"""
+        @function_tool
+        async def _get_mode_distribution(ctx: RunContextWrapper) -> ModeDistributionInfo:
+            """
+            Get the current mode distribution
+            
+            Returns:
+                Current mode distribution information
+            """
+            if not self.mode_manager or not hasattr(self.mode_manager, 'context'):
+                return ModeDistributionInfo()
+                
+            try:
+                # Get mode distribution
+                mode_distribution = self.mode_manager.context.mode_distribution.dict()
+                
+                # Get primary mode
+                primary_mode, primary_weight = self.mode_manager.context.mode_distribution.primary_mode
+                
+                # Get active modes
+                active_modes = self.mode_manager.context.mode_distribution.active_modes
+                
+                return ModeDistributionInfo(
+                    mode_distribution=mode_distribution,
+                    primary_mode=primary_mode,
+                    primary_weight=primary_weight,
+                    active_modes=active_modes
+                )
+            except Exception as e:
+                logger.error(f"Error getting mode distribution: {e}")
+                return ModeDistributionInfo()
+        
+        return _get_mode_distribution
+
+    def _create_get_mode_parameters_tool(self):
+        """Create the get mode parameters tool with proper access to self"""
+        @function_tool
+        async def _get_mode_parameters(ctx: RunContextWrapper, mode: str) -> ModeParameters:
+            """
+            Get parameters for a specific mode
+            
+            Args:
+                mode: Mode to get parameters for
+                
+            Returns:
+                Mode parameters
+            """
+            if not self.mode_manager:
+                return ModeParameters()
+                
+            try:
+                params = self.mode_manager.get_mode_parameters(mode)
+                return ModeParameters(parameters=params)
+            except Exception as e:
+                logger.error(f"Error getting mode parameters: {e}")
+                return ModeParameters()
+        
+        return _get_mode_parameters
+
+    def _create_get_conversation_style_tool(self):
+        """Create the get conversation style tool with proper access to self"""
+        @function_tool
+        async def _get_conversation_style(ctx: RunContextWrapper, mode: str) -> ConversationStyle:
+            """
+            Get conversation style for a specific mode
+            
+            Args:
+                mode: Mode to get style for
+                
+            Returns:
+                Conversation style
+            """
+            if not self.mode_manager:
+                return ConversationStyle()
+                
+            try:
+                style = self.mode_manager.get_conversation_style(mode)
+                return ConversationStyle(style=style)
+            except Exception as e:
+                logger.error(f"Error getting conversation style: {e}")
+                return ConversationStyle()
+        
+        return _get_conversation_style
+
+    def _create_blend_guidance_elements_tool(self):
+        """Create the blend guidance elements tool with proper access to self"""
+        @function_tool
+        async def _blend_guidance_elements(ctx: RunContextWrapper,
+                                          mode_distribution: Dict[str, float]) -> BlendedGuidanceElements:
+            """
+            Blend guidance elements from multiple modes
+            
+            Args:
+                mode_distribution: Mode distribution
+                
+            Returns:
+                Blended guidance elements
+            """
+            # Initialize blended elements
+            blended_elements = {
+                "tone": [],
+                "key_phrases": [],
+                "avoid_phrases": [],
+                "content_focus": []
+            }
+            
+            # Get significant modes (weight >= 0.2)
+            significant_modes = {mode: weight for mode, weight in mode_distribution.items() if weight >= 0.2}
+            
+            # Normalize significant mode weights
+            total_weight = sum(significant_modes.values())
+            normalized_weights = {mode: weight/total_weight for mode, weight in significant_modes.items()} if total_weight > 0 else {}
+            
+            # For each significant mode
+            for mode, norm_weight in normalized_weights.items():
+                try:
+                    # Get conversation style
+                    style_tool = self._create_get_conversation_style_tool()
+                    style_result = await style_tool(ctx, mode)
+                    style = style_result.style
+                    
+                    # Extract tone
+                    if "tone" in style:
+                        tone_elements = [t.strip() for t in style["tone"].split(",")] if isinstance(style["tone"], str) else []
+                        
+                        # Number of elements to include based on weight
+                        num_elements = max(1, round(len(tone_elements) * norm_weight))
+                        
+                        # Add top elements
+                        blended_elements["tone"].extend(tone_elements[:num_elements])
+                    
+                    # Extract topics to emphasize
+                    if "topics_to_emphasize" in style:
+                        topics = style["topics_to_emphasize"]
+                        topic_elements = [t.strip() for t in topics.split(",")] if isinstance(topics, str) else []
+                        
+                        # Number of elements to include
+                        num_elements = max(1, round(len(topic_elements) * norm_weight))
+                        
+                        # Add top elements
+                        blended_elements["content_focus"].extend(topic_elements[:num_elements])
+                    
+                    # Extract topics to avoid
+                    if "topics_to_avoid" in style:
+                        avoid_topics = style["topics_to_avoid"]
+                        avoid_elements = [t.strip() for t in avoid_topics.split(",")] if isinstance(avoid_topics, str) else []
+                        
+                        # Number of elements to include
+                        num_elements = max(1, round(len(avoid_elements) * norm_weight))
+                        
+                        # Add top elements
+                        blended_elements["avoid_phrases"].extend(avoid_elements[:num_elements])
+                    
+                    # Add key phrases
+                    vocalization = self.mode_manager.get_vocalization_patterns(mode)
+                    if vocalization and "key_phrases" in vocalization:
+                        key_phrases = vocalization["key_phrases"]
+                        
+                        # Number of phrases to include
+                        num_phrases = max(1, round(len(key_phrases) * norm_weight))
+                        
+                        # Add top phrases
+                        blended_elements["key_phrases"].extend(key_phrases[:num_phrases])
+                        
+                except Exception as e:
+                    logger.warning(f"Error blending guidance elements for mode {mode}: {e}")
+                    continue
+            
+            # Remove duplicates while preserving order
+            for element_type in blended_elements:
+                seen = set()
+                blended_elements[element_type] = [x for x in blended_elements[element_type] if x and not (x in seen or seen.add(x))]
+            
+            # Create blended tone string
+            tone_string = ", ".join(blended_elements["tone"]) if blended_elements["tone"] else "balanced"
+            
+            # Calculate weighted parameters
+            params = {}
+            for mode, weight in normalized_weights.items():
+                try:
+                    mode_params_tool = self._create_get_mode_parameters_tool()
+                    mode_params_result = await mode_params_tool(ctx, mode)
+                    mode_params = mode_params_result.parameters
+                    
+                    for param_name, param_value in mode_params.items():
+                        if isinstance(param_value, (int, float)):
+                            if param_name not in params:
+                                params[param_name] = 0.0
+                                
+                            # Add weighted contribution
+                            params[param_name] += param_value * weight
+                except:
+                    continue
+            
+            return BlendedGuidanceElements(
+                tone=tone_string,
+                formality_level=params.get("formality", 0.5),
+                verbosity=params.get("depth", 0.5),
+                key_phrases=blended_elements["key_phrases"],
+                avoid_phrases=blended_elements["avoid_phrases"],
+                content_focus=blended_elements["content_focus"],
+                weighted_parameters=params,
+                active_modes={mode: weight for mode, weight in normalized_weights.items()}
+            )
+        
+        return _blend_guidance_elements
+
+    def _create_blend_mode_outputs_tool(self):
+        """Create the blend mode outputs tool with proper access to self"""
+        @function_tool
+        async def _blend_mode_outputs(ctx: RunContextWrapper,
+                                      context_result: ContextProcessingResult,
+                                      mode_result: ModeUpdateResult,
+                                      goals_result: GoalAdditionResult) -> BlendedModeOutput:
+            """
+            Blend outputs from multiple mode systems
+            
+            Args:
+                context_result: Result from context system
+                mode_result: Result from mode manager
+                goals_result: Result from goal selector
+                
+            Returns:
+                Blended output
+            """
+            # Get active modes
+            active_modes = [(mode, weight) for mode, weight in mode_result.mode_distribution.items() if weight >= 0.2]
+            
+            return BlendedModeOutput(
+                context_processed=True,
+                mode_updated=True,
+                goals_added=goals_result.goals_added,
+                mode_distribution=mode_result.mode_distribution,
+                primary_mode=mode_result.primary_mode,
+                active_modes=active_modes,
+                context_result=context_result,
+                mode_result=mode_result,
+                goals_result=goals_result
+            )
+        
+        return _blend_mode_outputs
+
+    def _create_check_blend_coherence_tool(self):
+        """Create the check blend coherence tool with proper access to self"""
+        @function_tool
+        async def _check_blend_coherence(ctx: RunContextWrapper,
+                                         context_distribution: Dict[str, float],
+                                         mode_distribution: Dict[str, float]) -> CoherenceCheckResult:
+            """
+            Check coherence between context and mode distributions
+            
+            Args:
+                context_distribution: Context distribution
+                mode_distribution: Mode distribution
+                
+            Returns:
+                Coherence analysis
+            """
+            # Check alignment between context and mode distributions
+            # There should be a direct mapping between them
+            
+            correlation = 0.0
+            misalignments = []
+            
+            # Map context types to corresponding mode types
+            context_to_mode = {
+                "dominant": "dominant",
+                "casual": "friendly",
+                "intellectual": "intellectual",
+                "empathic": "compassionate",
+                "playful": "playful",
+                "creative": "creative",
+                "professional": "professional"
+            }
+            
+            # Check correlation for each context-mode pair
+            total_pairs = 0
+            for context, context_weight in context_distribution.items():
+                if context in context_to_mode:
+                    mode = context_to_mode[context]
+                    mode_weight = mode_distribution.get(mode, 0.0)
+                    
+                    # Calculate weight difference
+                    diff = abs(context_weight - mode_weight)
+                    
+                    # If significant difference, record misalignment
+                    if diff > 0.2 and (context_weight >= 0.2 or mode_weight >= 0.2):
+                        misalignments.append({
+                            "context": context,
+                            "context_weight": context_weight,
+                            "mode": mode,
+                            "mode_weight": mode_weight,
+                            "difference": diff
+                        })
+                    
+                    # Add to correlation
+                    correlation += (1.0 - diff)
+                    total_pairs += 1
+            
+            # Calculate average correlation
+            if total_pairs > 0:
+                correlation /= total_pairs
+            else:
+                correlation = 1.0  # Default if no pairs to check
+                
+            return CoherenceCheckResult(
+                coherence_score=correlation,
+                is_coherent=correlation >= 0.7,
+                misalignments=misalignments
+            )
+        
+        return _check_blend_coherence
+
+    def _create_extract_blended_guidance_tool(self):
+        """Create the extract blended guidance tool with proper access to self"""
+        @function_tool
+        async def _extract_blended_guidance(ctx: RunContextWrapper, mode_distribution: Dict[str, float]) -> ModeGuidance:
+            """
+            Extract response guidance from blended mode distribution
+            
+            Args:
+                mode_distribution: Mode distribution
+                
+            Returns:
+                Blended guidance
+            """
+            # Get elements based on mode distribution
+            blend_tool = self._create_blend_guidance_elements_tool()
+            elements = await blend_tool(ctx, mode_distribution)
+            
+            # Create guidance object
+            return ModeGuidance(
+                tone=elements.tone,
+                formality_level=elements.formality_level,
+                verbosity=elements.verbosity,
+                key_phrases=elements.key_phrases,
+                avoid_phrases=elements.avoid_phrases,
+                content_focus=elements.content_focus,
+                mode_description=f"Blended mode: {', '.join(elements.active_modes.keys())}",
+                weighted_parameters=elements.weighted_parameters,
+                active_modes=elements.active_modes
+            )
+        
+        return _extract_blended_guidance
