@@ -179,6 +179,132 @@ class ContextDistribution(BaseModel):
             
         return dot_product / (mag1 * mag2)
 
+# New Pydantic models to replace Dict return types
+class SignalInfo(BaseModel):
+    """Signal information"""
+    type: str = Field(..., description="Signal type")
+    value: str = Field(..., description="Signal value")
+    context: str = Field(..., description="Context type")
+    strength: float = Field(..., description="Signal strength")
+
+class CategorizedSignals(BaseModel):
+    """Categorized signals output"""
+    explicit: List[SignalInfo] = Field(default_factory=list)
+    implicit: List[SignalInfo] = Field(default_factory=list)
+    dominant: List[SignalInfo] = Field(default_factory=list)
+    casual: List[SignalInfo] = Field(default_factory=list)
+    intellectual: List[SignalInfo] = Field(default_factory=list)
+    empathic: List[SignalInfo] = Field(default_factory=list)
+    playful: List[SignalInfo] = Field(default_factory=list)
+    creative: List[SignalInfo] = Field(default_factory=list)
+    professional: List[SignalInfo] = Field(default_factory=list)
+
+class EmotionalBaselines(BaseModel):
+    """Emotional baselines"""
+    nyxamine: float = Field(0.5, ge=0.0, le=1.0)
+    oxynixin: float = Field(0.5, ge=0.0, le=1.0)
+    cortanyx: float = Field(0.3, ge=0.0, le=1.0)
+    adrenyx: float = Field(0.4, ge=0.0, le=1.0)
+    seranix: float = Field(0.5, ge=0.0, le=1.0)
+
+class SignificantContext(BaseModel):
+    """A context with significant weight"""
+    context: str
+    weight: float = Field(..., ge=0.0, le=1.0)
+
+class IncoherentPair(BaseModel):
+    """An incoherent context pair"""
+    context1: str
+    context2: str
+    compatibility: float = Field(..., ge=0.0, le=1.0)
+
+class ConfidenceThresholdResult(BaseModel):
+    """Confidence threshold check result"""
+    threshold_met: bool
+    confidence_threshold: float
+    confidence: float
+    significant_contexts: List[SignificantContext]
+    has_significant_contexts: bool
+
+class CoherenceResult(BaseModel):
+    """Coherence check result"""
+    coherence_score: float
+    is_coherent: bool
+    active_contexts: List[str]
+    incoherent_pairs: List[IncoherentPair]
+
+class ContextDetectionResult(BaseModel):
+    """Context detection result"""
+    context_distribution: ContextDistribution
+    confidence: float
+    signals: List[SignalInfo]
+    signal_based: bool
+    detection_method: str
+
+class FeatureDistribution(BaseModel):
+    """Distribution of feature weights"""
+    dominant: float = Field(0.0, ge=0.0, le=1.0)
+    casual: float = Field(0.0, ge=0.0, le=1.0)
+    intellectual: float = Field(0.0, ge=0.0, le=1.0)
+    empathic: float = Field(0.0, ge=0.0, le=1.0)
+    playful: float = Field(0.0, ge=0.0, le=1.0)
+    creative: float = Field(0.0, ge=0.0, le=1.0)
+    professional: float = Field(0.0, ge=0.0, le=1.0)
+
+class MessageFeatures(BaseModel):
+    """Extracted message features"""
+    length: int
+    word_count: int
+    has_question: bool
+    capitalization_ratio: float
+    punctuation_count: int
+    dominance_terms: List[str]
+    emotional_terms: List[str]
+    has_dominance_terms: bool
+    has_emotional_terms: bool
+    likely_formal: bool
+    likely_casual: bool
+    likely_emotional: bool
+    likely_intellectual: bool
+    feature_distribution: FeatureDistribution
+
+class ContextDistributionDict(BaseModel):
+    """Context distribution as a dictionary structure"""
+    dominant: float = Field(0.0, ge=0.0, le=1.0)
+    casual: float = Field(0.0, ge=0.0, le=1.0)
+    intellectual: float = Field(0.0, ge=0.0, le=1.0)
+    empathic: float = Field(0.0, ge=0.0, le=1.0)
+    playful: float = Field(0.0, ge=0.0, le=1.0)
+    creative: float = Field(0.0, ge=0.0, le=1.0)
+    professional: float = Field(0.0, ge=0.0, le=1.0)
+
+class HistoryEntry(BaseModel):
+    """Context history entry"""
+    timestamp: str
+    message_snippet: str
+    detected_distribution: ContextDistributionDict
+    updated_distribution: ContextDistributionDict
+    confidence: float
+    primary_context_changed: bool
+    active_contexts: List[str]
+
+class ContextChangeInfo(BaseModel):
+    """Information about a specific context change"""
+    context_name: str = Field(..., description="Name of the context")
+    from_value: float = Field(..., ge=0.0, le=1.0)
+    to_value: float = Field(..., ge=0.0, le=1.0)
+    change: float = Field(..., ge=0.0)
+    direction: str = Field(..., description="increase or decrease")
+
+class TransitionAnalysis(BaseModel):
+    """Context transition analysis"""
+    is_appropriate: bool
+    is_gradual: bool
+    total_change: float
+    average_change: float
+    context_changes: List[ContextChangeInfo]
+    significant_shifts: List[str]
+
 class BlendedContextDetectionOutput(BaseModel):
     """Output schema for blended context detection"""
     context_distribution: ContextDistribution = Field(..., description="Distribution of context weights")
