@@ -62,7 +62,7 @@ async def sanitize_string(text, max_length=None, allowed_tags=None):
         
         # Restore allowed tags
         for tag in allowed_tags:
-            tag_pattern = re.compile(f'__ALLOWED_TAG_-?\d+__')
+            tag_pattern = re.compile(r'__ALLOWED_TAG_-?\d+__')
             # Replace markers with original tags
             text = tag_pattern.sub(lambda m: m.group(0).replace('__ALLOWED_TAG_', '<').replace('__', '>'), text)
     else:
