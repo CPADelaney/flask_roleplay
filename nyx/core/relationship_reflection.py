@@ -5,7 +5,8 @@ import datetime
 import asyncio
 import random
 import uuid
-from typing import Dict, List, Any, Optional, Tuple, Union
+from typing import Dict, List, Any, Optional, Tuple, Union, TypedDict
+from typing_extensions import NotRequired  # For optional TypedDict fields
 from pydantic import BaseModel, Field
 
 from agents import Agent, Runner, ModelSettings, trace, function_tool, RunContextWrapper
@@ -14,6 +15,105 @@ from agents.exceptions import MaxTurnsExceeded, ModelBehaviorError
 logger = logging.getLogger(__name__)
 
 # =============== Models for Structured Output ===============
+
+class RelationshipStateDict(TypedDict):
+    """TypedDict for relationship state data"""
+    user_id: str
+    trust: float
+    familiarity: float
+    intimacy: float
+    conflict: float
+    dominance_balance: float
+    positive_interaction_score: float
+    negative_interaction_score: float
+    interaction_count: int
+    last_interaction_time: NotRequired[Optional[str]]
+    key_memories: NotRequired[List[str]]
+    inferred_user_traits: NotRequired[Dict[str, float]]
+    shared_secrets_level: NotRequired[float]
+    # Dominance-related fields
+    current_dominance_intensity: NotRequired[float]
+    max_achieved_intensity: NotRequired[float]
+    failed_escalation_attempts: NotRequired[int]
+    successful_dominance_tactics: NotRequired[List[str]]
+    failed_dominance_tactics: NotRequired[List[str]]
+    preferred_dominance_style: NotRequired[Optional[str]]
+    optimal_escalation_rate: NotRequired[float]
+    user_stated_intensity_preference: NotRequired[Optional[Union[int, str]]]
+    hard_limits_confirmed: NotRequired[bool]
+    hard_limits: NotRequired[List[str]]
+    soft_limits_approached: NotRequired[List[str]]
+    soft_limits_crossed_successfully: NotRequired[List[str]]
+    first_interaction: NotRequired[Optional[str]]  # For milestone detection
+
+class InteractionDict(TypedDict):
+    """TypedDict for interaction data"""
+    timestamp: str
+    interaction_type: NotRequired[str]
+    valence: NotRequired[float]
+    trust_impact: NotRequired[float]
+    intimacy_impact: NotRequired[float]
+    dominance_change: NotRequired[float]
+    summary: NotRequired[str]
+    memory_ids: NotRequired[List[str]]
+    emotion_tags: NotRequired[List[str]]
+    emotions: NotRequired[List[str]]  # Alternative to emotion_tags
+
+class PerspectiveDict(TypedDict):
+    """TypedDict for relationship perspective data"""
+    user_id: str
+    emotional_connection: float
+    relationship_value: float
+    comfort_level: float
+    engagement_interest: float
+    notable_aspects: List[str]
+    pain_points: List[str]
+    desires: List[str]
+    last_updated: NotRequired[str]
+
+class UserModelDict(TypedDict):
+    """TypedDict for user mental model data"""
+    user_id: str
+    inferred_emotion: NotRequired[str]
+    emotion_confidence: NotRequired[float]
+    behavioral_patterns: NotRequired[List[str]]
+    communication_style: NotRequired[str]
+    goals: NotRequired[List[str]]
+    concerns: NotRequired[List[str]]
+
+class MilestoneDict(TypedDict):
+    """TypedDict for milestone data"""
+    milestone_type: str
+    description: str
+    significance: float
+    metrics: RelationshipStateDict
+    milestone_id: NotRequired[str]
+
+class IdentityImpactDict(TypedDict):
+    """TypedDict for identity impacts"""
+    traits: Dict[str, float]
+    preferences: Dict[str, Dict[str, float]]
+
+class FormattedRelationshipData(TypedDict):
+    """TypedDict for formatted relationship data output"""
+    user_id: str
+    metrics: Dict[str, float]
+    interactions: List[Dict[str, Any]]
+    relationship_age: NotRequired[Optional[Dict[str, Any]]]
+    interaction_count: int
+    perspective: NotRequired[Optional[PerspectiveDict]]
+
+class PatternAnalysisResult(TypedDict):
+    """TypedDict for pattern analysis results"""
+    patterns: List[Dict[str, Any]]
+    confidence: float
+    message: str
+
+class RecordReflectionResult(TypedDict):
+    """TypedDict for record reflection result"""
+    reflection_id: str
+    recorded: bool
+    timestamp: str
 
 class RelationshipReflectionOutput(BaseModel):
     """Structured output for relationship reflections"""
@@ -53,9 +153,10 @@ class UserRelationshipPerspective(BaseModel):
 # =============== Function Tools ===============
 
 @function_tool
-async def format_relationship_history(user_id: str, relationship: Dict[str, Any], 
-                                   interactions: List[Dict[str, Any]],
-                                   perspective: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+async def format_relationship_history(user_id: str, 
+                                   relationship: RelationshipStateDict, 
+                                   interactions: List[InteractionDict],
+                                   perspective: Optional[PerspectiveDict] = None) -> FormattedRelationshipData:
     """
     Format relationship data for reflection generation
     
@@ -102,7 +203,7 @@ async def format_relationship_history(user_id: str, relationship: Dict[str, Any]
     }
     
     # Return formatted data
-    formatted_data = {
+    formatted_data: FormattedRelationshipData = {
         "user_id": user_id,
         "metrics": metrics,
         "interactions": formatted_interactions,
@@ -112,9 +213,9 @@ async def format_relationship_history(user_id: str, relationship: Dict[str, Any]
     }
     
     return formatted_data
-
+                                       
 @function_tool
-async def analyze_relationship_patterns(interactions: List[Dict[str, Any]]) -> Dict[str, Any]:
+async def analyze_relationship_patterns(interactions: List[InteractionDict]) -> PatternAnalysisResult:
     """
     Analyze patterns in relationship interactions
     
@@ -219,8 +320,8 @@ async def analyze_relationship_patterns(interactions: List[Dict[str, Any]]) -> D
     }
 
 @function_tool
-async def detect_relationship_milestones(relationship: Dict[str, Any], 
-                                      previous_state: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+async def detect_relationship_milestones(relationship: RelationshipStateDict, 
+                                      previous_state: RelationshipStateDict) -> Optional[MilestoneDict]:
     """
     Detect if relationship has reached any meaningful milestones
     
@@ -311,11 +412,11 @@ async def detect_relationship_milestones(relationship: Dict[str, Any],
                 break
     
     return milestone
-
+                                          
 @function_tool
-async def identify_relationship_identity_impacts(relationship: Dict[str, Any],
-                                           interactions: List[Dict[str, Any]],
-                                           user_model: Optional[Dict[str, Any]] = None) -> Dict[str, Dict[str, float]]:
+async def identify_relationship_identity_impacts(relationship: RelationshipStateDict,
+                                           interactions: List[InteractionDict],
+                                           user_model: Optional[UserModelDict] = None) -> IdentityImpactDict:
     """
     Identify how this relationship impacts Nyx's identity
     
@@ -335,7 +436,7 @@ async def identify_relationship_identity_impacts(relationship: Dict[str, Any],
     dominance_balance = relationship.get("dominance_balance", 0.0)
     
     # Define default impact values
-    identity_impacts = {
+    identity_impacts: IdentityImpactDict = {
         "traits": {},
         "preferences": {
             "interaction_styles": {}
@@ -401,12 +502,13 @@ async def identify_relationship_identity_impacts(relationship: Dict[str, Any],
     
     return identity_impacts
 
+
 @function_tool
 async def record_relationship_reflection(user_id: str, reflection_text: str, 
                                     reflection_type: str, 
                                     confidence: float,
-                                    identity_impacts: Dict[str, Dict[str, float]],
-                                    milestone_id: Optional[str] = None) -> Dict[str, Any]:
+                                    identity_impacts: IdentityImpactDict,
+                                    milestone_id: Optional[str] = None) -> RecordReflectionResult:
     """
     Record a relationship reflection for future reference
     
@@ -440,7 +542,7 @@ async def record_relationship_reflection(user_id: str, reflection_text: str,
         "recorded": True,
         "timestamp": datetime.datetime.now().isoformat()
     }
-
+                                        
 # =============== Main Relationship Reflection Class ===============
 
 class RelationshipReflectionSystem:
@@ -592,47 +694,11 @@ class RelationshipReflectionSystem:
             ]
         )
     
-    def _create_perspective_agent(self) -> Agent:
-        """Create an agent for developing Nyx's subjective perspective."""
-        return Agent(
-            name="Relationship Perspective Agent",
-            instructions="""You help develop Nyx's subjective perspective on relationships.
-            
-            Based on relationship data and interaction history, determine:
-            1. How Nyx feels about this relationship emotionally
-            2. What Nyx values about this connection
-            3. Areas of comfort or discomfort in the relationship
-            4. Desires for how the relationship might develop
-            5. Notable aspects or unique qualities of the relationship
-            
-            Create an authentic, nuanced perspective similar to how a person
-            might internally consider their feelings about a relationship.
-            """,
-            model="gpt-4.1-nano",
-            model_settings=ModelSettings(
-                temperature=0.6,
-                top_p=0.9,
-                max_tokens=800
-            ),
-            tools=[
-                format_relationship_history
-            ],
-            output_type=Dict
-        )
-    
     async def generate_relationship_reflection(self, user_id: str, 
                                           reflection_type: str = "general",
                                           milestone: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         Generate a reflection on the relationship with a specific user.
-        
-        Args:
-            user_id: User ID
-            reflection_type: Type of reflection (general, milestone, pattern, etc.)
-            milestone: Milestone data if this is a milestone reflection
-        
-        Returns:
-            Generated reflection and metadata
         """
         try:
             with trace(workflow_name="generate_relationship_reflection"):
@@ -650,32 +716,48 @@ class RelationshipReflectionSystem:
                         "message": f"No relationship found for user {user_id}"
                     }
                 
+                # UPDATE HERE: Cast relationship to proper type
+                relationship_dict = relationship if isinstance(relationship, dict) else relationship.model_dump()
+                typed_relationship = RelationshipStateDict(**relationship_dict)
+                
                 # Get relationship perspective
                 perspective = None
+                typed_perspective = None
                 if user_id in self.relationship_perspectives:
                     perspective = self.relationship_perspectives[user_id].model_dump()
+                    # UPDATE HERE: Cast perspective to proper type
+                    typed_perspective = PerspectiveDict(**perspective)
                 
                 # Get interaction history
                 interactions = await self.relationship_manager.get_interaction_history(user_id, limit=10)
                 
+                # UPDATE HERE: Cast interactions to proper type
+                typed_interactions = [InteractionDict(**i) for i in interactions]
+                
                 # Get user mental model if available
                 user_model = None
+                typed_user_model = None
                 if self.theory_of_mind:
                     user_model = await self.theory_of_mind.get_user_model(user_id)
+                    # UPDATE HERE: Cast user model to proper type if it exists
+                    if user_model:
+                        typed_user_model = UserModelDict(**user_model)
                 
+                # UPDATE HERE: Use typed versions
                 # Format data for reflection
                 formatted_data = await format_relationship_history(
                     user_id, 
-                    relationship if isinstance(relationship, dict) else relationship.model_dump(),
-                    interactions,
-                    perspective
+                    typed_relationship,
+                    typed_interactions,
+                    typed_perspective
                 )
                 
+                # UPDATE HERE: Use typed versions
                 # Get identity impacts
                 identity_impacts = await identify_relationship_identity_impacts(
-                    relationship if isinstance(relationship, dict) else relationship.model_dump(),
-                    interactions,
-                    user_model
+                    typed_relationship,
+                    typed_interactions,
+                    typed_user_model
                 )
                 
                 # Determine which agent to use based on reflection type
@@ -712,7 +794,7 @@ class RelationshipReflectionSystem:
                     reflection_output.reflection_text,
                     reflection_output.reflection_type,
                     reflection_output.confidence,
-                    identity_impacts,
+                    identity_impacts,  # This is already typed as IdentityImpactDict
                     milestone_id
                 )
                 
@@ -843,12 +925,6 @@ class RelationshipReflectionSystem:
     async def detect_and_process_milestones(self, user_id: str) -> Optional[Dict[str, Any]]:
         """
         Detect and process relationship milestones.
-        
-        Args:
-            user_id: User ID
-        
-        Returns:
-            Milestone data and reflection if detected
         """
         if not self.relationship_manager:
             return None
@@ -859,11 +935,30 @@ class RelationshipReflectionSystem:
             if not relationship:
                 return None
             
+            # UPDATE HERE: Cast to proper type
+            relationship_dict = relationship if isinstance(relationship, dict) else relationship.model_dump()
+            typed_relationship = RelationshipStateDict(**relationship_dict)
+            
             # Get previous state for comparison
             previous_state = self.previous_relationship_states.get(user_id, {})
             
+            # UPDATE HERE: Cast previous state to proper type
+            typed_previous_state = RelationshipStateDict(**previous_state) if previous_state else RelationshipStateDict(
+                user_id=user_id,
+                trust=0.5,
+                familiarity=0.1,
+                intimacy=0.1,
+                conflict=0.0,
+                dominance_balance=0.0,
+                positive_interaction_score=0.0,
+                negative_interaction_score=0.0,
+                interaction_count=0
+            )
+            
+            # UPDATE HERE: Use typed versions
             # Detect milestone
-            milestone = await detect_relationship_milestones(relationship, previous_state)
+            milestone = await detect_relationship_milestones(typed_relationship, typed_previous_state)
+            
             
             # If milestone detected, process it
             if milestone:
@@ -909,12 +1004,6 @@ class RelationshipReflectionSystem:
     async def update_relationship_perspective(self, user_id: str) -> Dict[str, Any]:
         """
         Update Nyx's subjective perspective on this relationship.
-        
-        Args:
-            user_id: User ID
-        
-        Returns:
-            Updated perspective
         """
         if not self.relationship_manager:
             return {
@@ -931,14 +1020,23 @@ class RelationshipReflectionSystem:
                     "message": f"No relationship found for user {user_id}"
                 }
             
+            # UPDATE HERE: Cast to proper type
+            relationship_dict = relationship if isinstance(relationship, dict) else relationship.model_dump()
+            typed_relationship = RelationshipStateDict(**relationship_dict)
+            
             # Get interaction history
             interactions = await self.relationship_manager.get_interaction_history(user_id, limit=10)
             
+            # UPDATE HERE: Cast interactions to proper type
+            typed_interactions = [InteractionDict(**i) for i in interactions]
+            
+            # UPDATE HERE: Use typed versions
             # Format data
             formatted_data = await format_relationship_history(
                 user_id,
-                relationship,
-                interactions
+                typed_relationship,
+                typed_interactions,
+                None  # No perspective in this call
             )
             
             # Current perspective if exists
@@ -1021,24 +1119,66 @@ class RelationshipReflectionSystem:
                 "status": "error",
                 "message": f"Error updating perspective: {str(e)}"
             }
+
+    def _create_perspective_agent(self) -> Agent:
+        """Create an agent for developing Nyx's subjective perspective."""
+        return Agent(
+            name="Relationship Perspective Agent",
+            instructions="""You help develop Nyx's subjective perspective on relationships.
+            
+            Based on relationship data and interaction history, determine:
+            1. How Nyx feels about this relationship emotionally
+            2. What Nyx values about this connection
+            3. Areas of comfort or discomfort in the relationship
+            4. Desires for how the relationship might develop
+            5. Notable aspects or unique qualities of the relationship
+            
+            Create an authentic, nuanced perspective similar to how a person
+            might internally consider their feelings about a relationship.
+            """,
+            model="gpt-4.1-nano",
+            model_settings=ModelSettings(
+                temperature=0.6,
+                top_p=0.9,
+                max_tokens=800
+            ),
+            tools=[
+                format_relationship_history
+            ],
+            output_type=Dict
+        )
+
+    def _ensure_typed_relationship(self, relationship: Union[Dict[str, Any], Any]) -> RelationshipStateDict:
+        """Helper method to ensure relationship data is properly typed."""
+        if isinstance(relationship, dict):
+            return RelationshipStateDict(**relationship)
+        elif hasattr(relationship, "model_dump"):
+            return RelationshipStateDict(**relationship.model_dump())
+        else:
+            raise ValueError(f"Unexpected relationship type: {type(relationship)}")
+    
+    def _ensure_typed_interactions(self, interactions: List[Any]) -> List[InteractionDict]:
+        """Helper method to ensure interactions are properly typed."""
+        typed_interactions = []
+        for interaction in interactions:
+            if isinstance(interaction, dict):
+                typed_interactions.append(InteractionDict(**interaction))
+            elif hasattr(interaction, "model_dump"):
+                typed_interactions.append(InteractionDict(**interaction.model_dump()))
+            else:
+                raise ValueError(f"Unexpected interaction type: {type(interaction)}")
+        return typed_interactions
     
     async def should_generate_reflection(self, user_id: str, 
                                       interaction_data: Optional[Dict[str, Any]] = None) -> bool:
         """
         Determine if a reflection should be generated.
-        
-        Args:
-            user_id: User ID
-            interaction_data: Recent interaction data if available
-        
-        Returns:
-            True if reflection should be generated
         """
         if not self.relationship_manager:
             return False
-        
-        # Check if enough time has passed since last reflection
-        if user_id in self.last_reflection_times:
+            
+        # Check if enough time has passed since last reflection  # <-- This line should not be indented
+        if user_id in self.last_reflection_times:  # <-- This line should not be indented
             hours_since_last = (datetime.datetime.now() - self.last_reflection_times[user_id]).total_seconds() / 3600
             if hours_since_last < self.reflection_triggers["min_interval_hours"]:
                 return False
@@ -1061,6 +1201,7 @@ class RelationshipReflectionSystem:
         # Check for metric changes
         if user_id in self.previous_relationship_states:
             previous = self.previous_relationship_states[user_id]
+            # Ensure we're comparing dicts
             current = relationship.model_dump() if hasattr(relationship, "model_dump") else relationship
             
             for metric in ["trust", "intimacy", "familiarity"]:
