@@ -1217,7 +1217,7 @@ async def _get_domains(ctx: RunContextWrapper[NoveltyEngineContext]) -> List[str
     """
     return ctx.context.domains
 
-@function_tool(strict_json_schema=False)  # Disable strict schema for complex return
+@function_tool(strict_mode=False)  # Disable strict schema for complex return
 async def _extract_domain_principles(
     ctx: RunContextWrapper[NoveltyEngineContext],
     domain: str
@@ -1255,7 +1255,7 @@ async def _extract_domain_principles(
     
     return principles
 
-@function_tool(strict_json_schema=False)  # Disable strict schema for complex return
+@function_tool(strict_mode=False)  # Disable strict schema for complex return
 async def _find_connections(
     ctx: RunContextWrapper[NoveltyEngineContext],
     domain1_principles: List[Dict[str, str]],
@@ -1284,7 +1284,7 @@ async def _find_connections(
     
     return connections
 
-@function_tool(strict_json_schema=False)
+@function_tool(strict_mode=False)
 async def _decompose_concepts(
     ctx: RunContextWrapper[NoveltyEngineContext],
     concepts: List[str]
@@ -1312,7 +1312,7 @@ async def _decompose_concepts(
     
     return decomposed
 
-@function_tool(strict_json_schema=False)
+@function_tool(strict_mode=False)
 async def _create_blended_space(
     ctx: RunContextWrapper[NoveltyEngineContext],
     concept_decompositions: List[Dict[str, Any]]
@@ -1339,7 +1339,7 @@ async def _create_blended_space(
         "potential_applications": ["Potential application 1", "Potential application 2"]
     }
 
-@function_tool(strict_json_schema=False)
+@function_tool(strict_mode=False)
 async def _identify_constraints(
     ctx: RunContextWrapper[NoveltyEngineContext],
     domain: str
@@ -1376,7 +1376,7 @@ async def _identify_constraints(
     
     return constraints
 
-@function_tool(strict_json_schema=False)
+@function_tool(strict_mode=False)
 async def _explore_constraint_removal(
     ctx: RunContextWrapper[NoveltyEngineContext],
     constraints: List[Dict[str, Any]]
@@ -1429,7 +1429,7 @@ async def _generate_random_stimuli(
     
     return random.sample(stimuli_options, min(count, len(stimuli_options)))
 
-@function_tool(strict_json_schema=False)
+@function_tool(strict_mode=False)
 async def _force_connections(
     ctx: RunContextWrapper[NoveltyEngineContext],
     problem: str,
@@ -1457,7 +1457,7 @@ async def _force_connections(
     
     return connections
 
-@function_tool(strict_json_schema=False)
+@function_tool(strict_mode=False)
 async def _generate_perspectives(
     ctx: RunContextWrapper[NoveltyEngineContext],
     problem: str
@@ -1481,7 +1481,7 @@ async def _generate_perspectives(
     
     return perspectives
 
-@function_tool(strict_json_schema=False)
+@function_tool(strict_mode=False)
 async def _analyze_from_perspective(
     ctx: RunContextWrapper[NoveltyEngineContext],
     problem: str,
@@ -1515,7 +1515,7 @@ async def _analyze_from_perspective(
         ]
     }
 
-@function_tool(strict_json_schema=False)
+@function_tool(strict_mode=False)
 async def _extract_domain_structure(
     ctx: RunContextWrapper[NoveltyEngineContext],
     domain: str
@@ -1551,7 +1551,7 @@ async def _extract_domain_structure(
         ]
     }
 
-@function_tool(strict_json_schema=False)
+@function_tool(strict_mode=False)
 async def _map_across_domains(
     ctx: RunContextWrapper[NoveltyEngineContext],
     source_structure: Dict[str, Any],
@@ -1593,7 +1593,7 @@ async def _map_across_domains(
         ]
     }
 
-@function_tool(strict_json_schema=False)
+@function_tool(strict_mode=False)
 async def _assess_novelty(
     ctx: RunContextWrapper[NoveltyEngineContext],
     idea_description: str
@@ -1617,7 +1617,7 @@ async def _assess_novelty(
         "originality_aspects": ["Original aspect 1", "Original aspect 2"]
     }
 
-@function_tool(strict_json_schema=False)
+@function_tool(strict_mode=False)
 async def _assess_usefulness(
     ctx: RunContextWrapper[NoveltyEngineContext],
     idea_description: str
@@ -1642,7 +1642,7 @@ async def _assess_usefulness(
         "value_propositions": ["Value proposition 1", "Value proposition 2"]
     }
 
-@function_tool(strict_json_schema=False)
+@function_tool(strict_mode=False)
 async def _assess_feasibility(
     ctx: RunContextWrapper[NoveltyEngineContext],
     idea_description: str
@@ -1669,7 +1669,7 @@ async def _assess_feasibility(
 
 # Tool functions for integrated cognitive systems
 
-@function_tool(strict_json_schema=False)
+@function_tool(strict_mode=False)
 async def _get_concept_spaces(
     ctx: RunContextWrapper[NoveltyEngineContext], 
     domain: Optional[str] = None
@@ -1709,7 +1709,7 @@ async def _get_concept_spaces(
         logger.error(f"Error retrieving concept spaces: {str(e)}")
         return []
 
-@function_tool(strict_json_schema=False)
+@function_tool(strict_mode=False)
 async def _create_conceptual_blend(
     ctx: RunContextWrapper[NoveltyEngineContext],
     space_id1: str,
@@ -1778,7 +1778,7 @@ async def _create_conceptual_blend(
         logger.error(f"Error creating conceptual blend: {str(e)}")
         return {"error": f"Error creating conceptual blend: {str(e)}"}
 
-@function_tool(strict_json_schema=False)
+@function_tool(strict_mode=False)
 async def _extract_novel_ideas_from_blend(
     ctx: RunContextWrapper[NoveltyEngineContext],
     blend_id: str
@@ -1841,7 +1841,7 @@ async def _extract_novel_ideas_from_blend(
         logger.error(f"Error extracting ideas from blend: {str(e)}")
         return []
 
-@function_tool(strict_json_schema=False)
+@function_tool(strict_mode=False)
 async def _get_causal_models(
     ctx: RunContextWrapper[NoveltyEngineContext],
     domain: Optional[str] = None
@@ -1880,7 +1880,7 @@ async def _get_causal_models(
         logger.error(f"Error retrieving causal models: {str(e)}")
         return []
 
-@function_tool(strict_json_schema=False)
+@function_tool(strict_mode=False)
 async def _analyze_causal_impacts(
     ctx: RunContextWrapper[NoveltyEngineContext],
     model_id: str,
@@ -1981,7 +1981,7 @@ async def _analyze_causal_impacts(
             "overall_impact_score": 0.0
         }
 
-@function_tool(strict_json_schema=False)
+@function_tool(strict_mode=False)
 async def _generate_causal_interventions(
     ctx: RunContextWrapper[NoveltyEngineContext],
     model_id: str,
@@ -2064,7 +2064,7 @@ async def _generate_causal_interventions(
         logger.error(f"Error generating causal interventions: {str(e)}")
         return []
 
-@function_tool(strict_json_schema=False)
+@function_tool(strict_mode=False)
 async def _reason_counterfactually(
     ctx: RunContextWrapper[NoveltyEngineContext],
     model_id: str,
@@ -2095,7 +2095,7 @@ async def _reason_counterfactually(
         logger.error(f"Error performing counterfactual reasoning: {str(e)}")
         return {"error": f"Error performing counterfactual reasoning: {str(e)}"}
 
-@function_tool(strict_json_schema=False)
+@function_tool(strict_mode=False)
 async def _setup_imagination_simulation(
     ctx: RunContextWrapper[NoveltyEngineContext],
     idea_description: str,
@@ -2168,7 +2168,7 @@ async def _setup_imagination_simulation(
             "focus_variables": []
         }
 
-@function_tool(strict_json_schema=False)
+@function_tool(strict_mode=False)
 async def _run_imagination_simulation(
     ctx: RunContextWrapper[NoveltyEngineContext],
     simulation_setup: Dict[str, Any]
@@ -2239,7 +2239,7 @@ async def _run_imagination_simulation(
             "confidence": 0.0
         }
 
-@function_tool(strict_json_schema=False)
+@function_tool(strict_mode=False)
 async def _extract_insights_from_simulation(
     ctx: RunContextWrapper[NoveltyEngineContext],
     simulation_result: Dict[str, Any]
@@ -2297,7 +2297,7 @@ async def _extract_insights_from_simulation(
     
     return insights
 
-@function_tool(strict_json_schema=False)
+@function_tool(strict_mode=False)
 async def _refine_idea_from_simulation(
     ctx: RunContextWrapper[NoveltyEngineContext],
     original_idea: Dict[str, Any],
