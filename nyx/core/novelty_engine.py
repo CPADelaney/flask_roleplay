@@ -2288,9 +2288,10 @@ async def _extract_insights_from_simulation(
                   f"due to {simulation_result.get('termination_reason', 'unknown')} after {simulation_result.get('steps', 0)} steps."
     })
     
-            return insights.append({
-                "type": "outcome",
-                content": f"Simulation {'succeeded' if simulation_result.get('success', False) else 'failed'} " +
+    # Add basic insight about simulation outcome
+    insights.append({
+        "type": "outcome",
+        "content": f"Simulation {'succeeded' if simulation_result.get('success', False) else 'failed'} " +
                   f"due to {simulation_result.get('termination_reason', 'unknown')} after {simulation_result.get('steps', 0)} steps."
     })
     
@@ -2352,57 +2353,3 @@ async def _refine_idea_from_simulation(
     refined_idea["technique_used"] = f"{refined_idea.get('technique_used', 'unknown')} + imagination_simulation"
     
     return refined_idea
-
-# ============================================================================
-# REFACTORING SUMMARY
-# ============================================================================
-
-"""
-REFACTORING SUMMARY - NoveltyEngine for OpenAI Agents SDK v0.0.17 Compatibility
-
-Key Changes Made:
-1. Fixed all Dict[str, Any] issues by:
-   - Adding `strict_json_schema=False` to function_tool decorators where needed
-   - Using simpler dict returns instead of complex Pydantic models for problematic functions
-   - Creating TypedDict classes for structured dict fields
-
-2. Ensured RunContextWrapper[NoveltyEngineContext] is ALWAYS the first parameter in all @function_tool functions
-
-3. Added `extra='forbid'` to all Pydantic models to prevent additional properties
-
-4. Fixed the NoveltyEngineContext storage issue by:
-   - Storing serialized ideas as JSON strings instead of direct object references
-   - Adding helper methods for storing and retrieving ideas
-
-5. Updated all return types to be compatible with OpenAI SDK's strict schema validation
-
-6. Maintained backward compatibility with the same public API
-
-Usage Notes:
-- The engine maintains the same API interface as before
-- All public methods work exactly the same way
-- Internal storage is now more robust and serialization-safe
-- Function tools with complex returns use `strict_json_schema=False` to avoid validation errors
-
-Example Usage:
-```python
-# Initialize the engine
-engine = NoveltyEngine(
-    imagination_simulator=imagination_sim,
-    memory_core=memory,
-    reasoning_core=reasoning
-)
-
-# Generate ideas as before
-idea = await engine.generate_novel_idea(
-    technique=CreativeTechnique.BISOCIATION,
-    domain=CreativeDomain.TECHNOLOGY,
-    concepts=["AI", "creativity"]
-)
-
-# Evaluate ideas
-evaluation = await engine.evaluate_idea(idea_id=idea.id)
-
-# All other methods work the same way
-```
-"""
