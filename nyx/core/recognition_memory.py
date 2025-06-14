@@ -26,9 +26,54 @@ from agents import (
 logger = logging.getLogger(__name__)
 
 # ============================================================================
-# Pydantic models for all data structures
+# Simple data classes to avoid Dict issues
 # ============================================================================
 
+class ContextRequirement(BaseModel):
+    """Single context requirement"""
+    model_config = ConfigDict(extra='forbid')
+    
+    key: str
+    value: str
+
+class ConfidenceLevel(BaseModel):
+    """Confidence level for a specific aspect"""
+    model_config = ConfigDict(extra='forbid')
+    
+    aspect: str
+    confidence: float
+
+class SimilarTrigger(BaseModel):
+    """Similar trigger information"""
+    model_config = ConfigDict(extra='forbid')
+    
+    trigger_id: str
+    trigger_value: str
+    similarity: float
+
+class RelevanceHierarchyItem(BaseModel):
+    """Item in relevance hierarchy"""
+    model_config = ConfigDict(extra='forbid')
+    
+    memory_id: str
+    relevance: float
+    rank: int
+
+class ConceptItem(BaseModel):
+    """Simple concept representation"""
+    model_config = ConfigDict(extra='forbid')
+    
+    concept: str
+    description: str
+
+class PatternItem(BaseModel):
+    """Pattern representation"""
+    model_config = ConfigDict(extra='forbid')
+    
+    pattern_type: str
+    pattern_value: str
+
+# Keep TypedDict for backwards compatibility but minimize their use
 class TriggerDict(TypedDict):
     """Simplified trigger dict for backwards compatibility"""
     trigger_id: str
@@ -71,13 +116,20 @@ class TopicDict(TypedDict):
 # New Pydantic models to replace Dict[str, Any]
 # ============================================================================
 
+class RecognitionTimestamp(BaseModel):
+    """Model for recognition timestamp"""
+    model_config = ConfigDict(extra='forbid')
+    
+    memory_id: str
+    recognized_at: str
+
 class MessageContext(BaseModel):
     """Model for conversation messages"""
     model_config = ConfigDict(extra='forbid')
     
     text: str
     timestamp: str = Field(default_factory=lambda: datetime.datetime.now().isoformat())
-    context: Dict[str, str] = Field(default_factory=dict)  # Using Dict[str, str] instead of Any
+    context_items: List[ContextRequirement] = Field(default_factory=list)
 
 class MemoryData(BaseModel):
     """Model for memory data"""
@@ -90,7 +142,7 @@ class MemoryData(BaseModel):
     significance: int = 5
     confidence: float = 0.5
     activation_trigger: Optional[TriggerDict] = None
-    metadata: Optional[Dict[str, str]] = None
+    metadata_items: List[ContextRequirement] = Field(default_factory=list)
 
 class TriggerPerformance(BaseModel):
     """Model for trigger performance tracking"""
@@ -182,7 +234,7 @@ class TriggerQuality(BaseModel):
     
     quality_score: float
     is_generic: bool
-    similar_triggers: List[Dict[str, Union[str, float]]]
+    similar_triggers: List[SimilarTrigger]
     specificity: float
     recommended_threshold: float
 
@@ -210,11 +262,18 @@ class CausalityAssessment(BaseModel):
     causality_strength: float
     causality_markers_found: List[str]
 
+class ParallelQueryResultItem(BaseModel):
+    """Single result from parallel query"""
+    model_config = ConfigDict(extra='forbid')
+    
+    trigger_id: str
+    memories: List[MemoryData]
+
 class ParallelQueryResult(BaseModel):
     """Model for parallel query results"""
     model_config = ConfigDict(extra='forbid')
     
-    results: Dict[str, List[MemoryData]]
+    results: List[ParallelQueryResultItem]
 
 # ============================================================================
 # Existing Pydantic models for recognition memory
@@ -229,7 +288,7 @@ class ContextualTrigger(BaseModel):
     trigger_value: str
     relevance_threshold: float = 0.6
     activation_strength: float = 1.0
-    context_requirements: Dict[str, str] = Field(default_factory=dict)
+    context_requirements: List[ContextRequirement] = Field(default_factory=list)
     source: str = "system"  # Where this trigger came from
 
 class RecognitionResult(BaseModel):
@@ -260,10 +319,10 @@ class SalienceAnalysisOutput(BaseModel):
     model_config = ConfigDict(extra='forbid')
     
     salient_entities: List[EntityDict]
-    salient_concepts: List[Dict[str, str]]
+    salient_concepts: List[ConceptItem]
     emotional_markers: List[EmotionDict]
     key_topics: List[TopicDict]
-    notable_patterns: List[Dict[str, str]]
+    notable_patterns: List[PatternItem]
 
 class TriggerExtractionOutput(BaseModel):
     """Output schema for trigger extraction"""
@@ -280,8 +339,8 @@ class RecognitionFilterOutput(BaseModel):
     
     selected_memories: List[MemoryDict]
     selection_rationale: str
-    confidence_levels: Dict[str, float]
-    relevance_hierarchy: List[Dict[str, str]]
+    confidence_levels: List[ConfidenceLevel]
+    relevance_hierarchy: List[RelevanceHierarchyItem]
 
 class RecognitionMemoryContext:
     """Context object for recognition memory operations"""
@@ -327,7 +386,7 @@ class RecognitionMemoryContext:
         self.default_triggers: List[ContextualTrigger] = []
         
         # Trigger performance tracking
-        self.trigger_performance: Dict[str, TriggerPerformance] = {}
+        self.trigger_performance: List[TriggerPerformance] = []
     
     @property
     def active_triggers(self) -> Dict[str, ContextualTrigger]:
@@ -681,9 +740,14 @@ class RecognitionMemorySystem:
             await self.initialize()
         
         # Format as message for context history
+        context_items = []
+        if current_context:
+            for key, value in current_context.items():
+                context_items.append(ContextRequirement(key=key, value=str(value)))
+        
         message = MessageContext(
             text=conversation_text,
-            context=current_context or {}
+            context_items=context_items
         )
         
         with trace(workflow_name="Process Conversation Turn", group_id=self.context.trace_id):
@@ -755,7 +819,7 @@ class RecognitionMemorySystem:
         trigger_value: str,
         relevance_threshold: float = 0.6,
         activation_strength: float = 1.0,
-        context_requirements: Dict[str, str] = None,
+        context_requirements: Optional[List[ContextRequirement]] = None,
         source: str = "user"
     ) -> Optional[str]:
         """
@@ -1067,7 +1131,7 @@ async def _get_active_triggers(ctx: RunContextWrapper[RecognitionMemoryContext])
     return triggers
 
 @function_tool
-async def _get_recent_recognitions(ctx: RunContextWrapper[RecognitionMemoryContext]) -> List[Dict[str, str]]:
+async def _get_recent_recognitions(ctx: RunContextWrapper[RecognitionMemoryContext]) -> List[RecognitionTimestamp]:
     """
     Get recently recognized memories
     
@@ -1076,10 +1140,10 @@ async def _get_recent_recognitions(ctx: RunContextWrapper[RecognitionMemoryConte
     """
     recent = []
     for memory_id, timestamp in ctx.context.recent_recognitions:
-        recent.append({
-            "memory_id": memory_id,
-            "recognized_at": timestamp.isoformat()
-        })
+        recent.append(RecognitionTimestamp(
+            memory_id=memory_id,
+            recognized_at=timestamp.isoformat()
+        ))
     return recent
 
 @function_tool
@@ -1285,7 +1349,7 @@ async def _format_trigger(
     trigger_value: str,
     relevance_threshold: float = 0.6,
     activation_strength: float = 1.0,
-    context_requirements: Dict[str, str] = None
+    context_requirements: Optional[List[ContextRequirement]] = None
 ) -> ContextualTrigger:
     """
     Format a contextual trigger
@@ -1314,7 +1378,7 @@ async def _format_trigger(
         trigger_value=trigger_value,
         relevance_threshold=relevance_threshold,
         activation_strength=activation_strength,
-        context_requirements=context_requirements or {},
+        context_requirements=context_requirements or [],
         source="agent_generated"
     )
 
@@ -1360,6 +1424,12 @@ async def _query_memory(
         # Convert to MemoryData objects
         memory_data_list = []
         for memory in memories:
+            # Convert metadata dict to list of ContextRequirement
+            metadata_items = []
+            if "metadata" in memory and memory["metadata"]:
+                for key, value in memory["metadata"].items():
+                    metadata_items.append(ContextRequirement(key=key, value=str(value)))
+            
             memory_data = MemoryData(
                 id=memory.get("id", ""),
                 memory_text=memory.get("memory_text", ""),
@@ -1368,7 +1438,7 @@ async def _query_memory(
                 significance=memory.get("significance", 5),
                 confidence=memory.get("confidence", 0.5),
                 activation_trigger=trigger,
-                metadata=memory.get("metadata", {})
+                metadata_items=metadata_items
             )
             memory_data_list.append(memory_data)
         
@@ -1453,18 +1523,26 @@ async def _calculate_contextual_relevance(
     
     # Recency boost
     recency_boost = 0.0
-    if memory.metadata and "timestamp" in memory.metadata:
-        try:
-            timestamp = datetime.datetime.fromisoformat(
-                memory.metadata["timestamp"].replace("Z", "+00:00")
-            )
-            days_old = (datetime.datetime.now() - timestamp).days
-            if days_old < 7:
-                recency_boost = 0.1  # Boost very recent memories
-            elif days_old < 30:
-                recency_boost = 0.05  # Small boost for recent memories
-        except Exception:
-            pass
+    if memory.metadata_items:
+        # Look for timestamp in metadata items
+        timestamp_item = None
+        for item in memory.metadata_items:
+            if item.key == "timestamp":
+                timestamp_item = item
+                break
+        
+        if timestamp_item:
+            try:
+                timestamp = datetime.datetime.fromisoformat(
+                    timestamp_item.value.replace("Z", "+00:00")
+                )
+                days_old = (datetime.datetime.now() - timestamp).days
+                if days_old < 7:
+                    recency_boost = 0.1  # Boost very recent memories
+                elif days_old < 30:
+                    recency_boost = 0.05  # Small boost for recent memories
+            except Exception:
+                pass
     
     # Calculate final relevance
     contextual_relevance = min(1.0, base_relevance + overlap_score + type_boost + recency_boost)
@@ -1736,6 +1814,12 @@ async def _query_with_prioritization(
         # Convert to MemoryData objects
         memory_data_list = []
         for memory in memories:
+            # Convert metadata dict to list of ContextRequirement
+            metadata_items = []
+            if "metadata" in memory and memory["metadata"]:
+                for key, value in memory["metadata"].items():
+                    metadata_items.append(ContextRequirement(key=key, value=str(value)))
+            
             memory_data = MemoryData(
                 id=memory.get("id", ""),
                 memory_text=memory.get("memory_text", ""),
@@ -1744,7 +1828,7 @@ async def _query_with_prioritization(
                 significance=memory.get("significance", 5),
                 confidence=memory.get("confidence", 0.5),
                 activation_trigger=trigger,
-                metadata=memory.get("metadata", {})
+                metadata_items=metadata_items
             )
             memory_data_list.append(memory_data)
                 
@@ -1795,13 +1879,19 @@ async def _query_memories_parallel(
             )
         
         # Wait for all tasks to complete
-        results = {}
+        result_items = []
         for trigger_id, task in trigger_tasks.items():
             try:
                 memories = await task
                 # Convert to MemoryData objects
                 memory_data_list = []
                 for memory in memories:
+                    # Convert metadata dict to list of ContextRequirement
+                    metadata_items = []
+                    if "metadata" in memory and memory["metadata"]:
+                        for key, value in memory["metadata"].items():
+                            metadata_items.append(ContextRequirement(key=key, value=str(value)))
+                    
                     memory_data = MemoryData(
                         id=memory.get("id", ""),
                         memory_text=memory.get("memory_text", ""),
@@ -1809,15 +1899,22 @@ async def _query_memories_parallel(
                         relevance=memory.get("relevance", 0.5),
                         significance=memory.get("significance", 5),
                         confidence=memory.get("confidence", 0.5),
-                        metadata=memory.get("metadata", {})
+                        metadata_items=metadata_items
                     )
                     memory_data_list.append(memory_data)
-                results[trigger_id] = memory_data_list
+                
+                result_items.append(ParallelQueryResultItem(
+                    trigger_id=trigger_id,
+                    memories=memory_data_list
+                ))
             except Exception as e:
                 logger.error(f"Error in parallel query for trigger {trigger_id}: {e}")
-                results[trigger_id] = []
+                result_items.append(ParallelQueryResultItem(
+                    trigger_id=trigger_id,
+                    memories=[]
+                ))
                 
-        return ParallelQueryResult(results=results)
+        return ParallelQueryResult(results=result_items)
         
     except Exception as e:
         logger.error(f"Error in parallel memory queries: {e}")
@@ -1841,14 +1938,19 @@ async def _track_query_performance(
     Returns:
         Performance metrics
     """
-    # Create performance entry if it doesn't exist
-    if trigger_id not in ctx.context.trigger_performance:
-        ctx.context.trigger_performance[trigger_id] = TriggerPerformance(
-            trigger_id=trigger_id
-        )
+    # Find existing performance entry
+    performance = None
+    for perf in ctx.context.trigger_performance:
+        if perf.trigger_id == trigger_id:
+            performance = perf
+            break
+    
+    # Create new entry if not found
+    if performance is None:
+        performance = TriggerPerformance(trigger_id=trigger_id)
+        ctx.context.trigger_performance.append(performance)
         
     # Update performance metrics
-    performance = ctx.context.trigger_performance[trigger_id]
     performance.query_count += 1
     performance.total_memories += memories_found
     
@@ -1916,11 +2018,11 @@ async def _assess_trigger_quality(
             )
             
             if similarity > 0.7:  # High similarity
-                similar_triggers.append({
-                    "trigger_id": existing_id,
-                    "trigger_value": existing.trigger_value,
-                    "similarity": similarity
-                })
+                similar_triggers.append(SimilarTrigger(
+                    trigger_id=existing_id,
+                    trigger_value=existing.trigger_value,
+                    similarity=similarity
+                ))
     
     # Check specificity
     words = trigger_value.split()
