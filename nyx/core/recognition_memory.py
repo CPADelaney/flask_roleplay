@@ -6,7 +6,7 @@ import datetime
 import random
 import uuid
 import json
-from typing import Dict, List, Any, Optional, Set, Union, Tuple, TypedDict
+from typing import List, Any, Optional, Set, Union, Tuple, TypedDict
 from pydantic import BaseModel, Field, ConfigDict
 
 # OpenAI Agents SDK imports
@@ -276,6 +276,33 @@ class ParallelQueryResult(BaseModel):
     results: List[ParallelQueryResultItem]
 
 # ============================================================================
+# Additional models to replace any remaining Dict usage
+# ============================================================================
+
+class TriggersStorage(BaseModel):
+    """Storage for active triggers"""
+    model_config = ConfigDict(extra='forbid')
+    
+    triggers: List[Tuple[str, str]] = Field(default_factory=list)  # List of (trigger_id, serialized_json)
+
+class MemoryQueryConfig(BaseModel):
+    """Configuration for memory queries"""
+    model_config = ConfigDict(extra='forbid')
+    
+    query: str
+    memory_types: List[str] = Field(default_factory=list)
+    limit: int = 3
+    min_significance: int = 3
+    entities: List[str] = Field(default_factory=list)
+
+class PrioritizationWeight(BaseModel):
+    """Weight for memory type prioritization"""
+    model_config = ConfigDict(extra='forbid')
+    
+    memory_type: str
+    weight: float
+
+# ============================================================================
 # Existing Pydantic models for recognition memory
 # ============================================================================
 
@@ -355,7 +382,7 @@ class RecognitionMemoryContext:
         self.current_context_distribution = None
         
         # Active triggers registry - store as serialized JSON
-        self._active_triggers_storage: Dict[str, str] = {}
+        self._active_triggers_storage: TriggersStorage = TriggersStorage()
         
         # Recently recognized memory IDs with timestamps
         self.recent_recognitions: List[Tuple[str, datetime.datetime]] = []
@@ -389,26 +416,34 @@ class RecognitionMemoryContext:
         self.trigger_performance: List[TriggerPerformance] = []
     
     @property
-    def active_triggers(self) -> Dict[str, ContextualTrigger]:
+    def active_triggers(self) -> List[Tuple[str, ContextualTrigger]]:
         """Get active triggers by deserializing from storage"""
-        triggers = {}
-        for trigger_id, trigger_json in self._active_triggers_storage.items():
+        triggers = []
+        for trigger_id, trigger_json in self._active_triggers_storage.triggers:
             try:
-                triggers[trigger_id] = ContextualTrigger.model_validate_json(trigger_json)
+                trigger = ContextualTrigger.model_validate_json(trigger_json)
+                triggers.append((trigger_id, trigger))
             except Exception:
                 pass
         return triggers
     
     def add_trigger(self, trigger: ContextualTrigger) -> None:
         """Add a trigger by serializing it"""
-        self._active_triggers_storage[trigger.trigger_id] = trigger.model_dump_json()
+        self._active_triggers_storage.triggers.append(
+            (trigger.trigger_id, trigger.model_dump_json())
+        )
     
     def remove_trigger(self, trigger_id: str) -> bool:
         """Remove a trigger"""
-        if trigger_id in self._active_triggers_storage:
-            del self._active_triggers_storage[trigger_id]
-            return True
-        return False
+        new_triggers = []
+        removed = False
+        for tid, tjson in self._active_triggers_storage.triggers:
+            if tid != trigger_id:
+                new_triggers.append((tid, tjson))
+            else:
+                removed = True
+        self._active_triggers_storage.triggers = new_triggers
+        return removed
 
 class RecognitionMemorySystem:
     """
@@ -723,7 +758,7 @@ class RecognitionMemorySystem:
     async def process_conversation_turn(
         self,
         conversation_text: str,
-        current_context: Dict[str, Any] = None
+        current_context: Optional[ContextRequirement] = None
     ) -> List[RecognitionResult]:
         """
         Process a conversation turn to trigger recognition memory
@@ -742,8 +777,7 @@ class RecognitionMemorySystem:
         # Format as message for context history
         context_items = []
         if current_context:
-            for key, value in current_context.items():
-                context_items.append(ContextRequirement(key=key, value=str(value)))
+            context_items.append(current_context)
         
         message = MessageContext(
             text=conversation_text,
@@ -847,7 +881,7 @@ class RecognitionMemorySystem:
                 trigger_value=trigger_value,
                 relevance_threshold=relevance_threshold,
                 activation_strength=activation_strength,
-                context_requirements=context_requirements or {}
+                context_requirements=context_requirements or []
             )
             
             # Set source
@@ -878,18 +912,18 @@ class RecognitionMemorySystem:
         
         return self.context.remove_trigger(trigger_id)
     
-    async def get_active_triggers(self) -> Dict[str, ContextualTrigger]:
+    async def get_active_triggers(self) -> List[ContextualTrigger]:
         """
         Get currently active contextual triggers
         
         Returns:
-            Dictionary of active triggers
+            List of active triggers
         """
         # Ensure system is initialized
         if not self.initialized:
             await self.initialize()
         
-        return self.context.active_triggers
+        return [trigger for _, trigger in self.context.active_triggers]
     
     async def register_contextual_cue(
         self,
@@ -996,7 +1030,7 @@ class RecognitionMemorySystem:
         self,
         conversation_text: str,
         novelty_engine=None
-    ) -> Dict[str, Any]:
+    ) -> ConceptItem:
         """
         Integrate recognition memory with novelty engine
         
@@ -1005,10 +1039,10 @@ class RecognitionMemorySystem:
             novelty_engine: Reference to novelty engine if available
             
         Returns:
-            Integration results
+            Integration results as ConceptItem
         """
         if not novelty_engine:
-            return {"error": "Novelty engine not provided"}
+            return ConceptItem(concept="error", description="Novelty engine not provided")
         
         # Ensure system is initialized
         if not self.initialized:
@@ -1019,7 +1053,7 @@ class RecognitionMemorySystem:
             recognition_results = await self.process_conversation_turn(conversation_text)
             
             if not recognition_results:
-                return {"status": "no_recognitions", "result": None}
+                return ConceptItem(concept="no_recognitions", description="No memories recognized")
             
             # Extract concepts from recognized memories
             memory_concepts = []
@@ -1041,16 +1075,13 @@ class RecognitionMemorySystem:
                     concepts=[conversation_concept] + memory_concepts[:1]  # Use first memory concept
                 )
                 
-                return {
-                    "status": "success",
-                    "integration_type": "bisociation",
-                    "conversation_concept": conversation_concept,
-                    "memory_concept": memory_concepts[0] if memory_concepts else None,
-                    "novel_idea": novel_idea
-                }
+                return ConceptItem(
+                    concept="bisociation_result",
+                    description=novel_idea
+                )
             except Exception as e:
                 logger.error(f"Error integrating with novelty engine: {e}")
-                return {"status": "error", "error": str(e)}
+                return ConceptItem(concept="error", description=str(e))
     
     # Helper methods
     
@@ -1119,7 +1150,7 @@ async def _get_active_triggers(ctx: RunContextWrapper[RecognitionMemoryContext])
         List of active triggers as dicts
     """
     triggers = []
-    for trigger_id, trigger in ctx.context.active_triggers.items():
+    for trigger_id, trigger in ctx.context.active_triggers:
         triggers.append(TriggerDict(
             trigger_id=trigger.trigger_id,
             trigger_type=trigger.trigger_type,
@@ -1349,7 +1380,7 @@ async def _format_trigger(
     trigger_value: str,
     relevance_threshold: float = 0.6,
     activation_strength: float = 1.0,
-    context_requirements: Optional[List[ContextRequirement]] = None
+    context_requirements: List[ContextRequirement] = []
 ) -> ContextualTrigger:
     """
     Format a contextual trigger
@@ -1378,7 +1409,7 @@ async def _format_trigger(
         trigger_value=trigger_value,
         relevance_threshold=relevance_threshold,
         activation_strength=activation_strength,
-        context_requirements=context_requirements or [],
+        context_requirements=context_requirements,
         source="agent_generated"
     )
 
@@ -1386,7 +1417,7 @@ async def _format_trigger(
 async def _query_memory(
     ctx: RunContextWrapper[RecognitionMemoryContext],
     trigger: TriggerDict,
-    memory_types: Optional[List[str]] = None,
+    memory_types: List[str] = [],
     limit: int = 3
 ) -> List[MemoryData]:
     """
@@ -1760,8 +1791,8 @@ async def _query_with_prioritization(
     ctx: RunContextWrapper[RecognitionMemoryContext],
     query: str,
     trigger: Optional[TriggerDict] = None,
-    memory_types: Optional[List[str]] = None,
-    prioritization: Optional[Dict[str, float]] = None,
+    memory_types: List[str] = [],
+    prioritization: List[PrioritizationWeight] = [],
     limit: int = 5
 ) -> List[MemoryData]:
     """
@@ -1785,9 +1816,14 @@ async def _query_with_prioritization(
     if not memory_types:
         memory_types = ["experience", "reflection", "abstraction", "observation"]
         
-    # Default prioritization
-    if not prioritization:
-        prioritization = {
+    # Convert prioritization to dict for memory core
+    priority_dict = {}
+    if prioritization:
+        for weight in prioritization:
+            priority_dict[weight.memory_type] = weight.weight
+    else:
+        # Default prioritization
+        priority_dict = {
             "experience": 0.4,
             "reflection": 0.3,
             "abstraction": 0.2,
@@ -1800,7 +1836,7 @@ async def _query_with_prioritization(
             memories = await ctx.context.memory_core.retrieve_memories_with_prioritization(
                 query=query,
                 memory_types=memory_types,
-                prioritization=prioritization,
+                prioritization=priority_dict,
                 limit=limit
             )
         else:
@@ -1842,7 +1878,7 @@ async def _query_with_prioritization(
 async def _query_memories_parallel(
     ctx: RunContextWrapper[RecognitionMemoryContext],
     triggers: List[TriggerDict],
-    memory_types: Optional[List[str]] = None,
+    memory_types: List[str] = [],
     limit_per_trigger: int = 3
 ) -> ParallelQueryResult:
     """
@@ -1854,11 +1890,11 @@ async def _query_memories_parallel(
         limit_per_trigger: Maximum number of memories per trigger
         
     Returns:
-        Dictionary of trigger_id -> memories
+        Parallel query result
     """
     # Ensure memory core exists
     if not ctx.context.memory_core:
-        return ParallelQueryResult(results={})
+        return ParallelQueryResult(results=[])
         
     # Default memory types
     if not memory_types:
@@ -1918,7 +1954,7 @@ async def _query_memories_parallel(
         
     except Exception as e:
         logger.error(f"Error in parallel memory queries: {e}")
-        return ParallelQueryResult(results={})
+        return ParallelQueryResult(results=[])
 
 @function_tool
 async def _track_query_performance(
@@ -2009,7 +2045,7 @@ async def _assess_trigger_quality(
     
     # Check if similar to existing triggers
     similar_triggers = []
-    for existing_id, existing in ctx.context.active_triggers.items():
+    for existing_id, existing in ctx.context.active_triggers:
         if existing.trigger_type == trigger_type:
             # Simple string similarity
             similarity = _calculate_string_similarity(
