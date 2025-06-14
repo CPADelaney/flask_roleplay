@@ -864,7 +864,7 @@ class RecognitionMemorySystem:
 # Tool Functions - All with RunContextWrapper as first parameter
 # ============================================================================
 
-@function_tool(strict_json_schema=False)
+@function_tool(strict_mode=False)
 async def _blend_memory_with_context(
     ctx: RunContextWrapper[RecognitionMemoryContext],
     memory: Dict[str, Any],
@@ -898,7 +898,7 @@ async def _blend_memory_with_context(
         "blend_score": blend_score
     }
 
-@function_tool(strict_json_schema=False)
+@function_tool(strict_mode=False)
 async def _get_active_triggers(ctx: RunContextWrapper[RecognitionMemoryContext]) -> List[Dict[str, Any]]:
     """
     Get the list of currently active triggers
@@ -918,7 +918,7 @@ async def _get_active_triggers(ctx: RunContextWrapper[RecognitionMemoryContext])
         })
     return triggers
 
-@function_tool(strict_json_schema=False)
+@function_tool(strict_mode=False)
 async def _get_recent_recognitions(ctx: RunContextWrapper[RecognitionMemoryContext]) -> List[Dict[str, str]]:
     """
     Get recently recognized memories
@@ -967,7 +967,7 @@ async def _get_trigger_types(ctx: RunContextWrapper[RecognitionMemoryContext]) -
     """
     return ctx.context.trigger_types
 
-@function_tool(strict_json_schema=False)
+@function_tool(strict_mode=False)
 async def _analyze_entities(
     ctx: RunContextWrapper[RecognitionMemoryContext],
     text: str
@@ -1019,7 +1019,7 @@ async def _analyze_entities(
     
     return entities
 
-@function_tool(strict_json_schema=False)
+@function_tool(strict_mode=False)
 async def _analyze_emotions(
     ctx: RunContextWrapper[RecognitionMemoryContext],
     text: str
@@ -1084,7 +1084,7 @@ async def _analyze_emotions(
     
     return detected_emotions
 
-@function_tool(strict_json_schema=False)
+@function_tool(strict_mode=False)
 async def _analyze_topics(
     ctx: RunContextWrapper[RecognitionMemoryContext],
     text: str
@@ -1167,7 +1167,7 @@ async def _format_trigger(
         source="agent_generated"
     )
 
-@function_tool(strict_json_schema=False)
+@function_tool(strict_mode=False)
 async def _query_memory(
     ctx: RunContextWrapper[RecognitionMemoryContext],
     trigger: Dict[str, Any],
@@ -1216,7 +1216,7 @@ async def _query_memory(
         logger.error(f"Error querying memory: {e}")
         return []
 
-@function_tool(strict_json_schema=False)
+@function_tool(strict_mode=False)
 async def _combine_query_results(
     ctx: RunContextWrapper[RecognitionMemoryContext],
     memory_sets: List[List[Dict[str, Any]]],
@@ -1316,7 +1316,7 @@ async def _calculate_contextual_relevance(
     
     return contextual_relevance
 
-@function_tool(strict_json_schema=False)
+@function_tool(strict_mode=False)
 async def _check_recognition_history(
     ctx: RunContextWrapper[RecognitionMemoryContext],
     memory_id: str
@@ -1352,7 +1352,7 @@ async def _check_recognition_history(
         "in_cooldown": False
     }
 
-@function_tool(strict_json_schema=False)
+@function_tool(strict_mode=False)
 async def _analyze_context_state(
     ctx: RunContextWrapper[RecognitionMemoryContext]
 ) -> Dict[str, Any]:
@@ -1397,7 +1397,7 @@ async def _analyze_context_state(
         "active_triggers_count": len(ctx.context.active_triggers)
     }
 
-@function_tool(strict_json_schema=False)
+@function_tool(strict_mode=False)
 async def _analyze_narrative_elements(
     ctx: RunContextWrapper[RecognitionMemoryContext],
     text: str
@@ -1456,7 +1456,7 @@ async def _analyze_narrative_elements(
     
     return narrative_elements
 
-@function_tool(strict_json_schema=False)
+@function_tool(strict_mode=False)
 async def _leverage_context_awareness(
     ctx: RunContextWrapper[RecognitionMemoryContext],
     text: str
@@ -1519,7 +1519,7 @@ async def _leverage_context_awareness(
             "emotions": []
         }
 
-@function_tool(strict_json_schema=False)
+@function_tool(strict_mode=False)
 async def _query_with_prioritization(
     ctx: RunContextWrapper[RecognitionMemoryContext],
     query: str,
@@ -1586,7 +1586,7 @@ async def _query_with_prioritization(
         logger.error(f"Error in prioritized memory query: {e}")
         return []
 
-@function_tool(strict_json_schema=False)
+@function_tool(strict_mode=False)
 async def _query_memories_parallel(
     ctx: RunContextWrapper[RecognitionMemoryContext],
     triggers: List[Dict[str, Any]],
@@ -1641,7 +1641,7 @@ async def _query_memories_parallel(
         logger.error(f"Error in parallel memory queries: {e}")
         return {}
 
-@function_tool(strict_json_schema=False)
+@function_tool(strict_mode=False)
 async def _track_query_performance(
     ctx: RunContextWrapper[RecognitionMemoryContext],
     trigger_id: str,
@@ -1703,7 +1703,7 @@ async def _track_query_performance(
         "needs_optimization": needs_optimization
     }
 
-@function_tool(strict_json_schema=False)
+@function_tool(strict_mode=False)
 async def _assess_trigger_quality(
     ctx: RunContextWrapper[RecognitionMemoryContext],
     trigger_type: str,
@@ -1773,7 +1773,7 @@ async def _assess_trigger_quality(
         "recommended_threshold": max(0.5, 0.7 - (quality * 0.2))  # Adjust threshold based on quality
     }
 
-@function_tool(strict_json_schema=False)
+@function_tool(strict_mode=False)
 async def _assess_memory_causality(
     ctx: RunContextWrapper[RecognitionMemoryContext],
     memory: Dict[str, Any],
@@ -1800,7 +1800,7 @@ async def _assess_memory_causality(
         "causality_markers_found": found
     }
 
-@function_tool(strict_json_schema=False)
+@function_tool(strict_mode=False)
 async def _calibrate_trigger_parameters(
     ctx: RunContextWrapper[RecognitionMemoryContext],
     trigger_type: str,
@@ -1856,7 +1856,7 @@ async def _calibrate_trigger_parameters(
         "activation_strength": activation_strength
     }
 
-@function_tool(strict_json_schema=False)
+@function_tool(strict_mode=False)
 async def _assess_conversational_impact(
     ctx: RunContextWrapper[RecognitionMemoryContext],
     memory: Dict[str, Any],
@@ -1982,7 +1982,7 @@ REFACTORING SUMMARY - RecognitionMemorySystem for OpenAI Agents SDK v0.0.17 Comp
 
 Key Changes Made:
 1. Fixed all Dict[str, Any] issues by:
-   - Adding `strict_json_schema=False` to function_tool decorators where needed
+   - Adding `strict_mode=False` to function_tool decorators where needed
    - Using simpler dict returns instead of complex Pydantic models for problematic functions
    - Creating TypedDict classes for structured dict fields
 
@@ -2004,7 +2004,7 @@ Usage Notes:
 - The system maintains the same API interface as before
 - All public methods work exactly the same way
 - Internal storage is now more robust and serialization-safe
-- Function tools with complex returns use `strict_json_schema=False` to avoid validation errors
+- Function tools with complex returns use `strict_mode=False` to avoid validation errors
 
 Example Usage:
 ```python
