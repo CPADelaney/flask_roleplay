@@ -26,11 +26,11 @@ from agents import (
 logger = logging.getLogger(__name__)
 
 # ============================================================================
-# TypedDicts for function returns (simpler for OpenAI SDK)
+# Pydantic models for all data structures
 # ============================================================================
 
 class TriggerDict(TypedDict):
-    """Simplified trigger dict"""
+    """Simplified trigger dict for backwards compatibility"""
     trigger_id: str
     trigger_type: str
     trigger_value: str
@@ -39,7 +39,7 @@ class TriggerDict(TypedDict):
     source: str
 
 class MemoryDict(TypedDict):
-    """Simplified memory dict"""
+    """Simplified memory dict for backwards compatibility"""
     id: str
     memory_text: str
     memory_type: str
@@ -68,7 +68,156 @@ class TopicDict(TypedDict):
     context: str
 
 # ============================================================================
-# Pydantic models for recognition memory
+# New Pydantic models to replace Dict[str, Any]
+# ============================================================================
+
+class MessageContext(BaseModel):
+    """Model for conversation messages"""
+    model_config = ConfigDict(extra='forbid')
+    
+    text: str
+    timestamp: str = Field(default_factory=lambda: datetime.datetime.now().isoformat())
+    context: Dict[str, str] = Field(default_factory=dict)  # Using Dict[str, str] instead of Any
+
+class MemoryData(BaseModel):
+    """Model for memory data"""
+    model_config = ConfigDict(extra='forbid')
+    
+    id: str
+    memory_text: str
+    memory_type: str
+    relevance: float = 0.5
+    significance: int = 5
+    confidence: float = 0.5
+    activation_trigger: Optional[TriggerDict] = None
+    metadata: Optional[Dict[str, str]] = None
+
+class TriggerPerformance(BaseModel):
+    """Model for trigger performance tracking"""
+    model_config = ConfigDict(extra='forbid')
+    
+    trigger_id: str
+    query_count: int = 0
+    total_memories: int = 0
+    avg_relevance: float = 0.0
+    needs_optimization: bool = False
+    last_updated: str = Field(default_factory=lambda: datetime.datetime.now().isoformat())
+
+class ContextState(BaseModel):
+    """Model for context state analysis"""
+    model_config = ConfigDict(extra='forbid')
+    
+    recognition_sensitivity: float
+    max_recognitions: int
+    context_complexity: int
+    active_triggers_count: int
+
+class RecognitionHistory(BaseModel):
+    """Model for recognition history check"""
+    model_config = ConfigDict(extra='forbid')
+    
+    was_recognized: bool
+    seconds_ago: Optional[float] = None
+    cooldown_period: float
+    cooldown_remaining: float
+    in_cooldown: bool
+
+class EntityAnalysis(BaseModel):
+    """Model for entity analysis results"""
+    model_config = ConfigDict(extra='forbid')
+    
+    entity: str
+    type: str
+    salience: float
+    position: int
+
+class EmotionAnalysis(BaseModel):
+    """Model for emotion analysis results"""
+    model_config = ConfigDict(extra='forbid')
+    
+    emotion: str
+    trigger_word: Optional[str] = None
+    trigger_pattern: Optional[str] = None
+    intensity: float
+    position: int
+
+class TopicAnalysis(BaseModel):
+    """Model for topic analysis results"""
+    model_config = ConfigDict(extra='forbid')
+    
+    topic: str
+    count: int
+    salience: float
+    context: str
+
+class NarrativeElement(BaseModel):
+    """Model for narrative element analysis"""
+    model_config = ConfigDict(extra='forbid')
+    
+    element_type: str
+    marker: Optional[str] = None
+    indicator: Optional[str] = None
+    context: str
+    salience: float
+    position: int
+
+class ContextAwarenessResult(BaseModel):
+    """Model for context awareness results"""
+    model_config = ConfigDict(extra='forbid')
+    
+    entities: List[EntityAnalysis]
+    topics: List[TopicAnalysis]
+    emotions: List[EmotionAnalysis]
+
+class BlendResult(BaseModel):
+    """Model for memory blending results"""
+    model_config = ConfigDict(extra='forbid')
+    
+    blended_snippet: str
+    blend_score: float
+
+class TriggerQuality(BaseModel):
+    """Model for trigger quality assessment"""
+    model_config = ConfigDict(extra='forbid')
+    
+    quality_score: float
+    is_generic: bool
+    similar_triggers: List[Dict[str, Union[str, float]]]
+    specificity: float
+    recommended_threshold: float
+
+class TriggerParameters(BaseModel):
+    """Model for calibrated trigger parameters"""
+    model_config = ConfigDict(extra='forbid')
+    
+    relevance_threshold: float
+    activation_strength: float
+
+class ConversationalImpact(BaseModel):
+    """Model for conversational impact assessment"""
+    model_config = ConfigDict(extra='forbid')
+    
+    impact_score: float
+    novelty: float
+    relevance: float
+    coherence: float
+    impact_type: str
+
+class CausalityAssessment(BaseModel):
+    """Model for causality assessment"""
+    model_config = ConfigDict(extra='forbid')
+    
+    causality_strength: float
+    causality_markers_found: List[str]
+
+class ParallelQueryResult(BaseModel):
+    """Model for parallel query results"""
+    model_config = ConfigDict(extra='forbid')
+    
+    results: Dict[str, List[MemoryData]]
+
+# ============================================================================
+# Existing Pydantic models for recognition memory
 # ============================================================================
 
 class ContextualTrigger(BaseModel):
@@ -80,7 +229,7 @@ class ContextualTrigger(BaseModel):
     trigger_value: str
     relevance_threshold: float = 0.6
     activation_strength: float = 1.0
-    context_requirements: Dict[str, str] = Field(default_factory=dict)  # Use Dict[str, str] instead of Any
+    context_requirements: Dict[str, str] = Field(default_factory=dict)
     source: str = "system"  # Where this trigger came from
 
 class RecognitionResult(BaseModel):
@@ -143,7 +292,7 @@ class RecognitionMemoryContext:
         self.reasoning_core = reasoning_core
         
         # Recent context tracking
-        self.recent_conversation: List[Dict[str, Any]] = []
+        self.recent_conversation: List[MessageContext] = []
         self.current_context_distribution = None
         
         # Active triggers registry - store as serialized JSON
@@ -178,7 +327,7 @@ class RecognitionMemoryContext:
         self.default_triggers: List[ContextualTrigger] = []
         
         # Trigger performance tracking
-        self.trigger_performance: Dict[str, Dict[str, Any]] = {}
+        self.trigger_performance: Dict[str, TriggerPerformance] = {}
     
     @property
     def active_triggers(self) -> Dict[str, ContextualTrigger]:
@@ -532,11 +681,10 @@ class RecognitionMemorySystem:
             await self.initialize()
         
         # Format as message for context history
-        message = {
-            "text": conversation_text,
-            "timestamp": datetime.datetime.now().isoformat(),
-            "context": current_context or {}
-        }
+        message = MessageContext(
+            text=conversation_text,
+            context=current_context or {}
+        )
         
         with trace(workflow_name="Process Conversation Turn", group_id=self.context.trace_id):
             # Update context history
@@ -861,21 +1009,21 @@ class RecognitionMemorySystem:
         return len(intersection) / len(union)
 
 # ============================================================================
-# Tool Functions - All with RunContextWrapper as first parameter
+# Tool Functions - All with RunContextWrapper as first parameter and Pydantic models
 # ============================================================================
 
-@function_tool(strict_mode=False)
+@function_tool
 async def _blend_memory_with_context(
     ctx: RunContextWrapper[RecognitionMemoryContext],
-    memory: Dict[str, Any],
-    conversation_context: List[Dict[str, Any]]
-) -> Dict[str, Any]:
+    memory: MemoryData,
+    conversation_context: List[MessageContext]
+) -> BlendResult:
     """
     Create a lightweight "blend" of a memory and the current conversation context
     so the filter agent can present how they interrelate.
     """
-    mem_text = memory.get("memory_text", "")
-    convo_text = " ".join(msg.get("text", "") for msg in conversation_context)
+    mem_text = memory.memory_text
+    convo_text = " ".join(msg.text for msg in conversation_context)
 
     # Pick a sentence from memory that overlaps with context, or fallback
     overlap_words = set(mem_text.lower().split()) & set(convo_text.lower().split())
@@ -893,13 +1041,13 @@ async def _blend_memory_with_context(
     total = len(set(mem_text.lower().split()) | set(convo_text.lower().split()))
     blend_score = round(shared / total, 2) if total > 0 else 0.0
 
-    return {
-        "blended_snippet": snippet,
-        "blend_score": blend_score
-    }
+    return BlendResult(
+        blended_snippet=snippet,
+        blend_score=blend_score
+    )
 
-@function_tool(strict_mode=False)
-async def _get_active_triggers(ctx: RunContextWrapper[RecognitionMemoryContext]) -> List[Dict[str, Any]]:
+@function_tool
+async def _get_active_triggers(ctx: RunContextWrapper[RecognitionMemoryContext]) -> List[TriggerDict]:
     """
     Get the list of currently active triggers
     
@@ -908,17 +1056,17 @@ async def _get_active_triggers(ctx: RunContextWrapper[RecognitionMemoryContext])
     """
     triggers = []
     for trigger_id, trigger in ctx.context.active_triggers.items():
-        triggers.append({
-            "trigger_id": trigger.trigger_id,
-            "trigger_type": trigger.trigger_type,
-            "trigger_value": trigger.trigger_value,
-            "relevance_threshold": trigger.relevance_threshold,
-            "activation_strength": trigger.activation_strength,
-            "source": trigger.source
-        })
+        triggers.append(TriggerDict(
+            trigger_id=trigger.trigger_id,
+            trigger_type=trigger.trigger_type,
+            trigger_value=trigger.trigger_value,
+            relevance_threshold=trigger.relevance_threshold,
+            activation_strength=trigger.activation_strength,
+            source=trigger.source
+        ))
     return triggers
 
-@function_tool(strict_mode=False)
+@function_tool
 async def _get_recent_recognitions(ctx: RunContextWrapper[RecognitionMemoryContext]) -> List[Dict[str, str]]:
     """
     Get recently recognized memories
@@ -937,7 +1085,7 @@ async def _get_recent_recognitions(ctx: RunContextWrapper[RecognitionMemoryConte
 @function_tool
 async def _update_context_history(
     ctx: RunContextWrapper[RecognitionMemoryContext],
-    new_message: Dict[str, Any]
+    new_message: MessageContext
 ) -> int:
     """
     Update conversation context history with a new message
@@ -967,11 +1115,11 @@ async def _get_trigger_types(ctx: RunContextWrapper[RecognitionMemoryContext]) -
     """
     return ctx.context.trigger_types
 
-@function_tool(strict_mode=False)
+@function_tool
 async def _analyze_entities(
     ctx: RunContextWrapper[RecognitionMemoryContext],
     text: str
-) -> List[Dict[str, Any]]:
+) -> List[EntityAnalysis]:
     """
     Analyze text for salient entities
     
@@ -992,12 +1140,12 @@ async def _analyze_entities(
         clean_word = word.strip(".,;:!?")
         if len(clean_word) > 1:  # Skip single letters
             entity_type = "person" if random.random() > 0.5 else "organization"
-            entities.append({
-                "entity": clean_word,
-                "type": entity_type,
-                "salience": round(random.uniform(0.6, 0.9), 2),
-                "position": text.find(clean_word)
-            })
+            entities.append(EntityAnalysis(
+                entity=clean_word,
+                type=entity_type,
+                salience=round(random.uniform(0.6, 0.9), 2),
+                position=text.find(clean_word)
+            ))
     
     # Check for simple location patterns
     location_patterns = ["in ", "at ", "to ", "from "]
@@ -1010,20 +1158,20 @@ async def _analyze_entities(
                 end_idx = len(text)
             location = text[idx + len(pattern):end_idx].strip(".,;:!?")
             if location and len(location) > 1 and location[0].isupper():
-                entities.append({
-                    "entity": location,
-                    "type": "location",
-                    "salience": round(random.uniform(0.5, 0.8), 2),
-                    "position": idx + len(pattern)
-                })
+                entities.append(EntityAnalysis(
+                    entity=location,
+                    type="location",
+                    salience=round(random.uniform(0.5, 0.8), 2),
+                    position=idx + len(pattern)
+                ))
     
     return entities
 
-@function_tool(strict_mode=False)
+@function_tool
 async def _analyze_emotions(
     ctx: RunContextWrapper[RecognitionMemoryContext],
     text: str
-) -> List[Dict[str, Any]]:
+) -> List[EmotionAnalysis]:
     """
     Analyze text for emotional markers
     
@@ -1047,48 +1195,48 @@ async def _analyze_emotions(
     for emotion, keywords in emotion_keywords.items():
         for keyword in keywords:
             if keyword in text.lower():
-                detected_emotions.append({
-                    "emotion": emotion,
-                    "trigger_word": keyword,
-                    "intensity": round(random.uniform(0.5, 0.9), 2),
-                    "position": text.lower().find(keyword)
-                })
+                detected_emotions.append(EmotionAnalysis(
+                    emotion=emotion,
+                    trigger_word=keyword,
+                    intensity=round(random.uniform(0.5, 0.9), 2),
+                    position=text.lower().find(keyword)
+                ))
     
     # If no emotions were detected, try to infer from patterns
     if not detected_emotions:
         if "!" in text:
             # Excitement or anger
             if any(word in text.lower() for word in ["wow", "amazing", "awesome", "cool"]):
-                detected_emotions.append({
-                    "emotion": "surprised",
-                    "trigger_pattern": "exclamation",
-                    "intensity": 0.7,
-                    "position": text.find("!")
-                })
+                detected_emotions.append(EmotionAnalysis(
+                    emotion="surprised",
+                    trigger_pattern="exclamation",
+                    intensity=0.7,
+                    position=text.find("!")
+                ))
             else:
-                detected_emotions.append({
-                    "emotion": "angry",
-                    "trigger_pattern": "exclamation",
-                    "intensity": 0.6,
-                    "position": text.find("!")
-                })
+                detected_emotions.append(EmotionAnalysis(
+                    emotion="angry",
+                    trigger_pattern="exclamation",
+                    intensity=0.6,
+                    position=text.find("!")
+                ))
         
         if "?" in text:
             # Curiosity or confusion
-            detected_emotions.append({
-                "emotion": "curious",
-                "trigger_pattern": "question",
-                "intensity": 0.5,
-                "position": text.find("?")
-            })
+            detected_emotions.append(EmotionAnalysis(
+                emotion="curious",
+                trigger_pattern="question",
+                intensity=0.5,
+                position=text.find("?")
+            ))
     
     return detected_emotions
 
-@function_tool(strict_mode=False)
+@function_tool
 async def _analyze_topics(
     ctx: RunContextWrapper[RecognitionMemoryContext],
     text: str
-) -> List[Dict[str, Any]]:
+) -> List[TopicAnalysis]:
     """
     Analyze text for key topics
     
@@ -1118,12 +1266,15 @@ async def _analyze_topics(
     
     topics = []
     for word, count in top_words:
-        topics.append({
-            "topic": word,
-            "count": count,
-            "salience": min(1.0, 0.5 + (count / 10)),
-            "context": text[max(0, text.lower().find(word) - 10):text.lower().find(word) + len(word) + 10]
-        })
+        context_start = max(0, text.lower().find(word) - 10)
+        context_end = min(len(text), text.lower().find(word) + len(word) + 10)
+        
+        topics.append(TopicAnalysis(
+            topic=word,
+            count=count,
+            salience=min(1.0, 0.5 + (count / 10)),
+            context=text[context_start:context_end]
+        ))
     
     return topics
 
@@ -1167,13 +1318,13 @@ async def _format_trigger(
         source="agent_generated"
     )
 
-@function_tool(strict_mode=False)
+@function_tool
 async def _query_memory(
     ctx: RunContextWrapper[RecognitionMemoryContext],
-    trigger: Dict[str, Any],
+    trigger: TriggerDict,
     memory_types: Optional[List[str]] = None,
     limit: int = 3
-) -> List[Dict[str, Any]]:
+) -> List[MemoryData]:
     """
     Query memory system based on a contextual trigger
     
@@ -1206,22 +1357,33 @@ async def _query_memory(
             entities=[trigger.get("trigger_value")] if trigger.get("trigger_type") == "entity" else None
         )
         
-        # Add trigger information to results
+        # Convert to MemoryData objects
+        memory_data_list = []
         for memory in memories:
-            memory["activation_trigger"] = trigger
+            memory_data = MemoryData(
+                id=memory.get("id", ""),
+                memory_text=memory.get("memory_text", ""),
+                memory_type=memory.get("memory_type", ""),
+                relevance=memory.get("relevance", 0.5),
+                significance=memory.get("significance", 5),
+                confidence=memory.get("confidence", 0.5),
+                activation_trigger=trigger,
+                metadata=memory.get("metadata", {})
+            )
+            memory_data_list.append(memory_data)
         
-        return memories
+        return memory_data_list
         
     except Exception as e:
         logger.error(f"Error querying memory: {e}")
         return []
 
-@function_tool(strict_mode=False)
+@function_tool
 async def _combine_query_results(
     ctx: RunContextWrapper[RecognitionMemoryContext],
-    memory_sets: List[List[Dict[str, Any]]],
+    memory_sets: List[List[MemoryData]],
     max_results: int = 10
-) -> List[Dict[str, Any]]:
+) -> List[MemoryData]:
     """
     Combine and deduplicate memory query results
     
@@ -1238,22 +1400,20 @@ async def _combine_query_results(
     
     for memory_set in memory_sets:
         for memory in memory_set:
-            memory_id = memory.get("id")
-            if memory_id and memory_id not in memory_ids:
+            if memory.id and memory.id not in memory_ids:
                 all_memories.append(memory)
-                memory_ids.add(memory_id)
+                memory_ids.add(memory.id)
     
     # Sort by relevance if available
-    if all_memories and "relevance" in all_memories[0]:
-        all_memories.sort(key=lambda x: x.get("relevance", 0), reverse=True)
+    all_memories.sort(key=lambda x: x.relevance, reverse=True)
     
     return all_memories[:max_results]
 
 @function_tool
 async def _calculate_contextual_relevance(
     ctx: RunContextWrapper[RecognitionMemoryContext],
-    memory: Dict[str, Any],
-    conversation_context: List[Dict[str, Any]]
+    memory: MemoryData,
+    conversation_context: List[MessageContext]
 ) -> float:
     """
     Calculate contextual relevance of a memory to current conversation
@@ -1266,19 +1426,14 @@ async def _calculate_contextual_relevance(
         Contextual relevance score
     """
     # Start with the memory's relevance score if available
-    base_relevance = memory.get("relevance", 0.5)
+    base_relevance = memory.relevance
     
     # Get memory text and type
-    memory_text = memory.get("memory_text", "")
-    memory_type = memory.get("memory_type", "")
+    memory_text = memory.memory_text
+    memory_type = memory.memory_type
     
     # Extract conversation text
-    conversation_text = ""
-    for message in conversation_context:
-        if "text" in message:
-            conversation_text += " " + message["text"]
-        elif "content" in message:
-            conversation_text += " " + message["content"]
+    conversation_text = " ".join(msg.text for msg in conversation_context)
     
     # Simple text similarity (word overlap)
     memory_words = set(memory_text.lower().split())
@@ -1298,10 +1453,10 @@ async def _calculate_contextual_relevance(
     
     # Recency boost
     recency_boost = 0.0
-    if "metadata" in memory and "timestamp" in memory.get("metadata", {}):
+    if memory.metadata and "timestamp" in memory.metadata:
         try:
             timestamp = datetime.datetime.fromisoformat(
-                memory["metadata"]["timestamp"].replace("Z", "+00:00")
+                memory.metadata["timestamp"].replace("Z", "+00:00")
             )
             days_old = (datetime.datetime.now() - timestamp).days
             if days_old < 7:
@@ -1316,11 +1471,11 @@ async def _calculate_contextual_relevance(
     
     return contextual_relevance
 
-@function_tool(strict_mode=False)
+@function_tool
 async def _check_recognition_history(
     ctx: RunContextWrapper[RecognitionMemoryContext],
     memory_id: str
-) -> Dict[str, Any]:
+) -> RecognitionHistory:
     """
     Check if a memory was recently recognized
     
@@ -1337,25 +1492,25 @@ async def _check_recognition_history(
             seconds_ago = (now - timestamp).total_seconds()
             cooldown = ctx.context.recognition_cooldown
             
-            return {
-                "was_recognized": True,
-                "seconds_ago": seconds_ago,
-                "cooldown_period": cooldown,
-                "cooldown_remaining": max(0, cooldown - seconds_ago),
-                "in_cooldown": seconds_ago < cooldown
-            }
+            return RecognitionHistory(
+                was_recognized=True,
+                seconds_ago=seconds_ago,
+                cooldown_period=cooldown,
+                cooldown_remaining=max(0, cooldown - seconds_ago),
+                in_cooldown=seconds_ago < cooldown
+            )
     
-    return {
-        "was_recognized": False,
-        "cooldown_period": ctx.context.recognition_cooldown,
-        "cooldown_remaining": 0,
-        "in_cooldown": False
-    }
+    return RecognitionHistory(
+        was_recognized=False,
+        cooldown_period=ctx.context.recognition_cooldown,
+        cooldown_remaining=0,
+        in_cooldown=False
+    )
 
-@function_tool(strict_mode=False)
+@function_tool
 async def _analyze_context_state(
     ctx: RunContextWrapper[RecognitionMemoryContext]
-) -> Dict[str, Any]:
+) -> ContextState:
     """
     Analyze current context state for recognition parameters
     
@@ -1372,7 +1527,7 @@ async def _analyze_context_state(
     # Adjust based on conversation state
     if len(conversation) > 0:
         # Check for questions (may indicate higher interest in memories)
-        last_message = conversation[-1].get("text", "")
+        last_message = conversation[-1].text
         if "?" in last_message:
             recognition_sensitivity += 0.1
             max_recognitions += 1
@@ -1390,18 +1545,18 @@ async def _analyze_context_state(
     ctx.context.recognition_sensitivity = min(1.0, recognition_sensitivity)
     ctx.context.max_recognitions_per_turn = min(5, max_recognitions)
     
-    return {
-        "recognition_sensitivity": ctx.context.recognition_sensitivity,
-        "max_recognitions": ctx.context.max_recognitions_per_turn,
-        "context_complexity": len(conversation),
-        "active_triggers_count": len(ctx.context.active_triggers)
-    }
+    return ContextState(
+        recognition_sensitivity=ctx.context.recognition_sensitivity,
+        max_recognitions=ctx.context.max_recognitions_per_turn,
+        context_complexity=len(conversation),
+        active_triggers_count=len(ctx.context.active_triggers)
+    )
 
-@function_tool(strict_mode=False)
+@function_tool
 async def _analyze_narrative_elements(
     ctx: RunContextWrapper[RecognitionMemoryContext],
     text: str
-) -> List[Dict[str, Any]]:
+) -> List[NarrativeElement]:
     """
     Analyze text for narrative elements that might trigger recognition
     
@@ -1427,13 +1582,13 @@ async def _analyze_narrative_elements(
             end = min(len(text), marker_position + 20)
             context = text[start:end]
             
-            narrative_elements.append({
-                "element_type": "narrative_marker",
-                "marker": marker,
-                "context": context,
-                "salience": 0.7,
-                "position": marker_position
-            })
+            narrative_elements.append(NarrativeElement(
+                element_type="narrative_marker",
+                marker=marker,
+                context=context,
+                salience=0.7,
+                position=marker_position
+            ))
     
     # Check for event descriptions
     event_indicators = ["happened", "occurred", "took place", "experienced", "went to"]
@@ -1446,21 +1601,21 @@ async def _analyze_narrative_elements(
             end = min(len(text), indicator_position + 25)
             context = text[start:end]
             
-            narrative_elements.append({
-                "element_type": "event_description",
-                "indicator": indicator,
-                "context": context,
-                "salience": 0.8,
-                "position": indicator_position
-            })
+            narrative_elements.append(NarrativeElement(
+                element_type="event_description",
+                indicator=indicator,
+                context=context,
+                salience=0.8,
+                position=indicator_position
+            ))
     
     return narrative_elements
 
-@function_tool(strict_mode=False)
+@function_tool
 async def _leverage_context_awareness(
     ctx: RunContextWrapper[RecognitionMemoryContext],
     text: str
-) -> Dict[str, Any]:
+) -> ContextAwarenessResult:
     """
     Leverage context awareness system for enhanced salience detection
     
@@ -1471,11 +1626,11 @@ async def _leverage_context_awareness(
         Context awareness results
     """
     if not ctx.context.context_awareness:
-        return {
-            "entities": [],
-            "topics": [],
-            "emotions": []
-        }
+        return ContextAwarenessResult(
+            entities=[],
+            topics=[],
+            emotions=[]
+        )
     
     try:
         # Use context awareness system
@@ -1484,50 +1639,53 @@ async def _leverage_context_awareness(
         # Extract elements
         entities = []
         for entity in awareness_result.get("entities", []):
-            entities.append({
-                "entity": entity.get("text", ""),
-                "type": entity.get("type", "unknown"),
-                "salience": entity.get("salience", 0.5)
-            })
+            entities.append(EntityAnalysis(
+                entity=entity.get("text", ""),
+                type=entity.get("type", "unknown"),
+                salience=entity.get("salience", 0.5),
+                position=0  # Position not provided by context awareness
+            ))
             
         topics = []
         for topic in awareness_result.get("topics", []):
-            topics.append({
-                "topic": topic.get("name", ""),
-                "confidence": topic.get("confidence", 0.5),
-                "keywords": topic.get("keywords", [])
-            })
+            topics.append(TopicAnalysis(
+                topic=topic.get("name", ""),
+                count=1,  # Count not provided
+                salience=topic.get("confidence", 0.5),
+                context=""  # Context not provided
+            ))
             
         emotions = []
         for emotion in awareness_result.get("emotions", []):
-            emotions.append({
-                "emotion": emotion.get("name", ""),
-                "intensity": emotion.get("score", 0.5)
-            })
+            emotions.append(EmotionAnalysis(
+                emotion=emotion.get("name", ""),
+                intensity=emotion.get("score", 0.5),
+                position=0  # Position not provided
+            ))
             
-        return {
-            "entities": entities,
-            "topics": topics,
-            "emotions": emotions
-        }
+        return ContextAwarenessResult(
+            entities=entities,
+            topics=topics,
+            emotions=emotions
+        )
         
     except Exception as e:
         logger.error(f"Error leveraging context awareness: {e}")
-        return {
-            "entities": [],
-            "topics": [],
-            "emotions": []
-        }
+        return ContextAwarenessResult(
+            entities=[],
+            topics=[],
+            emotions=[]
+        )
 
-@function_tool(strict_mode=False)
+@function_tool
 async def _query_with_prioritization(
     ctx: RunContextWrapper[RecognitionMemoryContext],
     query: str,
-    trigger: Optional[Dict[str, Any]] = None,
+    trigger: Optional[TriggerDict] = None,
     memory_types: Optional[List[str]] = None,
     prioritization: Optional[Dict[str, float]] = None,
     limit: int = 5
-) -> List[Dict[str, Any]]:
+) -> List[MemoryData]:
     """
     Query memory system with type prioritization
     
@@ -1575,24 +1733,34 @@ async def _query_with_prioritization(
                 limit=limit
             )
             
-        # Add trigger information
-        if trigger:
-            for memory in memories:
-                memory["activation_trigger"] = trigger
+        # Convert to MemoryData objects
+        memory_data_list = []
+        for memory in memories:
+            memory_data = MemoryData(
+                id=memory.get("id", ""),
+                memory_text=memory.get("memory_text", ""),
+                memory_type=memory.get("memory_type", ""),
+                relevance=memory.get("relevance", 0.5),
+                significance=memory.get("significance", 5),
+                confidence=memory.get("confidence", 0.5),
+                activation_trigger=trigger,
+                metadata=memory.get("metadata", {})
+            )
+            memory_data_list.append(memory_data)
                 
-        return memories
+        return memory_data_list
         
     except Exception as e:
         logger.error(f"Error in prioritized memory query: {e}")
         return []
 
-@function_tool(strict_mode=False)
+@function_tool
 async def _query_memories_parallel(
     ctx: RunContextWrapper[RecognitionMemoryContext],
-    triggers: List[Dict[str, Any]],
+    triggers: List[TriggerDict],
     memory_types: Optional[List[str]] = None,
     limit_per_trigger: int = 3
-) -> Dict[str, List[Dict[str, Any]]]:
+) -> ParallelQueryResult:
     """
     Query memory system in parallel for multiple triggers
     
@@ -1606,7 +1774,7 @@ async def _query_memories_parallel(
     """
     # Ensure memory core exists
     if not ctx.context.memory_core:
-        return {}
+        return ParallelQueryResult(results={})
         
     # Default memory types
     if not memory_types:
@@ -1630,24 +1798,38 @@ async def _query_memories_parallel(
         results = {}
         for trigger_id, task in trigger_tasks.items():
             try:
-                results[trigger_id] = await task
+                memories = await task
+                # Convert to MemoryData objects
+                memory_data_list = []
+                for memory in memories:
+                    memory_data = MemoryData(
+                        id=memory.get("id", ""),
+                        memory_text=memory.get("memory_text", ""),
+                        memory_type=memory.get("memory_type", ""),
+                        relevance=memory.get("relevance", 0.5),
+                        significance=memory.get("significance", 5),
+                        confidence=memory.get("confidence", 0.5),
+                        metadata=memory.get("metadata", {})
+                    )
+                    memory_data_list.append(memory_data)
+                results[trigger_id] = memory_data_list
             except Exception as e:
                 logger.error(f"Error in parallel query for trigger {trigger_id}: {e}")
                 results[trigger_id] = []
                 
-        return results
+        return ParallelQueryResult(results=results)
         
     except Exception as e:
         logger.error(f"Error in parallel memory queries: {e}")
-        return {}
+        return ParallelQueryResult(results={})
 
-@function_tool(strict_mode=False)
+@function_tool
 async def _track_query_performance(
     ctx: RunContextWrapper[RecognitionMemoryContext],
     trigger_id: str,
     memories_found: int,
     avg_relevance: float
-) -> Dict[str, Any]:
+) -> TriggerPerformance:
     """
     Track query performance for trigger optimization
     
@@ -1661,54 +1843,47 @@ async def _track_query_performance(
     """
     # Create performance entry if it doesn't exist
     if trigger_id not in ctx.context.trigger_performance:
-        ctx.context.trigger_performance[trigger_id] = {
-            "query_count": 0,
-            "total_memories": 0,
-            "avg_relevance": 0.0,
-            "last_updated": datetime.datetime.now().isoformat()
-        }
+        ctx.context.trigger_performance[trigger_id] = TriggerPerformance(
+            trigger_id=trigger_id
+        )
         
     # Update performance metrics
     performance = ctx.context.trigger_performance[trigger_id]
-    performance["query_count"] += 1
-    performance["total_memories"] += memories_found
+    performance.query_count += 1
+    performance.total_memories += memories_found
     
     # Calculate new average relevance
-    old_avg = performance.get("avg_relevance", 0.0)
-    old_count = performance.get("query_count", 1) - 1  # Subtract the one we just added
+    old_avg = performance.avg_relevance
+    old_count = performance.query_count - 1  # Subtract the one we just added
     
     if old_count > 0:
-        performance["avg_relevance"] = (old_avg * old_count + avg_relevance) / (old_count + 1)
+        performance.avg_relevance = (old_avg * old_count + avg_relevance) / (old_count + 1)
     else:
-        performance["avg_relevance"] = avg_relevance
+        performance.avg_relevance = avg_relevance
         
-    performance["last_updated"] = datetime.datetime.now().isoformat()
+    performance.last_updated = datetime.datetime.now().isoformat()
     
     # Check if trigger needs optimization
     needs_optimization = False
     
     # If too many queries with no results
-    if performance["query_count"] >= 3 and performance["total_memories"] == 0:
+    if performance.query_count >= 3 and performance.total_memories == 0:
         needs_optimization = True
         
     # If consistently low relevance
-    if performance["query_count"] >= 5 and performance["avg_relevance"] < 0.3:
+    if performance.query_count >= 5 and performance.avg_relevance < 0.3:
         needs_optimization = True
         
-    return {
-        "trigger_id": trigger_id,
-        "query_count": performance["query_count"],
-        "total_memories": performance["total_memories"],
-        "avg_relevance": performance["avg_relevance"],
-        "needs_optimization": needs_optimization
-    }
+    performance.needs_optimization = needs_optimization
+    
+    return performance
 
-@function_tool(strict_mode=False)
+@function_tool
 async def _assess_trigger_quality(
     ctx: RunContextWrapper[RecognitionMemoryContext],
     trigger_type: str,
     trigger_value: str
-) -> Dict[str, Any]:
+) -> TriggerQuality:
     """
     Assess quality of a potential trigger
     
@@ -1765,27 +1940,27 @@ async def _assess_trigger_quality(
     # Bound score
     quality = max(0.1, min(1.0, quality))
     
-    return {
-        "quality_score": quality,
-        "is_generic": is_generic,
-        "similar_triggers": similar_triggers,
-        "specificity": specificity,
-        "recommended_threshold": max(0.5, 0.7 - (quality * 0.2))  # Adjust threshold based on quality
-    }
+    return TriggerQuality(
+        quality_score=quality,
+        is_generic=is_generic,
+        similar_triggers=similar_triggers,
+        specificity=specificity,
+        recommended_threshold=max(0.5, 0.7 - (quality * 0.2))  # Adjust threshold based on quality
+    )
 
-@function_tool(strict_mode=False)
+@function_tool
 async def _assess_memory_causality(
     ctx: RunContextWrapper[RecognitionMemoryContext],
-    memory: Dict[str, Any],
-    conversation_context: List[Dict[str, Any]]
-) -> Dict[str, Any]:
+    memory: MemoryData,
+    conversation_context: List[MessageContext]
+) -> CausalityAssessment:
     """
     Assess causal connections between a recognized memory and the current conversation.
     Returns a simple causality strength score and any trigger keywords found.
     """
     # Combine memory text and recent conversation
-    mem_text = memory.get("memory_text", "")
-    convo_text = " ".join(msg.get("text", "") for msg in conversation_context)
+    mem_text = memory.memory_text
+    convo_text = " ".join(msg.text for msg in conversation_context)
     full_text = f"{mem_text} {convo_text}".lower()
 
     # Look for basic causal markers
@@ -1795,18 +1970,18 @@ async def _assess_memory_causality(
     # Simple strength: proportion of markers found capped at 1.0
     strength = min(1.0, len(found) / len(causality_markers))
 
-    return {
-        "causality_strength": strength,
-        "causality_markers_found": found
-    }
+    return CausalityAssessment(
+        causality_strength=strength,
+        causality_markers_found=found
+    )
 
-@function_tool(strict_mode=False)
+@function_tool
 async def _calibrate_trigger_parameters(
     ctx: RunContextWrapper[RecognitionMemoryContext],
     trigger_type: str,
     trigger_value: str,
-    quality_assessment: Dict[str, Any]
-) -> Dict[str, float]:
+    quality_assessment: TriggerQuality
+) -> TriggerParameters:
     """
     Calibrate trigger parameters based on quality assessment
     
@@ -1818,9 +1993,9 @@ async def _calibrate_trigger_parameters(
     Returns:
         Calibrated parameters
     """
-    quality = quality_assessment.get("quality_score", 0.5)
-    is_generic = quality_assessment.get("is_generic", False)
-    specificity = quality_assessment.get("specificity", 0.5)
+    quality = quality_assessment.quality_score
+    is_generic = quality_assessment.is_generic
+    specificity = quality_assessment.specificity
     
     # Base parameters
     relevance_threshold = 0.6
@@ -1851,17 +2026,17 @@ async def _calibrate_trigger_parameters(
     if is_generic:
         activation_strength *= 0.8  # Reduce strength for generic triggers
         
-    return {
-        "relevance_threshold": relevance_threshold,
-        "activation_strength": activation_strength
-    }
+    return TriggerParameters(
+        relevance_threshold=relevance_threshold,
+        activation_strength=activation_strength
+    )
 
-@function_tool(strict_mode=False)
+@function_tool
 async def _assess_conversational_impact(
     ctx: RunContextWrapper[RecognitionMemoryContext],
-    memory: Dict[str, Any],
-    conversation_context: List[Dict[str, Any]]
-) -> Dict[str, Any]:
+    memory: MemoryData,
+    conversation_context: List[MessageContext]
+) -> ConversationalImpact:
     """
     Assess potential conversational impact of a recognized memory
     
@@ -1873,14 +2048,14 @@ async def _assess_conversational_impact(
         Impact assessment
     """
     # Get memory properties
-    memory_text = memory.get("memory_text", "")
-    memory_type = memory.get("memory_type", "")
-    memory_significance = memory.get("significance", 5)
+    memory_text = memory.memory_text
+    memory_type = memory.memory_type
+    memory_significance = memory.significance
     
     # Extract last message
     last_message = ""
     if conversation_context:
-        last_message = conversation_context[-1].get("text", "")
+        last_message = conversation_context[-1].text
         
     # Default impact scores
     novelty = 0.5
@@ -1916,13 +2091,13 @@ async def _assess_conversational_impact(
     contrast = coherence < 0.3 and novelty > 0.7
     reinforcement = coherence > 0.7 and novelty < 0.3
     
-    return {
-        "impact_score": impact_score,
-        "novelty": novelty,
-        "relevance": relevance,
-        "coherence": coherence,
-        "impact_type": "elaboration" if elaboration else "contrast" if contrast else "reinforcement" if reinforcement else "mixed"
-    }
+    return ConversationalImpact(
+        impact_score=impact_score,
+        novelty=novelty,
+        relevance=relevance,
+        coherence=coherence,
+        impact_type="elaboration" if elaboration else "contrast" if contrast else "reinforcement" if reinforcement else "mixed"
+    )
 
 # Helper function for string similarity
 def _calculate_string_similarity(str1: str, str2: str) -> float:
@@ -1972,61 +2147,3 @@ async def prepare_for_relevance_filtering(ctx: RunContextWrapper[RecognitionMemo
     ctx.context.max_memories_to_return = ctx.context.max_recognitions_per_turn
     logger.debug(f"Standalone: Set max_memories_to_return to: {ctx.context.max_memories_to_return}")
     return None
-
-# ============================================================================
-# REFACTORING SUMMARY
-# ============================================================================
-
-"""
-REFACTORING SUMMARY - RecognitionMemorySystem for OpenAI Agents SDK v0.0.17 Compatibility
-
-Key Changes Made:
-1. Fixed all Dict[str, Any] issues by:
-   - Adding `strict_mode=False` to function_tool decorators where needed
-   - Using simpler dict returns instead of complex Pydantic models for problematic functions
-   - Creating TypedDict classes for structured dict fields
-
-2. Ensured RunContextWrapper[RecognitionMemoryContext] is ALWAYS the first parameter in all @function_tool functions
-
-3. Added `extra='forbid'` to all Pydantic models to prevent additional properties
-
-4. Fixed the RecognitionMemoryContext storage issue by:
-   - Storing serialized triggers as JSON strings instead of direct object references
-   - Adding helper methods for storing and retrieving triggers
-
-5. Fixed missing attributes:
-   - Added trigger_performance tracking dict
-   - Added missing context attributes (recognition_sensitivity, max_memories_per_trigger, max_memories_to_return)
-
-6. Simplified complex return types to avoid strict schema validation issues
-
-Usage Notes:
-- The system maintains the same API interface as before
-- All public methods work exactly the same way
-- Internal storage is now more robust and serialization-safe
-- Function tools with complex returns use `strict_mode=False` to avoid validation errors
-
-Example Usage:
-```python
-# Initialize the system
-recognition_system = RecognitionMemorySystem(
-    memory_core=memory,
-    context_awareness=context,
-    reasoning_core=reasoning
-)
-
-# Process conversation turns
-results = await recognition_system.process_conversation_turn(
-    "I remember feeling happy when I visited Paris last summer."
-)
-
-# Add custom triggers
-trigger_id = await recognition_system.add_contextual_trigger(
-    trigger_type="emotion",
-    trigger_value="happiness",
-    relevance_threshold=0.7
-)
-
-# All other methods work the same way
-```
-"""
