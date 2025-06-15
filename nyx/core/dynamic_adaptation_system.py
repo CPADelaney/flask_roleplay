@@ -23,6 +23,25 @@ from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
+class KVPair(BaseModel):
+    key: str
+    value: Any
+
+class RawContext(BaseModel):
+    items: list[KVPair]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {kv.key: kv.value for kv in self.items}
+
+    @staticmethod
+    def from_dict(d: dict[str, Any]) -> "RawContext":
+        return RawContext(items=[KVPair(key=k, value=v) for k, v in d.items()])
+
+
+    @staticmethod
+    def from_dict(d: dict[str, Any]) -> "RawContext":
+        return RawContext(items=[KVPair(key=k, value=v) for k, v in d.items()])
+
 # Pydantic models for structured I/O
 class StrategyParameters(BaseModel):
     exploration_rate: float = Field(default=0.2, ge=0.0, le=1.0, description="Rate of exploration vs exploitation")
@@ -918,257 +937,159 @@ class DynamicAdaptationSystem:
         )
     
     # Function tools for the agents
-    @staticmethod    
+    @staticmethod
     @function_tool
-    async def _calculate_context_difference(ctx: RunContextWrapper[DynamicAdaptationContext],
-                                        current: Dict[str, Any], 
-                                        previous: Dict[str, Any]) -> float:
-        """
-        Calculate the difference between two contexts
-        
-        Args:
-            current: Current context
-            previous: Previous context
-            
-        Returns:
-            Difference magnitude (0.0-1.0)
-        """
-        # Focus on key elements common to both contexts
-        common_keys = set(current.keys()) & set(previous.keys())
-        if not common_keys:
-            return 1.0  # Maximum difference if no common keys
-        
-        differences = []
-        for key in common_keys:
-            # Skip complex nested structures, consider only scalar values
-            if isinstance(current[key], (str, int, float, bool)) and isinstance(previous[key], (str, int, float, bool)):
-                if isinstance(current[key], bool) or isinstance(previous[key], bool):
-                    # For boolean values, difference is either 0 or 1
-                    diff = 0.0 if current[key] == previous[key] else 1.0
-                elif isinstance(current[key], str) or isinstance(previous[key], str):
-                    # For string values, difference is either 0 or 1
-                    diff = 0.0 if str(current[key]) == str(previous[key]) else 1.0
-                else:
-                    # For numeric values, calculate normalized difference
-                    max_val = max(abs(float(current[key])), abs(float(previous[key])))
-                    if max_val > 0:
-                        diff = abs(float(current[key]) - float(previous[key])) / max_val
-                    else:
-                        diff = 0.0
-                differences.append(diff)
-        
-        if not differences:
-            return 0.5  # Middle value if no comparable elements
-            
-        # Return average difference
-        return sum(differences) / len(differences)
+    async def _calculate_context_difference(
+        ctx: RunContextWrapper[DynamicAdaptationContext],
+        current: RawContext,
+        previous: RawContext
+    ) -> float:
+        cur, prev = current.to_dict(), previous.to_dict()
+        common = set(cur) & set(prev)
+        if not common:
+            return 1.0
+    
+        diffs: list[float] = []
+        for k in common:
+            a, b = cur[k], prev[k]
+            if isinstance(a, bool) and isinstance(b, bool):
+                diffs.append(0.0 if a == b else 1.0)
+            elif isinstance(a, (int, float)) and isinstance(b, (int, float)):
+                mx = max(abs(float(a)), abs(float(b)))
+                diffs.append(abs(float(a) - float(b)) / mx if mx else 0.0)
+            else:                                      # strings / mixed scalars
+                diffs.append(0.0 if str(a) == str(b) else 1.0)
+    
+        return sum(diffs) / len(diffs) if diffs else 0.5
 
-    @staticmethod    
+
+    @staticmethod
     @function_tool
-    async def _generate_change_description(ctx: RunContextWrapper[DynamicAdaptationContext],
-                                       current: Dict[str, Any], 
-                                       previous: Dict[str, Any], 
-                                       magnitude: float) -> str:
-        """
-        Generate a description of the context change
-        
-        Args:
-            current: Current context
-            previous: Previous context
-            magnitude: Change magnitude
-            
-        Returns:
-            Change description
-        """
-        changes = []
-        
-        # Check for new or modified keys
-        for key in current:
-            if key in previous:
-                if current[key] != previous[key] and isinstance(current[key], (str, int, float, bool)):
-                    changes.append(f"{key} changed from {previous[key]} to {current[key]}")
+    async def _generate_change_description(
+        ctx: RunContextWrapper[DynamicAdaptationContext],
+        current: RawContext,
+        previous: RawContext,
+        magnitude: float
+    ) -> str:
+        cur, prev = current.to_dict(), previous.to_dict()
+        changes: list[str] = []
+    
+        for k in cur:
+            if k in prev:
+                if cur[k] != prev[k]:
+                    changes.append(f"{k} changed from {prev[k]} to {cur[k]}")
             else:
-                changes.append(f"New element: {key}")
-        
-        # Check for removed keys
-        for key in previous:
-            if key not in current:
-                changes.append(f"Removed element: {key}")
-        
-        # Check for experience sharing and identity changes
-        if "has_experience" in current and "has_experience" in previous:
-            if current["has_experience"] and not previous["has_experience"]:
-                changes.append("Experience sharing was activated")
-            elif not current["has_experience"] and previous["has_experience"]:
-                changes.append("Experience sharing was deactivated")
-        
-        if "cross_user_experience" in current:
-            if current.get("cross_user_experience", False):
-                changes.append("Cross-user experience sharing was used")
-        
-        if "identity_impact" in current:
-            if current.get("identity_impact", False):
-                changes.append("Experience had significant identity impact")
-        
+                changes.append(f"New element: {k}")
+        for k in prev:
+            if k not in cur:
+                changes.append(f"Removed element: {k}")
+    
+        # domain-specific flags (kept exactly as in your original code)
+        if cur.get("has_experience") and not prev.get("has_experience"):
+            changes.append("Experience sharing was activated")
+        elif prev.get("has_experience") and not cur.get("has_experience"):
+            changes.append("Experience sharing was deactivated")
+        if cur.get("cross_user_experience"):
+            changes.append("Cross-user experience sharing was used")
+        if cur.get("identity_impact"):
+            changes.append("Experience had significant identity impact")
+    
         if not changes:
             return f"Context changed with magnitude {magnitude:.2f}"
-            
-        change_desc = ", ".join(changes[:3])  # Limit to first 3 changes
+    
+        desc = ", ".join(changes[:3])
         if len(changes) > 3:
-            change_desc += f", and {len(changes) - 3} more changes"
-            
-        return f"Context changed ({magnitude:.2f}): {change_desc}"
-
-    @staticmethod    
+            desc += f", and {len(changes) - 3} more changes"
+        return f"Context changed ({magnitude:.2f}): {desc}"
+    
+    @staticmethod
     @function_tool
-    async def _extract_context_features(ctx: RunContextWrapper[DynamicAdaptationContext],
-                                    context: Dict[str, Any]) -> ContextFeatures:
-        """
-        Extract numerical features from context for analysis
-        
-        Args:
-            context: Context to analyze
-            
-        Returns:
-            Context features
-        """
-        features = {}
-        
-        # Calculate complexity
-        complexity = await self._calculate_context_complexity(ctx, context)
-        features["complexity"] = complexity
-        
-        # Calculate volatility if we have history
-        volatility = self._calculate_context_volatility()
-        features["volatility"] = volatility
-        
-        # Extract feature from user input if present
-        if "user_input" in context and isinstance(context["user_input"], str):
-            features["input_length"] = min(1.0, len(context["user_input"]) / 500.0)
-            features["user_complexity"] = min(1.0, len(set(context["user_input"].split())) / 100.0)
-        
-        # Extract emotional intensity if present
-        if "emotional_state" in context:
-            emotional_state = context["emotional_state"]
-            if isinstance(emotional_state, dict) and "arousal" in emotional_state:
-                features["emotional_intensity"] = emotional_state["arousal"]
-        
-        # Extract experience features
-        if "has_experience" in context:
-            experience_relevant = context.get("has_experience", False)
-            exp_relevance = 0.0
-            
-            if experience_relevant and "relevance_score" in context:
-                exp_relevance = min(1.0, context["relevance_score"])
-            elif experience_relevant:
-                exp_relevance = 0.7  # Default if has experience but no score
-                
-            features["experience_relevance"] = exp_relevance
-            
-            # Check for cross-user experiences
-            if context.get("cross_user_experience", False):
-                # Cross-user experiences increase complexity
-                features["complexity"] = min(1.0, features["complexity"] + 0.2)
-        
-        # Extract identity features
-        if "identity_impact" in context and context["identity_impact"]:
-            # Identity stability (0 = changing rapidly, 1 = very stable)
-            features["identity_stability"] = 0.3  # Default to lower stability when identity impact present
-        else:
-            features["identity_stability"] = 0.8  # Default to high stability when no identity impact
-        
-        # Extract user engagement if present
-        if "interaction_count" in context:
-            # Higher interaction count suggests higher engagement
-            features["user_engagement"] = min(1.0, context["interaction_count"] / 50.0)
-        
-        # Return as pydantic model
-        return ContextFeatures(**features)
+    async def _extract_context_features(
+        ctx: RunContextWrapper[DynamicAdaptationContext],
+        context: RawContext
+    ) -> ContextFeatures:
+        cdict = context.to_dict()
+        # — complexity / volatility calculations are identical —
+        complexity = await ctx.agent._calculate_context_complexity(ctx, context)  # type: ignore
+        volatility = ctx.agent._calculate_context_volatility()                    # type: ignore
+    
+        feat: dict[str, Any] = {
+            "complexity" : complexity,
+            "volatility" : volatility,
+        }
+    
+        # all the same feature extraction logic:
+        if (uin := cdict.get("user_input")):
+            feat["input_length"]   = min(1.0, len(str(uin)) / 500.0)
+            feat["user_complexity"] = min(1.0, len(set(str(uin).split())) / 100.0)
+    
+        if (emo := cdict.get("emotional_state", {})) and isinstance(emo, dict):
+            if "arousal" in emo:
+                feat["emotional_intensity"] = emo["arousal"]
+    
+        if cdict.get("has_experience"):
+            feat["experience_relevance"] = min(1.0, cdict.get("relevance_score", 0.7))
+            if cdict.get("cross_user_experience"):
+                feat["complexity"] = min(1.0, feat["complexity"] + 0.2)
+    
+        feat["identity_stability"] = 0.3 if cdict.get("identity_impact") else 0.8
+        if (ic := cdict.get("interaction_count")) is not None:
+            feat["user_engagement"] = min(1.0, ic / 50.0)
+    
+        return ContextFeatures(**feat)
 
-    @staticmethod    
+    @staticmethod
     @function_tool
-    async def _calculate_context_complexity(ctx: RunContextWrapper[DynamicAdaptationContext],
-                                        context: Dict[str, Any]) -> float:
-        """
-        Calculate the complexity of the current context
-        
-        Args:
-            context: Context to analyze
-            
-        Returns:
-            Complexity score (0.0-1.0)
-        """
-        # Count the number of nested elements and total elements
-        total_elements = 0
-        nested_elements = 0
-        max_depth = 0
-        
-        def count_elements(obj, depth=0):
+    async def _calculate_context_complexity(
+        ctx: RunContextWrapper[DynamicAdaptationContext],
+        context: RawContext
+    ) -> float:
+        cdict = context.to_dict()
+        total_elements = nested_elements = max_depth = 0
+    
+        def count(obj, depth=0):
             nonlocal total_elements, nested_elements, max_depth
             max_depth = max(max_depth, depth)
-            
             if isinstance(obj, dict):
                 total_elements += len(obj)
-                for key, value in obj.items():
-                    if isinstance(value, (dict, list)):
+                for v in obj.values():
+                    if isinstance(v, (dict, list)):
                         nested_elements += 1
-                        count_elements(value, depth + 1)
+                        count(v, depth + 1)
             elif isinstance(obj, list):
                 total_elements += len(obj)
-                for item in obj:
-                    if isinstance(item, (dict, list)):
+                for v in obj:
+                    if isinstance(v, (dict, list)):
                         nested_elements += 1
-                        count_elements(item, depth + 1)
-        
-        count_elements(context)
-        
-        # Calculate complexity factors
-        size_factor = min(1.0, total_elements / 50.0)  # Normalize by expecting max 50 elements
-        nesting_factor = min(1.0, nested_elements / 10.0)  # Normalize by expecting max 10 nested elements
-        depth_factor = min(1.0, max_depth / 5.0)  # Normalize by expecting max depth of 5
-        
-        # Add complexity for experience/identity factors
-        experience_factor = 0.0
-        if context.get("has_experience", False):
-            experience_factor += 0.1
-            if context.get("cross_user_experience", False):
-                experience_factor += 0.2
-        
-        identity_factor = 0.0
-        if context.get("identity_impact", False):
-            identity_factor += 0.2
-        
-        # Combine factors with weights
-        complexity = (
-            size_factor * 0.3 +
-            nesting_factor * 0.2 +
-            depth_factor * 0.2 +
+                        count(v, depth + 1)
+    
+        count(cdict)
+    
+        size_factor       = min(1.0, total_elements  / 50.0)
+        nesting_factor    = min(1.0, nested_elements / 10.0)
+        depth_factor      = min(1.0, max_depth       / 5.0)
+        experience_factor = 0.1 if cdict.get("has_experience") else 0.0
+        if cdict.get("cross_user_experience"):
+            experience_factor += 0.2
+        identity_factor   = 0.2 if cdict.get("identity_impact") else 0.0
+    
+        return (
+            size_factor   * 0.3 +
+            nesting_factor* 0.2 +
+            depth_factor  * 0.2 +
             experience_factor * 0.15 +
-            identity_factor * 0.15
+            identity_factor   * 0.15
         )
-        
-        return complexity
 
-    @staticmethod    
+    @staticmethod
     @function_tool
-    async def _add_to_context_history(ctx: RunContextWrapper[DynamicAdaptationContext],
-                                  context: Dict[str, Any]) -> bool:
-        """
-        Add current context to the history
-        
-        Args:
-            context: Context to add
-        
-        Returns:
-            Success status
-        """
-        # Add context to history
-        ctx.context.context_history.append(context)
-        
-        # Trim history if needed
+    async def _add_to_context_history(
+        ctx: RunContextWrapper[DynamicAdaptationContext],
+        context: RawContext
+    ) -> bool:
+        ctx.context.context_history.append(context.to_dict())
         if len(ctx.context.context_history) > ctx.context.max_history_size:
             ctx.context.context_history.pop(0)
-        
         return True
 
     @staticmethod    
@@ -1192,94 +1113,53 @@ class DynamicAdaptationSystem:
         
         return strategies
 
-    @staticmethod    
+    @staticmethod
     @function_tool
-    async def _calculate_strategy_score(ctx: RunContextWrapper[DynamicAdaptationContext],
-                                    strategy: Strategy, 
-                                    context_features: ContextFeatures,
-                                    performance_metrics: Dict[str, Any]) -> float:
-        """
-        Calculate how well a strategy matches the current context
-        
-        Args:
-            strategy: Strategy to evaluate
-            context_features: Features of the current context
-            performance_metrics: Current performance metrics
-            
-        Returns:
-            Strategy score (0.0-1.0)
-        """
+    async def _calculate_strategy_score(
+        ctx: RunContextWrapper[DynamicAdaptationContext],
+        strategy: Strategy,
+        context_features: ContextFeatures,
+        performance_metrics: PerformanceMetrics
+    ) -> float:
         params = strategy.parameters.model_dump()
-        
-        # Base score starts at 0.5
+        perf   = performance_metrics.model_dump(exclude_none=True)
+    
         score = 0.5
-        
-        # Adjust based on complexity
-        # Higher complexity prefers higher adaptation rate
-        complexity_match = 1.0 - abs(context_features.complexity - params["adaptation_rate"])
-        score += complexity_match * 0.1
-        
-        # Adjust based on volatility
-        # Higher volatility prefers higher exploration rate
-        volatility_match = 1.0 - abs(context_features.volatility - params["exploration_rate"])
-        score += volatility_match * 0.1
-        
-        # Adjust based on performance metrics
-        success_rate = performance_metrics.get("success_rate", 0.5)
-        error_rate = performance_metrics.get("error_rate", 0.2)
-        
-        # If success is low, favor exploration
-        if success_rate < 0.4:
+        score += (1 - abs(context_features.complexity  - params["adaptation_rate"])) * 0.1
+        score += (1 - abs(context_features.volatility - params["exploration_rate"])) * 0.1
+    
+        success = perf.get("success_rate", 0.5)
+        errors  = perf.get("error_rate"  , 0.2)
+        if success < 0.4:
             score += params["exploration_rate"] * 0.1
-        # If error rate is high, favor precision
-        if error_rate > 0.3:
+        if errors  > 0.3:
             score += params["precision_focus"] * 0.1
-        
-        # Adjust for experience features if available
-        if hasattr(context_features, "experience_relevance") and context_features.experience_relevance is not None:
-            experience_relevance = context_features.experience_relevance
-            
-            # If experiences are highly relevant, increase score for high experience_sharing_rate
-            if experience_relevance > 0.7:
+    
+        if context_features.experience_relevance is not None:
+            if context_features.experience_relevance > 0.7:
                 score += params["experience_sharing_rate"] * 0.1
-                
-            # If cross-user experiences are used, match with cross_user_sharing parameter
-            if hasattr(context_features, "user_engagement") and context_features.user_engagement is not None:
-                engagement = context_features.user_engagement
-                
-                # Higher engagement favors cross-user sharing
-                if engagement > 0.6:
-                    score += params["cross_user_sharing"] * 0.1
-        
-        # Adjust for identity features if available
-        if hasattr(context_features, "identity_stability") and context_features.identity_stability is not None:
-            stability = context_features.identity_stability
-            
-            # Match identity_evolution_rate with stability (lower stability favors lower evolution rate)
-            stability_match = 1.0 - abs(stability - (1.0 - params["identity_evolution_rate"]))
-            score += stability_match * 0.1
-        
-        # Adjust for emotional intensity if available
-        if hasattr(context_features, "emotional_intensity") and context_features.emotional_intensity is not None:
-            emotional_intensity = context_features.emotional_intensity
-            # High emotional intensity might benefit from conservative approach
-            if emotional_intensity > 0.7:
-                score += (1.0 - params["risk_tolerance"]) * 0.1
-        
-        # Adjust for recency bias from strategy history
-        recency_penalty = 0.0
-        for i, history_item in enumerate(reversed(ctx.context.strategy_history[-5:])):
-            if history_item["strategy_id"] == strategy.id:
-                recency_penalty += 0.05 * (0.8 ** i)  # Exponential decay with distance
-        
-        score -= min(0.2, recency_penalty)  # Cap penalty
-        
-        # Add a small random factor for exploration
-        score += random.uniform(-0.05, 0.05)
-        
-        # Ensure score is in [0,1] range
-        return min(1.0, max(0.0, score))
-
+        if context_features.user_engagement is not None:
+            if context_features.user_engagement > 0.6:
+                score += params["cross_user_sharing"] * 0.1
+    
+        if context_features.identity_stability is not None:
+            stab   = context_features.identity_stability
+            score += (1 - abs(stab - (1 - params["identity_evolution_rate"]))) * 0.1
+    
+        if context_features.emotional_intensity is not None:
+            if context_features.emotional_intensity > 0.7:
+                score += (1 - params["risk_tolerance"]) * 0.1
+    
+        # recency penalty (unchanged)
+        recency = 0.0
+        for i, item in enumerate(reversed(ctx.context.strategy_history[-5:])):
+            if item["strategy_id"] == strategy.id:
+                recency += 0.05 * (0.8 ** i)
+        score -= min(0.2, recency)
+    
+        score += random.uniform(-0.05, 0.05)  # exploration
+        return max(0.0, min(1.0, score))
+    
     @staticmethod    
     @function_tool
     async def _get_strategy(ctx: RunContextWrapper[DynamicAdaptationContext],
