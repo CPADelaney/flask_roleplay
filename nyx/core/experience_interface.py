@@ -9,6 +9,7 @@ import os
 from typing import Dict, List, Any, Optional, Tuple, Union, Set
 import numpy as np
 from pydantic import BaseModel, Field
+from nyx.core.types.kv import KVPair          
 
 # Update imports to use OpenAI Agents SDK
 from agents import (
@@ -18,6 +19,36 @@ from agents import (
 )
 
 logger = logging.getLogger(__name__)
+
+class KVPair(BaseModel):
+    key: str
+    value: Any           # already imported from nyx.core.types.kv in your other file
+
+class IdentityChange(BaseModel):
+    path: str            # e.g. "preferences.scenario_types.teasing"
+    old: float
+    new: float
+    change: float
+
+class IdentityUpdateResult(BaseModel):
+    preferences: list[IdentityChange] | None = None
+    traits:      list[IdentityChange] | None = None
+
+class IdentityProfileExport(BaseModel):
+    items: list[KVPair]                       # flattened dump of the whole profile
+
+class ExperienceRecord(BaseModel):
+    experience_id: str
+    text: str
+    similarity: float
+    metadata: list[KVPair] | None = None
+
+class StoreExperienceResult(BaseModel):
+    experience_id: str
+    scenario_type: str
+    tags: list[str]
+    significance: int
+    user_id: str | None = None
 
 # Define schema models for structured outputs
 class ExperienceOutput(BaseModel):
@@ -89,6 +120,14 @@ class ExperienceContext:
         self.search_results = []
         self.last_reflection = None
         self.cycle_count = 0
+
+class ExperienceRecord(BaseModel):
+    """Strict schema for an experience item returned by search / recall tools"""
+    experience_id: str
+    text: str
+    similarity: float
+    metadata: list[KVPair] | None = None
+
 
 class ExperienceRunHooks(RunHooks):
     """Hooks for monitoring experience agent execution"""
@@ -275,14 +314,15 @@ class ExperienceInterface:
                 )
             ],
             tools=[
-                function_tool(self._retrieve_experiences),
-                function_tool(self._get_emotional_context),
-                function_tool(self._store_experience),
-                function_tool(self._vector_search_experiences)
+                self._retrieve_experiences,
+                self._get_emotional_context,
+                self._store_experience,
+                self._vector_search_experiences
             ],
             input_guardrails=[
                 InputGuardrail(guardrail_function=self._experience_request_guardrail)
             ],
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(
                 temperature=0.7
             )
@@ -299,10 +339,11 @@ class ExperienceInterface:
             personality and emotional growth.
             """,
             tools=[
-                function_tool(self._retrieve_experiences),
-                function_tool(self._get_emotional_context)
+                self._retrieve_experiences,
+                self._get_emotional_context
             ],
             output_type=ReflectionOutput,
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(
                 temperature=0.7
             )
@@ -319,10 +360,11 @@ class ExperienceInterface:
             a compelling and meaningful story.
             """,
             tools=[
-                function_tool(self._retrieve_experiences),
-                function_tool(self._get_timeframe_text)
+                self._retrieve_experiences,
+                self._get_timeframe_text
             ],
             output_type=NarrativeOutput,
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(
                 temperature=0.8
             )
@@ -338,12 +380,13 @@ class ExperienceInterface:
             Generate natural, engaging, and emotionally appropriate recollections of experiences.
             """,
             tools=[
-                function_tool(self._get_emotional_tone),
-                function_tool(self._get_scenario_tone),
-                function_tool(self._get_timeframe_text),
-                function_tool(self._get_confidence_marker)
+                self._get_emotional_tone,
+                self._get_scenario_tone,
+                self._get_timeframe_text,
+                self._get_confidence_marker
             ],
             output_type=ExperienceOutput,
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(
                 temperature=0.7
             )
@@ -360,11 +403,12 @@ class ExperienceInterface:
             and appropriateness when recommending cross-user experiences.
             """,
             tools=[
-                function_tool(self._get_cross_user_experiences),
-                function_tool(self._filter_sharable_experiences),
-                function_tool(self._personalize_cross_user_experience)
+                self._get_cross_user_experiences,
+                self._filter_sharable_experiences,
+                self._personalize_cross_user_experience
             ],
             output_type=ExperienceOutput,
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(
                 temperature=0.6
             )
@@ -381,10 +425,11 @@ class ExperienceInterface:
             Focus on creating a coherent, continuous identity that learns and grows.
             """,
             tools=[
-                function_tool(self._update_identity_from_experience),
-                function_tool(self._get_identity_profile),
-                function_tool(self._generate_identity_reflection)
+                self._update_identity_from_experience,
+                self._get_identity_profile,
+                self._generate_identity_reflection
             ],
+            model="gpt-4.1-nano",
             model_settings=ModelSettings(
                 temperature=0.5
             )
@@ -444,7 +489,11 @@ class ExperienceInterface:
     
     @staticmethod
     @function_tool
-    async def _vector_search_experiences(ctx: RunContextWrapper, instance, params: VectorSearchParams) -> List[Dict[str, Any]]:
+    async def _vector_search_experiences(
+        ctx: RunContextWrapper,
+        instance,
+        params: VectorSearchParams
+    ) -> list[ExperienceRecord]:
         """
         Perform vector search for experiences similar to the query
         
@@ -501,18 +550,23 @@ class ExperienceInterface:
         results.sort(key=lambda x: x["similarity"], reverse=True)
         top_results = results[:top_k]
         
-        experiences = []
+        experiences: list[ExperienceRecord] = []
         for result in top_results:
             exp_id = result["experience_id"]
             try:
                 memory = await instance.memory_core.get_memory_by_id(exp_id)
                 if memory:
-                    memory["similarity"] = result["similarity"]
-                    experiences.append(memory)
-            except Exception as e:
-                logger.error(f"Error fetching experience {exp_id}: {e}")
-        
-        return experiences
+                    experiences.append(
+                        ExperienceRecord(
+                            experience_id=exp_id,
+                            text=memory.get("text", ""),
+                            similarity=result["similarity"],
+                            metadata=[
+                                KVPair(key=k, value=v) for k, v in (memory.get("metadata") or {}).items()
+                            ] or None
+                        )
+                    )
+         return experiences
     
     def _calculate_cosine_similarity(self, vec1: List[float], vec2: List[float]) -> float:
         """
@@ -548,11 +602,13 @@ class ExperienceInterface:
     
     @staticmethod
     @function_tool
-    async def _get_cross_user_experiences(ctx: RunContextWrapper,
-                                      instance,
-                                      query: str,
-                                      user_id: str,
-                                      limit: int = 3) -> List[Dict[str, Any]]:
+    async def _get_cross_user_experiences(
+        ctx: RunContextWrapper,
+        instance,
+        query: str,
+        user_id: str,
+        limit: int = 3
+    ) -> list[ExperienceRecord]:
         """
         Get experiences from other users that are relevant to the query
         
@@ -636,62 +692,66 @@ class ExperienceInterface:
     
     @staticmethod
     @function_tool
-    async def _personalize_cross_user_experience(ctx: RunContextWrapper,
-                                           instance,
-                                           experience: Dict[str, Any],
-                                           user_id: str) -> Dict[str, Any]:
+    async def _personalize_cross_user_experience(
+        ctx: RunContextWrapper,
+        instance,
+        experience: ExperienceRecord,
+        user_id: str
+    ) -> ExperienceRecord:
         """
-        Personalize a cross-user experience for the current user
-        
-        Args:
-            ctx: Run context wrapper
-            instance: The class instance
-            experience: The experience to personalize
-            user_id: Current user ID
-            
-        Returns:
-            Personalized experience
+        Personalize a cross-user experience for the current user.
         """
-        # Get user preference profile
+        # 1) turn the incoming model into a mutable dict
+        personalized: dict = experience.model_dump()   # <-- was .copy()
+
+        # ------------------------------------------------------------------
+        # (A) remove / augment user-specific metadata
+        # ------------------------------------------------------------------
+        raw_meta = personalized.get("metadata") or []
+        # raw_meta is list[KVPair]; convert to {key: value}
+        metadata_dict = {kv.key: kv.value for kv in raw_meta}
+
+        if "user_id" in metadata_dict:
+            metadata_dict["original_user_id"] = metadata_dict.pop("user_id")
+
+        metadata_dict.update(
+            cross_user_shared=True,
+            shared_with=user_id,
+            shared_timestamp=datetime.now().isoformat(),
+        )
+
+        # ------------------------------------------------------------------
+        # (B) preference-based emotional tweaks
+        # ------------------------------------------------------------------
         profile = instance._get_user_preference_profile(user_id)
-        
-        # Make a copy of the experience to modify
-        personalized = experience.copy()
-        
-        # Remove user-specific information
-        if "metadata" in personalized:
-            metadata = personalized["metadata"].copy()
-            # Remove original user info
-            if "user_id" in metadata:
-                metadata["original_user_id"] = metadata.pop("user_id")
-            
-            # Add sharing metadata
-            metadata["cross_user_shared"] = True
-            metadata["shared_with"] = user_id
-            metadata["shared_timestamp"] = datetime.now().isoformat()
-            
-            personalized["metadata"] = metadata
-        
-        # Adjust emotional context based on user preferences if needed
-        emotional_context = personalized.get("metadata", {}).get("emotional_context", {})
-        
-        if emotional_context:
-            # Check user preferences for emotional tones
-            primary_emotion = emotional_context.get("primary_emotion", "")
-            
-            if primary_emotion and profile and "emotional_preferences" in profile:
-                # Check if user has a preference for this emotion
-                emotion_pref = profile["emotional_preferences"].get(primary_emotion.lower(), 0.5)
-                
-                # If preference is low, adjust intensity down slightly to match preferences
-                if emotion_pref < 0.4 and "primary_intensity" in emotional_context:
-                    emotional_context["primary_intensity"] *= 0.8
-                
-                # If preference is high, adjust intensity up slightly
-                elif emotion_pref > 0.7 and "primary_intensity" in emotional_context:
-                    emotional_context["primary_intensity"] = min(1.0, emotional_context["primary_intensity"] * 1.2)
-        
-        return personalized
+
+        emotional_context = metadata_dict.get("emotional_context", {})
+        if emotional_context and profile:
+            primary = emotional_context.get("primary_emotion", "").lower()
+            pref = profile.get("emotional_preferences", {}).get(primary, 0.5)
+
+            if pref < 0.4 and "primary_intensity" in emotional_context:
+                emotional_context["primary_intensity"] *= 0.8
+            elif pref > 0.7 and "primary_intensity" in emotional_context:
+                emotional_context["primary_intensity"] = min(
+                    1.0, emotional_context["primary_intensity"] * 1.2
+                )
+
+        # write back the edited metadata
+        personalized["metadata"] = metadata_dict
+
+        # ------------------------------------------------------------------
+        # (C) return a STRICT ExperienceRecord
+        # ------------------------------------------------------------------
+        meta_pairs = [KVPair(key=k, value=v) for k, v in metadata_dict.items()] or None
+
+        return ExperienceRecord(
+            experience_id=personalized["experience_id"],
+            text=personalized.get("text", ""),
+            similarity=personalized.get("similarity", 1.0),
+            metadata=meta_pairs,
+        )
+
     
     def _get_user_preference_profile(self, user_id: str) -> Dict[str, Any]:
         """
@@ -734,57 +794,68 @@ class ExperienceInterface:
     
     @staticmethod
     @function_tool
-    async def _update_identity_from_experience(ctx: RunContextWrapper, instance,
-                                         experience: Dict[str, Any],
-                                         impact: Dict[str, Dict[str, float]]) -> Dict[str, Any]:
-        updates = {
-            "preferences": {},
-            "traits": {}
-        }
-        if "preferences" in impact:
-            for pref_type, pref_values in impact["preferences"].items():
-                if pref_type in instance.identity_profile["preferences"]:
-                    for pref_name, pref_impact in pref_values.items():
-                        if pref_name in instance.identity_profile["preferences"][pref_type]:
-                            old_value = instance.identity_profile["preferences"][pref_type][pref_name]
-                            significance = experience.get("significance", 5) / 10
-                            learning_rate = 0.1 * significance
-                            new_value = old_value + (pref_impact * learning_rate)
-                            new_value = max(0.0, min(1.0, new_value))
-                            instance.identity_profile["preferences"][pref_type][pref_name] = new_value
-                            updates["preferences"][f"{pref_type}.{pref_name}"] = {
-                                "old": old_value,
-                                "new": new_value,
-                                "change": new_value - old_value
-                            }
-        if "traits" in impact:
-            for trait_name, trait_impact in impact["traits"].items():
-                if trait_name in instance.identity_profile["traits"]:
-                    old_value = instance.identity_profile["traits"][trait_name]
-                    significance = experience.get("significance", 5) / 10
-                    learning_rate = 0.05 * significance
-                    new_value = old_value + (trait_impact * learning_rate)
-                    new_value = max(0.0, min(1.0, new_value))
-                    instance.identity_profile["traits"][trait_name] = new_value
-                    updates["traits"][trait_name] = {
-                        "old": old_value,
-                        "new": new_value,
-                        "change": new_value - old_value
-                    }
+    async def _update_identity_from_experience(
+        ctx: RunContextWrapper,
+        instance,
+        experience: ExperienceRecord,
+        impact: Dict[str, Dict[str, float]]      # ← impact can stay dict, it’s input
+    ) -> IdentityUpdateResult:
+    
+        pref_changes: list[IdentityChange] = []
+        trait_changes: list[IdentityChange] = []
+    
+        # ---- preference updates ------------------------------------------------
+        for pref_type, pref_values in impact.get("preferences", {}).items():
+            for pref_name, delta in pref_values.items():
+                if pref_name in instance.identity_profile["preferences"].get(pref_type, {}):
+                    old = instance.identity_profile["preferences"][pref_type][pref_name]
+                    lr  = 0.1 * (experience.similarity if experience.similarity else 0.5)
+                    new = max(0.0, min(1.0, old + delta * lr))
+                    instance.identity_profile["preferences"][pref_type][pref_name] = new
+                    pref_changes.append(
+                        IdentityChange(
+                            path=f"preferences.{pref_type}.{pref_name}",
+                            old=old, new=new, change=new-old
+                        )
+                    )
+    
+        # ---- trait updates -----------------------------------------------------
+        for trait_name, delta in impact.get("traits", {}).items():
+            if trait_name in instance.identity_profile["traits"]:
+                old = instance.identity_profile["traits"][trait_name]
+                lr  = 0.05 * (experience.similarity if experience.similarity else 0.5)
+                new = max(0.0, min(1.0, old + delta * lr))
+                instance.identity_profile["traits"][trait_name] = new
+                trait_changes.append(
+                    IdentityChange(
+                        path=f"traits.{trait_name}",
+                        old=old, new=new, change=new-old
+                    )
+                )
+    
+        # history bookkeeping (unchanged)
         instance.identity_profile["evolution_history"].append({
             "timestamp": datetime.now().isoformat(),
-            "experience_id": experience.get("id", "unknown"),
-            "updates": updates
+            "experience_id": experience.experience_id,
+            "updates": {"preferences": [c.model_dump() for c in pref_changes],
+                        "traits":      [c.model_dump() for c in trait_changes]}
         })
-        if len(instance.identity_profile["evolution_history"]) > 100:
-            instance.identity_profile["evolution_history"] = instance.identity_profile["evolution_history"][-100:]
-        return updates
+        instance.identity_profile["evolution_history"] = instance.identity_profile["evolution_history"][-100:]
+    
+        return IdentityUpdateResult(
+            preferences=pref_changes or None,
+            traits=trait_changes or None
+        )
 
     
     @staticmethod
     @function_tool
-    async def _get_identity_profile(ctx: RunContextWrapper, instance) -> Dict[str, Any]:
-        return instance.identity_profile
+    async def _get_identity_profile(
+        ctx: RunContextWrapper,
+        instance
+    ) -> IdentityProfileExport:
+        flat = [KVPair(key=k, value=v) for k, v in instance.identity_profile.items()]
+        return IdentityProfileExport(items=flat)
 
     
     @staticmethod
@@ -850,123 +921,126 @@ class ExperienceInterface:
     
     @staticmethod
     @function_tool
-    async def _retrieve_experiences(ctx: RunContextWrapper, instance, 
-                                   query: str,
-                                   scenario_type: Optional[str] = None,
-                                   limit: int = 3,
-                                   min_relevance: float = 0.6) -> List[Dict[str, Any]]:
-        ctx.context.current_query = query
-        ctx.context.current_scenario_type = scenario_type or ""
-        context = {
-            "query": query,
-            "scenario_type": scenario_type or "",
-            "emotional_state": instance.emotional_core.get_formatted_emotional_state() if instance.emotional_core else {},
-            "entities": []
+    async def _retrieve_experiences(
+        ctx: RunContextWrapper,
+        instance,
+        query: str,
+        scenario_type: str | None = None,
+        limit: int = 3,
+        min_relevance: float = 0.6
+    ) -> list[ExperienceRecord]:
+        """
+        Search memory for experiences matching the query, rank them, and return a
+        strict list[ExperienceRecord] that passes the Agents-SDK schema checker.
+        """
+    
+        # ---- 1. context bookkeeping ------------------------------------------
+        ctx.context.current_query          = query
+        ctx.context.current_scenario_type  = scenario_type or ""
+        ctx.context.cycle_count           += 1
+    
+        # Build a (quick) context dict for memory-core search
+        context_dict = {
+            "query"         : query,
+            "scenario_type" : scenario_type or "",
+            "emotional_state":
+                instance.emotional_core.get_formatted_emotional_state()
+                if instance.emotional_core else {},
+            "entities"      : []
         }
-        cache_key = f"{query}_{scenario_type}_{limit}_{min_relevance}"
+    
+        # ---- 2. simple cache --------------------------------------------------
+        cache_key = f"{query}|{scenario_type}|{limit}|{min_relevance}"
         if cache_key in instance.experience_cache:
-            cache_time, cache_result = instance.experience_cache[cache_key]
-            cache_age = (datetime.now() - cache_time).total_seconds()
-            if cache_age < 300:
-                return cache_result
+            ts, cached = instance.experience_cache[cache_key]
+            if (datetime.now() - ts).total_seconds() < 300:      # 5-min cache
+                return cached
+    
+        # helper to wrap metadata dict → list[KVPair]
+        def _meta_pairs(meta: dict | None) -> list[KVPair] | None:
+            return [KVPair(key=k, value=v) for k, v in (meta or {}).items()] or None
+    
+        experiences: list[ExperienceRecord] = []
+    
+        # ----------------------------------------------------------------------
+        # 3a. VECTOR SEARCH  (preferred path)
+        # ----------------------------------------------------------------------
         try:
-            search_params = VectorSearchParams(
+            vec_params = VectorSearchParams(
                 query=query,
                 top_k=limit * 2,
                 include_cross_user=True
             )
-            vector_results = await instance._vector_search_experiences(ctx, instance, search_params)
-            if vector_results and len(vector_results) >= limit:
-                scored_memories = []
-                for memory in vector_results:
-                    emotional_context = await instance._get_memory_emotional_context(memory)
-                    experiential_richness = instance._calculate_experiential_richness(
-                        memory, emotional_context
-                    )
-                    relevance_score = memory.get("similarity", memory.get("relevance", 0.5))
-                    scored_memories.append({
-                        "memory": memory,
-                        "relevance_score": relevance_score,
-                        "emotional_context": emotional_context,
-                        "experiential_richness": experiential_richness,
-                        "final_score": relevance_score * 0.7 + experiential_richness * 0.3
-                    })
-                scored_memories.sort(key=lambda x: x["final_score"], reverse=True)
-                experiences = []
-                for item in scored_memories[:limit]:
-                    if item["final_score"] >= min_relevance:
-                        experience = await instance._convert_memory_to_experience(
-                            item["memory"],
-                            item["emotional_context"],
-                            item["relevance_score"],
-                            item["experiential_richness"]
+            vector_hits = await instance._vector_search_experiences(ctx, instance, vec_params)
+            if vector_hits:
+                scored: list[tuple[dict, float, float]] = []
+                for mem in vector_hits:
+                    emo_ctx = await instance._get_memory_emotional_context(mem)
+                    richness = instance._calculate_experiential_richness(mem, emo_ctx)
+                    sim      = mem.get("similarity", mem.get("relevance", 0.5))
+                    final    = sim * 0.7 + richness * 0.3
+                    scored.append((mem, sim, final))
+    
+                scored.sort(key=lambda x: x[2], reverse=True)
+                for mem, sim, final in scored[:limit]:
+                    if final < min_relevance:
+                        continue
+                    experiences.append(
+                        ExperienceRecord(
+                            experience_id=mem["id"],
+                            text        =mem.get("memory_text", ""),
+                            similarity  =sim,
+                            metadata    =_meta_pairs(mem.get("metadata"))
                         )
-                        experiences.append(experience)
-                instance.experience_cache[cache_key] = (datetime.now(), experiences)
-                instance.last_retrieval_time = datetime.now()
-                ctx.context.search_results = experiences
-                return experiences
+                    )
         except Exception as e:
-            logger.error(f"Vector search failed: {e}, falling back to traditional retrieval")
-        base_memories = await instance.memory_core.retrieve_memories(
-            query=query,
-            memory_types=["observation", "reflection", "episodic", "experience"],
-            limit=limit*3,
-            context=context
-        )
-            
-        if not base_memories:
-            logger.info("No base memories found for experience retrieval")
-            return []
-        
-        # Score memories for relevance
-        scored_memories = []
-        for memory in base_memories:
-            # Get emotional context for this memory
-            emotional_context = await self._get_memory_emotional_context(memory)
-            
-            # Calculate experiential richness
-            experiential_richness = self._calculate_experiential_richness(
-                memory, emotional_context
+            logger.error(f"Vector search failed: {e} – falling back to keyword retrieval")
+    
+        # ----------------------------------------------------------------------
+        # 3b. KEYWORD / TRADITIONAL SEARCH  (fallback)
+        # ----------------------------------------------------------------------
+        if len(experiences) < limit:
+            base = await instance.memory_core.retrieve_memories(
+                query=query,
+                memory_types=["observation", "reflection", "episodic", "experience"],
+                limit=limit * 3,
+                context=context_dict
             )
-            
-            # Add to scored memories
-            scored_memories.append({
-                "memory": memory,
-                "relevance_score": memory.get("relevance", 0.5),
-                "emotional_context": emotional_context,
-                "experiential_richness": experiential_richness,
-                "final_score": memory.get("relevance", 0.5) * 0.7 + experiential_richness * 0.3
-            })
-        
-        # Sort by final score
-        scored_memories.sort(key=lambda x: x["final_score"], reverse=True)
-        
-        # Process top memories into experiences
-        experiences = []
-        for item in scored_memories[:limit]:
-            if item["final_score"] >= min_relevance:
-                experience = await self._convert_memory_to_experience(
-                    item["memory"],
-                    item["emotional_context"],
-                    item["relevance_score"],
-                    item["experiential_richness"]
+            for mem in base:
+                emo_ctx   = await instance._get_memory_emotional_context(mem)
+                richness  = instance._calculate_experiential_richness(mem, emo_ctx)
+                relevance = mem.get("relevance", 0.5)
+                final     = relevance * 0.7 + richness * 0.3
+                if final < min_relevance:
+                    continue
+                experiences.append(
+                    ExperienceRecord(
+                        experience_id=mem["id"],
+                        text        =mem.get("memory_text", ""),
+                        similarity  =relevance,
+                        metadata    =_meta_pairs(mem.get("metadata"))
+                    )
                 )
-                experiences.append(experience)
-        
-        # Cache the result
-        self.experience_cache[cache_key] = (datetime.now(), experiences)
-        self.last_retrieval_time = datetime.now()
-        
-        ctx.context.search_results = experiences
+                if len(experiences) >= limit:
+                    break
+    
+        # ---- 4. cache & bookkeeping ------------------------------------------
+        instance.experience_cache[cache_key] = (datetime.now(), experiences)
+        instance.last_retrieval_time         = datetime.now()
+        ctx.context.search_results           = experiences
+    
         return experiences
+
     
     @staticmethod
     @function_tool
-    async def _get_emotional_context(ctx: RunContextWrapper, instance) -> Dict[str, Any]:
-        emotional_state = instance.emotional_core.get_formatted_emotional_state() if instance.emotional_core else {}
-        ctx.context.emotional_state = emotional_state
-        return emotional_state
+    async def _get_emotional_context(
+        ctx: RunContextWrapper,
+        instance
+    ) -> EmotionalContext:
+        state = instance.emotional_core.get_formatted_emotional_state() if instance.emotional_core else {}
+        ctx.context.emotional_state = state
+        return EmotionalContext.model_validate(state)   # converts dict → model
     
     @staticmethod
     @function_tool
@@ -975,12 +1049,12 @@ class ExperienceInterface:
         instance,
         memory_text: str,
         scenario_type: str = "general",
-        entities: Optional[List[str]] = None,
-        emotional_context: Optional[Dict[str, Any]] = None,
+        entities: list[str] | None = None,
+        emotional_context: dict[str, Any] | None = None,
         significance: int = 5,
-        tags: Optional[List[str]] = None,
-        user_id: Optional[str] = None
-    ) -> Dict[str, Any]:
+        tags: list[str] | None = None,
+        user_id: str | None = None
+    ) -> StoreExperienceResult:
         tags = tags or []
         if scenario_type not in tags:
             tags.append(scenario_type)
@@ -1040,14 +1114,13 @@ class ExperienceInterface:
                 )
         except Exception as e:
             logger.error(f"Error updating identity from experience: {e}")
-        return {
-            "memory_id": memory_id,
-            "memory_text": memory_text,
-            "scenario_type": scenario_type,
-            "tags": tags,
-            "significance": significance,
-            "user_id": user_id
-        }
+        return StoreExperienceResult(
+            experience_id=memory_id,
+            scenario_type=scenario_type,
+            tags=tags,
+            significance=significance,
+            user_id=user_id
+        )
 
         
     def _calculate_identity_impact(self, 
@@ -1141,71 +1214,87 @@ class ExperienceInterface:
     
     @staticmethod
     @function_tool
-    async def _get_emotional_tone(ctx: RunContextWrapper, instance, emotional_context: Dict[str, Any]) -> str:
-        if not emotional_context:
+    async def _get_emotional_tone(
+        ctx: RunContextWrapper,
+        instance,
+        emotional_context: EmotionalContext | None
+    ) -> str:
+        """
+        Map an EmotionalContext → one of {'positive','negative','intense','standard'}.
+        Input is now the **typed** EmotionalContext model, avoiding the old
+        free-form dict that tripped the SDK’s strict-schema checker.
+        """
+        if emotional_context is None:
             return "standard"
-        primary = emotional_context.get("primary_emotion", "neutral")
-        intensity = emotional_context.get("primary_intensity", 0.5)
-        valence = emotional_context.get("valence", 0.0)
+    
+        primary   = (emotional_context.primary or "neutral").lower()
+        intensity = emotional_context.intensity or 0.5
+        valence   = emotional_context.valence   or 0.0
+    
         if intensity > 0.8:
             return "intense"
-        if valence > 0.3 or primary in ["Joy", "Anticipation", "Trust", "Love"]:
+        if valence > 0.3 or primary in {"joy", "anticipation", "trust", "love"}:
             return "positive"
-        if valence < -0.3 or primary in ["Anger", "Fear", "Disgust", "Sadness", "Frustration"]:
+        if valence < -0.3 or primary in {"anger", "fear", "disgust", "sadness", "frustration"}:
             return "negative"
         return "standard"
 
     
     @staticmethod
     @function_tool
-    async def _get_scenario_tone(ctx: RunContextWrapper, instance, scenario_type: str) -> str:
+    async def _get_scenario_tone(
+        ctx: RunContextWrapper,
+        instance,
+        scenario_type: str
+    ) -> str:
         scenario_type = scenario_type.lower()
-        if scenario_type in ["teasing", "indulgent"]:
+        if scenario_type in {"teasing", "indulgent"}:
             return "teasing"
-        elif scenario_type in ["discipline", "punishment", "training"]:
+        if scenario_type in {"discipline", "punishment", "training"}:
             return "disciplinary"
-        elif scenario_type in ["dark", "fear"]:
+        if scenario_type in {"dark", "fear"}:
             return "intense"
         return "standard"
 
     
     @staticmethod
     @function_tool
-    async def _get_timeframe_text(ctx: RunContextWrapper, instance, timestamp: Optional[str]) -> str:
+    async def _get_timeframe_text(
+        ctx: RunContextWrapper,
+        instance,
+        timestamp: str | None
+    ) -> str:
         if not timestamp:
             return "a while back"
         try:
-            if isinstance(timestamp, str):
-                memory_time = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
-            else:
-                memory_time = timestamp
-            days_ago = (datetime.now() - memory_time).days
-            if days_ago < 1:
-                return "earlier today"
-            elif days_ago < 2:
-                return "yesterday"
-            elif days_ago < 7:
-                return f"{days_ago} days ago"
-            elif days_ago < 14:
-                return "last week"
-            elif days_ago < 30:
-                return "a couple weeks ago"
-            elif days_ago < 60:
-                return "a month ago"
-            elif days_ago < 365:
-                return f"{days_ago // 30} months ago"
-            else:
-                return "a while back"
+            mem_time = (
+                datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+                if isinstance(timestamp, str) else timestamp
+            )
+            days = (datetime.now() - mem_time).days
+            if   days < 1:  return "earlier today"
+            elif days < 2:  return "yesterday"
+            elif days < 7:  return f"{days} days ago"
+            elif days < 14: return "last week"
+            elif days < 30: return "a couple weeks ago"
+            elif days < 60: return "a month ago"
+            elif days < 365:return f"{days//30} months ago"
+            else:           return "a while back"
         except Exception as e:
             logger.error(f"Error processing timestamp: {e}")
             return "a while back"
 
+
     
     @staticmethod
     @function_tool
-    async def _get_confidence_marker(ctx: RunContextWrapper, instance, relevance: float) -> str:
-        for (min_val, max_val), marker in instance.confidence_markers.items():
-            if min_val <= relevance < max_val:
+    async def _get_confidence_marker(
+        ctx: RunContextWrapper,
+        instance,
+        relevance: float
+    ) -> str:
+        for (lo, hi), marker in instance.confidence_markers.items():
+            if lo <= relevance < hi:
                 return marker
         return "remember"
 
