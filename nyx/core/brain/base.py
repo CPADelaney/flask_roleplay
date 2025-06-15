@@ -94,7 +94,7 @@ class NeedsUpdate(BaseModel):
     """Needs system update result"""
     model_config = ConfigDict(extra='forbid')
     
-    drive_strengths: Optional[dict] = None  # This could be further refined
+    drive_strengths: Optional[Dict[str, Any]] = None  # Fixed: was Optional[dict]
     error: Optional[str] = None
 
 class GoalExecutionResult(BaseModel):
@@ -102,7 +102,7 @@ class GoalExecutionResult(BaseModel):
     model_config = ConfigDict(extra='forbid')
     
     goal_id: Optional[str] = None
-    executed_step: Optional[dict] = None  # Could be refined
+    executed_step: Optional[Dict[str, Any]] = None  # Fixed: was Optional[dict]
     status: Optional[str] = None
     error: Optional[str] = None
 
@@ -130,8 +130,8 @@ class CognitiveCycleContext(BaseModel):
     model_config = ConfigDict(extra='forbid')
     
     user_input: Optional[str] = None
-    emotional_context: Optional[dict] = None
-    environmental_factors: Optional[dict] = None
+    emotional_context: Optional[Dict[str, Any]] = None  # Fixed: was Optional[dict]
+    environmental_factors: Optional[Dict[str, Any]] = None  # Fixed: was Optional[dict]
 
 class DesireExpression(BaseModel):
     """Result of expressing desire"""
@@ -180,18 +180,18 @@ class SystemStats(BaseModel):
     """Comprehensive system statistics"""
     model_config = ConfigDict(extra='forbid')
     
-    memory_stats: Optional[dict] = None
-    meta_stats: Optional[dict] = None
-    knowledge_stats: Optional[dict] = None
-    emotional_state: Optional[dict] = None
-    hormone_stats: Optional[dict] = None
-    procedural_stats: Optional[dict] = None
-    identity_stats: Optional[dict] = None
-    needs_stats: Optional[dict] = None
-    goal_stats: Optional[dict] = None
-    performance_metrics: Optional[dict] = None
-    thinking_stats: Optional[dict] = None
-    processing_stats: Optional[dict] = None
+    memory_stats: Optional[Dict[str, Any]] = None  # Fixed: was Optional[dict]
+    meta_stats: Optional[Dict[str, Any]] = None  # Fixed: was Optional[dict]
+    knowledge_stats: Optional[Dict[str, Any]] = None  # Fixed: was Optional[dict]
+    emotional_state: Optional[Dict[str, Any]] = None  # Fixed: was Optional[dict]
+    hormone_stats: Optional[Dict[str, Any]] = None  # Fixed: was Optional[dict]
+    procedural_stats: Optional[Dict[str, Any]] = None  # Fixed: was Optional[dict]
+    identity_stats: Optional[Dict[str, Any]] = None  # Fixed: was Optional[dict]
+    needs_stats: Optional[Dict[str, Any]] = None  # Fixed: was Optional[dict]
+    goal_stats: Optional[Dict[str, Any]] = None  # Fixed: was Optional[dict]
+    performance_metrics: Optional[Dict[str, Any]] = None  # Fixed: was Optional[dict]
+    thinking_stats: Optional[Dict[str, Any]] = None  # Fixed: was Optional[dict]
+    processing_stats: Optional[Dict[str, Any]] = None  # Fixed: was Optional[dict]
 
 class UserInputAnalysis(BaseModel):
     """Analysis of user input for dominance"""
@@ -281,7 +281,7 @@ class FemdomIdeasResult(BaseModel):
     model_config = ConfigDict(extra='forbid')
     
     success: bool
-    ideas: List[dict] = Field(default_factory=list)
+    ideas: List[Dict[str, Any]] = Field(default_factory=list)  # Fixed: was List[dict]
     error: Optional[str] = None
 
 class ProtocolAssignment(BaseModel):
