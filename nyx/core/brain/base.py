@@ -115,11 +115,6 @@ class GoalExecutionResult(BaseModel):
     status: str | None = None
     error: str | None = None
 
-class EmotionalContext(BaseModel):
-    primary: str | None = None
-    intensity: float | None = None
-    valence: float | None = None       # -1 … 1
-
 class MetaCoreResult(BaseModel):
     """Meta core cycle result"""
     evaluation_completed: bool = False
