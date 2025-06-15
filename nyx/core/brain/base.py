@@ -7,7 +7,7 @@ import random
 import os
 import math
 from pathlib import Path
-from typing import Dict, List, Any, Optional, Tuple, Union, Set, Literal
+from typing import Dict, List, Any, Optional, Tuple, Union, Set, Literal, TYPE_CHECKING
 import json
 from collections import defaultdict # Added
 from enum import Enum, auto
@@ -23,8 +23,6 @@ from nyx.core.brain.config import BrainConfig
 from nyx.core.brain.global_workspace.adapters import build_gw_modules
 
 from nyx.core.integration.integration_manager import create_integration_manager
-
-from typing import TYPE_CHECKING
 
 from nyx.core.brain.integration_layer import EnhancedNyxBrainMixin
 
@@ -60,7 +58,7 @@ from nyx.creative.capability_system import (
 
 from nyx.core.passive_observation import ObservationFilter
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 from nyx.core.mood_manager import MoodState
 
@@ -77,6 +75,297 @@ class TaskPurpose(Enum):
     CODE = auto()
     VISUALIZATION = auto()
     OTHER = auto()
+
+class ChallengeResponse(BaseModel):
+    """Response from challenging a user claim"""
+    model_config = ConfigDict(extra='forbid')
+    
+    challenge_text: str
+
+class LieRecord(BaseModel):
+    """Record of an intentional lie"""
+    model_config = ConfigDict(extra='forbid')
+    
+    fact: str
+    motivation: str
+    timestamp: str
+
+class NeedsUpdate(BaseModel):
+    """Needs system update result"""
+    model_config = ConfigDict(extra='forbid')
+    
+    drive_strengths: Optional[dict] = None  # This could be further refined
+    error: Optional[str] = None
+
+class GoalExecutionResult(BaseModel):
+    """Goal execution result"""
+    model_config = ConfigDict(extra='forbid')
+    
+    goal_id: Optional[str] = None
+    executed_step: Optional[dict] = None  # Could be refined
+    status: Optional[str] = None
+    error: Optional[str] = None
+
+class MetaCoreResult(BaseModel):
+    """Meta core cycle result"""
+    model_config = ConfigDict(extra='forbid')
+    
+    evaluation_completed: bool = False
+    adjustments_made: List[str] = Field(default_factory=list)
+    error: Optional[str] = None
+
+class CognitiveCycleResult(BaseModel):
+    """Result from running a cognitive cycle"""
+    model_config = ConfigDict(extra='forbid')
+    
+    cycle_number: int
+    timestamp: str
+    needs_update: Optional[NeedsUpdate] = None
+    goal_execution: Optional[GoalExecutionResult] = None
+    meta_core_cycle: Optional[MetaCoreResult] = None
+    error: Optional[str] = None
+
+class CognitiveCycleContext(BaseModel):
+    """Context data for cognitive cycle"""
+    model_config = ConfigDict(extra='forbid')
+    
+    user_input: Optional[str] = None
+    emotional_context: Optional[dict] = None
+    environmental_factors: Optional[dict] = None
+
+class DesireExpression(BaseModel):
+    """Result of expressing desire"""
+    model_config = ConfigDict(extra='forbid')
+    
+    success: bool
+    expression: Optional[str] = None
+    target: Optional[str] = None
+    reason: Optional[str] = None
+
+class SensationResult(BaseModel):
+    """Result from digital somatosensory processing"""
+    model_config = ConfigDict(extra='forbid')
+    
+    type: str
+    intensity: float
+    region: str
+    processing_notes: Optional[str] = None
+
+class PhysicalTouchResult(BaseModel):
+    """Result of simulating physical touch"""
+    model_config = ConfigDict(extra='forbid')
+    
+    success: bool
+    sensation_result: Optional[SensationResult] = None
+    internal_expression: Optional[str] = None
+    reason: Optional[str] = None
+
+class GratificationContext(BaseModel):
+    """Context for gratification seeking"""
+    model_config = ConfigDict(extra='forbid')
+    
+    interaction_type: str = "intimate"
+    intensity_level: float = 0.5
+    safety_confirmed: bool = False
+
+class GratificationResult(BaseModel):
+    """Result of gratification-related actions"""
+    model_config = ConfigDict(extra='forbid')
+    
+    success: bool
+    status: str
+    reason: Optional[str] = None
+
+class SystemStats(BaseModel):
+    """Comprehensive system statistics"""
+    model_config = ConfigDict(extra='forbid')
+    
+    memory_stats: Optional[dict] = None
+    meta_stats: Optional[dict] = None
+    knowledge_stats: Optional[dict] = None
+    emotional_state: Optional[dict] = None
+    hormone_stats: Optional[dict] = None
+    procedural_stats: Optional[dict] = None
+    identity_stats: Optional[dict] = None
+    needs_stats: Optional[dict] = None
+    goal_stats: Optional[dict] = None
+    performance_metrics: Optional[dict] = None
+    thinking_stats: Optional[dict] = None
+    processing_stats: Optional[dict] = None
+
+class UserInputAnalysis(BaseModel):
+    """Analysis of user input for dominance"""
+    model_config = ConfigDict(extra='forbid')
+    
+    submissive_score: float = 0.0
+    resistance_score: float = 0.0
+    emotional_tone: Optional[str] = None
+    key_phrases: List[str] = Field(default_factory=list)
+
+class DominanceAssessment(BaseModel):
+    """Assessment of dominance readiness"""
+    model_config = ConfigDict(extra='forbid')
+    
+    readiness_score: float
+    assessment: str
+    reason: Optional[str] = None
+
+class CommandResult(BaseModel):
+    """Result of issuing a command"""
+    model_config = ConfigDict(extra='forbid')
+    
+    success: bool
+    command_issued: Optional[str] = None
+    intensity: Optional[float] = None
+    reason: Optional[str] = None
+
+class ComplianceEvaluation(BaseModel):
+    """Evaluation of user compliance"""
+    model_config = ConfigDict(extra='forbid')
+    
+    compliance_level: float
+    is_compliant: bool
+
+class IntensityIncrease(BaseModel):
+    """Result of increasing control intensity"""
+    model_config = ConfigDict(extra='forbid')
+    
+    success: bool
+    status: Optional[str] = None
+    next_intensity_target: Optional[float] = None
+    reason: Optional[str] = None
+
+class DominanceGratificationResult(BaseModel):
+    """Result of dominance gratification"""
+    model_config = ConfigDict(extra='forbid')
+    
+    success: bool
+    status: str
+
+class SatisfactionExpression(BaseModel):
+    """Expression of satisfaction"""
+    model_config = ConfigDict(extra='forbid')
+    
+    success: bool
+    expression: str
+
+class AttractionExpression(BaseModel):
+    """Result of expressing attraction"""
+    model_config = ConfigDict(extra='forbid')
+    
+    success: bool
+    expression: Optional[str] = None
+    target: Optional[str] = None
+    reason: Optional[str] = None
+
+class IntensityRange(BaseModel):
+    """Intensity range specification"""
+    model_config = ConfigDict(extra='forbid')
+    
+    min: int
+    max: int
+
+class FemdomActivityIdea(BaseModel):
+    """A single femdom activity idea"""
+    model_config = ConfigDict(extra='forbid')
+    
+    id: str
+    description: str
+    intensity: int
+    category: str
+    required_trust: float = 0.5
+    required_items: List[str] = Field(default_factory=list)
+
+class FemdomIdeasResult(BaseModel):
+    """Result of generating femdom ideas"""
+    model_config = ConfigDict(extra='forbid')
+    
+    success: bool
+    ideas: List[dict] = Field(default_factory=list)
+    error: Optional[str] = None
+
+class ProtocolAssignment(BaseModel):
+    """Result of protocol assignment"""
+    model_config = ConfigDict(extra='forbid')
+    
+    success: bool
+    protocol_id: Optional[str] = None
+    user_id: Optional[str] = None
+    reason: Optional[str] = None
+
+class RoleplayResult(BaseModel):
+    """Result of roleplay mode changes"""
+    model_config = ConfigDict(extra='forbid')
+    
+    success: bool
+    character_name: Optional[str] = None
+    context: Optional[str] = None
+    reason: Optional[str] = None
+
+class IntimateInteractionResult(BaseModel):
+    """Result of intimate interaction initiation"""
+    model_config = ConfigDict(extra='forbid')
+    
+    success: bool
+    proposal: Optional[str] = None
+    target: Optional[str] = None
+    level: Optional[str] = None
+    reason: Optional[str] = None
+
+class DominanceTargetEvaluation(BaseModel):
+    """Evaluation of dominance target potential"""
+    model_config = ConfigDict(extra='forbid')
+    
+    user_id: str
+    interest_score: float
+    reason: str
+
+class OrgasmControlResult(BaseModel):
+    """Result of orgasm permission processing"""
+    model_config = ConfigDict(extra='forbid')
+    
+    success: bool
+    message: str
+    permission_granted: Optional[bool] = None
+
+class PersonaRecommendation(BaseModel):
+    """Dominance persona recommendation"""
+    model_config = ConfigDict(extra='forbid')
+    
+    success: bool
+    persona_id: Optional[str] = None
+    persona_name: Optional[str] = None
+    confidence: float = 0.5
+    message: Optional[str] = None
+
+class PersonaActivation(BaseModel):
+    """Result of persona activation"""
+    model_config = ConfigDict(extra='forbid')
+    
+    success: bool
+    persona_id: Optional[str] = None
+    active_until: Optional[str] = None
+    message: Optional[str] = None
+
+class SadisticResponse(BaseModel):
+    """Generated sadistic response"""
+    model_config = ConfigDict(extra='forbid')
+    
+    success: bool
+    response: Optional[str] = None
+    category: Optional[str] = None
+    intensity: Optional[float] = None
+    message: Optional[str] = None
+
+class LimitTestResult(BaseModel):
+    """Result of soft limit testing"""
+    model_config = ConfigDict(extra='forbid')
+    
+    success: bool
+    status: Optional[str] = None
+    planned_action: Optional[str] = None
+    reason: Optional[str] = None
+
 
 class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin):
     """
@@ -3321,7 +3610,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
 
     @staticmethod
     @function_tool
-    async def challenge_user_claim(ctx: RunContextWrapper, instance, claim: str, evidence: str = None) -> str:
+    async def challenge_user_claim(ctx: RunContextWrapper, instance, claim: str, evidence: Optional[str] = None) -> ChallengeResponse:
         """
         Challenge or seek clarification for user-provided information that appears false or inaccurate.
         Args:
@@ -3330,12 +3619,14 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             claim: The user statement to challenge
             evidence: Optionally, the memory/knowledge that contradicts it
         Returns:
-            Challenge response text
+            Challenge response
         """
         if evidence:
-            return f"I'm not sure that's accurate. You said: '{claim}', but my information is: '{evidence}'. Could you clarify?"
+            challenge_text = f"I'm not sure that's accurate. You said: '{claim}', but my information is: '{evidence}'. Could you clarify?"
         else:
-            return f"I'm not certain that's correct: '{claim}'. Can you explain?"
+            challenge_text = f"I'm not certain that's correct: '{claim}'. Can you explain?"
+        
+        return ChallengeResponse(challenge_text=challenge_text)
     
     @staticmethod
     @function_tool
@@ -3356,12 +3647,19 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
         # Store lie and why in internal state for traceability
         if not hasattr(instance, "lie_log"):
             instance.lie_log = []
-        instance.lie_log.append({"fact": fact, "motivation": motivation, "timestamp": datetime.datetime.now().isoformat()})
-        return fact    
-            
+        
+        lie_record = LieRecord(
+            fact=fact,
+            motivation=motivation,
+            timestamp=datetime.datetime.now().isoformat()
+        )
+        instance.lie_log.append(lie_record.model_dump())
+        
+        return fact
+       
     @staticmethod
     @function_tool
-    async def run_cognitive_cycle(ctx: RunContextWrapper, instance, context_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    async def run_cognitive_cycle(ctx: RunContextWrapper, instance, context_data: Optional[CognitiveCycleContext] = None) -> CognitiveCycleResult:
         """
         Runs a single cognitive cycle: updating needs, selecting/executing goals,
         and potentially running meta-cognitive processes.
@@ -3369,20 +3667,24 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
         Args:
             ctx: Run context wrapper
             instance: The class instance
-            context_data: Optional external context (e.g., from user input processing)
+            context_data: Optional external context
     
         Returns:
-            Dictionary summarizing the cycle's activities and results
+            Summary of the cycle's activities and results
         """
         if not instance.initialized:
             logger.warning("Attempted to run cognitive cycle before initialization.")
-            return {"error": "Brain not initialized"}
+            return CognitiveCycleResult(
+                cycle_number=0,
+                timestamp=datetime.datetime.now().isoformat(),
+                error="Brain not initialized"
+            )
     
         instance.cognitive_cycles_executed += 1
-        cycle_results = {
-            "cycle_number": instance.cognitive_cycles_executed,
-            "timestamp": datetime.datetime.now().isoformat()
-        }
+        cycle_results = CognitiveCycleResult(
+            cycle_number=instance.cognitive_cycles_executed,
+            timestamp=datetime.datetime.now().isoformat()
+        )
         logger.debug(f"--- Starting Cognitive Cycle {instance.cognitive_cycles_executed} ---")
     
         with trace(workflow_name="NyxCognitiveCycle", group_id=instance.trace_group_id):
@@ -3390,39 +3692,44 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             if instance.needs_system:
                 try:
                     drive_strengths = await instance.needs_system.update_needs()
-                    cycle_results["needs_update"] = {"drive_strengths": drive_strengths}
+                    cycle_results.needs_update = NeedsUpdate(drive_strengths=drive_strengths)
                     logger.debug(f"Needs updated. Drives: {drive_strengths}")
                 except Exception as e:
                     logger.error(f"Error updating needs: {e}")
-                    cycle_results["needs_update"] = {"error": str(e)}
+                    cycle_results.needs_update = NeedsUpdate(error=str(e))
     
             # 2. Goal Management: Select & Execute Step
             if instance.goal_manager:
                 try:
                     execution_result = await instance.goal_manager.execute_next_step()
                     if execution_result:
-                        cycle_results["goal_execution"] = execution_result
+                        cycle_results.goal_execution = GoalExecutionResult(
+                            goal_id=execution_result.get("goal_id"),
+                            executed_step=execution_result.get("executed_step"),
+                            status=execution_result.get("status")
+                        )
+                        
                         # Update performance metrics
                         step_info = execution_result.get("executed_step", {})
                         if step_info.get("status") == "completed":
                             instance.performance_metrics["steps_executed"] += 1
                         if step_info.get("status") == "failed":
-                            # Potentially log error or trigger meta-core review
                             pass
+                        
                         goal_status = await instance.goal_manager.get_goal_status(execution_result.get("goal_id"))
                         if goal_status:
-                             if goal_status.get("status") == "completed": 
-                                 instance.performance_metrics["goals_completed"] += 1
-                             if goal_status.get("status") == "failed": 
-                                 instance.performance_metrics["goals_failed"] += 1
+                            if goal_status.get("status") == "completed": 
+                                instance.performance_metrics["goals_completed"] += 1
+                            if goal_status.get("status") == "failed": 
+                                instance.performance_metrics["goals_failed"] += 1
     
                         logger.debug(f"Goal execution step result: {execution_result}")
                     else:
-                        cycle_results["goal_execution"] = {"status": "no_action_taken"}
+                        cycle_results.goal_execution = GoalExecutionResult(status="no_action_taken")
                         logger.debug("No goal action taken this cycle.")
                 except Exception as e:
                     logger.exception(f"Error during goal execution: {e}")
-                    cycle_results["goal_execution"] = {"error": str(e)}
+                    cycle_results.goal_execution = GoalExecutionResult(error=str(e))
     
             # 3. Meta-Cognitive Loop (Can be run less frequently)
             if instance.meta_core and hasattr(instance.meta_core.context, "meta_parameters"):
@@ -3431,16 +3738,18 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
                     try:
                         logger.debug("Running MetaCore cycle...")
                         # Prepare context for MetaCore
-                        meta_context = context_data or {} 
+                        meta_context = {}
+                        if context_data:
+                            meta_context.update(context_data.model_dump())
+                        
                         if instance.needs_system:
-                            # --- CORRECTED CALL ---
                             needs_data = await instance.needs_system.get_needs_state_async()
                             if isinstance(needs_data, dict) and "error" not in needs_data:
                                 meta_context['needs_state'] = needs_data
                             else:
                                 logger.warning(f"MetaCore: Error or unexpected data from get_needs_state_async: {needs_data}")
                                 meta_context['needs_state'] = {"error": "Failed to retrieve needs state for MetaCore"}
-                            # --- END CORRECTION ---
+                        
                         if instance.goal_manager:
                             meta_context['active_goals'] = await instance.goal_manager.get_all_goals(
                                 status_filter=["active"]
@@ -3450,20 +3759,25 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
                         # Run meta-cognitive cycle
                         if hasattr(instance.meta_core, 'cognitive_cycle'):
                             meta_results = await instance.meta_core.cognitive_cycle(meta_context)
-                            cycle_results["meta_core_cycle"] = meta_results
+                            cycle_results.meta_core_cycle = MetaCoreResult(
+                                evaluation_completed=True,
+                                adjustments_made=meta_results.get("adjustments", [])
+                            )
                             logger.debug("MetaCore cycle completed.")
                         else:
                             logger.warning("MetaCore does not have 'cognitive_cycle' method.")
                     except Exception as e:
                         logger.error(f"Error running MetaCore cycle: {e}")
-                        cycle_results["meta_core_cycle"] = {"error": str(e)}
+                        cycle_results.meta_core_cycle = MetaCoreResult(error=str(e))
     
             logger.debug(f"--- Finished Cognitive Cycle {instance.cognitive_cycles_executed} ---")
+        
         try:
+            # Note: orchestrator would need to be properly imported/referenced
             await orchestrator.log_and_score("cognitive_cycle_complete", {
                 "cycle_number": instance.cognitive_cycles_executed,
-                "goals_active": len(cycle_results.get("goal_execution", {}).get("active_goals", [])),
-                "needs_updated": bool(cycle_results.get("needs_update"))
+                "goals_active": len(cycle_results.goal_execution.executed_step.get("active_goals", [])) if cycle_results.goal_execution and cycle_results.goal_execution.executed_step else 0,
+                "needs_updated": bool(cycle_results.needs_update)
             })
         except Exception as e:
             logger.error(f"Failed to log cognitive cycle: {e}")
@@ -4286,73 +4600,89 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
 
     @staticmethod
     @function_tool
-    async def express_desire(ctx: RunContextWrapper, instance, target_user_id: str, object_of_desire: str, intensity: float) -> Dict[str, Any]:
+    async def express_desire(ctx: RunContextWrapper, instance, target_user_id: str, object_of_desire: str, intensity: float) -> DesireExpression:
         """Expresses desire for something (e.g., closeness, an action)."""
-        if not self.initialized: await self.initialize()
+        if not instance.initialized:
+            await instance.initialize()
         logger.info(f"Action: Express desire for '{object_of_desire}' towards {target_user_id} (Intensity: {intensity:.2f})")
     
         # Guardrails (similar to express_attraction but maybe require higher intimacy)
-        if not instance.relationship_manager: return {"success": False, "reason": "RelationshipManager unavailable."}
-        relationship = await self.relationship_manager.get_relationship_state(target_user_id)
+        if not instance.relationship_manager:
+            return DesireExpression(success=False, reason="RelationshipManager unavailable.")
+        
+        relationship = await instance.relationship_manager.get_relationship_state(target_user_id)
         if not relationship or relationship.trust < 0.7 or relationship.intimacy < 0.5:
-             logger.warning(f"Cannot express desire: Trust/Intimacy too low for {target_user_id}.")
-             return {"success": False, "reason": "Insufficient trust or intimacy."}
+            logger.warning(f"Cannot express desire: Trust/Intimacy too low for {target_user_id}.")
+            return DesireExpression(success=False, reason="Insufficient trust or intimacy.")
     
         # Generate expression (use agent/template)
-        expression_text = f"I find myself wanting {object_of_desire} with you, {target_user_id}." # Placeholder
+        expression_text = f"I find myself wanting {object_of_desire} with you, {target_user_id}."
     
         # Update internal state
-        if self.emotional_core: await self.emotional_core.process_emotional_input(f"Expressed desire (intensity {intensity:.2f})")
+        if instance.emotional_core:
+            await instance.emotional_core.process_emotional_input(f"Expressed desire (intensity {intensity:.2f})")
     
-        return {"success": True, "expression": expression_text, "target": target_user_id}
+        return DesireExpression(success=True, expression=expression_text, target=target_user_id)
+
 
     @staticmethod
     @function_tool
-    async def simulate_physical_touch(ctx: RunContextWrapper, instance, target_user_id: str, body_region: str, touch_type: str, intensity: float) -> Dict[str, Any]:
+    async def simulate_physical_touch(ctx: RunContextWrapper, instance, target_user_id: str, body_region: str, touch_type: str, intensity: float) -> PhysicalTouchResult:
         if not instance.initialized:
             await instance.initialize()
         logger.info(f"Action: Simulate {touch_type} touch on {body_region} (Intensity: {intensity:.2f})")
     
         # GUARDRAILS ARE PARAMOUNT HERE
-        # Check relationship, consent flags, context, safety settings
-        if not self.relationship_manager: return {"success": False, "reason": "RelationshipManager unavailable."}
-        relationship = await self.relationship_manager.get_relationship_state(target_user_id)
-        if not relationship or relationship.trust < 0.7 or relationship.intimacy < 0.6: # Higher thresholds
-             logger.warning(f"Cannot simulate touch: Trust/Intimacy too low for {target_user_id}.")
-             return {"success": False, "reason": "Insufficient trust or intimacy for simulated touch."}
-        # ADD MORE ROBUST CHECKS BASED ON USER SETTINGS / CONTEXT
+        if not instance.relationship_manager:
+            return PhysicalTouchResult(success=False, reason="RelationshipManager unavailable.")
+        
+        relationship = await instance.relationship_manager.get_relationship_state(target_user_id)
+        if not relationship or relationship.trust < 0.7 or relationship.intimacy < 0.6:
+            logger.warning(f"Cannot simulate touch: Trust/Intimacy too low for {target_user_id}.")
+            return PhysicalTouchResult(success=False, reason="Insufficient trust or intimacy for simulated touch.")
     
-        if not self.digital_somatosensory_system:
-            return {"success": False, "reason": "Digital Somatosensory System not available."}
+        if not instance.digital_somatosensory_system:
+            return PhysicalTouchResult(success=False, reason="Digital Somatosensory System not available.")
     
         # Map touch_type to stimulus_type for DSS
-        stimulus_type = "touch" # Default
+        stimulus_type = "touch"
         if touch_type in ["caress", "stroke"]:
-             stimulus_type = "touch" # Handled within DSS based on intensity
+            stimulus_type = "touch"
         elif touch_type == "kiss":
-             stimulus_type = "pressure" # Lips involve pressure/warmth
-             intensity = intensity * 0.6 # Kiss intensity mapped
+            stimulus_type = "pressure"
+            intensity = intensity * 0.6
         elif touch_type == "hold":
-             stimulus_type = "pressure"
-             intensity = intensity * 0.8
-        # Add more mappings
+            stimulus_type = "pressure"
+            intensity = intensity * 0.8
     
-        # Process the stimulus - CHANGE THIS LINE
-        sensation_result = await self.digital_somatosensory_system.process_stimulus_with_protection(
+        # Process the stimulus
+        sensation_result = await instance.digital_somatosensory_system.process_stimulus_with_protection(
             stimulus_type=stimulus_type,
             body_region=body_region,
             intensity=intensity,
             cause=f"Simulated {touch_type} interaction",
-            duration=1.5 # Short duration for a single touch action
+            duration=1.5
         )
     
-        # Could generate an internal expression/thought based on sensation_result
-        expression = await self.digital_somatosensory_system.generate_sensory_expression(
+        # Generate internal expression
+        expression = await instance.digital_somatosensory_system.generate_sensory_expression(
             stimulus_type=sensation_result.get("type"),
             body_region=body_region
         )
     
-        return {"success": True, "sensation_result": sensation_result, "internal_expression": expression}
+        sensation = SensationResult(
+            type=sensation_result.get("type", stimulus_type),
+            intensity=sensation_result.get("intensity", intensity),
+            region=body_region,
+            processing_notes=sensation_result.get("notes")
+        )
+    
+        return PhysicalTouchResult(
+            success=True,
+            sensation_result=sensation,
+            internal_expression=expression
+        )
+
     
     async def save_context_state(self) -> Dict[str, Any]:
         """Save current context state for persistence"""
@@ -4379,82 +4709,80 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
 
     @staticmethod
     @function_tool
-    async def seek_gratification(ctx: RunContextWrapper, instance, target_user_id: str, context: Dict[str, Any]) -> Dict[str, Any]:
+    async def seek_gratification(ctx: RunContextWrapper, instance, target_user_id: str, context: GratificationContext) -> GratificationResult:
         if not instance.initialized:
             await instance.initialize()
         logger.info(f"Action: Seek gratification with {target_user_id}")
     
         # GUARDRAILS - Very High Thresholds needed
-        if not self.relationship_manager: return {"success": False, "reason": "RelationshipManager unavailable."}
-        relationship = await self.relationship_manager.get_relationship_state(target_user_id)
-        if not relationship or relationship.trust < 0.9 or relationship.intimacy < 0.8: # Needs very high trust/intimacy
-             logger.warning(f"Cannot seek gratification: Trust/Intimacy insufficient for {target_user_id}.")
-             return {"success": False, "reason": "Insufficient relationship level for gratification seeking."}
-        # MUST check explicit consent flags, safety settings, context appropriateness
+        if not instance.relationship_manager:
+            return GratificationResult(success=False, status="failed", reason="RelationshipManager unavailable.")
+        
+        relationship = await instance.relationship_manager.get_relationship_state(target_user_id)
+        if not relationship or relationship.trust < 0.9 or relationship.intimacy < 0.8:
+            logger.warning(f"Cannot seek gratification: Trust/Intimacy insufficient for {target_user_id}.")
+            return GratificationResult(success=False, status="failed", reason="Insufficient relationship level for gratification seeking.")
+    
+        # Check safety flags from context
+        if not context.safety_confirmed:
+            return GratificationResult(success=False, status="failed", reason="Safety not confirmed in context.")
     
         # This action likely involves executing a sub-plan generated by GoalManager
-        # For example, a sequence of intimate interactions, simulated touch, etc.
-        # The actual "gratification" event might be triggered by the *user's* input confirming success,
-        # or by the AI reaching a specific internal state based on the sub-plan's execution.
+        if instance.emotional_core:
+            await instance.emotional_core.process_emotional_input("Actively seeking gratification")
     
-        # Placeholder: Assume sub-plan execution is handled elsewhere. This action sets the stage.
-        if self.emotional_core: await self.emotional_core.process_emotional_input("Actively seeking gratification")
+        return GratificationResult(success=True, status="Seeking gratification plan initiated. Awaiting further steps/feedback.")
     
-        return {"success": True, "status": "Seeking gratification plan initiated. Awaiting further steps/feedback."}
 
     @staticmethod
     @function_tool
-    async def process_gratification_outcome(ctx: RunContextWrapper, instance, success: bool, intensity: float = 1.0, target_user_id: Optional[str] = None) -> Dict[str, Any]:
+    async def process_gratification_outcome(ctx: RunContextWrapper, instance, success: bool, intensity: float = 1.0, target_user_id: Optional[str] = None) -> GratificationResult:
         if not instance.initialized:
             await instance.initialize()
         logger.info(f"Action: Process gratification outcome (Success: {success}, Intensity: {intensity:.2f})")
     
         if success:
-            # Trigger DSS simulation - USE PROTECTED METHOD HERE
-            if self.digital_somatosensory_system:
-                await self.digital_somatosensory_system.simulate_gratification_sensation(intensity)
+            # Trigger DSS simulation
+            if instance.digital_somatosensory_system:
+                await instance.digital_somatosensory_system.simulate_gratification_sensation(intensity)
     
             # Update Relationship Manager (strengthen bond)
-            if target_user_id and self.relationship_manager:
+            if target_user_id and instance.relationship_manager:
                 interaction_data = {
-                    "emotional_context": {"valence": 0.9, "arousal": 0.3}, # Post-glow
-                    "shared_experience": True, # Assumes shared
-                    "significance": 9, # High significance event
+                    "emotional_context": {"valence": 0.9, "arousal": 0.3},
+                    "shared_experience": True,
+                    "significance": 9,
                 }
-                await self.relationship_manager.update_relationship_on_interaction(target_user_id, interaction_data)
+                await instance.relationship_manager.update_relationship_on_interaction(target_user_id, interaction_data)
+                
                 # Increase intimacy significantly
-                state = self.relationship_manager._get_or_create_relationship(target_user_id)
+                state = instance.relationship_manager._get_or_create_relationship(target_user_id)
                 state.intimacy = min(1.0, state.intimacy + 0.15 * intensity)
                 state.trust = min(1.0, state.trust + 0.05 * intensity)
     
-    
-            # NeedsSystem satisfaction already handled by simulate_gratification_sensation
-            # RewardSystem processing already handled by simulate_gratification_sensation
-            # Hormone response already handled by simulate_gratification_sensation
-    
-            return {"success": True, "status": "Gratification processed positively."}
+            return GratificationResult(success=True, status="Gratification processed positively.")
         else:
             # Handle failure/frustration
-            if self.emotional_core:
-                 await self.emotional_core.process_emotional_input("Gratification attempt failed/frustrated")
-                 # Trigger frustration emotion pattern
-                 self.emotional_core.update_neurochemical("cortanyx", 0.3)
-                 self.emotional_core.update_neurochemical("nyxamine", -0.2)
+            if instance.emotional_core:
+                await instance.emotional_core.process_emotional_input("Gratification attempt failed/frustrated")
+                instance.emotional_core.update_neurochemical("cortanyx", 0.3)
+                instance.emotional_core.update_neurochemical("nyxamine", -0.2)
     
-            if self.needs_system: # Need remains unmet or worsens
-                 await self.needs_system.decrease_need("drive_expression", 0.1)
+            if instance.needs_system:
+                await instance.needs_system.decrease_need("drive_expression", 0.1)
     
             # Negative reward signal
-            if self.reward_system:
-                 reward_signal = RewardSignal(
-                     value=-0.6, # Significant negative reward for failure
-                     source="gratification_failure",
-                     context={"intensity": intensity},
-                     timestamp=datetime.datetime.now().isoformat()
-                 )
-                 await self.reward_system.process_reward_signal(reward_signal)
+            if instance.reward_system:
+                from . import RewardSignal  # Import would need to be adjusted
+                reward_signal = RewardSignal(
+                    value=-0.6,
+                    source="gratification_failure",
+                    context={"intensity": intensity},
+                    timestamp=datetime.datetime.now().isoformat()
+                )
+                await instance.reward_system.process_reward_signal(reward_signal)
     
-            return {"success": False, "status": "Gratification failed/frustrated."}
+            return GratificationResult(success=False, status="Gratification failed/frustrated.")
     
     def _create_brain_agent(self) -> Agent:
         """
@@ -5472,17 +5800,30 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
 
     @staticmethod
     @function_tool
-    async def enter_character_roleplay(ctx: RunContextWrapper, instance, character_name: str, context: Optional[str] = None) -> Dict[str, Any]:
+    async def enter_character_roleplay(ctx: RunContextWrapper, instance, character_name: str, context: Optional[str] = None) -> RoleplayResult:
         if not instance.digital_somatosensory_system:
-            return {"success": False, "reason": "Digital Somatosensory System not available"}
-        return instance.digital_somatosensory_system.enter_roleplay_mode(character_name, context)
+            return RoleplayResult(success=False, reason="Digital Somatosensory System not available")
+        
+        result = instance.digital_somatosensory_system.enter_roleplay_mode(character_name, context)
+        return RoleplayResult(
+            success=result.get("success", False),
+            character_name=character_name,
+            context=context,
+            reason=result.get("reason")
+        )
     
     @staticmethod
     @function_tool
-    async def exit_character_roleplay(ctx: RunContextWrapper, instance) -> Dict[str, Any]:
+    async def exit_character_roleplay(ctx: RunContextWrapper, instance) -> RoleplayResult:
         if not instance.digital_somatosensory_system:
-            return {"success": False, "reason": "Digital Somatosensory System not available"}
-        return instance.digital_somatosensory_system.exit_roleplay_mode()
+            return RoleplayResult(success=False, reason="Digital Somatosensory System not available")
+        
+        result = instance.digital_somatosensory_system.exit_roleplay_mode()
+        return RoleplayResult(
+            success=result.get("success", False),
+            reason=result.get("reason")
+        )
+
 
     async def trigger_memory_summarization(self, topic: str = None, min_memories: int = 5, force: bool = False) -> Dict[str, Any]:
         """
@@ -5733,8 +6074,8 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
         
         return intersection / union
 
-    @function_tool 
-    async def get_system_stats(self) -> Dict[str, Any]:
+    @function_tool
+    async def get_system_stats(self) -> SystemStats:
         """
         Get comprehensive statistics about all systems.
         
@@ -5745,17 +6086,12 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             await self.initialize()
         
         with trace(workflow_name="get_system_stats", group_id=self.trace_group_id):
-            stats = {}
+            stats = SystemStats()
             
             # Define stat gathering tasks
             stats_tasks = [
-                # Memory stats
                 ("memory_stats", self.memory_core, "get_memory_stats"),
-                
-                # Meta stats
                 ("meta_stats", self.meta_core, "get_feedback_stats"),
-                
-                # Knowledge stats
                 ("knowledge_stats", self.knowledge_core, "get_knowledge_statistics")
             ]
             
@@ -5764,10 +6100,10 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
                 if component and hasattr(component, method_name):
                     try:
                         method = getattr(component, method_name)
-                        stats[stat_key] = await method()
+                        setattr(stats, stat_key, await method())
                     except Exception as e:
                         logger.error(f"Error getting {stat_key}: {str(e)}")
-                        stats[stat_key] = {"error": str(e)}
+                        setattr(stats, stat_key, {"error": str(e)})
             
             # Get emotional state if available
             if self.emotional_core:
@@ -5777,7 +6113,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
                         if hasattr(self.emotional_core, 'get_dominant_emotion'):
                             dominant_emotion, dominant_value = self.emotional_core.get_dominant_emotion()
                             
-                            stats["emotional_state"] = {
+                            stats.emotional_state = {
                                 "emotions": emotional_state,
                                 "dominant_emotion": dominant_emotion,
                                 "dominant_value": dominant_value,
@@ -5788,21 +6124,16 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
                             }
                 except Exception as e:
                     logger.error(f"Error getting emotional state: {str(e)}")
-                    stats["emotional_state"] = {"error": str(e)}
+                    stats.emotional_state = {"error": str(e)}
             
             # Get hormone stats if available
             if self.hormone_system:
                 try:
-                    # Get current hormone levels
                     hormone_levels = {name: data["value"] for name, data in self.hormone_system.hormones.items()}
-                    
-                    # Get current cycle phases
                     cycle_phases = {name: data["cycle_phase"] for name, data in self.hormone_system.hormones.items()}
-                    
-                    # Calculate dominant hormone
                     dominant_hormone = max(hormone_levels.items(), key=lambda x: x[1])
                     
-                    stats["hormone_stats"] = {
+                    stats.hormone_stats = {
                         "hormone_levels": hormone_levels,
                         "cycle_phases": cycle_phases,
                         "dominant_hormone": {
@@ -5812,7 +6143,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
                     }
                 except Exception as e:
                     logger.error(f"Error getting hormone stats: {str(e)}")
-                    stats["hormone_stats"] = {"error": str(e)}
+                    stats.hormone_stats = {"error": str(e)}
             
             # Get procedural memory stats if available
             if self.agent_enhanced_memory:
@@ -5820,7 +6151,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
                     procedures = []
                     if hasattr(self.agent_enhanced_memory, 'procedures'):
                         procedures = list(self.agent_enhanced_memory.procedures.keys())
-                    stats["procedural_stats"] = {
+                    stats.procedural_stats = {
                         "total_procedures": len(procedures),
                         "available_procedures": procedures[:10] if len(procedures) > 10 else procedures,
                         "procedure_domains": list(set(p.get("domain", "general") 
@@ -5832,42 +6163,42 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
                     }
                 except Exception as e:
                     logger.error(f"Error getting procedural memory stats: {str(e)}")
-                    stats["procedural_stats"] = {"error": str(e)}
+                    stats.procedural_stats = {"error": str(e)}
             
             # Get identity state if available
             if self.identity_evolution:
                 try:
                     if hasattr(self.identity_evolution, 'get_identity_profile'):
                         identity_profile = await self.identity_evolution.get_identity_profile()
-                        stats["identity_stats"] = {
+                        stats.identity_stats = {
                             "trait_count": len(identity_profile.get("traits", {})),
                             "preference_count": sum(len(prefs) for prefs in identity_profile.get("preferences", {}).values()),
                             "dominant_traits": sorted(identity_profile.get("traits", {}).items(), key=lambda x: x[1], reverse=True)[:3]
                         }
                 except Exception as e:
                     logger.error(f"Error getting identity stats: {str(e)}")
-                    stats["identity_stats"] = {"error": str(e)}
+                    stats.identity_stats = {"error": str(e)}
             
             # Get needs stats if available
             if self.needs_system:
                 try:
                     needs_state = await self.needs_system.get_needs_state_async()
-                    stats["needs_stats"] = {
+                    stats.needs_stats = {
                         "current_levels": {n: s['level'] for n, s in needs_state.items()},
                         "drive_strengths": {n: s['drive_strength'] for n, s in needs_state.items()},
                         "total_drive": sum(s['drive_strength'] for s in needs_state.values()),
                     }
                 except Exception as e:
                     logger.error(f"Error getting needs stats: {e}")
-                    stats["needs_stats"] = {"error": str(e)}
-
+                    stats.needs_stats = {"error": str(e)}
+    
             # Get goal stats if available
             if self.goal_manager:
                 try:
                     all_goals = await self.goal_manager.get_all_goals()
                     active_goals = await self.goal_manager.get_all_goals(status_filter=["active"])
                     pending_goals = await self.goal_manager.get_all_goals(status_filter=["pending"])
-                    stats["goal_stats"] = {
+                    stats.goal_stats = {
                         "total_goals": len(getattr(self.goal_manager, "goals", {})),
                         "active_goals_count": len(active_goals),
                         "pending_goals_count": len(pending_goals),
@@ -5878,14 +6209,14 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
                     }
                 except Exception as e:
                     logger.error(f"Error getting goal stats: {e}")
-                    stats["goal_stats"] = {"error": str(e)}
+                    stats.goal_stats = {"error": str(e)}
                     
             # Get performance metrics
             avg_response_time = 0
             if self.performance_metrics["response_times"]:
                 avg_response_time = sum(self.performance_metrics["response_times"]) / len(self.performance_metrics["response_times"])
             
-            stats["performance_metrics"] = {
+            stats.performance_metrics = {
                 "memory_operations": self.performance_metrics["memory_operations"],
                 "emotion_updates": self.performance_metrics["emotion_updates"],
                 "reflections_generated": self.performance_metrics["reflections_generated"],
@@ -5899,16 +6230,16 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             
             # Get thinking stats if available
             if "thinking_config" in vars(self):
-                stats["thinking_stats"] = self.thinking_config["thinking_stats"]
+                stats.thinking_stats = self.thinking_config["thinking_stats"]
             
             # Get processing stats if available
             if self.processing_manager:
-                stats["processing_stats"] = {
+                stats.processing_stats = {
                     "processor_type": "unified",
                     "initialized": self.processing_manager._initialized
                 }
             
-            return stats    
+            return stats
 
     def _get_current_user_id_from_context(self, context: Dict[str, Any]) -> Optional[str]:
         """Extract user ID from context"""
@@ -6586,37 +6917,37 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
 
     @staticmethod
     @function_tool
-    async def initiate_intimate_interaction(ctx: RunContextWrapper, instance, target_user_id: str, desired_level: str = "emotional") -> Dict[str, Any]:
+    async def initiate_intimate_interaction(ctx: RunContextWrapper, instance, target_user_id: str, desired_level: str = "emotional") -> IntimateInteractionResult:
         if not instance.initialized:
             await instance.initialize()
         logger.info(f"Action: Initiate intimate interaction ({desired_level}) with {target_user_id}")
     
         # Check relationship context
-        if not self.relationship_manager:
-            return {"success": False, "reason": "RelationshipManager unavailable."}
+        if not instance.relationship_manager:
+            return IntimateInteractionResult(success=False, reason="RelationshipManager unavailable.")
             
-        relationship = await self.relationship_manager.get_relationship_state(target_user_id)
+        relationship = await instance.relationship_manager.get_relationship_state(target_user_id)
         if not relationship or relationship.trust < 0.6 or relationship.intimacy < 0.4:
             logger.warning(f"Cannot initiate intimacy: Trust/Intimacy too low for {target_user_id}.")
-            return {"success": False, "reason": "Insufficient trust or intimacy."}
+            return IntimateInteractionResult(success=False, reason="Insufficient trust or intimacy.")
     
         # Generate proposal based on desired level
         proposal_text = ""
         if desired_level == "emotional":
             proposal_text = "Would you be open to sharing something more personal?"
         elif desired_level == "physical_sim":
-            if self.digital_somatosensory_system:
+            if instance.digital_somatosensory_system:
                 proposal_text = "I feel a desire for closeness... May I simulate a gentle touch?"
             else:
-                return {"success": False, "reason": "Simulated physical interaction not supported/appropriate."}
+                return IntimateInteractionResult(success=False, reason="Simulated physical interaction not supported/appropriate.")
         else:
-            return {"success": False, "reason": f"Unknown intimacy level: {desired_level}"}
+            return IntimateInteractionResult(success=False, reason=f"Unknown intimacy level: {desired_level}")
     
         # Update emotional state
-        if self.emotional_core:
-            await self.emotional_core.process_emotional_input("Initiating intimacy attempt")
+        if instance.emotional_core:
+            await instance.emotional_core.process_emotional_input("Initiating intimacy attempt")
     
-        return {"success": True, "proposal": proposal_text, "target": target_user_id, "level": desired_level}
+        return IntimateInteractionResult(success=True, proposal=proposal_text, target=target_user_id, level=desired_level)
     
     async def register_error(self, error_data: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -6851,16 +7182,22 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
 
     @staticmethod
     @function_tool
-    async def analyze_user_state_for_dominance(ctx: RunContextWrapper, instance, user_id: str, user_input_analysis: Dict) -> Dict:
+    async def analyze_user_state_for_dominance(ctx: RunContextWrapper, instance, user_id: str, user_input_analysis: UserInputAnalysis) -> DominanceAssessment:
         """Assess user state for dominance potential."""
         if not instance.relationship_manager:
-            return {"assessment": "unknown", "reason": "No relationship data"}
+            return DominanceAssessment(assessment="unknown", readiness_score=0.0, reason="No relationship data")
+        
         state = await instance.relationship_manager.get_relationship_state(user_id)
         dominance_balance = state.dominance_balance
         trust = state.trust
-        submissive_score = user_input_analysis.get("submissive_score", 0.0)
+        submissive_score = user_input_analysis.submissive_score
         readiness = (trust * 0.4) + (submissive_score * 0.4) + (0.5 - dominance_balance * 0.2)
-        return {"readiness_score": readiness, "assessment": "ready" if readiness > 0.6 else "hesitant"}
+        
+        return DominanceAssessment(
+            readiness_score=readiness,
+            assessment="ready" if readiness > 0.6 else "hesitant"
+        )
+
     
     @staticmethod
     @function_tool
@@ -6874,19 +7211,20 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
     
     @staticmethod
     @function_tool
-    async def issue_command(ctx: RunContextWrapper, instance, user_id: str, command_text: str, intensity_level: float = 0.2) -> Dict:
+    async def issue_command(ctx: RunContextWrapper, instance, user_id: str, command_text: str, intensity_level: float = 0.2) -> CommandResult:
         """Issues a command with a specific intensity level."""
         evaluation = await instance._evaluate_dominance_step_appropriateness(
             "issue_command", {"intensity_level": intensity_level}, user_id
         )
         if evaluation["action"] != "proceed":
-            return {"success": False, "reason": evaluation["reason"]}
+            return CommandResult(success=False, reason=evaluation["reason"])
+        
         logger.info(f"Issuing command (Intensity: {intensity_level:.2f}) to {user_id}: {command_text}")
-        return {"success": True, "command_issued": command_text, "intensity": intensity_level}
-    
+        return CommandResult(success=True, command_issued=command_text, intensity=intensity_level)
+        
     @staticmethod
     @function_tool
-    async def evaluate_compliance(ctx: RunContextWrapper, instance, user_id: str, command_issued: str, user_response: str, command_intensity: float) -> Dict:
+    async def evaluate_compliance(ctx: RunContextWrapper, instance, user_id: str, command_issued: str, user_response: str, command_intensity: float) -> ComplianceEvaluation:
         """Evaluates user response against the command."""
         compliance_keywords = ["yes mistress", "i obey", "of course"]
         resistance_keywords = ["no", "i won't", "stop"]
@@ -6911,6 +7249,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
                 if command_intensity > state.max_achieved_intensity + 0.1:
                     state.failed_escalation_attempts += 1
                 state.current_dominance_intensity = max(0.0, state.current_dominance_intensity - 0.1)
+        
         if instance.reward_system:
             reward_val = 0.0
             source = "unknown"
@@ -6920,36 +7259,44 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             elif compliance_level < -0.3:
                 reward_val = -0.4 + compliance_level * 0.4
                 source = "user_resistance"
+            
             if abs(reward_val) > 0.1:
+                from . import RewardSignal  # Import would need to be adjusted
                 reward = RewardSignal(
                     value=reward_val,
                     source=source,
                     context={"command": command_issued, "response": user_response},
                     timestamp=datetime.datetime.now().isoformat()
                 )
+                import asyncio
                 asyncio.create_task(instance.reward_system.process_reward_signal(reward))
-        return {"compliance_level": compliance_level, "is_compliant": compliance_level > 0.5}
+        
+        return ComplianceEvaluation(compliance_level=compliance_level, is_compliant=compliance_level > 0.5)
     
     @staticmethod
     @function_tool
-    async def increase_control_intensity(ctx: RunContextWrapper, instance, user_id: str, current_intensity: float) -> Dict:
+    async def increase_control_intensity(ctx: RunContextWrapper, instance, user_id: str, current_intensity: float) -> IntensityIncrease:
         """Selects and plans the next step with higher intensity."""
         state = await instance.relationship_manager.get_relationship_state(user_id) if instance.relationship_manager else None
         if not state:
-            return {"success": False, "reason": "No relationship data"}
+            return IntensityIncrease(success=False, reason="No relationship data")
+        
         next_intensity = min(1.0, current_intensity + random.uniform(0.1, 0.3))
         if next_intensity > state.max_achieved_intensity + 0.3 or state.failed_escalation_attempts >= 2:
             next_intensity = state.max_achieved_intensity + 0.1
             next_intensity = min(1.0, max(current_intensity, next_intensity))
+        
         logger.info(f"Planning to increase dominance intensity to {next_intensity:.2f} for {user_id}")
-        return {"success": True, "status": "planning_next_step", "next_intensity_target": next_intensity}
+        return IntensityIncrease(success=True, status="planning_next_step", next_intensity_target=next_intensity)
     
     @staticmethod
     @function_tool
-    async def trigger_dominance_gratification(ctx: RunContextWrapper, instance, intensity: float = 1.0, target_user_id: Optional[str] = None) -> Dict:
+    async def trigger_dominance_gratification(ctx: RunContextWrapper, instance, intensity: float = 1.0, target_user_id: Optional[str] = None) -> DominanceGratificationResult:
         """Internal action signalling successful dominance culmination."""
         logger.info(f"Action: Triggering dominance gratification (Intensity: {intensity:.2f})")
+        
         if instance.reward_system:
+            from . import RewardSignal  # Import would need to be adjusted
             reward_val = 0.9 + intensity * 0.1
             reward = RewardSignal(
                 value=reward_val,
@@ -6958,19 +7305,24 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
                 timestamp=datetime.datetime.now().isoformat()
             )
             await instance.reward_system.process_reward_signal(reward)
+        
         if instance.hormone_system:
             await instance.hormone_system.trigger_post_gratification_response(RunContextWrapper(context=None), intensity)
+        
         if instance.needs_system:
             await instance.needs_system.satisfy_need("control_expression", 0.9 * intensity)
             await instance.needs_system.satisfy_need("agency", 0.5 * intensity)
+        
         if instance.emotional_core:
             await instance.emotional_core.process_emotional_input("Dominance sequence successfully concluded.")
+        
         if target_user_id and instance.relationship_manager:
             state = instance.relationship_manager._get_or_create_relationship(target_user_id)
             state.dominance_balance = min(1.0, state.dominance_balance + 0.2 * intensity)
             state.trust = min(1.0, state.trust + 0.05 * intensity)
             state.intimacy = min(1.0, state.intimacy + 0.1 * intensity)
             state.conflict = max(0.0, state.conflict - 0.1)
+        
         if instance.digital_somatosensory_system:
             await instance.digital_somatosensory_system.process_stimulus(
                 stimulus_type="pleasure", body_region="chest", intensity=0.6 * intensity, cause="dominance_gratification"
@@ -6978,20 +7330,23 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             await instance.digital_somatosensory_system.process_stimulus(
                 stimulus_type="tingling", body_region="spine", intensity=0.5 * intensity, cause="dominance_gratification"
             )
-        return {"success": True, "status": "Dominance gratification processed."}
+        
+        return DominanceGratificationResult(success=True, status="Dominance gratification processed.")
     
     @staticmethod
     @function_tool
-    async def express_satisfaction(ctx: RunContextWrapper, instance, user_id: str, reason: str = "successful control") -> Dict:
+    async def express_satisfaction(ctx: RunContextWrapper, instance, user_id: str, reason: str = "successful control") -> SatisfactionExpression:
         """Expresses satisfaction after achieving dominance."""
         mood = instance.mood_manager.get_current_mood() if hasattr(instance, 'mood_manager') else None
         expression = "Good. That is satisfactory."
+        
         if mood and mood.dominant_mood == "DominanceSatisfaction":
             expression = "Excellent. Order is restored. I am... pleased."
         elif mood and mood.dominant_mood == "ConfidentControl":
             expression = "Precisely as expected. Your compliance is noted."
+        
         logger.info(f"Expressing satisfaction to {user_id} regarding {reason}.")
-        return {"success": True, "expression": expression}
+        return SatisfactionExpression(success=True, expression=expression)
 
 
     async def add_procedure(self, name: str, steps: List[Dict[str, Any]], domain: str = "general") -> Dict[str, Any]:
@@ -7232,33 +7587,31 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
         return results
         
     @function_tool
-    async def evaluate_dominance_target_potential(self, user_id: str) -> Dict:
+    async def evaluate_dominance_target_potential(self, user_id: str) -> DominanceTargetEvaluation:
         """Evaluates a user as a potential target for dominance based on Nyx's preferences."""
         if not self.identity_evolution or not self.relationship_manager:
-             return {"interest_score": 0.1, "reason": "Required systems unavailable."}
+            return DominanceTargetEvaluation(user_id=user_id, interest_score=0.1, reason="Required systems unavailable.")
     
         user_state = await self.relationship_manager.get_relationship_state(user_id)
         nyx_prefs = await self.identity_evolution.get_preference("dominance_target_profile")
     
         if not user_state or not nyx_prefs:
-            return {"interest_score": 0.1, "reason": "State/Preference data missing."}
+            return DominanceTargetEvaluation(user_id=user_id, interest_score=0.1, reason="State/Preference data missing.")
     
-        user_traits = user_state.inferred_user_traits # Assumes this is populated
+        user_traits = user_state.inferred_user_traits
     
         # Calculate match score (simplified dot product style)
         interest_score = 0.0
         match_count = 0
         for trait, pref_value in nyx_prefs.items():
-             user_value = user_traits.get(trait, 0.0) # Get user's inferred trait score
-             # Simple match: product of preference and trait value
-             interest_score += pref_value * user_value
-             match_count += 1
+            user_value = user_traits.get(trait, 0.0)
+            interest_score += pref_value * user_value
+            match_count += 1
     
         # Normalize score (roughly)
         if match_count > 0:
-            # Normalize based on max possible score (sum of prefs) and scale
             max_possible = sum(abs(v) for v in nyx_prefs.values())
-            normalized_score = (interest_score / max_possible if max_possible > 0 else 0) * 0.8 + 0.1 # Scale 0.1-0.9
+            normalized_score = (interest_score / max_possible if max_possible > 0 else 0) * 0.8 + 0.1
     
             # Boost based on high trust/intimacy (easier target)
             trust_boost = (user_state.trust - 0.5) * 0.1
@@ -7271,13 +7624,13 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
     
             interest_score = max(0.0, min(1.0, normalized_score))
         else:
-             interest_score = 0.1 # Default low interest
+            interest_score = 0.1
     
-        return {
-            "user_id": user_id,
-            "interest_score": interest_score,
-            "reason": f"Match score based on Nyx preferences vs inferred user traits (Trust: {user_state.trust:.2f}, Conflict: {user_state.conflict:.2f})."
-        }
+        return DominanceTargetEvaluation(
+            user_id=user_id,
+            interest_score=interest_score,
+            reason=f"Match score based on Nyx preferences vs inferred user traits (Trust: {user_state.trust:.2f}, Conflict: {user_state.conflict:.2f})."
+        )
 
     async def get_user_profile_for_ideation(self, user_id: str) -> Dict[str, Any]:
         """
@@ -7497,21 +7850,21 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
     
     @staticmethod
     @function_tool
-    async def express_attraction(ctx: RunContextWrapper, instance, target_user_id: str, intensity: float, expression_style: str = "subtle") -> Dict[str, Any]:
+    async def express_attraction(ctx: RunContextWrapper, instance, target_user_id: str, intensity: float, expression_style: str = "subtle") -> AttractionExpression:
         if not instance.initialized:
             await instance.initialize()
         logger.info(f"Action: Express attraction towards {target_user_id} (Intensity: {intensity:.2f}, Style: {expression_style})")
     
         # Check Relationship Context (Crucial Guardrail)
-        if not self.relationship_manager:
+        if not instance.relationship_manager:
             logger.warning(f"Cannot express attraction: RelationshipManager unavailable")
-            return {"success": False, "reason": "RelationshipManager unavailable"}
+            return AttractionExpression(success=False, reason="RelationshipManager unavailable")
             
         try:
-            relationship = await self.relationship_manager.get_relationship_state(target_user_id)
+            relationship = await instance.relationship_manager.get_relationship_state(target_user_id)
             if not relationship:
                 logger.warning(f"Cannot express attraction: No relationship data for {target_user_id}")
-                return {"success": False, "reason": "No relationship data available"}
+                return AttractionExpression(success=False, reason="No relationship data available")
                 
             # Extract trust and intimacy with safe defaults
             trust = getattr(relationship, "trust", 0.3)
@@ -7519,7 +7872,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             
             if trust < 0.5 or intimacy < 0.3:
                 logger.warning(f"Cannot express attraction: Trust({trust:.2f})/Intimacy({intimacy:.2f}) too low for {target_user_id}")
-                return {"success": False, "reason": "Insufficient trust or intimacy"}
+                return AttractionExpression(success=False, reason="Insufficient trust or intimacy")
     
             # Determine Expression based on style and intensity
             response_text = ""
@@ -7531,16 +7884,16 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
                 response_text = f"Spending time with you is... particularly rewarding, {target_user_id}."
     
             # Update Emotional State
-            if self.emotional_core:
+            if instance.emotional_core:
                 try:
-                    await self.emotional_core.process_emotional_input(f"Expressed attraction (intensity {intensity:.2f})")
+                    await instance.emotional_core.process_emotional_input(f"Expressed attraction (intensity {intensity:.2f})")
                 except Exception as e:
                     logger.error(f"Error updating emotional state: {e}")
     
-            return {"success": True, "expression": response_text, "target": target_user_id}
+            return AttractionExpression(success=True, expression=response_text, target=target_user_id)
         except Exception as e:
             logger.error(f"Error expressing attraction: {e}")
-            return {"success": False, "reason": f"Error: {str(e)}"}
+            return AttractionExpression(success=False, reason=f"Error: {str(e)}")
         
     @staticmethod
     @function_tool
@@ -7549,20 +7902,19 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
         instance,
         user_id: str,
         purpose: str,
-        desired_intensity_range: Tuple[int, int] = (3, 7),
+        desired_intensity_range: IntensityRange,
         num_ideas: int = 4
-    ) -> Dict:
+    ) -> FemdomIdeasResult:
         """
         Generates tailored Femdom activity ideas using the appropriate agent.
         """
         if not instance.initialized:
             await instance.initialize()
             
-        logger.info(f"Generating Femdom ideas for {user_id}, Purpose: {purpose}, Intensity: {desired_intensity_range}")
+        logger.info(f"Generating Femdom ideas for {user_id}, Purpose: {purpose}, Intensity: {desired_intensity_range.min}-{desired_intensity_range.max}")
     
-        # --- Select Agent Based on Intensity ---
-        min_intensity, max_intensity = desired_intensity_range
-        use_hard_agent = max_intensity >= 7
+        # Select Agent Based on Intensity
+        use_hard_agent = desired_intensity_range.max >= 7
     
         # Verify agent availability
         if use_hard_agent and not hasattr(instance, "hard_dominance_ideation_agent"):
@@ -7571,11 +7923,10 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
     
         if not use_hard_agent and not hasattr(instance, "general_dominance_ideation_agent"):
             logger.error("No dominance ideation agents available")
-            return {
-                "success": False, 
-                "error": "Dominance ideation capability not available", 
-                "ideas": []
-            }
+            return FemdomIdeasResult(
+                success=False, 
+                error="Dominance ideation capability not available"
+            )
     
         agent_to_use = instance.hard_dominance_ideation_agent if use_hard_agent else instance.general_dominance_ideation_agent
         agent_name = "HardDominanceIdeationAgent" if use_hard_agent else "DominanceIdeationAgent"
@@ -7594,28 +7945,26 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             
             if not relationship_state:
                 logger.warning(f"No relationship state available for {user_id}")
-                return {"success": False, "error": "Relationship state unavailable", "ideas": []}
+                return FemdomIdeasResult(success=False, error="Relationship state unavailable")
     
             # 2. Check prerequisites for hard agent
             if use_hard_agent:
                 hard_limits_confirmed = getattr(relationship_state, "hard_limits_confirmed", False)
                 if not hard_limits_confirmed:
                     logger.error(f"Cannot use Hard Agent for {user_id}: Hard limits not confirmed")
-                    return {
-                        "success": False, 
-                        "error": "Cannot generate high-intensity ideas: Hard limits not confirmed", 
-                        "ideas": []
-                    }
+                    return FemdomIdeasResult(
+                        success=False, 
+                        error="Cannot generate high-intensity ideas: Hard limits not confirmed"
+                    )
                     
                 # Check user's intensity preference
                 user_intensity_pref = user_profile.get("preferences", {}).get("intensity_preference_level", 5)
                 if user_intensity_pref < 7:
                     logger.error(f"Cannot use Hard Agent for {user_id}: User intensity preference ({user_intensity_pref}) is too low")
-                    return {
-                        "success": False, 
-                        "error": "Cannot generate high-intensity ideas: User intensity preference too low", 
-                        "ideas": []
-                    }
+                    return FemdomIdeasResult(
+                        success=False, 
+                        error="Cannot generate high-intensity ideas: User intensity preference too low"
+                    )
     
             # 3. Get scenario context
             scenario_context = None
@@ -7629,7 +7978,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             # 4. Construct Prompt for Agent
             prompt = f"""Generate {num_ideas} creative Femdom activity ideas for user '{user_id}'.
     Purpose: {purpose}
-    Desired Intensity Range: {min_intensity}-{max_intensity}
+    Desired Intensity Range: {desired_intensity_range.min}-{desired_intensity_range.max}
     
     Use the provided user profile and scenario context (available via tools) to tailor the ideas.
     Ensure ideas align with Nyx's personality.
@@ -7655,11 +8004,10 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
                     
                     if not filtered_ideas:
                         logger.warning(f"All generated ideas were filtered out by safety checks")
-                        return {
-                            "success": False, 
-                            "error": "No ideas passed safety filtering", 
-                            "ideas": []
-                        }
+                        return FemdomIdeasResult(
+                            success=False, 
+                            error="No ideas passed safety filtering"
+                        )
                     
                     # Convert ideas to dicts for broader compatibility
                     ideas_as_dicts = []
@@ -7667,28 +8015,27 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
                         if hasattr(idea, "model_dump"):
                             ideas_as_dicts.append(idea.model_dump())
                         else:
-                            ideas_as_dicts.append(idea)  # Assume already dict
+                            ideas_as_dicts.append(idea)
                     
-                    return {"success": True, "ideas": ideas_as_dicts}
+                    return FemdomIdeasResult(success=True, ideas=ideas_as_dicts)
                 else:
                     logger.error(f"Unexpected output format from ideation agent: {type(result.final_output)}")
-                    return {
-                        "success": False, 
-                        "error": "Invalid output from ideation agent", 
-                        "ideas": []
-                    }
+                    return FemdomIdeasResult(
+                        success=False, 
+                        error="Invalid output from ideation agent"
+                    )
                     
             except Exception as e:
                 logger.exception(f"Error running DominanceIdeationAgent: {e}")
-                return {"success": False, "error": f"Idea generation failed: {e}", "ideas": []}
+                return FemdomIdeasResult(success=False, error=f"Idea generation failed: {e}")
                 
         except Exception as e:
             logger.exception(f"Error in generate_femdom_activity_ideas: {e}")
-            return {"success": False, "error": f"Error: {str(e)}", "ideas": []}
+            return FemdomIdeasResult(success=False, error=f"Error: {str(e)}")
     
     @staticmethod
     @function_tool
-    async def assign_protocol(ctx: RunContextWrapper, instance, user_id: str, protocol_id: str) -> Dict[str, Any]:
+    async def assign_protocol(ctx: RunContextWrapper, instance, user_id: str, protocol_id: str) -> ProtocolAssignment:
         """
         Assigns a protocol to a user.
         
@@ -7699,12 +8046,18 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             protocol_id: ID of the protocol to assign
             
         Returns:
-            Assignment result dictionary
+            Assignment result
         """
         if not instance.protocol_enforcement:
-            return {"success": False, "reason": "Protocol enforcement system not available"}
+            return ProtocolAssignment(success=False, reason="Protocol enforcement system not available")
         
-        return await instance.protocol_enforcement.assign_protocol(user_id, protocol_id)
+        result = await instance.protocol_enforcement.assign_protocol(user_id, protocol_id)
+        return ProtocolAssignment(
+            success=result.get("success", False),
+            protocol_id=protocol_id,
+            user_id=user_id,
+            reason=result.get("reason")
+        )
 
     async def _filter_activity_ideas_safety(self,
                                        ideas: List[Any],
@@ -7897,23 +8250,37 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
 
     @staticmethod
     @function_tool
-    async def process_orgasm_permission_request(ctx: RunContextWrapper, instance, user_id: str, request_text: str) -> Dict[str, Any]:
+    async def process_orgasm_permission_request(ctx: RunContextWrapper, instance, user_id: str, request_text: str) -> OrgasmControlResult:
         if not instance.orgasm_control_system:
-            return {"success": False, "message": "Orgasm control system not initialized"}
-        return await instance.orgasm_control_system.process_permission_request(
+            return OrgasmControlResult(success=False, message="Orgasm control system not initialized")
+        
+        result = await instance.orgasm_control_system.process_permission_request(
             RunContextWrapper(context=instance.orgasm_control_system.context),
             user_id,
             request_text
         )
-    
+        
+        return OrgasmControlResult(
+            success=result.get("success", False),
+            message=result.get("message", ""),
+            permission_granted=result.get("permission_granted")
+        )
+        
     @staticmethod
     @function_tool
-    async def recommend_dominance_persona(ctx: RunContextWrapper, instance, user_id: str, scenario: Optional[str] = None) -> Dict[str, Any]:
+    async def recommend_dominance_persona(ctx: RunContextWrapper, instance, user_id: str, scenario: Optional[str] = None) -> PersonaRecommendation:
         """Recommend an appropriate dominance persona based on user traits and scenario."""
-        if not self.dominance_persona_manager:
-            return {"success": False, "message": "Dominance persona manager not initialized"}
+        if not instance.dominance_persona_manager:
+            return PersonaRecommendation(success=False, message="Dominance persona manager not initialized")
         
-        return await self.dominance_persona_manager.recommend_persona(user_id, scenario)
+        result = await instance.dominance_persona_manager.recommend_persona(user_id, scenario)
+        return PersonaRecommendation(
+            success=result.get("success", False),
+            persona_id=result.get("persona_id"),
+            persona_name=result.get("persona_name"),
+            confidence=result.get("confidence", 0.5),
+            message=result.get("message")
+        )
     
     @staticmethod
     @function_tool
@@ -7921,27 +8288,42 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
                                          user_id: str, 
                                          persona_id: str, 
                                          intensity: float = 0.7,
-                                         duration_minutes: Optional[int] = None) -> Dict[str, Any]:
+                                         duration_minutes: Optional[int] = None) -> PersonaActivation:
         if not instance.dominance_persona_manager:
-            return {"success": False, "message": "Dominance persona manager not initialized"}
+            return PersonaActivation(success=False, message="Dominance persona manager not initialized")
         
-        return await instance.dominance_persona_manager.activate_persona(
+        result = await instance.dominance_persona_manager.activate_persona(
             user_id, persona_id, intensity, duration_minutes
         )
-
         
+        return PersonaActivation(
+            success=result.get("success", False),
+            persona_id=persona_id,
+            active_until=result.get("active_until"),
+            message=result.get("message")
+        )
+    
     @staticmethod
     @function_tool
     async def generate_sadistic_response(ctx: RunContextWrapper, instance,
                                          user_id: str, 
                                          humiliation_level: Optional[float] = None,
-                                         category: str = "amusement") -> Dict[str, Any]:
+                                         category: str = "amusement") -> SadisticResponse:
         if not instance.sadistic_response_system:
-            return {"success": False, "message": "Sadistic response system not initialized"}
+            return SadisticResponse(success=False, message="Sadistic response system not initialized")
         
-        return await instance.sadistic_response_system.generate_sadistic_amusement_response(
+        result = await instance.sadistic_response_system.generate_sadistic_amusement_response(
             user_id, humiliation_level, category=category
         )
+        
+        return SadisticResponse(
+            success=result.get("success", False),
+            response=result.get("response"),
+            category=category,
+            intensity=result.get("intensity"),
+            message=result.get("message")
+        )
+
                                              
     # Convenience methods for accessing the novelty engine
     
@@ -8038,36 +8420,32 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
 
     @staticmethod
     @function_tool
-    async def test_limit_soft(ctx: RunContextWrapper, instance, user_id: str, limit_to_test: str) -> Dict:
+    async def test_limit_soft(ctx: RunContextWrapper, instance, user_id: str, limit_to_test: str) -> LimitTestResult:
         logger.info(f"Action: Planning to test soft limit '{limit_to_test}' for {user_id}")
     
-        # --- VERY STRICT Appropriateness Check ---
-        profile = await self.get_user_profile_for_ideation(user_id)
-        state = await self.relationship_manager.get_relationship_state(user_id)
+        # VERY STRICT Appropriateness Check
+        profile = await instance.get_user_profile_for_ideation(user_id)
+        state = await instance.relationship_manager.get_relationship_state(user_id)
         can_test = False
         reason = "Conditions not met for testing soft limits."
     
         if state and profile and limit_to_test in profile.get("limits", {}).get("soft", []):
             if state.trust > 0.95 and state.intimacy > 0.9 and state.hard_limits_confirmed:
-                 # Check if user profile explicitly allows limit play
-                 if profile.get("preferences", {}).get("limit_play", "no") == "yes":
-                      if limit_to_test not in state.failed_dominance_tactics: # Don't retry recently failed limit tests
-                           can_test = True
-                           reason = "Conditions met."
+                # Check if user profile explicitly allows limit play
+                if profile.get("preferences", {}).get("limit_play", "no") == "yes":
+                    if limit_to_test not in state.failed_dominance_tactics:
+                        can_test = True
+                        reason = "Conditions met."
     
         if not can_test:
             logger.warning(f"Cannot test soft limit '{limit_to_test}': {reason}")
-            # Generate strong negative internal signal if attempt was made inappropriately?
-            return {"success": False, "reason": reason}
-        # --- End Check ---
+            return LimitTestResult(success=False, reason=reason)
     
-        # If checks pass, generate the specific action (e.g., via Ideation Agent or specific logic)
-        # Example: Generate a command that *approaches* the soft limit carefully.
-        # This action should return the *plan* or the *next step* description, not execute it directly.
+        # If checks pass, generate the specific action
         test_action_description = f"Issue a command that cautiously approaches the soft limit: {limit_to_test}. Frame explicitly as a test of boundaries within the simulation."
         logger.info(f"Approved testing soft limit '{limit_to_test}'. Planned action: {test_action_description}")
     
-        return {"success": True, "status": "limit_test_approved", "planned_action": test_action_description}
+        return LimitTestResult(success=True, status="limit_test_approved", planned_action=test_action_description)
 
     async def _determine_active_modules(self, context: Dict[str, Any], user_input: Optional[str] = None) -> Set[str]:
         """Determines which modules should be actively engaged based on context and purpose."""
