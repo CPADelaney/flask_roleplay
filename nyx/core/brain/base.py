@@ -142,7 +142,7 @@ class EmotionalContext(BaseModel):
 
 class EnvironmentFactor(BaseModel):
     name: str
-    value: JsonScalar
+    value: Any
 
 class CognitiveCycleContext(BaseModel):
     """Context data for cognitive cycle"""
