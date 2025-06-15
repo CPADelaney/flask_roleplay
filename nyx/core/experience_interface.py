@@ -1077,7 +1077,7 @@ class ExperienceInterface:
         state = instance.emotional_core.get_formatted_emotional_state() if instance.emotional_core else {}
         ctx.context.emotional_state = state
         return EmotionalContext.model_validate(state)   # converts dict → model
-    
+
     @staticmethod
     @function_tool
     async def _store_experience(
@@ -1091,71 +1091,97 @@ class ExperienceInterface:
         tags: list[str] | None = None,
         user_id: str | None = None
     ) -> StoreExperienceResult:
-        tags = tags or []
-        if scenario_type not in tags:
-            tags.append(scenario_type)
-        if "experience" not in tags:
-            tags.append("experience")
+        """
+        Add `memory_text` to memory-core, embed it, update identity, and return a
+        strict `StoreExperienceResult`.
+        """
+    
+        # ----------------------- tags & metadata --------------------------------
+        tags = (tags or []) + [t for t in (scenario_type, "experience") if t not in (tags or [])]
+    
         metadata = {
             "scenario_type": scenario_type,
-            "entities": entities or [],
-            "is_experience": True
+            "entities"     : entities or [],
+            "is_experience": True,
         }
         if user_id:
             metadata["user_id"] = user_id
         if emotional_context:
             metadata["emotional_context"] = emotional_context
         elif instance.emotional_core:
-            emotional_context = instance.emotional_core.get_formatted_emotional_state()
-            metadata["emotional_context"] = emotional_context
+            metadata["emotional_context"] = instance.emotional_core.get_formatted_emotional_state()
+    
+        # ----------------------- write to memory-core ---------------------------
         memory_id = await instance.memory_core.add_memory(
-            memory_text=memory_text,
-            memory_type="experience",
-            memory_scope="game",
-            significance=significance,
-            tags=tags,
-            metadata=metadata
+            memory_text = memory_text,
+            memory_type = "experience",
+            memory_scope= "game",
+            significance= significance,
+            tags        = tags,
+            metadata    = metadata,
         )
+    
+        # Track per-user mapping -----------------------------------------------
         if user_id:
-            if not hasattr(instance, "user_experience_map"):
-                instance.user_experience_map = dict()
-            if user_id not in instance.user_experience_map:
-                instance.user_experience_map[user_id] = set()
-            instance.user_experience_map[user_id].add(memory_id)
+            instance.user_experience_map.setdefault(user_id, set()).add(memory_id)
+    
+        # ----------------------- embed & index ---------------------------------
         try:
             vector = await instance._generate_experience_vector(ctx, instance, memory_text)
-            if not hasattr(instance, "experience_vectors"):
-                instance.experience_vectors = dict()
             instance.experience_vectors[memory_id] = {
                 "experience_id": memory_id,
-                "vector": vector,
-                "metadata": {
-                    "user_id": user_id or "default",
+                "vector"      : vector,
+                "metadata"    : {
+                    "user_id"      : user_id or "default",
                     "scenario_type": scenario_type,
-                    "timestamp": datetime.now().isoformat()
-                }
+                    "timestamp"    : datetime.now().isoformat(),
+                },
             }
         except Exception as e:
-            logger.error(f"Error generating vector for experience {memory_id}: {e}")
+            logger.error(f"Vector-embedding failed for {memory_id}: {e}")
+    
+        # ----------------------- identity impact -------------------------------
         try:
-            identity_impact = instance._calculate_identity_impact(
-                memory_text, scenario_type, emotional_context
+            raw_impact = instance._calculate_identity_impact(
+                memory_text, scenario_type, metadata.get("emotional_context", {})
             )
-            if identity_impact:
+    
+            if raw_impact and (raw_impact.get("preferences") or raw_impact.get("traits")):
+                # Convert dict → IdentityImpactInput
+                pref_deltas  = [
+                    ImpactDelta(key=f"{ptype}.{pname}", delta=delta)
+                    for ptype, prefs in raw_impact.get("preferences", {}).items()
+                    for pname, delta in (prefs or {}).items()
+                ]
+                trait_deltas = [
+                    ImpactDelta(key=tname, delta=delta)
+                    for tname, delta in raw_impact.get("traits", {}).items()
+                ]
+                impact_model = IdentityImpactInput(
+                    preferences=pref_deltas or None,
+                    traits=trait_deltas   or None,
+                )
+    
+                exp_rec = ExperienceRecord(
+                    experience_id = memory_id,
+                    text          = memory_text,
+                    similarity    = 1.0,       # new memories get full similarity to themselves
+                    metadata      = None,
+                )
+    
                 await instance._update_identity_from_experience(
-                    ctx,
-                    instance,
-                    {"id": memory_id, "memory_text": memory_text, "significance": significance},
-                    identity_impact
+                    ctx, instance, exp_rec, impact_model
                 )
         except Exception as e:
-            logger.error(f"Error updating identity from experience: {e}")
+            logger.error(f"Identity-update failed for {memory_id}: {e}")
+    
+        # ----------------------- structured return -----------------------------
         return StoreExperienceResult(
-            experience_id=memory_id,
-            scenario_type=scenario_type,
-            tags=tags,
-            significance=significance,
-            user_id=user_id
+            experience_id = memory_id,
+            scenario_type = scenario_type,
+            tags          = tags,
+            significance  = significance,
+            user_id       = user_id,
         )
 
         
