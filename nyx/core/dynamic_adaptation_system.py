@@ -32,6 +32,53 @@ class MetricKV(BaseModel):
     metric: str
     value: float
 
+class ExperienceContextAnalysis(BaseModel):
+    has_experience: bool
+    cross_user_experience: bool
+    experience_relevance: float
+    experience_complexity: float
+    scenario_type: str | None = None
+    user_engagement: float | None = None
+
+
+class IdentityContextAnalysis(BaseModel):
+    identity_impact: bool
+    identity_stability: float
+    preference_updates: list[KVPair] | None = None
+    trait_updates: list[KVPair] | None = None
+    update_magnitude: float | None = None
+
+
+class ExperiencePerformanceAnalysis(BaseModel):
+    experience_effectiveness: float
+    experience_utility: float | None = None
+    utility_category: str | None = None
+    user_satisfaction: float | None = None
+    trend: str | None = None
+    trend_magnitude: float | None = None
+
+
+class IdentityPerformanceAnalysis(BaseModel):
+    identity_coherence: float
+    coherence_category: str | None = None
+    overall_stability: float | None = None
+    trend: str | None = None
+    trend_magnitude: float | None = None
+
+
+class ExperienceAdaptationSettings(ExperienceAdaptationParams):
+    # fields from the strategy that are not in ExperienceAdaptationParams
+    strategy_id: str
+    strategy_name: str
+    experience_sharing_rate: float
+
+
+class IdentityAdaptationSettings(IdentityAdaptationParams):
+    strategy_id: str
+    strategy_name: str
+    identity_evolution_rate: float       # copied from strategy
+    adaptation_rate: float               # copied from strategy
+
 
 class MetricTrend(BaseModel):
     """output of the trend calculator"""
@@ -141,6 +188,14 @@ class AdaptationCycleResult(BaseModel):
     experience_adaptation: Optional[ExperienceAdaptationParams] = Field(default=None, description="Experience adaptation parameters")
     identity_adaptation: Optional[IdentityAdaptationParams] = Field(default=None, description="Identity adaptation parameters")
     insights: List[str] = Field(default_factory=list, description="Insights from the adaptation cycle")
+
+def _kv_list_to_dict(kvs: Any) -> dict[str, Any]:
+    """Accept list[KVPair] *or* raw dict and return a plain dict."""
+    if isinstance(kvs, list) and kvs and isinstance(kvs[0], KVPair):
+        return {kv.key: kv.value for kv in kvs}
+    if isinstance(kvs, dict):
+        return kvs
+    return {}
 
 class DynamicAdaptationContext:
     """Context object for sharing state between agents and tools"""
@@ -1477,601 +1532,346 @@ class DynamicAdaptationSystem:
     
     # New function tools for experience-related adaptations
 
-    @staticmethod    
+    @staticmethod
     @function_tool
-    async def _analyze_experience_context(ctx: RunContextWrapper[DynamicAdaptationContext],
-                                      context: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Analyze experience-related context features
-        
-        Args:
-            context: Context to analyze
-            
-        Returns:
-            Experience context analysis
-        """
-        experience_analysis = {
-            "has_experience": context.get("has_experience", False),
-            "cross_user_experience": context.get("cross_user_experience", False),
-            "experience_relevance": 0.5  # Default
-        }
-        
-        # Calculate experience relevance if available
-        if "relevance_score" in context:
-            experience_analysis["experience_relevance"] = min(1.0, context["relevance_score"])
-        elif experience_analysis["has_experience"]:
-            experience_analysis["experience_relevance"] = 0.7  # Default if has experience but no score
-        
-        # Calculate experience complexity
-        experience_complexity = 0.0
-        if experience_analysis["has_experience"]:
-            experience_complexity += 0.2
-            if experience_analysis["cross_user_experience"]:
-                experience_complexity += 0.3
-        
-        experience_analysis["experience_complexity"] = experience_complexity
-        
-        # Check for scenario type
-        if "scenario_type" in context:
-            experience_analysis["scenario_type"] = context["scenario_type"]
-        
-        # Check for user engagement with experiences
-        if "user_engagement" in context:
-            experience_analysis["user_engagement"] = context["user_engagement"]
-        
-        return experience_analysis
+    async def _analyze_experience_context(
+        ctx: RunContextWrapper[DynamicAdaptationContext],
+        context: Any                              # <-- no strict dict!
+    ) -> ExperienceContextAnalysis:
+        c = _kv_list_to_dict(context)
+    
+        has_xp      = bool(c.get("has_experience", False))
+        cross_user  = bool(c.get("cross_user_experience", False))
+        rel         = float(c.get("relevance_score", 0.7 if has_xp else 0.5))
+        comp        = 0.0 + (0.2 if has_xp else 0.0) + (0.3 if cross_user else 0.0)
+    
+        return ExperienceContextAnalysis(
+            has_experience        = has_xp,
+            cross_user_experience = cross_user,
+            experience_relevance  = min(1.0, rel),
+            experience_complexity = comp,
+            scenario_type         = c.get("scenario_type"),
+            user_engagement       = c.get("user_engagement"),
+        )
 
-    @staticmethod    
+    @staticmethod
     @function_tool
-    async def _analyze_identity_context(ctx: RunContextWrapper[DynamicAdaptationContext],
-                                    context: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Analyze identity-related context features
-        
-        Args:
-            context: Context to analyze
-            
-        Returns:
-            Identity context analysis
-        """
-        identity_analysis = {
-            "identity_impact": context.get("identity_impact", False),
-            "identity_stability": 0.8  # Default high stability
-        }
-        
-        # Adjust stability if identity impact present
-        if identity_analysis["identity_impact"]:
-            identity_analysis["identity_stability"] = 0.3  # Lower stability when identity impact present
-            
-            # Check for impact details
-            if isinstance(context.get("identity_impact"), dict):
-                identity_impact = context["identity_impact"]
-                
-                # Check preference updates
-                if "preferences" in identity_impact:
-                    identity_analysis["preference_updates"] = identity_impact["preferences"]
-                
-                # Check trait updates
-                if "traits" in identity_impact:
-                    identity_analysis["trait_updates"] = identity_impact["traits"]
-                
-                # Calculate update magnitude
-                update_count = 0
-                update_magnitude = 0.0
-                
-                for category, updates in identity_impact.items():
-                    if isinstance(updates, dict):
-                        update_count += len(updates)
-                        update_magnitude += sum(abs(val) for val in updates.values())
-                
-                if update_count > 0:
-                    identity_analysis["update_magnitude"] = update_magnitude / update_count
-        
-        return identity_analysis
+    async def _analyze_identity_context(
+        ctx: RunContextWrapper[DynamicAdaptationContext],
+        context: Any
+    ) -> IdentityContextAnalysis:
+        c = _kv_list_to_dict(context)
+    
+        impact  = bool(c.get("identity_impact", False))
+        stable  = 0.3 if impact else 0.8
+        pref_up = c.get("identity_impact", {}).get("preferences") if impact else None
+        trait_up= c.get("identity_impact", {}).get("traits")      if impact else None
+    
+        up_mag  = None
+        if impact and isinstance(c.get("identity_impact"), dict):
+            vals  = []
+            for upd in c["identity_impact"].values():
+                if isinstance(upd, dict):
+                    vals.extend(upd.values())
+            if vals:
+                up_mag = sum(abs(v) for v in vals) / len(vals)
+    
+        return IdentityContextAnalysis(
+            identity_impact   = impact,
+            identity_stability= stable,
+            preference_updates=[KVPair(key=k, value=v) for k, v in (pref_up or {}).items()] or None,
+            trait_updates     =[KVPair(key=k, value=v) for k, v in (trait_up or {}).items()] or None,
+            update_magnitude  = up_mag,
+        )
 
-    @staticmethod    
+    @staticmethod
     @function_tool
-    async def _calculate_experience_strategy_fit(ctx: RunContextWrapper[DynamicAdaptationContext],
-                                           strategy: Strategy,
-                                           context_features: Dict[str, Any]) -> float:
-        """
-        Calculate how well a strategy fits experience-related context
-        
-        Args:
-            strategy: Strategy to evaluate
-            context_features: Experience context features
-            
-        Returns:
-            Strategy fit score (0.0-1.0)
-        """
-        params = strategy.parameters.model_dump()
-        
-        # Start with neutral score
+    async def _calculate_experience_strategy_fit(
+        ctx: RunContextWrapper[DynamicAdaptationContext],
+        strategy: Strategy,
+        context_features: ExperienceContextAnalysis
+    ) -> float:
+    
+        p = strategy.parameters.model_dump()
+        cf = context_features
+    
         score = 0.5
-        
-        # Adjust based on experience features
-        has_experience = context_features.get("has_experience", False)
-        cross_user_experience = context_features.get("cross_user_experience", False)
-        experience_relevance = context_features.get("experience_relevance", 0.5)
-        
-        # If experiences are used and relevant, match with experience_sharing_rate
-        if has_experience:
-            experience_match = 1.0 - abs(experience_relevance - params["experience_sharing_rate"])
-            score += experience_match * 0.2
-            
-            # If cross-user experiences are used, match with cross_user_sharing
-            if cross_user_experience:
-                cross_user_match = 1.0 - abs(0.8 - params["cross_user_sharing"])  # Prefer high cross-user sharing
-                score += cross_user_match * 0.2
-            else:
-                # If no cross-user but has experience, prefer moderate cross-user sharing
-                cross_user_match = 1.0 - abs(0.3 - params["cross_user_sharing"])
-                score += cross_user_match * 0.1
+        if cf.has_experience:
+            score += (1.0 - abs(cf.experience_relevance - p["experience_sharing_rate"])) * 0.2
+            cross_match = 1.0 - abs((0.8 if cf.cross_user_experience else 0.3)
+                                    - p["cross_user_sharing"])
+            score += cross_match * (0.2 if cf.cross_user_experience else 0.1)
         else:
-            # If no experiences are used, prefer lower experience sharing rates
-            experience_match = 1.0 - abs(0.2 - params["experience_sharing_rate"])
-            score += experience_match * 0.1
-        
-        # Adjust for user engagement if available
-        if "user_engagement" in context_features:
-            engagement = context_features["user_engagement"]
-            
-            # Higher engagement favors higher experience sharing
-            if engagement > 0.6:
-                score += params["experience_sharing_rate"] * 0.15
-                score += params["cross_user_sharing"] * 0.1
+            score += (1.0 - abs(0.2 - p["experience_sharing_rate"])) * 0.1
+    
+        if cf.user_engagement is not None:
+            if cf.user_engagement > 0.6:
+                score += p["experience_sharing_rate"] * 0.15 + p["cross_user_sharing"] * 0.1
             else:
-                # Lower engagement favors lower experience sharing
-                score += (1.0 - params["experience_sharing_rate"]) * 0.1
-        
-        # Ensure score is in valid range
+                score += (1.0 - p["experience_sharing_rate"]) * 0.1
+    
+        return min(1.0, max(0.0, score))
+    # ---------------------------------------------------------------------------
+    @staticmethod
+    @function_tool
+    async def _calculate_identity_strategy_fit(
+        ctx: RunContextWrapper[DynamicAdaptationContext],
+        strategy: Strategy,
+        context_features: IdentityContextAnalysis
+    ) -> float:
+    
+        p  = strategy.parameters.model_dump()
+        cf = context_features
+    
+        score = 0.5
+        if cf.identity_impact:
+            if cf.update_magnitude is not None:
+                score += (1.0 - abs(cf.update_magnitude - p["identity_evolution_rate"])) * 0.2
+            else:
+                score += p["identity_evolution_rate"] * 0.15
+        else:
+            score += (1.0 - p["identity_evolution_rate"]) * 0.1
+    
+        stab_match = 1.0 - abs(cf.identity_stability - (1.0 - p["identity_evolution_rate"]))
+        score += stab_match * 0.2
+        score += (1.0 - abs((1.0 - cf.identity_stability) - p["adaptation_rate"])) * 0.1
+    
         return min(1.0, max(0.0, score))
 
-    @staticmethod    
+    @staticmethod
     @function_tool
-    async def _calculate_identity_strategy_fit(ctx: RunContextWrapper[DynamicAdaptationContext],
-                                         strategy: Strategy,
-                                         context_features: Dict[str, Any]) -> float:
-        """
-        Calculate how well a strategy fits identity-related context
-        
-        Args:
-            strategy: Strategy to evaluate
-            context_features: Identity context features
-            
-        Returns:
-            Strategy fit score (0.0-1.0)
-        """
-        params = strategy.parameters.model_dump()
-        
-        # Start with neutral score
-        score = 0.5
-        
-        # Adjust based on identity features
-        identity_impact = context_features.get("identity_impact", False)
-        identity_stability = context_features.get("identity_stability", 0.8)
-        
-        # If identity impact present, match with identity_evolution_rate
-        if identity_impact:
-            if "update_magnitude" in context_features:
-                # Match evolution rate with update magnitude
-                update_magnitude = context_features["update_magnitude"]
-                evolution_match = 1.0 - abs(update_magnitude - params["identity_evolution_rate"])
-                score += evolution_match * 0.2
-            else:
-                # Default to preferring higher evolution rate when impact present
-                score += params["identity_evolution_rate"] * 0.15
-        else:
-            # If no identity impact, prefer lower evolution rate
-            evolution_match = 1.0 - params["identity_evolution_rate"]
-            score += evolution_match * 0.1
-        
-        # Match identity stability with evolution rate (inverse relationship)
-        stability_match = 1.0 - abs(identity_stability - (1.0 - params["identity_evolution_rate"]))
-        score += stability_match * 0.2
-        
-        # Match with adaptation rate
-        adaptation_match = 1.0 - abs((1.0 - identity_stability) - params["adaptation_rate"])
-        score += adaptation_match * 0.1
-        
-        # Ensure score is in valid range
-        return min(1.0, max(0.0, score))
-
-    @staticmethod    
+    async def _analyze_experience_performance(
+        ctx: RunContextWrapper[DynamicAdaptationContext],
+        metrics: list[MetricKV]
+    ) -> ExperiencePerformanceAnalysis:
+    
+        m = {kv.metric: kv.value for kv in metrics}
+        eff = 0.5
+        if "experience_utility" in m: eff = m["experience_utility"]
+        if "user_satisfaction" in m:  eff = (eff + m["user_satisfaction"]) / 2
+    
+        res = ExperiencePerformanceAnalysis(
+            experience_effectiveness = eff,
+            experience_utility       = m.get("experience_utility"),
+            user_satisfaction        = m.get("user_satisfaction"),
+            utility_category         = ("high" if m.get("experience_utility",0)>0.7 else
+                                        "low"  if m.get("experience_utility",1)<0.3 else
+                                        "moderate") if "experience_utility" in m else None
+        )
+    
+        # -------- trend over history -------------------------------------------
+        history_vals = [
+            pt["metrics"]["experience_utility"]
+            for pt in ctx.context.performance_history
+            if "experience_utility" in pt["metrics"]
+        ]
+        if len(history_vals) >= 3:
+            recent = sum(history_vals[-3:]) / 3
+            older  = sum(history_vals[:-3]) / max(1, len(history_vals)-3)
+            diff   = recent - older
+            res.trend = ("stable"    if abs(diff) < 0.05 else
+                         "improving" if diff > 0       else
+                         "declining")
+            res.trend_magnitude = abs(diff)
+    
+        return res
+    # ---------------------------------------------------------------------------
+    @staticmethod
     @function_tool
-    async def _analyze_experience_performance(ctx: RunContextWrapper[DynamicAdaptationContext],
-                                         metrics: Dict[str, float]) -> Dict[str, Any]:
-        """
-        Analyze experience-related performance metrics
-        
-        Args:
-            metrics: Performance metrics
-            
-        Returns:
-            Experience performance analysis
-        """
-        experience_analysis = {
-            "experience_effectiveness": 0.5  # Default
-        }
-        
-        # Extract experience-related metrics
-        if "experience_utility" in metrics:
-            experience_analysis["experience_utility"] = metrics["experience_utility"]
-            
-            # Categorize utility
-            if metrics["experience_utility"] > 0.7:
-                experience_analysis["utility_category"] = "high"
-            elif metrics["experience_utility"] < 0.3:
-                experience_analysis["utility_category"] = "low"
-            else:
-                experience_analysis["utility_category"] = "moderate"
-        
-        # Calculate overall effectiveness
-        effectiveness_factors = []
-        
-        if "experience_utility" in metrics:
-            effectiveness_factors.append(metrics["experience_utility"])
-        
-        if "user_satisfaction" in metrics:
-            effectiveness_factors.append(metrics["user_satisfaction"])
-            experience_analysis["user_satisfaction"] = metrics["user_satisfaction"]
-        
-        if effectiveness_factors:
-            experience_analysis["experience_effectiveness"] = sum(effectiveness_factors) / len(effectiveness_factors)
-        
-        # Calculate trend if we have history
-        experience_metrics_history = []
-        for history_point in ctx.context.performance_history:
-            if "experience_utility" in history_point["metrics"]:
-                experience_metrics_history.append(history_point["metrics"]["experience_utility"])
-        
-        if len(experience_metrics_history) >= 3:
-            # Calculate trend
-            recent_avg = sum(experience_metrics_history[-3:]) / 3
-            older_avg = sum(experience_metrics_history[:-3]) / max(1, len(experience_metrics_history) - 3)
-            
-            trend = recent_avg - older_avg
-            
-            if abs(trend) < 0.05:
-                experience_analysis["trend"] = "stable"
-            elif trend > 0:
-                experience_analysis["trend"] = "improving"
-            else:
-                experience_analysis["trend"] = "declining"
-            
-            experience_analysis["trend_magnitude"] = abs(trend)
-        
-        return experience_analysis
-
-    @staticmethod    
-    @function_tool
-    async def _analyze_identity_performance(ctx: RunContextWrapper[DynamicAdaptationContext],
-                                       metrics: Dict[str, float]) -> Dict[str, Any]:
-        """
-        Analyze identity-related performance metrics
-        
-        Args:
-            metrics: Performance metrics
-            
-        Returns:
-            Identity performance analysis
-        """
-        identity_analysis = {
-            "identity_coherence": 0.5  # Default
-        }
-        
-        # Extract identity-related metrics
-        if "identity_coherence" in metrics:
-            identity_analysis["identity_coherence"] = metrics["identity_coherence"]
-            
-            # Categorize coherence
-            if metrics["identity_coherence"] > 0.7:
-                identity_analysis["coherence_category"] = "high"
-            elif metrics["identity_coherence"] < 0.3:
-                identity_analysis["coherence_category"] = "low"
-            else:
-                identity_analysis["coherence_category"] = "moderate"
-        
-        # Check for other identity metrics
-        identity_metrics = {}
-        for key, value in metrics.items():
-            if key.startswith("identity_"):
-                identity_metrics[key] = value
-                identity_analysis[key] = value
-        
-        # Calculate overall stability
-        if identity_metrics:
-            identity_analysis["overall_stability"] = sum(identity_metrics.values()) / len(identity_metrics)
-        
-        # Calculate trend if we have history
-        identity_metrics_history = []
-        for history_point in ctx.context.performance_history:
-            if "identity_coherence" in history_point["metrics"]:
-                identity_metrics_history.append(history_point["metrics"]["identity_coherence"])
-        
-        if len(identity_metrics_history) >= 3:
-            # Calculate trend
-            recent_avg = sum(identity_metrics_history[-3:]) / 3
-            older_avg = sum(identity_metrics_history[:-3]) / max(1, len(identity_metrics_history) - 3)
-            
-            trend = recent_avg - older_avg
-            
-            if abs(trend) < 0.05:
-                identity_analysis["trend"] = "stable"
-            elif trend > 0:
-                identity_analysis["trend"] = "improving"
-            else:
-                identity_analysis["trend"] = "declining"
-            
-            identity_analysis["trend_magnitude"] = abs(trend)
-        
-        return identity_analysis
+    async def _analyze_identity_performance(
+        ctx: RunContextWrapper[DynamicAdaptationContext],
+        metrics: list[MetricKV]
+    ) -> IdentityPerformanceAnalysis:
+    
+        m = {kv.metric: kv.value for kv in metrics}
+        coherence = m.get("identity_coherence", 0.5)
+    
+        res = IdentityPerformanceAnalysis(
+            identity_coherence = coherence,
+            coherence_category = ("high" if coherence>0.7 else
+                                  "low"  if coherence<0.3 else
+                                  "moderate")
+        )
+    
+        extra = {k:v for k,v in m.items() if k.startswith("identity_")}
+        if extra:
+            res.overall_stability = sum(extra.values())/len(extra)
+    
+        history_vals = [
+            pt["metrics"]["identity_coherence"]
+            for pt in ctx.context.performance_history
+            if "identity_coherence" in pt["metrics"]
+        ]
+        if len(history_vals) >= 3:
+            recent = sum(history_vals[-3:]) / 3
+            older  = sum(history_vals[:-3]) / max(1, len(history_vals)-3)
+            diff   = recent - older
+            res.trend = ("stable" if abs(diff)<0.05 else
+                         "improving" if diff>0 else "declining")
+            res.trend_magnitude = abs(diff)
+    
+        return res
     
     # Tools for experience adaptation agent
 
-    @staticmethod    
+    @staticmethod
     @function_tool
-    async def _get_current_experience_params(ctx: RunContextWrapper[DynamicAdaptationContext]) -> Dict[str, Any]:
-        """
-        Get current experience adaptation parameters
-        
-        Returns:
-            Current experience adaptation parameters
-        """
-        return ctx.context.experience_adaptation.model_dump()
+    async def _get_current_experience_params(
+        ctx: RunContextWrapper[DynamicAdaptationContext]
+    ) -> ExperienceAdaptationParams:
+        return ctx.context.experience_adaptation
 
-    @staticmethod    
+    @staticmethod
     @function_tool
-    async def _calculate_experience_adaptation(ctx: RunContextWrapper[DynamicAdaptationContext],
-                                         feedback: Dict[str, Any], 
-                                         current_params: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Calculate adjusted experience adaptation parameters based on feedback
-        
-        Args:
-            feedback: User feedback information
-            current_params: Current adaptation parameters
-            
-        Returns:
-            Adjusted parameters
-        """
-        # Start with current parameters
-        params = current_params.copy()
-        
-        # Extract relevant feedback
-        experience_rating = feedback.get("experience_rating", None)
-        cross_user_rating = feedback.get("cross_user_rating", None)
-        scenario_ratings = feedback.get("scenario_ratings", {})
-        
-        # Update cross_user_enabled based on explicit feedback
-        if cross_user_rating is not None:
-            # Convert rating to boolean (threshold at 5 on 0-10 scale)
-            params["cross_user_enabled"] = cross_user_rating >= 5
-        
-        # Update sharing threshold based on experience rating
-        if experience_rating is not None:
-            # Convert 0-10 rating to threshold (inverse relationship)
-            # Higher rating = lower threshold = more sharing
-            params["sharing_threshold"] = max(0.5, 1.0 - (experience_rating / 10.0))
-        
-        # Update experience types based on scenario ratings
-        if scenario_ratings:
-            # Sort scenario types by rating
-            sorted_scenarios = sorted(
-                scenario_ratings.items(),
-                key=lambda x: x[1],
-                reverse=True
-            )
-            
-            # Get top rated scenarios (rating > 5)
-            top_scenarios = [s for s, r in sorted_scenarios if r > 5]
-            
-            if top_scenarios:
-                params["experience_types"] = top_scenarios
-        
-        # Update personalization level based on overall ratings
-        if experience_rating is not None:
-            params["personalization_level"] = experience_rating / 10.0
-        
-        return params
-
-    @staticmethod    
+    async def _calculate_experience_adaptation(
+        ctx: RunContextWrapper[DynamicAdaptationContext],
+        feedback: Any,
+        current_params: ExperienceAdaptationParams
+    ) -> ExperienceAdaptationParams:
+    
+        fb   = _kv_list_to_dict(feedback)
+        p    = current_params.model_dump()
+    
+        if (rate := fb.get("cross_user_rating")) is not None:
+            p["cross_user_enabled"] = rate >= 5
+        if (rate := fb.get("experience_rating")) is not None:
+            p["sharing_threshold"]      = max(0.5, 1.0 - rate/10)
+            p["personalization_level"]  = rate / 10
+        if (sr := fb.get("scenario_ratings")):
+            top = [s for s,r in sorted(sr.items(), key=lambda x:x[1], reverse=True) if r>5]
+            if top: p["experience_types"] = top
+    
+        return ExperienceAdaptationParams(**p)
+    # ---------------------------------------------------------------------------
+    @staticmethod
     @function_tool
-    async def _update_experience_sharing_history(ctx: RunContextWrapper[DynamicAdaptationContext],
-                                           user_id: str, 
-                                           feedback: Dict[str, Any], 
-                                           adapted_params: Dict[str, Any]) -> bool:
-        """
-        Update experience sharing history with adaptation information
-        
-        Args:
-            user_id: User ID
-            feedback: User feedback
-            adapted_params: Adapted parameters
-            
-        Returns:
-            Success status
-        """
-        # Record adaptation in history
+    async def _update_experience_sharing_history(
+        ctx: RunContextWrapper[DynamicAdaptationContext],
+        user_id: str,
+        feedback: Any,
+        adapted_params: ExperienceAdaptationParams
+    ) -> bool:
+    
         ctx.context.experience_sharing_history.append({
-            "timestamp": datetime.now().isoformat(),
-            "user_id": user_id,
-            "feedback": feedback,
-            "adapted_params": adapted_params,
-            "strategy_id": ctx.context.current_strategy_id
+            "timestamp"     : datetime.now().isoformat(),
+            "user_id"       : user_id,
+            "feedback"      : _kv_list_to_dict(feedback),
+            "adapted_params": adapted_params.model_dump(),
+            "strategy_id"   : ctx.context.current_strategy_id
         })
-        
-        # Limit history size
-        if len(ctx.context.experience_sharing_history) > ctx.context.max_history_size:
-            ctx.context.experience_sharing_history = ctx.context.experience_sharing_history[-ctx.context.max_history_size:]
-        
+        ctx.context.experience_sharing_history = ctx.context.experience_sharing_history[
+            -ctx.context.max_history_size:
+        ]
         return True
     
     # Tools for identity adaptation agent
 
-    @staticmethod    
+    @staticmethod
     @function_tool
-    async def _get_current_identity_params(ctx: RunContextWrapper[DynamicAdaptationContext]) -> Dict[str, Any]:
-        """
-        Get current identity adaptation parameters
-        
-        Returns:
-            Current identity adaptation parameters
-        """
-        return ctx.context.identity_adaptation.model_dump()
-
-    @staticmethod  
+    async def _get_current_identity_params(
+        ctx: RunContextWrapper[DynamicAdaptationContext]
+    ) -> IdentityAdaptationParams:
+        return ctx.context.identity_adaptation
+    # ---------------------------------------------------------------------------
+    @staticmethod
     @function_tool
-    async def _calculate_identity_adaptation(ctx: RunContextWrapper[DynamicAdaptationContext],
-                                       identity_state: Dict[str, Any], 
-                                       performance: Dict[str, Any],
-                                       current_params: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Calculate adjusted identity adaptation parameters based on state and performance
-        
-        Args:
-            identity_state: Current identity state
-            performance: Performance metrics
-            current_params: Current adaptation parameters
-            
-        Returns:
-            Adjusted parameters
-        """
-        # Start with current parameters
-        params = current_params.copy()
-        
-        # Extract relevant metrics
-        identity_coherence = performance.get("identity_coherence", None)
-        user_satisfaction = performance.get("user_satisfaction", None)
-        
-        # Extract identity state information
-        recent_changes = identity_state.get("identity_evolution", {}).get("recent_significant_changes", {})
-        total_updates = identity_state.get("identity_evolution", {}).get("total_updates", 0)
-        
-        # Adjust evolution rate based on coherence and satisfaction
-        if identity_coherence is not None:
-            # Lower coherence = lower evolution rate
-            if identity_coherence < 0.3:
-                params["evolution_rate"] = max(0.1, params["evolution_rate"] - 0.1)
-            # Higher coherence = can increase evolution rate if satisfaction is good
-            elif identity_coherence > 0.7 and user_satisfaction is not None and user_satisfaction > 0.7:
-                params["evolution_rate"] = min(0.6, params["evolution_rate"] + 0.05)
-        
-        # Adjust trait stability based on recent changes
+    async def _calculate_identity_adaptation(
+        ctx: RunContextWrapper[DynamicAdaptationContext],
+        identity_state: Any,
+        performance: list[MetricKV],
+        current_params: IdentityAdaptationParams
+    ) -> IdentityAdaptationParams:
+    
+        state = _kv_list_to_dict(identity_state)
+        perf  = {kv.metric: kv.value for kv in performance}
+        p     = current_params.model_dump()
+    
+        coherence        = perf.get("identity_coherence")
+        satisfaction     = perf.get("user_satisfaction")
+        recent_changes   = state.get("identity_evolution", {}).get("recent_significant_changes", {})
+        total_updates    = state.get("identity_evolution", {}).get("total_updates", 0)
+    
+        if coherence is not None:
+            if coherence < 0.3:
+                p["evolution_rate"] = max(0.1, p["evolution_rate"] - 0.1)
+            elif coherence > 0.7 and satisfaction and satisfaction > 0.7:
+                p["evolution_rate"] = min(0.6, p["evolution_rate"] + 0.05)
+    
         if recent_changes:
-            # Many recent changes = increase stability
             if len(recent_changes) > 3:
-                params["trait_stability"] = min(0.9, params["trait_stability"] + 0.1)
-            # Few significant changes = can decrease stability
+                p["trait_stability"] = min(0.9, p["trait_stability"] + 0.1)
             elif len(recent_changes) < 2 and total_updates > 10:
-                params["trait_stability"] = max(0.3, params["trait_stability"] - 0.05)
-        
-        # Adjust preference adaptability based on user satisfaction
-        if user_satisfaction is not None:
-            # Higher satisfaction = can increase adaptability
-            if user_satisfaction > 0.7:
-                params["preference_adaptability"] = min(0.8, params["preference_adaptability"] + 0.05)
-            # Lower satisfaction = reduce adaptability
-            elif user_satisfaction < 0.3:
-                params["preference_adaptability"] = max(0.2, params["preference_adaptability"] - 0.1)
-        
-        # Adjust consolidation frequency based on total updates and coherence
-        if total_updates > 20 and identity_coherence is not None:
-            if identity_coherence < 0.5:
-                # Lower coherence with many updates = increase consolidation
-                params["consolidation_frequency"] = min(0.8, params["consolidation_frequency"] + 0.1)
-            else:
-                # Good coherence with many updates = current frequency is working
-                pass
+                p["trait_stability"] = max(0.3, p["trait_stability"] - 0.05)
+    
+        if satisfaction is not None:
+            if   satisfaction > 0.7: p["preference_adaptability"] = min(0.8, p["preference_adaptability"] + 0.05)
+            elif satisfaction < 0.3: p["preference_adaptability"] = max(0.2, p["preference_adaptability"] - 0.1)
+    
+        if total_updates > 20 and coherence is not None and coherence < 0.5:
+            p["consolidation_frequency"] = min(0.8, p["consolidation_frequency"] + 0.1)
         elif total_updates < 5:
-            # Few updates = reduce consolidation frequency
-            params["consolidation_frequency"] = max(0.1, params["consolidation_frequency"] - 0.05)
-        
-        return params
-
-    @staticmethod  
+            p["consolidation_frequency"] = max(0.1, p["consolidation_frequency"] - 0.05)
+    
+        return IdentityAdaptationParams(**p)
+    # ---------------------------------------------------------------------------
+    @staticmethod
     @function_tool
-    async def _update_identity_evolution_history(ctx: RunContextWrapper[DynamicAdaptationContext],
-                                          identity_state: Dict[str, Any], 
-                                          adapted_params: Dict[str, Any]) -> bool:
-        """
-        Update identity evolution history with adaptation information
-        
-        Args:
-            identity_state: Current identity state
-            adapted_params: Adapted parameters
-            
-        Returns:
-            Success status
-        """
-        # Record adaptation in history
+    async def _update_identity_evolution_history(
+        ctx: RunContextWrapper[DynamicAdaptationContext],
+        identity_state: Any,
+        adapted_params: IdentityAdaptationParams
+    ) -> bool:
+    
         ctx.context.identity_evolution_history.append({
-            "timestamp": datetime.now().isoformat(),
-            "identity_state": identity_state,
-            "adapted_params": adapted_params,
-            "strategy_id": ctx.context.current_strategy_id
+            "timestamp"     : datetime.now().isoformat(),
+            "identity_state": _kv_list_to_dict(identity_state),
+            "adapted_params": adapted_params.model_dump(),
+            "strategy_id"   : ctx.context.current_strategy_id
         })
-        
-        # Limit history size
-        if len(ctx.context.identity_evolution_history) > ctx.context.max_history_size:
-            ctx.context.identity_evolution_history = ctx.context.identity_evolution_history[-ctx.context.max_history_size:]
-        
+        ctx.context.identity_evolution_history = ctx.context.identity_evolution_history[
+            -ctx.context.max_history_size:
+        ]
         return True
     
     # Public tools for external use
 
-    @staticmethod  
+    @staticmethod
     @function_tool
-    async def _get_experience_adaptation_settings(ctx: RunContextWrapper[DynamicAdaptationContext]) -> Dict[str, Any]:
-        """
-        Get current experience adaptation settings based on active strategy
-        
-        Returns:
-            Experience adaptation settings
-        """
-        # Get strategy parameters
-        strategy_id = ctx.context.current_strategy_id
-        strategy_data = ctx.context.strategies.get(strategy_id, {})
-        strategy_params = strategy_data.get("parameters", {})
-        
-        # Create settings dictionary
-        settings = {
-            "strategy_id": strategy_id,
-            "strategy_name": strategy_data.get("name", "Unknown"),
-            "cross_user_enabled": strategy_params.get("cross_user_sharing", 0.3) > 0.3,
-            "sharing_threshold": max(0.5, 1.0 - strategy_params.get("experience_sharing_rate", 0.5)),
-            "experience_sharing_rate": strategy_params.get("experience_sharing_rate", 0.5),
-            "personalization_level": strategy_params.get("experience_sharing_rate", 0.5) * 0.8
-        }
-        
-        # Add specific experience adaptation settings
-        settings.update(ctx.context.experience_adaptation.model_dump())
-        
-        return settings
-
-    @staticmethod  
+    async def _get_experience_adaptation_settings(
+        ctx: RunContextWrapper[DynamicAdaptationContext]
+    ) -> ExperienceAdaptationSettings:
+    
+        sid   = ctx.context.current_strategy_id
+        sdata = ctx.context.strategies.get(sid, {})
+        sparam= sdata.get("parameters", {})
+    
+        return ExperienceAdaptationSettings(
+            strategy_id            = sid,
+            strategy_name          = sdata.get("name", "Unknown"),
+            experience_sharing_rate= sparam.get("experience_sharing_rate", 0.5),
+            cross_user_enabled     = ctx.context.experience_adaptation.cross_user_enabled,
+            sharing_threshold      = ctx.context.experience_adaptation.sharing_threshold,
+            personalization_level  = ctx.context.experience_adaptation.personalization_level,
+            experience_types       = ctx.context.experience_adaptation.experience_types,
+        )
+    # ---------------------------------------------------------------------------
+    @staticmethod
     @function_tool
-    async def _get_identity_adaptation_settings(ctx: RunContextWrapper[DynamicAdaptationContext]) -> Dict[str, Any]:
-        """
-        Get current identity adaptation settings based on active strategy
-        
-        Returns:
-            Identity adaptation settings
-        """
-        # Get strategy parameters
-        strategy_id = ctx.context.current_strategy_id
-        strategy_data = ctx.context.strategies.get(strategy_id, {})
-        strategy_params = strategy_data.get("parameters", {})
-        
-        # Create settings dictionary
-        settings = {
-            "strategy_id": strategy_id,
-            "strategy_name": strategy_data.get("name", "Unknown"),
-            "identity_evolution_rate": strategy_params.get("identity_evolution_rate", 0.2),
-            "adaptation_rate": strategy_params.get("adaptation_rate", 0.15)
-        }
-        
-        # Add specific identity adaptation settings
-        settings.update(ctx.context.identity_adaptation.model_dump())
-        
-        return settings
+    async def _get_identity_adaptation_settings(
+        ctx: RunContextWrapper[DynamicAdaptationContext]
+    ) -> IdentityAdaptationSettings:
+    
+        sid   = ctx.context.current_strategy_id
+        sdata = ctx.context.strategies.get(sid, {})
+        sparam= sdata.get("parameters", {})
+    
+        return IdentityAdaptationSettings(
+            strategy_id              = sid,
+            strategy_name            = sdata.get("name", "Unknown"),
+            identity_evolution_rate  = sparam.get("identity_evolution_rate", 0.2),
+            adaptation_rate          = sparam.get("adaptation_rate", 0.15),
+            evolution_rate           = ctx.context.identity_adaptation.evolution_rate,
+            trait_stability          = ctx.context.identity_adaptation.trait_stability,
+            preference_adaptability  = ctx.context.identity_adaptation.preference_adaptability,
+            consolidation_frequency  = ctx.context.identity_adaptation.consolidation_frequency,
+        )
