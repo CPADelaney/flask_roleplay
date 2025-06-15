@@ -1212,36 +1212,32 @@ class DynamicAdaptationSystem:
         
         return volatility
 
-    @staticmethod    
+    @staticmethod
     @function_tool
-    async def _update_strategy_history(ctx: RunContextWrapper[DynamicAdaptationContext],
-                                   strategy_id: str, 
-                                   context_summary: Dict[str, Any]) -> bool:
+    async def _update_strategy_history(
+        ctx: RunContextWrapper[DynamicAdaptationContext],
+        strategy_id: str,
+        context_summary: RawContext          # << strict & SDK-friendly
+    ) -> bool:
         """
-        Update strategy history with newly selected strategy
-        
-        Args:
-            strategy_id: ID of selected strategy
-            context_summary: Summary of the context
-            
-        Returns:
-            Success status
+        Append the chosen strategy to history and maintain size limits.
         """
-        # Record strategy selection
-        ctx.context.strategy_history.append({
-            "timestamp": datetime.now().isoformat(),
-            "strategy_id": strategy_id,
-            "context_summary": context_summary,
-            "cycle": ctx.context.cycle_count
-        })
-        
-        # Update current strategy
+        cdict = context_summary.to_dict()    # ← back to your plain dict
+    
+        ctx.context.strategy_history.append(
+            {
+                "timestamp"      : datetime.now().isoformat(),
+                "strategy_id"    : strategy_id,
+                "context_summary": cdict,
+                "cycle"          : ctx.context.cycle_count,
+            }
+        )
+    
         ctx.context.current_strategy_id = strategy_id
-        
-        # Trim history if needed
+    
         if len(ctx.context.strategy_history) > ctx.context.max_history_size:
             ctx.context.strategy_history.pop(0)
-        
+    
         return True
 
     @staticmethod    
