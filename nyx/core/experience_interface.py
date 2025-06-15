@@ -566,7 +566,10 @@ class ExperienceInterface:
                             ] or None
                         )
                     )
-         return experiences
+            except Exception:
+                pass  # Add exception handling if needed
+        
+        return experiences  # This line was incorrectly indented
     
     def _calculate_cosine_similarity(self, vec1: List[float], vec2: List[float]) -> float:
         """
