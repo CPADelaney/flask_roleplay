@@ -11,6 +11,7 @@ from typing import Dict, List, Any, Optional, Tuple, Union, Set, Literal, TYPE_C
 import json
 from collections import defaultdict # Added
 from enum import Enum, auto
+from nyx.core.types.kv import KVPair
 
 from nyx.core.brain.global_workspace.workspace_v3 import (
     NyxEngineV3, Proposal, EnhancedWorkspaceModule
@@ -64,6 +65,17 @@ from nyx.core.mood_manager import MoodState
 
 logger = logging.getLogger(__name__)
 
+# --- helper ---------------------------------------------------------------
+
+def _dict_to_kv(d: dict[str, Any] | None) -> list[KVPair] | None:
+    """
+    Convert an ordinary dict into a list-of-KVPair.
+    Returns None if the input is falsy.
+    """
+    if not d:
+        return None
+    return [KVPair(key=k, value=v) for k, v in d.items()]
+
 class TaskPurpose(Enum):
     ANALYZE = auto()
     WRITE = auto()
@@ -88,15 +100,25 @@ class LieRecord(BaseModel):
 
 class NeedsUpdate(BaseModel):
     """Needs system update result"""
-    drive_strengths: Optional[Dict[str, Any]] = None
-    error: Optional[str] = None
+    drive_strengths: list[KVPair] | None = None   # ← no Dict!
+    error: str | None = None
+
+class StepDetail(BaseModel):                      # replaces free-form dict
+    name: str
+    status: str
+    meta: list[KVPair] | None = None
 
 class GoalExecutionResult(BaseModel):
     """Goal execution result"""
-    goal_id: Optional[str] = None
-    executed_step: Optional[Dict[str, Any]] = None
-    status: Optional[str] = None
-    error: Optional[str] = None
+    goal_id: str | None = None
+    executed_step: StepDetail | None = None
+    status: str | None = None
+    error: str | None = None
+
+class EmotionalContext(BaseModel):
+    primary: str | None = None
+    intensity: float | None = None
+    valence: float | None = None       # -1 … 1
 
 class MetaCoreResult(BaseModel):
     """Meta core cycle result"""
@@ -113,11 +135,20 @@ class CognitiveCycleResult(BaseModel):
     meta_core_cycle: Optional[MetaCoreResult] = None
     error: Optional[str] = None
 
+class EmotionalContext(BaseModel):
+    primary: str | None = None
+    intensity: float | None = None
+    valence: float | None = None         # –1 … 1
+
+class EnvironmentFactor(BaseModel):
+    name: str
+    value: JsonScalar
+
 class CognitiveCycleContext(BaseModel):
     """Context data for cognitive cycle"""
-    user_input: Optional[str] = None
-    emotional_context: Optional[Dict[str, Any]] = None
-    environmental_factors: Optional[Dict[str, Any]] = None
+    user_input: str | None = None
+    emotional_context: EmotionalContext | None = None
+    environmental_factors: list[EnvironmentFactor] | None = None
 
 class DesireExpression(BaseModel):
     """Result of expressing desire"""
@@ -3592,133 +3623,157 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
         instance.lie_log.append(lie_record.model_dump())
         
         return fact
-       
+           
+    # -------------------------------------------------------------------------
+    # REPLACEMENT FOR run_cognitive_cycle
+    # -------------------------------------------------------------------------
+    
     @staticmethod
     @function_tool
-    async def run_cognitive_cycle(ctx: RunContextWrapper, instance, context_data: Optional[CognitiveCycleContext] = None) -> CognitiveCycleResult:
+    async def run_cognitive_cycle(
+        ctx: RunContextWrapper,
+        instance,
+        context_data: CognitiveCycleContext | None = None
+    ) -> CognitiveCycleResult:
         """
         Runs a single cognitive cycle: updating needs, selecting/executing goals,
-        and potentially running meta-cognitive processes.
-    
-        Args:
-            ctx: Run context wrapper
-            instance: The class instance
-            context_data: Optional external context
-    
-        Returns:
-            Summary of the cycle's activities and results
+        and (optionally) the meta-cognitive loop.
         """
+        # ─── 0. Guard ─────────────────────────────────────────────────────────
         if not instance.initialized:
             logger.warning("Attempted to run cognitive cycle before initialization.")
             return CognitiveCycleResult(
-                cycle_number=0,
-                timestamp=datetime.datetime.now().isoformat(),
-                error="Brain not initialized"
+                cycle_number   = 0,
+                timestamp      = datetime.datetime.now().isoformat(),
+                error          = "Brain not initialized",
             )
     
+        # ─── 1. Book-keeping objects ─────────────────────────────────────────
         instance.cognitive_cycles_executed += 1
         cycle_results = CognitiveCycleResult(
-            cycle_number=instance.cognitive_cycles_executed,
-            timestamp=datetime.datetime.now().isoformat()
+            cycle_number = instance.cognitive_cycles_executed,
+            timestamp    = datetime.datetime.now().isoformat(),
         )
         logger.debug(f"--- Starting Cognitive Cycle {instance.cognitive_cycles_executed} ---")
     
+        # ─── 2. MAIN PIPELINE ────────────────────────────────────────────────
         with trace(workflow_name="NyxCognitiveCycle", group_id=instance.trace_group_id):
-            # 1. Update Needs & Check for Goal Triggers
+    
+            # Needs update ­­­--------------------------------------------------
             if instance.needs_system:
                 try:
-                    drive_strengths = await instance.needs_system.update_needs()
-                    cycle_results.needs_update = NeedsUpdate(drive_strengths=drive_strengths)
-                    logger.debug(f"Needs updated. Drives: {drive_strengths}")
+                    drive_strengths_raw = await instance.needs_system.update_needs()
+                    cycle_results.needs_update = NeedsUpdate(
+                        drive_strengths = _dict_to_kv(drive_strengths_raw)
+                    )
+                    logger.debug(f"Needs updated. Drives: {drive_strengths_raw}")
                 except Exception as e:
                     logger.error(f"Error updating needs: {e}")
                     cycle_results.needs_update = NeedsUpdate(error=str(e))
     
-            # 2. Goal Management: Select & Execute Step
+            # Goal execution ­­­-----------------------------------------------
             if instance.goal_manager:
                 try:
                     execution_result = await instance.goal_manager.execute_next_step()
                     if execution_result:
-                        cycle_results.goal_execution = GoalExecutionResult(
-                            goal_id=execution_result.get("goal_id"),
-                            executed_step=execution_result.get("executed_step"),
-                            status=execution_result.get("status")
+                        step_dict  = execution_result.get("executed_step") or {}
+                        step_meta  = _dict_to_kv(step_dict.get("meta"))
+                        step_model = StepDetail(
+                            name  = step_dict.get("name", "step"),
+                            status= step_dict.get("status", "unknown"),
+                            meta  = step_meta,
                         )
-                        
-                        # Update performance metrics
-                        step_info = execution_result.get("executed_step", {})
-                        if step_info.get("status") == "completed":
+    
+                        cycle_results.goal_execution = GoalExecutionResult(
+                            goal_id       = execution_result.get("goal_id"),
+                            executed_step = step_model,
+                            status        = execution_result.get("status"),
+                        )
+    
+                        # performance-metrics bookkeeping (unchanged) ----------
+                        if step_dict.get("status") == "completed":
                             instance.performance_metrics["steps_executed"] += 1
-                        if step_info.get("status") == "failed":
-                            pass
-                        
-                        goal_status = await instance.goal_manager.get_goal_status(execution_result.get("goal_id"))
+                        if step_dict.get("status") == "failed":
+                            instance.performance_metrics["steps_failed"]   += 1
+    
+                        goal_status = await instance.goal_manager.get_goal_status(
+                            execution_result.get("goal_id")
+                        )
                         if goal_status:
-                            if goal_status.get("status") == "completed": 
+                            if goal_status.get("status") == "completed":
                                 instance.performance_metrics["goals_completed"] += 1
-                            if goal_status.get("status") == "failed": 
+                            if goal_status.get("status") == "failed":
                                 instance.performance_metrics["goals_failed"] += 1
     
                         logger.debug(f"Goal execution step result: {execution_result}")
+    
                     else:
                         cycle_results.goal_execution = GoalExecutionResult(status="no_action_taken")
                         logger.debug("No goal action taken this cycle.")
+    
                 except Exception as e:
                     logger.exception(f"Error during goal execution: {e}")
                     cycle_results.goal_execution = GoalExecutionResult(error=str(e))
     
-            # 3. Meta-Cognitive Loop (Can be run less frequently)
-            if instance.meta_core and hasattr(instance.meta_core.context, "meta_parameters"):
+            # Meta-cognitive loop ­­­------------------------------------------
+            if instance.meta_core and getattr(instance.meta_core.context, "meta_parameters", None):
                 eval_interval = instance.meta_core.context.meta_parameters.get("evaluation_interval", 5)
                 if instance.cognitive_cycles_executed % eval_interval == 0:
                     try:
-                        logger.debug("Running MetaCore cycle...")
-                        # Prepare context for MetaCore
-                        meta_context = {}
+                        logger.debug("Running MetaCore cycle…")
+    
+                        meta_context: dict[str, Any] = {}
                         if context_data:
                             meta_context.update(context_data.model_dump())
-                        
+    
                         if instance.needs_system:
-                            needs_data = await instance.needs_system.get_needs_state_async()
-                            if isinstance(needs_data, dict) and "error" not in needs_data:
-                                meta_context['needs_state'] = needs_data
-                            else:
-                                logger.warning(f"MetaCore: Error or unexpected data from get_needs_state_async: {needs_data}")
-                                meta_context['needs_state'] = {"error": "Failed to retrieve needs state for MetaCore"}
-                        
+                            needs_state_raw = await instance.needs_system.get_needs_state_async()
+                            meta_context["needs_state"] = (
+                                needs_state_raw
+                                if isinstance(needs_state_raw, dict) and "error" not in needs_state_raw
+                                else {"error": "Failed to retrieve needs state for MetaCore"}
+                            )
+    
                         if instance.goal_manager:
-                            meta_context['active_goals'] = await instance.goal_manager.get_all_goals(
+                            meta_context["active_goals"] = await instance.goal_manager.get_all_goals(
                                 status_filter=["active"]
                             )
-                        meta_context['performance_metrics'] = await instance.get_system_stats()
     
-                        # Run meta-cognitive cycle
-                        if hasattr(instance.meta_core, 'cognitive_cycle'):
-                            meta_results = await instance.meta_core.cognitive_cycle(meta_context)
-                            cycle_results.meta_core_cycle = MetaCoreResult(
-                                evaluation_completed=True,
-                                adjustments_made=meta_results.get("adjustments", [])
-                            )
-                            logger.debug("MetaCore cycle completed.")
-                        else:
-                            logger.warning("MetaCore does not have 'cognitive_cycle' method.")
+                        meta_context["performance_metrics"] = await instance.get_system_stats()
+    
+                        # run cycle
+                        meta_results = await instance.meta_core.cognitive_cycle(meta_context)
+                        cycle_results.meta_core_cycle = MetaCoreResult(
+                            evaluation_completed = True,
+                            adjustments_made     = meta_results.get("adjustments", []),
+                        )
+                        logger.debug("MetaCore cycle completed.")
+    
                     except Exception as e:
                         logger.error(f"Error running MetaCore cycle: {e}")
                         cycle_results.meta_core_cycle = MetaCoreResult(error=str(e))
     
-            logger.debug(f"--- Finished Cognitive Cycle {instance.cognitive_cycles_executed} ---")
-        
+        logger.debug(f"--- Finished Cognitive Cycle {instance.cognitive_cycles_executed} ---")
+    
+        # ─── 3. Post-log to orchestrator (unchanged) ─────────────────────────
         try:
-            # Note: orchestrator would need to be properly imported/referenced
-            await orchestrator.log_and_score("cognitive_cycle_complete", {
-                "cycle_number": instance.cognitive_cycles_executed,
-                "goals_active": len(cycle_results.goal_execution.executed_step.get("active_goals", [])) if cycle_results.goal_execution and cycle_results.goal_execution.executed_step else 0,
-                "needs_updated": bool(cycle_results.needs_update)
-            })
+            await orchestrator.log_and_score(
+                "cognitive_cycle_complete",
+                {
+                    "cycle_number": cycle_results.cycle_number,
+                    "goals_active": len(
+                        cycle_results.goal_execution.executed_step.meta or []
+                    )
+                    if cycle_results.goal_execution and cycle_results.goal_execution.executed_step
+                    else 0,
+                    "needs_updated": bool(cycle_results.needs_update),
+                },
+            )
         except Exception as e:
             logger.error(f"Failed to log cognitive cycle: {e}")
-        
+    
         return cycle_results
+
 
     async def _register_creative_actions(self):
         """Register creative actions with the action generator."""
