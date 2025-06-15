@@ -10,6 +10,7 @@ from typing import Dict, List, Any, Optional, Tuple, Union, Set
 import numpy as np
 from pydantic import BaseModel, Field
 from nyx.core.types.kv import KVPair          
+from nyx.core.brain.base import EmotionalContext
 
 # Update imports to use OpenAI Agents SDK
 from agents import (
@@ -24,6 +25,20 @@ class KVPair(BaseModel):
     key: str
     value: Any           # already imported from nyx.core.types.kv in your other file
 
+class ImpactDelta(BaseModel):
+    key: str          # e.g. "scenario_types.teasing"  or  "playfulness"
+    delta: float      # positive or negative change
+
+
+class IdentityImpactInput(BaseModel):
+    """
+    Strict schema for updates coming from an experience:
+      • preferences: list of key/delta pairs
+      • traits:      list of key/delta pairs
+    """
+    preferences: list[ImpactDelta] | None = None
+    traits:      list[ImpactDelta] | None = None
+
 class IdentityChange(BaseModel):
     path: str            # e.g. "preferences.scenario_types.teasing"
     old: float
@@ -36,12 +51,6 @@ class IdentityUpdateResult(BaseModel):
 
 class IdentityProfileExport(BaseModel):
     items: list[KVPair]                       # flattened dump of the whole profile
-
-class ExperienceRecord(BaseModel):
-    experience_id: str
-    text: str
-    similarity: float
-    metadata: list[KVPair] | None = None
 
 class StoreExperienceResult(BaseModel):
     experience_id: str
@@ -801,55 +810,79 @@ class ExperienceInterface:
         ctx: RunContextWrapper,
         instance,
         experience: ExperienceRecord,
-        impact: Dict[str, Dict[str, float]]      # ← impact can stay dict, it’s input
+        impact: IdentityImpactInput
     ) -> IdentityUpdateResult:
+        """
+        Apply the supplied deltas to `instance.identity_profile` and return a
+        structured report of what actually changed.
+        """
     
-        pref_changes: list[IdentityChange] = []
+        pref_changes:  list[IdentityChange] = []
         trait_changes: list[IdentityChange] = []
     
-        # ---- preference updates ------------------------------------------------
-        for pref_type, pref_values in impact.get("preferences", {}).items():
-            for pref_name, delta in pref_values.items():
-                if pref_name in instance.identity_profile["preferences"].get(pref_type, {}):
-                    old = instance.identity_profile["preferences"][pref_type][pref_name]
-                    lr  = 0.1 * (experience.similarity if experience.similarity else 0.5)
-                    new = max(0.0, min(1.0, old + delta * lr))
-                    instance.identity_profile["preferences"][pref_type][pref_name] = new
-                    pref_changes.append(
-                        IdentityChange(
-                            path=f"preferences.{pref_type}.{pref_name}",
-                            old=old, new=new, change=new-old
-                        )
-                    )
+        # ------------------------ preferences ----------------------------------
+        for p in impact.preferences or []:
+            # p.key is like  "scenario_types.teasing"
+            parts = p.key.split(".", 1)
+            if len(parts) != 2:
+                continue                       # malformed; skip
+            pref_type, pref_name = parts
+            bucket = instance.identity_profile["preferences"].get(pref_type)
+            if bucket is None or pref_name not in bucket:
+                continue                       # unknown preference; skip
     
-        # ---- trait updates -----------------------------------------------------
-        for trait_name, delta in impact.get("traits", {}).items():
-            if trait_name in instance.identity_profile["traits"]:
-                old = instance.identity_profile["traits"][trait_name]
-                lr  = 0.05 * (experience.similarity if experience.similarity else 0.5)
-                new = max(0.0, min(1.0, old + delta * lr))
-                instance.identity_profile["traits"][trait_name] = new
-                trait_changes.append(
-                    IdentityChange(
-                        path=f"traits.{trait_name}",
-                        old=old, new=new, change=new-old
-                    )
+            old_val = bucket[pref_name]
+            lr      = 0.10 * (experience.similarity or 0.5)
+            new_val = max(0.0, min(1.0, old_val + p.delta * lr))
+            bucket[pref_name] = new_val
+    
+            pref_changes.append(
+                IdentityChange(
+                    path=f"preferences.{pref_type}.{pref_name}",
+                    old=old_val,
+                    new=new_val,
+                    change=new_val - old_val
                 )
+            )
     
-        # history bookkeeping (unchanged)
+        # --------------------------- traits ------------------------------------
+        for t in impact.traits or []:
+            trait_name = t.key
+            if trait_name not in instance.identity_profile["traits"]:
+                continue
+    
+            old_val = instance.identity_profile["traits"][trait_name]
+            lr      = 0.05 * (experience.similarity or 0.5)
+            new_val = max(0.0, min(1.0, old_val + t.delta * lr))
+            instance.identity_profile["traits"][trait_name] = new_val
+    
+            trait_changes.append(
+                IdentityChange(
+                    path=f"traits.{trait_name}",
+                    old=old_val,
+                    new=new_val,
+                    change=new_val - old_val
+                )
+            )
+    
+        # --------------------- history bookkeeping -----------------------------
         instance.identity_profile["evolution_history"].append({
-            "timestamp": datetime.now().isoformat(),
+            "timestamp"    : datetime.now().isoformat(),
             "experience_id": experience.experience_id,
-            "updates": {"preferences": [c.model_dump() for c in pref_changes],
-                        "traits":      [c.model_dump() for c in trait_changes]}
+            "updates"      : {
+                "preferences": [c.model_dump() for c in pref_changes],
+                "traits"     : [c.model_dump() for c in trait_changes]
+            }
         })
-        instance.identity_profile["evolution_history"] = instance.identity_profile["evolution_history"][-100:]
+        instance.identity_profile["evolution_history"] = (
+            instance.identity_profile["evolution_history"][-100:]
+        )
     
+        # ------------------------ structured return ----------------------------
         return IdentityUpdateResult(
             preferences=pref_changes or None,
             traits=trait_changes or None
         )
-
     
     @staticmethod
     @function_tool
