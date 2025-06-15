@@ -78,46 +78,34 @@ class TaskPurpose(Enum):
 
 class ChallengeResponse(BaseModel):
     """Response from challenging a user claim"""
-    model_config = ConfigDict(extra='forbid')
-    
     challenge_text: str
 
 class LieRecord(BaseModel):
     """Record of an intentional lie"""
-    model_config = ConfigDict(extra='forbid')
-    
     fact: str
     motivation: str
     timestamp: str
 
 class NeedsUpdate(BaseModel):
     """Needs system update result"""
-    model_config = ConfigDict(extra='forbid')
-    
-    drive_strengths: Optional[Dict[str, Any]] = None  # Fixed: was Optional[dict]
+    drive_strengths: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
 
 class GoalExecutionResult(BaseModel):
     """Goal execution result"""
-    model_config = ConfigDict(extra='forbid')
-    
     goal_id: Optional[str] = None
-    executed_step: Optional[Dict[str, Any]] = None  # Fixed: was Optional[dict]
+    executed_step: Optional[Dict[str, Any]] = None
     status: Optional[str] = None
     error: Optional[str] = None
 
 class MetaCoreResult(BaseModel):
     """Meta core cycle result"""
-    model_config = ConfigDict(extra='forbid')
-    
     evaluation_completed: bool = False
     adjustments_made: List[str] = Field(default_factory=list)
     error: Optional[str] = None
 
 class CognitiveCycleResult(BaseModel):
     """Result from running a cognitive cycle"""
-    model_config = ConfigDict(extra='forbid')
-    
     cycle_number: int
     timestamp: str
     needs_update: Optional[NeedsUpdate] = None
@@ -127,16 +115,12 @@ class CognitiveCycleResult(BaseModel):
 
 class CognitiveCycleContext(BaseModel):
     """Context data for cognitive cycle"""
-    model_config = ConfigDict(extra='forbid')
-    
     user_input: Optional[str] = None
-    emotional_context: Optional[Dict[str, Any]] = None  # Fixed: was Optional[dict]
-    environmental_factors: Optional[Dict[str, Any]] = None  # Fixed: was Optional[dict]
+    emotional_context: Optional[Dict[str, Any]] = None
+    environmental_factors: Optional[Dict[str, Any]] = None
 
 class DesireExpression(BaseModel):
     """Result of expressing desire"""
-    model_config = ConfigDict(extra='forbid')
-    
     success: bool
     expression: Optional[str] = None
     target: Optional[str] = None
@@ -144,8 +128,6 @@ class DesireExpression(BaseModel):
 
 class SensationResult(BaseModel):
     """Result from digital somatosensory processing"""
-    model_config = ConfigDict(extra='forbid')
-    
     type: str
     intensity: float
     region: str
@@ -153,8 +135,6 @@ class SensationResult(BaseModel):
 
 class PhysicalTouchResult(BaseModel):
     """Result of simulating physical touch"""
-    model_config = ConfigDict(extra='forbid')
-    
     success: bool
     sensation_result: Optional[SensationResult] = None
     internal_expression: Optional[str] = None
@@ -162,41 +142,33 @@ class PhysicalTouchResult(BaseModel):
 
 class GratificationContext(BaseModel):
     """Context for gratification seeking"""
-    model_config = ConfigDict(extra='forbid')
-    
     interaction_type: str = "intimate"
     intensity_level: float = 0.5
     safety_confirmed: bool = False
 
 class GratificationResult(BaseModel):
     """Result of gratification-related actions"""
-    model_config = ConfigDict(extra='forbid')
-    
     success: bool
     status: str
     reason: Optional[str] = None
 
 class SystemStats(BaseModel):
     """Comprehensive system statistics"""
-    model_config = ConfigDict(extra='forbid')
-    
-    memory_stats: Optional[Dict[str, Any]] = None  # Fixed: was Optional[dict]
-    meta_stats: Optional[Dict[str, Any]] = None  # Fixed: was Optional[dict]
-    knowledge_stats: Optional[Dict[str, Any]] = None  # Fixed: was Optional[dict]
-    emotional_state: Optional[Dict[str, Any]] = None  # Fixed: was Optional[dict]
-    hormone_stats: Optional[Dict[str, Any]] = None  # Fixed: was Optional[dict]
-    procedural_stats: Optional[Dict[str, Any]] = None  # Fixed: was Optional[dict]
-    identity_stats: Optional[Dict[str, Any]] = None  # Fixed: was Optional[dict]
-    needs_stats: Optional[Dict[str, Any]] = None  # Fixed: was Optional[dict]
-    goal_stats: Optional[Dict[str, Any]] = None  # Fixed: was Optional[dict]
-    performance_metrics: Optional[Dict[str, Any]] = None  # Fixed: was Optional[dict]
-    thinking_stats: Optional[Dict[str, Any]] = None  # Fixed: was Optional[dict]
-    processing_stats: Optional[Dict[str, Any]] = None  # Fixed: was Optional[dict]
+    memory_stats: Optional[Dict[str, Any]] = None
+    meta_stats: Optional[Dict[str, Any]] = None
+    knowledge_stats: Optional[Dict[str, Any]] = None
+    emotional_state: Optional[Dict[str, Any]] = None
+    hormone_stats: Optional[Dict[str, Any]] = None
+    procedural_stats: Optional[Dict[str, Any]] = None
+    identity_stats: Optional[Dict[str, Any]] = None
+    needs_stats: Optional[Dict[str, Any]] = None
+    goal_stats: Optional[Dict[str, Any]] = None
+    performance_metrics: Optional[Dict[str, Any]] = None
+    thinking_stats: Optional[Dict[str, Any]] = None
+    processing_stats: Optional[Dict[str, Any]] = None
 
 class UserInputAnalysis(BaseModel):
     """Analysis of user input for dominance"""
-    model_config = ConfigDict(extra='forbid')
-    
     submissive_score: float = 0.0
     resistance_score: float = 0.0
     emotional_tone: Optional[str] = None
@@ -204,16 +176,12 @@ class UserInputAnalysis(BaseModel):
 
 class DominanceAssessment(BaseModel):
     """Assessment of dominance readiness"""
-    model_config = ConfigDict(extra='forbid')
-    
     readiness_score: float
     assessment: str
     reason: Optional[str] = None
 
 class CommandResult(BaseModel):
     """Result of issuing a command"""
-    model_config = ConfigDict(extra='forbid')
-    
     success: bool
     command_issued: Optional[str] = None
     intensity: Optional[float] = None
@@ -221,15 +189,11 @@ class CommandResult(BaseModel):
 
 class ComplianceEvaluation(BaseModel):
     """Evaluation of user compliance"""
-    model_config = ConfigDict(extra='forbid')
-    
     compliance_level: float
     is_compliant: bool
 
 class IntensityIncrease(BaseModel):
     """Result of increasing control intensity"""
-    model_config = ConfigDict(extra='forbid')
-    
     success: bool
     status: Optional[str] = None
     next_intensity_target: Optional[float] = None
@@ -237,22 +201,16 @@ class IntensityIncrease(BaseModel):
 
 class DominanceGratificationResult(BaseModel):
     """Result of dominance gratification"""
-    model_config = ConfigDict(extra='forbid')
-    
     success: bool
     status: str
 
 class SatisfactionExpression(BaseModel):
     """Expression of satisfaction"""
-    model_config = ConfigDict(extra='forbid')
-    
     success: bool
     expression: str
 
 class AttractionExpression(BaseModel):
     """Result of expressing attraction"""
-    model_config = ConfigDict(extra='forbid')
-    
     success: bool
     expression: Optional[str] = None
     target: Optional[str] = None
@@ -260,15 +218,12 @@ class AttractionExpression(BaseModel):
 
 class IntensityRange(BaseModel):
     """Intensity range specification"""
-    model_config = ConfigDict(extra='forbid')
-    
     min: int
     max: int
 
+
 class FemdomActivityIdea(BaseModel):
     """A single femdom activity idea"""
-    model_config = ConfigDict(extra='forbid')
-    
     id: str
     description: str
     intensity: int
@@ -278,16 +233,13 @@ class FemdomActivityIdea(BaseModel):
 
 class FemdomIdeasResult(BaseModel):
     """Result of generating femdom ideas"""
-    model_config = ConfigDict(extra='forbid')
-    
     success: bool
-    ideas: List[Dict[str, Any]] = Field(default_factory=list)  # Fixed: was List[dict]
+    ideas: List[Dict[str, Any]] = Field(default_factory=list)
     error: Optional[str] = None
+
 
 class ProtocolAssignment(BaseModel):
     """Result of protocol assignment"""
-    model_config = ConfigDict(extra='forbid')
-    
     success: bool
     protocol_id: Optional[str] = None
     user_id: Optional[str] = None
@@ -295,8 +247,6 @@ class ProtocolAssignment(BaseModel):
 
 class RoleplayResult(BaseModel):
     """Result of roleplay mode changes"""
-    model_config = ConfigDict(extra='forbid')
-    
     success: bool
     character_name: Optional[str] = None
     context: Optional[str] = None
@@ -304,8 +254,6 @@ class RoleplayResult(BaseModel):
 
 class IntimateInteractionResult(BaseModel):
     """Result of intimate interaction initiation"""
-    model_config = ConfigDict(extra='forbid')
-    
     success: bool
     proposal: Optional[str] = None
     target: Optional[str] = None
@@ -314,24 +262,18 @@ class IntimateInteractionResult(BaseModel):
 
 class DominanceTargetEvaluation(BaseModel):
     """Evaluation of dominance target potential"""
-    model_config = ConfigDict(extra='forbid')
-    
     user_id: str
     interest_score: float
     reason: str
 
 class OrgasmControlResult(BaseModel):
     """Result of orgasm permission processing"""
-    model_config = ConfigDict(extra='forbid')
-    
     success: bool
     message: str
     permission_granted: Optional[bool] = None
 
 class PersonaRecommendation(BaseModel):
     """Dominance persona recommendation"""
-    model_config = ConfigDict(extra='forbid')
-    
     success: bool
     persona_id: Optional[str] = None
     persona_name: Optional[str] = None
@@ -340,8 +282,6 @@ class PersonaRecommendation(BaseModel):
 
 class PersonaActivation(BaseModel):
     """Result of persona activation"""
-    model_config = ConfigDict(extra='forbid')
-    
     success: bool
     persona_id: Optional[str] = None
     active_until: Optional[str] = None
@@ -349,8 +289,6 @@ class PersonaActivation(BaseModel):
 
 class SadisticResponse(BaseModel):
     """Generated sadistic response"""
-    model_config = ConfigDict(extra='forbid')
-    
     success: bool
     response: Optional[str] = None
     category: Optional[str] = None
@@ -359,8 +297,6 @@ class SadisticResponse(BaseModel):
 
 class LimitTestResult(BaseModel):
     """Result of soft limit testing"""
-    model_config = ConfigDict(extra='forbid')
-    
     success: bool
     status: Optional[str] = None
     planned_action: Optional[str] = None
