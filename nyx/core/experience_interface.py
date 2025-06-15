@@ -1086,32 +1086,33 @@ class ExperienceInterface:
         memory_text: str,
         scenario_type: str = "general",
         entities: list[str] | None = None,
-        emotional_context: dict[str, Any] | None = None,
+        emotional_context: EmotionalContext | None = None,   # 🟢  typed
         significance: int = 5,
         tags: list[str] | None = None,
         user_id: str | None = None
     ) -> StoreExperienceResult:
         """
-        Add `memory_text` to memory-core, embed it, update identity, and return a
-        strict `StoreExperienceResult`.
+        Add a new experience, embed it, update identity, and return a strict result.
         """
     
-        # ----------------------- tags & metadata --------------------------------
+        # --------- tag & metadata prep -----------------------------------------
         tags = (tags or []) + [t for t in (scenario_type, "experience") if t not in (tags or [])]
     
-        metadata = {
+        metadata: dict[str, Any] = {
             "scenario_type": scenario_type,
             "entities"     : entities or [],
             "is_experience": True,
         }
         if user_id:
             metadata["user_id"] = user_id
+    
+        # Attach emotional context (always as dict for storage)
         if emotional_context:
-            metadata["emotional_context"] = emotional_context
+            metadata["emotional_context"] = emotional_context.model_dump(exclude_none=True)
         elif instance.emotional_core:
             metadata["emotional_context"] = instance.emotional_core.get_formatted_emotional_state()
     
-        # ----------------------- write to memory-core ---------------------------
+        # --------- write to memory-core ----------------------------------------
         memory_id = await instance.memory_core.add_memory(
             memory_text = memory_text,
             memory_type = "experience",
@@ -1121,16 +1122,16 @@ class ExperienceInterface:
             metadata    = metadata,
         )
     
-        # Track per-user mapping -----------------------------------------------
+        # map per-user ----------------------------------------------------------
         if user_id:
             instance.user_experience_map.setdefault(user_id, set()).add(memory_id)
     
-        # ----------------------- embed & index ---------------------------------
+        # --------- embedding ---------------------------------------------------
         try:
-            vector = await instance._generate_experience_vector(ctx, instance, memory_text)
+            vec = await instance._generate_experience_vector(ctx, instance, memory_text)
             instance.experience_vectors[memory_id] = {
                 "experience_id": memory_id,
-                "vector"      : vector,
+                "vector"      : vec,
                 "metadata"    : {
                     "user_id"      : user_id or "default",
                     "scenario_type": scenario_type,
@@ -1138,50 +1139,45 @@ class ExperienceInterface:
                 },
             }
         except Exception as e:
-            logger.error(f"Vector-embedding failed for {memory_id}: {e}")
+            logger.error(f"Vector embed failed for {memory_id}: {e}")
     
-        # ----------------------- identity impact -------------------------------
+        # --------- identity impact --------------------------------------------
         try:
-            raw_impact = instance._calculate_identity_impact(
-                memory_text, scenario_type, metadata.get("emotional_context", {})
+            raw = instance._calculate_identity_impact(
+                memory_text, scenario_type, metadata["emotional_context"]
             )
-    
-            if raw_impact and (raw_impact.get("preferences") or raw_impact.get("traits")):
-                # Convert dict → IdentityImpactInput
-                pref_deltas  = [
-                    ImpactDelta(key=f"{ptype}.{pname}", delta=delta)
-                    for ptype, prefs in raw_impact.get("preferences", {}).items()
-                    for pname, delta in (prefs or {}).items()
-                ]
-                trait_deltas = [
-                    ImpactDelta(key=tname, delta=delta)
-                    for tname, delta in raw_impact.get("traits", {}).items()
-                ]
-                impact_model = IdentityImpactInput(
-                    preferences=pref_deltas or None,
-                    traits=trait_deltas   or None,
+            if raw and (raw["preferences"] or raw["traits"]):
+                impact = IdentityImpactInput(
+                    preferences=[
+                        ImpactDelta(key=f"{t}.{k}", delta=v)
+                        for t,prefs in raw["preferences"].items()
+                        for k,v in prefs.items()
+                    ] or None,
+                    traits=[
+                        ImpactDelta(key=k, delta=v) for k,v in raw["traits"].items()
+                    ] or None,
                 )
-    
-                exp_rec = ExperienceRecord(
-                    experience_id = memory_id,
-                    text          = memory_text,
-                    similarity    = 1.0,       # new memories get full similarity to themselves
-                    metadata      = None,
-                )
-    
                 await instance._update_identity_from_experience(
-                    ctx, instance, exp_rec, impact_model
+                    ctx,
+                    instance,
+                    ExperienceRecord(
+                        experience_id=memory_id,
+                        text=memory_text,
+                        similarity=1.0,
+                        metadata=None
+                    ),
+                    impact
                 )
         except Exception as e:
             logger.error(f"Identity-update failed for {memory_id}: {e}")
     
-        # ----------------------- structured return -----------------------------
+        # --------- structured return ------------------------------------------
         return StoreExperienceResult(
-            experience_id = memory_id,
-            scenario_type = scenario_type,
-            tags          = tags,
-            significance  = significance,
-            user_id       = user_id,
+            experience_id=memory_id,
+            scenario_type=scenario_type,
+            tags=tags,
+            significance=significance,
+            user_id=user_id
         )
 
         
