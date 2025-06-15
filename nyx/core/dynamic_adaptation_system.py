@@ -28,14 +28,25 @@ class KVPair(BaseModel):
     value: Any
 
 class MetricKV(BaseModel):
+    """name → value pair used for passing current metrics"""
     metric: str
     value: float
 
+
 class MetricTrend(BaseModel):
+    """output of the trend calculator"""
     metric: str
-    direction: str          # 'improving' | 'declining' | 'stable'
+    direction: str            # 'improving' | 'declining' | 'stable'
     magnitude: float
     diff_from_avg: float | None = None
+
+
+class ResourceTrend(BaseModel):
+    """result of the resource-trend regression helper"""
+    direction: str            # 'increasing' | 'decreasing' | 'stable'
+    magnitude: float
+    slope: float | None = None
+    mean: float | None = None
 
 class RawContext(BaseModel):
     items: list[KVPair]
@@ -1310,141 +1321,120 @@ class DynamicAdaptationSystem:
     
         return trends
 
-    @staticmethod    
+    @staticmethod
     @function_tool
-    async def _generate_performance_insights(ctx: RunContextWrapper[DynamicAdaptationContext],
-                                         metrics: Dict[str, float], 
-                                         trends: Dict[str, Dict[str, Any]]) -> List[str]:
+    async def _generate_performance_insights(
+        ctx: RunContextWrapper[DynamicAdaptationContext],
+        metrics: list[MetricKV],                 # strict input ✅
+        trends:  list[MetricTrend]               # strict input ✅
+    ) -> list[str]:                              # list[str] is already strict
         """
-        Generate insights based on performance metrics and trends
-        
-        Args:
-            metrics: Performance metrics
-            trends: Calculated trends
-            
-        Returns:
-            List of insight strings
+        Produce human-readable insights from the latest metrics & their trends.
         """
-        insights = []
-        
-        # Check for significant improvements
-        improvements = [metric for metric, trend in trends.items() 
-                       if trend["direction"] == "improving" and trend["magnitude"] > 0.1]
+    
+        # ---------- convert helper objects back to plain dicts ------------------
+        m_dict  = {m.metric: m.value for m in metrics}
+        t_dict  = {t.metric: {
+                        "direction": t.direction,
+                        "magnitude": t.magnitude}
+                   for t in trends}
+    
+        insights: list[str] = []
+    
+        # --- significant improvements / declines --------------------------------
+        improvements = [k for k, t in t_dict.items()
+                        if t["direction"] == "improving" and t["magnitude"] > 0.1]
         if improvements:
-            metrics_list = ", ".join(improvements)
-            insights.append(f"Significant improvement in {metrics_list}")
-        
-        # Check for significant declines
-        declines = [metric for metric, trend in trends.items() 
-                   if trend["direction"] == "declining" and trend["magnitude"] > 0.1]
+            insights.append(f"Significant improvement in {', '.join(improvements)}")
+    
+        declines = [k for k, t in t_dict.items()
+                    if t["direction"] == "declining" and t["magnitude"] > 0.1]
         if declines:
-            metrics_list = ", ".join(declines)
-            insights.append(f"Significant decline in {metrics_list}")
-        
-        # Check for overall performance
-        avg_performance = sum(metrics.values()) / len(metrics) if metrics else 0.5
-        if avg_performance > 0.8:
-            insights.append("Overall performance is excellent")
-        elif avg_performance < 0.4:
-            insights.append("Overall performance is concerning")
-        
-        # Check for volatility
-        volatility = self._calculate_performance_volatility(ctx.context)
-        if volatility > 0.2:
-            insights.append("Performance metrics show high volatility")
-        
-        # Check for experience-related insights
-        if "experience_utility" in metrics:
-            if metrics["experience_utility"] > 0.7:
-                insights.append("Experience sharing is highly effective")
-            elif metrics["experience_utility"] < 0.3:
-                insights.append("Experience sharing effectiveness is low")
-        
-        # Check for identity-related insights
-        if "identity_coherence" in metrics:
-            if metrics["identity_coherence"] > 0.7:
-                insights.append("Identity profile shows strong coherence")
-            elif metrics["identity_coherence"] < 0.3:
-                insights.append("Identity profile lacks coherence")
-        
+            insights.append(f"Significant decline in {', '.join(declines)}")
+    
+        # --- overall performance -------------------------------------------------
+        if m_dict:
+            avg_perf = sum(m_dict.values()) / len(m_dict)
+            if   avg_perf > 0.8: insights.append("Overall performance is excellent")
+            elif avg_perf < 0.4: insights.append("Overall performance is concerning")
+    
+        # --- volatility ----------------------------------------------------------
+        try:
+            vol = DynamicAdaptationSystem._calculate_performance_volatility(ctx.context)  # type: ignore[arg-type]
+            if vol > 0.2:
+                insights.append("Performance metrics show high volatility")
+        except Exception:
+            pass  # volatility helper not available / not critical
+    
+        # --- experience / identity specific -------------------------------------
+        if (val := m_dict.get("experience_utility")) is not None:
+            if   val > 0.7: insights.append("Experience sharing is highly effective")
+            elif val < 0.3: insights.append("Experience sharing effectiveness is low")
+    
+        if (val := m_dict.get("identity_coherence")) is not None:
+            if   val > 0.7: insights.append("Identity profile shows strong coherence")
+            elif val < 0.3: insights.append("Identity profile lacks coherence")
+    
         return insights
 
-    @staticmethod    
+    @staticmethod
     @function_tool
-    async def _calculate_resource_trend(ctx: RunContextWrapper[DynamicAdaptationContext],
-                                    values: List[float]) -> Dict[str, Any]:
+    async def _calculate_resource_trend(
+        ctx: RunContextWrapper[DynamicAdaptationContext],
+        values: list[float]                       # already strict ✅
+    ) -> ResourceTrend:                           # strict output ✅
         """
-        Calculate trend from a series of resource values
-        
-        Args:
-            values: Series of values to analyze
-            
-        Returns:
-            Trend analysis
+        Linear-regression trend detector for any numeric resource.
         """
+    
         if len(values) < 2:
-            return {"direction": "stable", "magnitude": 0.0}
-            
-        # Calculate linear regression
-        n = len(values)
-        x = list(range(n))
-        mean_x = sum(x) / n
-        mean_y = sum(values) / n
-        
-        numerator = sum((x[i] - mean_x) * (values[i] - mean_y) for i in range(n))
-        denominator = sum((x[i] - mean_x) ** 2 for i in range(n))
-        
-        if denominator == 0:
-            return {"direction": "stable", "magnitude": 0.0}
-            
-        slope = numerator / denominator
-        
-        # Normalize slope based on mean value
-        if mean_y != 0:
-            normalized_slope = slope / abs(mean_y)
-        else:
-            normalized_slope = slope
-            
-        # Determine direction and magnitude
-        if abs(normalized_slope) < 0.05:
+            return ResourceTrend(direction="stable", magnitude=0.0)
+    
+        n        = len(values)
+        x        = list(range(n))
+        mean_x   = sum(x) / n
+        mean_y   = sum(values) / n
+        numer    = sum((x[i]-mean_x)*(values[i]-mean_y) for i in range(n))
+        denom    = sum((x[i]-mean_x)**2 for i in range(n))
+        slope    = 0.0 if denom == 0 else numer / denom
+        norm_slp = slope / abs(mean_y) if mean_y else slope
+    
+        if abs(norm_slp) < 0.05:
             direction = "stable"
-        elif normalized_slope > 0:
-            direction = "increasing"
         else:
-            direction = "decreasing"
-            
-        return {
-            "direction": direction,
-            "magnitude": abs(normalized_slope),
-            "slope": slope,
-            "mean": mean_y
-        }
+            direction = "increasing" if norm_slp > 0 else "decreasing"
+    
+        return ResourceTrend(
+            direction = direction,
+            magnitude = abs(norm_slp),
+            slope     = slope,
+            mean      = mean_y
+        )
 
-    @staticmethod    
+    @staticmethod
     @function_tool
-    async def _update_performance_history(ctx: RunContextWrapper[DynamicAdaptationContext],
-                                      metrics: Dict[str, float]) -> bool:
+    async def _update_performance_history(
+        ctx: RunContextWrapper[DynamicAdaptationContext],
+        metrics: list[MetricKV]                   # strict input ✅
+    ) -> bool:
         """
-        Update performance history with current metrics
-        
-        Args:
-            metrics: Current performance metrics
-            
-        Returns:
-            Success status
+        Append the current metrics snapshot to history.
         """
-        # Add metrics to history
+    
+        # unwrap list → dict
+        m_dict = {kv.metric: kv.value for kv in metrics}
+    
         ctx.context.performance_history.append({
-            "timestamp": datetime.now().isoformat(),
-            "metrics": metrics,
-            "strategy_id": ctx.context.current_strategy_id,
-            "cycle": ctx.context.cycle_count
+            "timestamp"   : datetime.now().isoformat(),
+            "metrics"     : m_dict,
+            "strategy_id" : ctx.context.current_strategy_id,
+            "cycle"       : ctx.context.cycle_count
         })
-        
-        # Trim history if needed
+    
+        # history length cap
         if len(ctx.context.performance_history) > ctx.context.max_history_size:
             ctx.context.performance_history.pop(0)
-        
+    
         return True
     
     def _calculate_performance_volatility(self, context: DynamicAdaptationContext) -> float:
