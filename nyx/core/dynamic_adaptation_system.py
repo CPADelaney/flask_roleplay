@@ -27,6 +27,16 @@ class KVPair(BaseModel):
     key: str
     value: Any
 
+class MetricKV(BaseModel):
+    metric: str
+    value: float
+
+class MetricTrend(BaseModel):
+    metric: str
+    direction: str          # 'improving' | 'declining' | 'stable'
+    magnitude: float
+    diff_from_avg: float | None = None
+
 class RawContext(BaseModel):
     items: list[KVPair]
 
@@ -1235,73 +1245,69 @@ class DynamicAdaptationSystem:
     
         ctx.context.current_strategy_id = strategy_id
     
-        if len(ctx.context.strategy_history) > ctx.context.max_history_size:
-            ctx.context.strategy_history.pop(0)
-    
-        return True
-
-    @staticmethod    
+    @staticmethod
     @function_tool
-    async def _calculate_performance_trends(ctx: RunContextWrapper[DynamicAdaptationContext],
-                                        metrics: Dict[str, float]) -> Dict[str, Dict[str, Any]]:
+    async def _calculate_performance_trends(
+        ctx: RunContextWrapper[DynamicAdaptationContext],
+        metrics: list[MetricKV]          # ✅ strict input
+    ) -> list[MetricTrend]:              # ✅ strict output
         """
-        Calculate trends in performance metrics
-        
-        Args:
-            metrics: Current performance metrics
-            
-        Returns:
-            Trends for each metric
+        Compare the latest performance metrics with history and return a
+        per-metric trend analysis.  Logic is unchanged – only marshaling
+        to/from the new Pydantic wrappers was added.
         """
-        trends = {}
-        
-        # Add metrics to history
-        await self._update_performance_history(ctx, metrics)
-        
-        if len(ctx.context.performance_history) < 2:
-            # Not enough history for trends
-            for metric, value in metrics.items():
-                trends[metric] = {
-                    "direction": "stable",
-                    "magnitude": 0.0
-                }
+    
+        # ---------- unwrap the KV list -> dict ----------------------------------
+        m_dict: dict[str, float] = {kv.metric: kv.value for kv in metrics}
+    
+        # keep your existing helper (still takes a plain dict)
+        await self._update_performance_history(ctx, m_dict)
+    
+        history = ctx.context.performance_history
+        trends: list[MetricTrend] = []
+    
+        # not enough data yet -> everything 'stable'
+        if len(history) < 2:
+            for name, val in m_dict.items():
+                trends.append(
+                    MetricTrend(metric=name, direction="stable", magnitude=0.0)
+                )
             return trends
-        
-        # Calculate trends for each metric
-        for metric, current_value in metrics.items():
-            # Find previous values for this metric
-            previous_values = []
-            for history_point in ctx.context.performance_history[:-1]:  # Skip current point
-                if metric in history_point["metrics"]:
-                    previous_values.append(history_point["metrics"][metric])
-            
-            if not previous_values:
-                trends[metric] = {
-                    "direction": "stable",
-                    "magnitude": 0.0
-                }
+    
+        # -----------------------------------------------------------------------
+        # full trend computation (your original code, just tweaked a bit)
+        # -----------------------------------------------------------------------
+        for name, current in m_dict.items():
+            prev_vals = [
+                h["metrics"][name]                             # type: ignore[index]
+                for h in history[:-1] if name in h["metrics"]  # skip latest point
+            ]
+    
+            if not prev_vals:
+                trends.append(
+                    MetricTrend(metric=name, direction="stable", magnitude=0.0)
+                )
                 continue
-                
-            # Calculate average of previous values
-            avg_previous = sum(previous_values) / len(previous_values)
-            
-            # Calculate difference
-            diff = current_value - avg_previous
-            
-            # Determine direction and magnitude
-            if abs(diff) < 0.05:  # Small threshold for stability
+    
+            avg_prev = sum(prev_vals) / len(prev_vals)
+            diff     = current - avg_prev
+    
+            if abs(diff) < 0.05:
                 direction = "stable"
                 magnitude = 0.0
             else:
                 direction = "improving" if diff > 0 else "declining"
                 magnitude = min(1.0, abs(diff))
-                
-            trends[metric] = {
-                "direction": direction,
-                "magnitude": magnitude,
-                "diff_from_avg": diff
-            }
-        
+    
+            trends.append(
+                MetricTrend(
+                    metric        = name,
+                    direction     = direction,
+                    magnitude     = magnitude,
+                    diff_from_avg = diff
+                )
+            )
+    
         return trends
 
     @staticmethod    
