@@ -918,41 +918,85 @@ async def prepare_conditioning_data(                           # noqa: N802
         pd["raw_input"] = raw
 
     return pd
+    
 @function_tool
-async def apply_association_effects(
+async def apply_association_effects(                         # noqa: N802
     ctx: RunContextWrapper,
-    triggered_association: Dict[str, Any]
+    triggered_json: str | None = None,
 ) -> Dict[str, Any]:
-    """Apply physiological/emotional effects from a triggered association"""
-    strength = float(triggered_association.get("association_strength", triggered_association.get("strength", 0.0)))
-    valence = float(triggered_association.get("valence", 0.0))
-    intensity = strength * 0.7
-    
-    effects_applied = []
-    
-    # Emotional effects (simplified)
-    if ctx.context.emotional_core and valence != 0.0:
+    """
+    Translate a *triggered association* into concrete emotional / physiological
+    effects and push them into the relevant subsystems.
+
+    Parameters
+    ----------
+    triggered_json :
+        JSON-encoded dict that MUST contain at least:
+        • association_strength  (float)
+        • valence               (float, –1.0 … 1.0)
+
+    Returns
+    -------
+    dict
+        Summary of what was applied.
+    """
+    # ------------------------------------------------------------------ #
+    # 1.  Parse & sanity-check                                          #
+    # ------------------------------------------------------------------ #
+    try:
+        assoc: dict[str, Any] = json.loads(triggered_json or "{}")
+        if not isinstance(assoc, dict):
+            raise ValueError("payload must decode to an object")
+    except Exception as exc:
+        logger.error("apply_association_effects: bad JSON – %s", exc)
+        assoc = {}
+
+    # Helper to coerce numeric-ish inputs safely
+    def _num(val: Any, default: float = 0.0) -> float:
         try:
-            if valence > 0.1:
-                effects_applied.append({
-                    "type": "emotional",
-                    "details": "Positive emotional response",
-                    "valence": "positive",
-                    "intensity": round(intensity, 3)
-                })
-            elif valence < -0.1:
-                effects_applied.append({
-                    "type": "emotional",
-                    "details": "Negative emotional response",
-                    "valence": "negative",
-                    "intensity": round(intensity, 3)
-                })
-        except Exception as e:
-            logger.error(f"Error applying emotional effects: {e}")
-    
+            return float(val)
+        except (TypeError, ValueError):
+            return default
+
+    strength = max(0.0, _num(assoc.get("association_strength", assoc.get("strength", 0))))
+    valence  = max(-1.0, min(1.0, _num(assoc.get("valence", 0))))
+    intensity = round(strength * 0.7, 4)
+
+    effects: list[dict[str, Any]] = []
+
+    # ------------------------------------------------------------------ #
+    # 2.  Emotional subsystem                                            #
+    # ------------------------------------------------------------------ #
+    if ctx.context.emotional_core and valence != 0.0:
+        emo_payload = {
+            "valence": "positive" if valence > 0 else "negative",
+            "intensity": intensity,
+            "source": "conditioning_association",
+        }
+        # Fire-and-forget: don’t let errors bubble up
+        try:
+            await ctx.context.emotional_core.apply_valence_shift(emo_payload)  # type: ignore[attr-defined]
+            effects.append({"type": "emotional", **emo_payload})
+        except Exception as exc:
+            logger.warning("emotional_core failed: %s", exc)
+
+    # ------------------------------------------------------------------ #
+    # 3.  Physiology / neurochemical subsystem (optional)                #
+    # ------------------------------------------------------------------ #
+    if hasattr(ctx.context, "physiology_core") and intensity > 0:
+        try:
+            delta = {"nyxamine": intensity * 0.1 * valence}
+            await ctx.context.physiology_core.adjust_neurochemistry(delta)  # type: ignore[attr-defined]
+            effects.append({"type": "physiological", "delta": delta})
+        except Exception as exc:
+            logger.debug("physiology_core unavailable: %s", exc)
+
+    # ------------------------------------------------------------------ #
+    # 4.  Return consolidated summary                                    #
+    # ------------------------------------------------------------------ #
     return {
-        "effects_applied": effects_applied,
-        "original_association_strength": round(strength, 3),
-        "original_valence": round(valence, 3),
-        "derived_effect_intensity": round(intensity, 3)
+        "effects_applied": effects,
+        "original_association_strength": round(strength, 4),
+        "original_valence": round(valence, 4),
+        "derived_effect_intensity": intensity,
     }
