@@ -45,6 +45,15 @@ class CrossUserExperienceResult(BaseModel):
     source_users: List[str] = Field(..., description="Source user IDs")
     personalized: bool = Field(..., description="Whether experiences were personalized")
 
+def _get_mgr(ctx: RunContextWrapper):
+    """Return the CrossUserExperienceManager that owns these tools."""
+    ref = getattr(ctx, "context", None)
+    if ref is None:
+        return None
+    if isinstance(ref, dict) and "manager" in ref:
+        return ref["manager"]
+    return ref  # assume the manager itself was passed
+
 class CrossUserExperienceManager:
     """
     System for managing and sharing experiences across different users.
@@ -112,7 +121,8 @@ class CrossUserExperienceManager:
             - Previous sharing history between users
             - Overall compatibility between user preferences
             """,
-            output_type=ExperiencePermission
+            output_type=ExperiencePermission,
+            model="gpt-4.1-nano"
         )
     
     def _create_relevance_agent(self) -> Agent:
@@ -134,7 +144,8 @@ class CrossUserExperienceManager:
             - The compatibility of the experience's scenario with user preferences
             - The emotional context of the experience
             - Privacy implications of sharing the experience
-            """
+            """,
+            model="gpt-4.1-nano"
         )
     
     def _create_personalization_agent(self) -> Agent:
@@ -157,7 +168,8 @@ class CrossUserExperienceManager:
             - Emotional preferences and comfort levels
             - Privacy concerns and boundaries
             - Ensuring the experience remains coherent after adaptation
-            """
+            """,
+            model="gpt-4.1-nano"
         )
     
     def _create_search_orchestrator(self) -> Agent:
@@ -204,91 +216,74 @@ class CrossUserExperienceManager:
                     tool_description_override="Personalize experiences for target user"
                 )
             ],
-            output_type=CrossUserExperienceResult
+            output_type=CrossUserExperienceResult,
+            model="gpt-4.1-nano"
         )
     
     # Tool functions for agents
-    @staticmethod  
+    @staticmethod
     @function_tool
-    async def get_user_preference(ctx: RunContextWrapper, user_id: str) -> Dict[str, Any]:
-        """
-        Get user preference profile for experience sharing
-        
-        Args:
-            user_id: ID of the user
-            
-        Returns:
-            User preference profile
-        """
-        # Check if profile exists
-        if user_id in self.user_preference_profiles:
-            return self.user_preference_profiles[user_id]
-        
-        # Create default profile
+    async def get_user_preference(ctx: RunContextWrapper, user_id: str) -> Dict[str, Any]: # noqa: N802
+        """Fetch – or lazily create – a preference profile for *user_id*."""
+        mgr = _get_mgr(ctx)
+        if mgr is None:
+            return {"error": "manager_context_missing", "user_id": user_id}
+    
+        # fast-path cache hit
+        if user_id in mgr.user_preference_profiles:
+            return mgr.user_preference_profiles[user_id]
+    
+        # build default profile
         default_profile = {
             "user_id": user_id,
-            "scenario_preferences": {
-                "teasing": 0.5,
-                "discipline": 0.5,
-                "training": 0.5,
-                "service": 0.5,
-                "worship": 0.5,
-                "psychological": 0.5,
-                "nurturing": 0.5
-            },
-            "emotional_preferences": {
-                "joy": 0.5,
-                "anticipation": 0.5,
-                "trust": 0.5,
-                "fear": 0.5,
-                "surprise": 0.5
-            },
+            "scenario_preferences": {k: 0.5 for k in
+                ["teasing", "discipline", "training", "service",
+                 "worship", "psychological", "nurturing"]},
+            "emotional_preferences": {k: 0.5 for k in
+                ["joy", "anticipation", "trust", "fear", "surprise"]},
             "experience_sharing_preference": 0.5,
-            "cross_user_sharing_preference": self.default_cross_user_preference,
-            "privacy_level": self.default_privacy_level
+            "cross_user_sharing_preference": getattr(
+                mgr, "default_cross_user_preference", 0.3
+            ),
+            "privacy_level": getattr(mgr, "default_privacy_level", 0.5),
         }
-        
-        # Store and return
-        self.user_preference_profiles[user_id] = default_profile
+        mgr.user_preference_profiles[user_id] = default_profile
         return default_profile
 
-    @staticmethod  
+    @staticmethod
     @function_tool
-    async def calculate_sharing_permission(ctx: RunContextWrapper,
-                                     source_user_id: str,
-                                     target_user_id: str) -> Dict[str, Any]:
-        """
-        Calculate sharing permission between users
-        
-        Args:
-            source_user_id: ID of the source user
-            target_user_id: ID of the target user
-            
-        Returns:
-            Permission details
-        """
-        # Create context for permission agent
+    async def calculate_sharing_permission(           # noqa: N802
+        ctx: RunContextWrapper,
+        source_user_id: str,
+        target_user_id: str
+    ) -> Dict[str, Any]:
+        """Determine sharing permission between two users."""
+        mgr = _get_mgr(ctx)
+        if mgr is None:
+            return {"error": "manager_context_missing"}
+    
         permission_input = {
             "source_user_id": source_user_id,
             "target_user_id": target_user_id,
-            "source_preference": await self.get_user_preference(ctx, source_user_id),
-            "target_preference": await self.get_user_preference(ctx, target_user_id),
-            "sharing_history": self._get_sharing_history(source_user_id, target_user_id)
+            "source_preference": await CrossUserExperienceManager.get_user_preference(
+                ctx, source_user_id
+            ),
+            "target_preference": await CrossUserExperienceManager.get_user_preference(
+                ctx, target_user_id
+            ),
+            "sharing_history": mgr._get_sharing_history(source_user_id, target_user_id),  # noqa: SLF001
         }
-        
-        # Run permission agent
+    
         result = await Runner.run(
-            self.permission_agent, 
+            mgr.permission_agent,
             json.dumps(permission_input),
-            context={"manager": self}
+            context={"manager": mgr},
         )
-        
-        # Store in permission matrix
+    
         permission = result.final_output_as(ExperiencePermission)
-        key = f"{source_user_id}:{target_user_id}"
-        self.permission_matrix[key] = permission.model_dump()
-        
+        mgr.permission_matrix[f"{source_user_id}:{target_user_id}"] = permission.model_dump()
         return permission.model_dump()
+
     
     def _get_sharing_history(self, user_id1: str, user_id2: str) -> List[Dict[str, Any]]:
         """Get sharing history between two users"""
@@ -299,91 +294,69 @@ class CrossUserExperienceManager:
                 history.append(entry)
         return history
 
-    @staticmethod  
+    @staticmethod
     @function_tool
-    async def retrieve_experiences(ctx: RunContextWrapper,
-                             source_user_id: str,
-                             query: str,
-                             scenario_type: Optional[str] = None,
-                             limit: int = 5) -> List[Dict[str, Any]]:
-        """
-        Retrieve experiences from a source user
-        
-        Args:
-            source_user_id: ID of the source user
-            query: Search query
-            scenario_type: Optional scenario type filter
-            limit: Maximum number of experiences to return
-            
-        Returns:
-            List of retrieved experiences
-        """
-        if not self.memory_core:
+    async def retrieve_experiences(                   # noqa: N802
+        ctx: RunContextWrapper,
+        source_user_id: str,
+        query: str,
+        scenario_type: Optional[str] = None,
+        limit: int = 5,
+    ) -> List[Dict[str, Any]]:
+        """Search the MemoryCore for matching experiences."""
+        mgr = _get_mgr(ctx)
+        if mgr is None or not getattr(mgr, "memory_core", None):
             return []
-        
-        # Get search function from memory core
-        if hasattr(self.memory_core, "search_memories"):
-            search_params = {
-                "user_id": source_user_id,
-                "query": query,
-                "memory_type": "experience",
-                "limit": limit
-            }
-            
-            if scenario_type:
-                search_params["tags"] = [scenario_type]
-            
-            # Perform search
-            results = await self.memory_core.search_memories(**search_params)
-            return results or []
-        
-        return []
-
-    @staticmethod  
+    
+        if not hasattr(mgr.memory_core, "search_memories"):
+            return []
+    
+        params = {
+            "user_id": source_user_id,
+            "query": query,
+            "memory_type": "experience",
+            "limit": limit,
+        }
+        if scenario_type:
+            params["tags"] = [scenario_type]
+    
+        try:
+            return await mgr.memory_core.search_memories(**params) or []
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Memory search failed: %s", exc)
+            return []
+    
+    @staticmethod
     @function_tool
-    async def filter_experiences_by_permission(ctx: RunContextWrapper,
-                                        experiences: List[Dict[str, Any]],
-                                        source_user_id: str,
-                                        target_user_id: str) -> List[Dict[str, Any]]:
-        """
-        Filter experiences based on sharing permissions
-        
-        Args:
-            experiences: List of experiences to filter
-            source_user_id: ID of the source user
-            target_user_id: ID of the target user
-            
-        Returns:
-            Filtered experiences
-        """
-        # Get permission
+    async def filter_experiences_by_permission(       # noqa: N802
+        ctx: RunContextWrapper,
+        experiences: List[Dict[str, Any]],
+        source_user_id: str,
+        target_user_id: str,
+    ) -> List[Dict[str, Any]]:
+        """Whitelist experiences according to the stored permission matrix."""
+        mgr = _get_mgr(ctx)
+        if mgr is None:
+            return []
+    
         key = f"{source_user_id}:{target_user_id}"
-        permission = self.permission_matrix.get(key)
-        
+        permission = mgr.permission_matrix.get(key)
         if not permission:
-            # Calculate permission if not exists
-            permission = await self.calculate_sharing_permission(ctx, source_user_id, target_user_id)
-        
-        # Filter experiences
-        filtered = []
+            permission = await CrossUserExperienceManager.calculate_sharing_permission(
+                ctx, source_user_id, target_user_id
+            )
+    
+        permitted, plevel = permission.get("scenario_types", []), permission.get("permission_level", 0.0)
+        excluded = set(permission.get("excluded_scenario_types", []))
+    
+        filtered: List[Dict[str, Any]] = []
         for exp in experiences:
             scenario = exp.get("scenario_type", "general")
-            
-            # Skip if scenario is excluded
-            if scenario in permission.get("excluded_scenario_types", []):
+            if scenario in excluded:
                 continue
-            
-            # Include if scenario is allowed or permission level is high
-            if (scenario in permission.get("scenario_types", []) or 
-                permission.get("permission_level", 0) >= 0.7):
-                
-                # Calculate privacy level
-                privacy_level = self._calculate_privacy_level(exp)
-                
-                # Only include if privacy level is acceptable
-                if privacy_level <= permission.get("permission_level", 0):
+            if scenario in permitted or plevel >= 0.7:
+                if mgr._calculate_privacy_level(exp) <= plevel:   # noqa: SLF001
                     filtered.append(exp)
-        
         return filtered
     
     def _calculate_privacy_level(self, experience: Dict[str, Any]) -> float:
@@ -412,59 +385,42 @@ class CrossUserExperienceManager:
         
         return min(1.0, privacy_level)
 
-    @staticmethod  
+    @staticmethod
     @function_tool
-    async def personalize_experience(ctx: RunContextWrapper,
-                               experience: Dict[str, Any],
-                               target_user_id: str) -> Dict[str, Any]:
-        """
-        Personalize an experience for a target user
-        
-        Args:
-            experience: Experience to personalize
-            target_user_id: ID of the target user
-            
-        Returns:
-            Personalized experience
-        """
-        # Get target preferences
-        target_prefs = await self.get_user_preference(ctx, target_user_id)
-        
-        # Create context for personalization agent
-        personalization_input = {
-            "experience": experience,
-            "target_preferences": target_prefs
-        }
-        
-        # Run personalization agent
+    async def personalize_experience(                 # noqa: N802
+        ctx: RunContextWrapper,
+        experience: Dict[str, Any],
+        target_user_id: str,
+    ) -> Dict[str, Any]:
+        """Run the personalization-agent, add metadata & record sharing."""
+        mgr = _get_mgr(ctx)
+        if mgr is None:
+            return {"error": "manager_context_missing"}
+    
+        target_prefs = await CrossUserExperienceManager.get_user_preference(ctx, target_user_id)
+        payload = {"experience": experience, "target_preferences": target_prefs}
+    
         result = await Runner.run(
-            self.personalization_agent, 
-            json.dumps(personalization_input),
-            context={"manager": self}
+            mgr.personalization_agent,
+            json.dumps(payload),
+            context={"manager": mgr},
         )
-        
-        # Get personalized experience
         personalized = json.loads(result.final_output)
-        
-        # Add sharing metadata
-        if "metadata" not in personalized:
-            personalized["metadata"] = {}
-            
-        personalized["metadata"].update({
-            "cross_user_shared": True,
-            "source_user_id": experience.get("user_id"),
-            "source_experience_id": experience.get("id"),
-            "shared_timestamp": datetime.datetime.now().isoformat()
-        })
-        
-        # Record in sharing history
-        self._record_sharing(
+        personalized.setdefault("metadata", {}).update(
+            {
+                "cross_user_shared": True,
+                "source_user_id": experience.get("user_id"),
+                "source_experience_id": experience.get("id"),
+                "shared_timestamp": datetime.datetime.utcnow().isoformat() + "Z",
+            }
+        )
+    
+        mgr._record_sharing(   # noqa: SLF001
             source_user_id=experience.get("user_id", "unknown"),
             target_user_id=target_user_id,
             experience_id=experience.get("id", "unknown"),
-            scenario_type=experience.get("scenario_type", "general")
+            scenario_type=experience.get("scenario_type", "general"),
         )
-        
         return personalized
     
     def _record_sharing(self, source_user_id: str, target_user_id: str, 
@@ -482,42 +438,30 @@ class CrossUserExperienceManager:
         if len(self.sharing_history) > self.max_history_size:
             self.sharing_history = self.sharing_history[-self.max_history_size:]
 
-    @staticmethod  
+    @staticmethod
     @function_tool
-    async def get_potential_source_users(ctx: RunContextWrapper,
-                                   target_user_id: str,
-                                   min_compatibility: float = 0.6,
-                                   source_user_ids: Optional[List[str]] = None) -> List[str]:
-        """
-        Find potential source users for experiences
-        
-        Args:
-            target_user_id: ID of the target user
-            min_compatibility: Minimum compatibility threshold
-            source_user_ids: Optional list of specific source user IDs
-            
-        Returns:
-            List of compatible source users
-        """
+    async def get_potential_source_users(             # noqa: N802
+        ctx: RunContextWrapper,
+        target_user_id: str,
+        min_compatibility: float = 0.6,
+        source_user_ids: Optional[List[str]] = None,
+    ) -> List[str]:
+        """Return compatible source users; honour explicit *source_user_ids*."""
+        mgr = _get_mgr(ctx)
+        if mgr is None:
+            return []
+    
         if source_user_ids:
             return source_user_ids
-            
-        # Get target preferences
-        target_prefs = await self.get_user_preference(ctx, target_user_id)
-        
-        # Find compatible users
-        compatible_users = []
-        for user_id, prefs in self.user_preference_profiles.items():
-            if user_id == target_user_id:
+    
+        target_prefs = await CrossUserExperienceManager.get_user_preference(ctx, target_user_id)
+        compat: List[str] = []
+        for uid, prefs in mgr.user_preference_profiles.items():
+            if uid == target_user_id:
                 continue
-                
-            # Calculate compatibility
-            compatibility = self._calculate_user_compatibility(target_prefs, prefs)
-            
-            if compatibility >= min_compatibility:
-                compatible_users.append(user_id)
-        
-        return compatible_users
+            if mgr._calculate_user_compatibility(target_prefs, prefs) >= min_compatibility:  # noqa: SLF001
+                compat.append(uid)
+        return compat
     
     def _calculate_user_compatibility(self, prefs1: Dict[str, Any], prefs2: Dict[str, Any]) -> float:
         """Calculate compatibility between user preferences"""
