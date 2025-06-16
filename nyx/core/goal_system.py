@@ -1386,49 +1386,92 @@ class GoalManager:
         }
     
     # Agent SDK tools for plan validation agent
-    @staticmethod
-    @function_tool
-    async def _validate_action_sequence(ctx: RunContextWrapper, plan: List[Dict[str, Any]]) -> Dict[str, Any]:
+    @function_tool(name_override="_validate_action_sequence")
+    async def validate_action_sequence(                      # noqa: N802
+        ctx: RunContextWrapper,
+        plan_json: str | None = None,
+    ) -> Dict[str, Any]:
         """
-        Validate that actions are sequenced correctly with proper dependencies
-        
-        Args:
-            plan: The plan to validate
-            
-        Returns:
-            Validation results
+        Validate that a proposed *plan* (list of steps) is internally
+        consistent.  The caller supplies the plan as **JSON string** so the
+        tool schema remains simple and strict-schema-compatible.
+    
+        Parameters
+        ----------
+        plan_json : str
+            JSON-encoded list of step dictionaries, each containing at least
+            ``action`` and (optionally) ``parameters``.
+    
+        Returns
+        -------
+        dict
+            ``is_valid``      – boolean  
+            ``issue_count``   – number of detected issues  
+            ``issues``        – list of human-readable issue strings
         """
-        issues = []
-        
-        # Check for valid action names
-        available_actions = await self._get_available_actions(ctx)
-        available_action_names = [a["name"] for a in available_actions["actions"]]
-        
-        for i, step in enumerate(plan):
-            step_num = i + 1
+        # -------------------------------------------------------------- #
+        # 1. Decode & basic sanity-check                                 #
+        # -------------------------------------------------------------- #
+        issues: list[str] = []
+        try:
+            plan: list[dict[str, Any]] = json.loads(plan_json or "[]")
+            if not isinstance(plan, list):
+                raise TypeError("plan_json must decode to a list")
+        except Exception as exc:
+            err = f"Invalid JSON for plan: {exc}"
+            logger.error(err)
+            return {"is_valid": False, "issue_count": 1, "issues": [err]}
+    
+        # Empty plan = nothing to validate (let the caller decide if that’s
+        # permissible; here we treat it as valid but warn)
+        if not plan:
+            return {"is_valid": True, "issue_count": 0, "issues": []}
+    
+        # -------------------------------------------------------------- #
+        # 2. Determine the catalogue of available action names           #
+        # -------------------------------------------------------------- #
+        try:
+            # Preferred: call sibling tool if present on ctx.context
+            if hasattr(ctx.context, "_get_available_actions"):
+                cat = await ctx.context._get_available_actions(ctx)  # type: ignore[attr-defined]
+                avail_actions = {a["name"] for a in cat.get("actions", [])}
+            else:
+                # Fallback: introspect NyxBrain / runner context for callables
+                brain = getattr(ctx.context, "brain", None)
+                avail_actions = {
+                    name for name in dir(brain) if callable(getattr(brain, name, None))
+                } if brain else set()
+        except Exception as exc:
+            logger.warning("Could not fetch available actions: %s", exc)
+            avail_actions = set()
+    
+        # -------------------------------------------------------------- #
+        # 3. Per-step validation                                         #
+        # -------------------------------------------------------------- #
+        for i, step in enumerate(plan, 1):
             action = step.get("action", "")
-            
-            # Check if action exists
-            if action not in available_action_names:
-                issues.append(f"Step {step_num}: Action '{action}' is not available")
-                
-            # Check parameter references to previous steps
-            for param_name, param_value in step.get("parameters", {}).items():
-                if isinstance(param_value, str) and param_value.startswith("$step_"):
-                    # Extract referenced step number
+            if action not in avail_actions:
+                issues.append(f"Step {i}: unknown action '{action}'")
+    
+            # Parameter references to previous steps
+            for p_name, p_val in (step.get("parameters") or {}).items():
+                if isinstance(p_val, str) and p_val.startswith("$step_"):
+                    piece = p_val.split("_", 1)[-1]  # e.g. "3.result"
                     try:
-                        ref_step = int(param_value.split("_")[1].split(".")[0])
-                        if ref_step > step_num:
-                            issues.append(f"Step {step_num}: References future step {ref_step}")
-                        if ref_step == step_num:
-                            issues.append(f"Step {step_num}: Self-reference detected")
-                    except (ValueError, IndexError):
-                        issues.append(f"Step {step_num}: Invalid step reference format: {param_value}")
-        
+                        ref = int(piece.split(".")[0])
+                    except ValueError:
+                        issues.append(f"Step {i}: malformed reference '{p_val}'")
+                        continue
+                    if ref >= i:
+                        issues.append(f"Step {i}: references future/self step {ref}")
+    
+        # -------------------------------------------------------------- #
+        # 4. Outcome                                                     #
+        # -------------------------------------------------------------- #
         return {
             "is_valid": len(issues) == 0,
             "issue_count": len(issues),
-            "issues": issues
+            "issues": issues,
         }
 
     @staticmethod
