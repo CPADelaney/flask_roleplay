@@ -657,15 +657,40 @@ async def generate_time_expression_impl(state: Dict[str, Any]) -> Dict[str, Any]
         "time_reference": time_reference
     }
 
+# ── temporal_perception.py – replace the existing function ────────────────────
+from pydantic import ValidationError
+
 @function_tool
 async def generate_time_expression(                      # noqa: N802
     time_perception_state: TimeExpressionState,
 ) -> TimeExpressionOutput:
     """
-    Wrap the helper output in a strict Pydantic model so the schema is valid.
+    Turn `time_perception_state` into natural-language output.
+
+    * Datetimes are serialised to ISO strings before they reach the helper.
+    * If the helper’s output contains unexpected keys or types, we fall back to
+      a safe, minimal `TimeExpressionOutput` instead of raising.
     """
-    raw = await generate_time_expression_impl(time_perception_state.model_dump())
-    return TimeExpressionOutput.model_validate(raw)
+    # 1.  Prepare a plain JSON-safe dict for the helper
+    safe_state = time_perception_state.model_dump(mode="json")
+
+    # 2.  Run the legacy helper
+    raw = await generate_time_expression_impl(safe_state)
+
+    # 3.  Validate & coerce into the strict schema; fall back gracefully
+    try:
+        return TimeExpressionOutput.model_validate(raw)
+    except ValidationError as err:
+        logger.warning(
+            "generate_time_expression_impl returned non-conforming data; "
+            "error=%s ; raw=%s", err, raw
+        )
+        # Minimal but valid fallback – keeps the Agent SDK happy
+        return TimeExpressionOutput(
+            expression=str(raw) if raw is not None else "",
+            time_scale=safe_state.get("current_time_category"),
+        )
+
 
 
 @function_tool
