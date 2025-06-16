@@ -2438,53 +2438,67 @@ class IdentityEvolutionSystem:
     # ---------------------------------------------------------------------------
 
     
+    # ---------------------------------------------------------------------------
     @staticmethod
     @function_tool
     async def _calculate_emotional_impacts(
         ctx: RunContextWrapper,
-        experience: Dict[str, Any],
-        neurochemical_impacts: "NeurochemicalImpact"
+        experience: Any,                         # <= was Dict[str, Any]
+        neurochemical_impacts: NeurochemicalImpact,  # <= dropped the quotes
     ) -> Dict[str, Dict[str, float]]:
-        ic = ctx.context
+        """
+        Convert neurochemical deltas plus the experience’s emotional context
+        into per-emotion likelihood/intensity/threshold tweaks.
+        """
+        ic         = ctx.context
         emotional  = experience.get("emotional_context", {})
         primary    = emotional.get("primary_emotion", "")
         sig        = experience.get("significance", 5) / 10
+    
         impacts: Dict[str, Dict[str, float]] = {}
     
+        # direct change for the primary emotion ----------------------------------
         if primary in ic.emotional_tendencies:
-            impacts[primary] = {"likelihood": .1 * sig,
-                                "intensity": .05 * sig,
-                                "threshold": -.05 * sig}
-    
-            chem_emotion = {
-                "nyxamine": ["Joy", "Anticipation", "Teasing"],
-                "seranix": ["Contentment", "Trust"],
-                "oxynixin": ["Trust", "Love", "Nurturing"],
-                "cortanyx": ["Sadness", "Fear", "Anger", "Disgust", "Cruel", "Detached"],
-                "adrenyx": ["Fear", "Surprise", "Anticipation", "Controlling"]
+            impacts[primary] = {
+                "likelihood":  .1 * sig,
+                "intensity":   .05 * sig,
+                "threshold":  -.05 * sig,
             }
-            for chem, delta in [
-                ("nyxamine", neurochemical_impacts.nyxamine_impact),
-                ("seranix", neurochemical_impacts.seranix_impact),
-                ("oxynixin", neurochemical_impacts.oxynixin_impact),
-                ("cortanyx", neurochemical_impacts.cortanyx_impact),
-                ("adrenyx", neurochemical_impacts.adrenyx_impact)
-            ]:
-                if abs(delta) < .1: continue
-                for emo in chem_emotion.get(chem, []):
-                    if emo not in ic.emotional_tendencies or emo == primary:
-                        continue
-                    scale = .6 * abs(delta) * sig
-                    impacts.setdefault(emo, {"likelihood":0,"intensity":0,"threshold":0})
-                    if delta > 0:
-                        impacts[emo]["likelihood"] += .05 * scale
-                        impacts[emo]["intensity"]  += .03 * scale
-                        impacts[emo]["threshold"]  -= .02 * scale
-                    else:
-                        impacts[emo]["likelihood"] -= .05 * scale
-                        impacts[emo]["intensity"]  -= .03 * scale
-                        impacts[emo]["threshold"]  += .02 * scale
+    
+        # map neurochemical deltas into secondary emotions -----------------------
+        chem_emotion = {
+            "nyxamine": ["Joy", "Anticipation", "Teasing"],
+            "seranix":  ["Contentment", "Trust"],
+            "oxynixin": ["Trust", "Love", "Nurturing"],
+            "cortanyx": ["Sadness", "Fear", "Anger", "Disgust", "Cruel", "Detached"],
+            "adrenyx":  ["Fear", "Surprise", "Anticipation", "Controlling"],
+        }
+        for chem, delta in (
+            ("nyxamine", neurochemical_impacts.nyxamine_impact),
+            ("seranix",  neurochemical_impacts.seranix_impact),
+            ("oxynixin", neurochemical_impacts.oxynixin_impact),
+            ("cortanyx", neurochemical_impacts.cortanyx_impact),
+            ("adrenyx",  neurochemical_impacts.adrenyx_impact),
+        ):
+            if abs(delta) < 0.1:
+                continue
+            for emo in chem_emotion.get(chem, []):
+                if emo not in ic.emotional_tendencies or emo == primary:
+                    continue
+                scale = 0.6 * abs(delta) * sig
+                tgt   = impacts.setdefault(emo, {"likelihood": 0, "intensity": 0, "threshold": 0})
+                if delta > 0:
+                    tgt["likelihood"] += 0.05 * scale
+                    tgt["intensity"]  += 0.03 * scale
+                    tgt["threshold"]  -= 0.02 * scale
+                else:
+                    tgt["likelihood"] -= 0.05 * scale
+                    tgt["intensity"]  -= 0.03 * scale
+                    tgt["threshold"]  += 0.02 * scale
+    
         return impacts
+    # ---------------------------------------------------------------------------
+
 
     @staticmethod
     @function_tool
