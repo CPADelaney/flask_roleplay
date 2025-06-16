@@ -852,47 +852,72 @@ async def determine_conditioning_type(                    # noqa: N802
     return "unknown"
 
 @function_tool
-async def prepare_conditioning_data(
+async def prepare_conditioning_data(                           # noqa: N802
     ctx: RunContextWrapper,
     conditioning_type: str,
-    raw_input_data: Dict[str, Any]
+    raw_input_json: str | None = None,
 ) -> Dict[str, Any]:
-    """Prepare data for specific conditioning type"""
-    prepared_data = {"conditioning_type_confirmed": conditioning_type}
-    
-    if conditioning_type == "classical":
-        prepared_data.update({
-            "unconditioned_stimulus": raw_input_data.get("unconditioned_stimulus"),
-            "conditioned_stimulus": raw_input_data.get("conditioned_stimulus", raw_input_data.get("stimulus")),
-            "response": raw_input_data.get("response"),
-            "intensity": raw_input_data.get("intensity", 1.0),
-            "valence": raw_input_data.get("valence", 0.0),
-            "context_keys": raw_input_data.get("context_keys", [])
-        })
-    
-    elif conditioning_type == "operant":
-        prepared_data.update({
-            "behavior": raw_input_data.get("behavior"),
-            "consequence_type": raw_input_data.get("consequence_type"),
-            "intensity": raw_input_data.get("intensity", 1.0),
-            "valence": raw_input_data.get("valence", 0.0),
-            "context_keys": raw_input_data.get("context_keys", [])
-        })
-    
-    elif conditioning_type == "personality_trait":
-        prepared_data.update({
-            "trait": raw_input_data.get("trait"),
-            "target_value": raw_input_data.get("target_value", raw_input_data.get("value"))
-        })
-    
-    elif conditioning_type == "behavior_evaluation":
-        prepared_data.update({
-            "behavior": raw_input_data.get("behavior"),
-            "context": raw_input_data.get("context", {})
-        })
-    
-    return prepared_data
+    """
+    Normalise *raw* conditioning payloads into a canonical structure.
 
+    ⚠️  The parameter `raw_input_json` **must** be a JSON-serialisable string
+    (dicts / lists should be `json.dumps`-ed by the caller).  This avoids the
+    strict-schema complaint from the Agents SDK about `additionalProperties`.
+    """
+    # ------------------------------------------------------------------ #
+    # 1.  Parse & validate raw payload                                   #
+    # ------------------------------------------------------------------ #
+    try:
+        raw = json.loads(raw_input_json or "{}")
+        if not isinstance(raw, dict):
+            raise ValueError("Payload must decode to an object.")
+    except Exception as exc:
+        logger.warning("prepare_conditioning_data: bad JSON – %s", exc)
+        raw = {}
+
+    pd: dict[str, Any] = {"conditioning_type_confirmed": conditioning_type}
+
+    # ------------------------------------------------------------------ #
+    # 2.  Branch per conditioning type                                   #
+    # ------------------------------------------------------------------ #
+    if conditioning_type == "classical":
+        pd.update(
+            unconditioned_stimulus=raw.get("unconditioned_stimulus"),
+            conditioned_stimulus=raw.get(
+                "conditioned_stimulus", raw.get("stimulus")
+            ),
+            response=raw.get("response"),
+            intensity=raw.get("intensity", 1.0),
+            valence=raw.get("valence", 0.0),
+            context_keys=raw.get("context_keys", []),
+        )
+
+    elif conditioning_type == "operant":
+        pd.update(
+            behavior=raw.get("behavior"),
+            consequence_type=raw.get("consequence_type"),
+            intensity=raw.get("intensity", 1.0),
+            valence=raw.get("valence", 0.0),
+            context_keys=raw.get("context_keys", []),
+        )
+
+    elif conditioning_type == "personality_trait":
+        pd.update(
+            trait=raw.get("trait"),
+            target_value=raw.get("target_value", raw.get("value")),
+        )
+
+    elif conditioning_type == "behavior_evaluation":
+        pd.update(
+            behavior=raw.get("behavior"),
+            context=raw.get("context", {}),
+        )
+
+    # 3.  Unknown / passthrough branch – retain raw for debugging
+    else:
+        pd["raw_input"] = raw
+
+    return pd
 @function_tool
 async def apply_association_effects(
     ctx: RunContextWrapper,
