@@ -2500,61 +2500,79 @@ class IdentityEvolutionSystem:
     # ---------------------------------------------------------------------------
 
 
+    # ---------------------------------------------------------------------------
     @staticmethod
     @function_tool
     async def _update_identity_history(
         ctx: RunContextWrapper,
-        trait_changes: Dict[str, Dict[str, Any]],
-        preference_changes: Dict[str, Dict[str, Dict[str, Any]]],
-        neurochemical_impacts: "NeurochemicalImpact",
-        emotional_impacts: Dict[str, Dict[str, float]],
-        experience_id: str
+        trait_changes: Any,                        # <= was Dict[str, Dict[str, Any]]
+        preference_changes: Any,                  # <= was Dict[str, Dict[str, Dict[str, Any]]]
+        neurochemical_impacts: NeurochemicalImpact,   # <= dropped the quotes
+        emotional_impacts: Any,                   # <= was Dict[str, Dict[str, float]]
+        experience_id: str,
     ) -> Dict[str, Any]:
-        ic = ctx.context
-        ts = datetime.datetime.now().isoformat()
-        sig_changes = {}
+        """
+        Collate everything that moved in this update, store it in `impact_history`,
+        and bump the global counters.  Uses *Any* for the three deeply-nested
+        arg­uments so the generated JSON schema does **not** set
+        `additionalProperties`, avoiding the UserError you saw.
+        """
+        import datetime
+        ic  = ctx.context
+        ts  = datetime.datetime.now().isoformat()
+        sig_changes: Dict[str, float] = {}
     
-        # traits
-        for trait, ch in trait_changes.items():
-            if abs(ch.get("actual_change", 0)) >= ic.min_impact_threshold:
+        # ---- traits -----------------------------------------------------------
+        for trait, ch in (trait_changes or {}).items():
+            if abs(ch.get("actual_change", 0.0)) >= ic.min_impact_threshold:
                 sig_changes[f"trait.{trait}"] = ch["actual_change"]
-        # prefs
-        for cat, prefs in preference_changes.items():
-            for pref, ch in prefs.items():
-                if abs(ch.get("actual_change", 0)) >= ic.min_impact_threshold:
+    
+        # ---- preferences ------------------------------------------------------
+        for cat, prefs in (preference_changes or {}).items():
+            for pref, ch in (prefs or {}).items():
+                if abs(ch.get("actual_change", 0.0)) >= ic.min_impact_threshold:
                     sig_changes[f"preference.{cat}.{pref}"] = ch["actual_change"]
-        # neurochemicals
-        for chem, delta in [
+    
+        # ---- neurochemicals ---------------------------------------------------
+        for chem, delta in (
             ("nyxamine", neurochemical_impacts.nyxamine_impact),
-            ("seranix", neurochemical_impacts.seranix_impact),
+            ("seranix",  neurochemical_impacts.seranix_impact),
             ("oxynixin", neurochemical_impacts.oxynixin_impact),
             ("cortanyx", neurochemical_impacts.cortanyx_impact),
-            ("adrenyx", neurochemical_impacts.adrenyx_impact)
-        ]:
+            ("adrenyx",  neurochemical_impacts.adrenyx_impact),
+        ):
             if abs(delta) >= ic.min_impact_threshold:
                 sig_changes[f"neurochemical.{chem}"] = delta
-        # emotions
-        for emo, emo_ch in emotional_impacts.items():
-            for aspect, delta in emo_ch.items():
+    
+        # ---- emotions ---------------------------------------------------------
+        for emo, emo_ch in (emotional_impacts or {}).items():
+            for aspect, delta in (emo_ch or {}).items():
                 if abs(delta) >= ic.min_impact_threshold:
                     sig_changes[f"emotion.{emo}.{aspect}"] = delta
     
+        # ---- write-back -------------------------------------------------------
         ic.update_count += 1
-        ic.last_update = ts
-        ic.impact_history.append({
-            "timestamp": ts,
-            "experience_id": experience_id,
-            "significant_changes": sig_changes,
-            "update_count": ic.update_count,
-            "neurochemical_impacts": neurochemical_impacts.model_dump(),
-            "emotional_impacts": emotional_impacts
-        })
+        ic.last_update   = ts
+        ic.impact_history.append(
+            {
+                "timestamp":            ts,
+                "experience_id":        experience_id,
+                "significant_changes":  sig_changes,
+                "update_count":         ic.update_count,
+                "neurochemical_impacts": neurochemical_impacts.model_dump(),
+                "emotional_impacts":    emotional_impacts,
+            }
+        )
         if len(ic.impact_history) > ic.max_history_entries:
             ic.impact_history = ic.impact_history[-ic.max_history_entries:]
     
-        return {"significant_changes": len(sig_changes),
-                "update_count": ic.update_count,
-                "timestamp": ts}
+        return {
+            "significant_changes": len(sig_changes),
+            "update_count":        ic.update_count,
+            "timestamp":           ts,
+        }
+    # ---------------------------------------------------------------------------
+
 
     @staticmethod
     @function_tool
