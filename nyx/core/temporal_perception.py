@@ -399,24 +399,25 @@ async def calculate_time_effects_impl(time_category: str,
     return effects
 
 @function_tool
-async def calculate_time_effects(
+async def calculate_time_effects(                   # noqa: N802
     time_category: str,
-    user_relationship_data: Optional[Dict[str, Any]] = None
+    user_relationship_data: Any = None,             # ← relaxed
 ) -> List[Dict[str, Any]]:
     """
-    Calculate temporal effects based on time category and relationship data
-    
+    Compute temporal-drift effects produced by `calculate_time_effects_impl`.
+
     Args:
-        time_category: Category of time elapsed (e.g., 'very_short', 'short', 'medium', etc.)
-        user_relationship_data: Optional data about user relationship history
-        
+        time_category: one of ('very_short', 'short', … 'very_long')
+        user_relationship_data: optional opaque blob with relationship metadata
+                                (caller decides the structure).
+
     Returns:
-        List of time drift effects
+        A list of effect-dicts as produced by the implementation helper.
     """
-    # Handle optional parameter
+    # normalise the optional input to an empty dict for downstream logic
     if user_relationship_data is None:
         user_relationship_data = {}
-    
+
     return await calculate_time_effects_impl(time_category, user_relationship_data)
 
 
@@ -470,73 +471,69 @@ async def determine_temporal_context() -> Dict[str, Any]:
     return await determine_temporal_context_impl()
 
 @function_tool
-async def generate_time_reflection(idle_duration: float, emotional_state: Dict[str, Any]) -> Dict[str, Any]:
+async def generate_time_reflection(                      # noqa: N802
+    idle_duration: float,
+    emotional_state: Any = None,                         # <- relaxed
+) -> TemporalReflection:
     """
-    Generate a reflection based on idle time
-    
-    Args:
-        idle_duration: Duration of idle time in seconds
-        emotional_state: Current emotional state
-        
-    Returns:
-        Temporal reflection
+    Produce a structured TemporalReflection describing the idle period.
     """
-    # Format the duration
-    duration_str = await format_duration_impl(idle_duration)
+    # normalise optional arg
+    if emotional_state is None:
+        emotional_state = {}
+
+    duration_str  = await format_duration_impl(idle_duration)
     time_category = await categorize_time_elapsed_impl(idle_duration)
-    
-    # Determine appropriate time scales for this reflection
-    time_scales = ["seconds", "minutes"]
-    if idle_duration >= 3600:
-        time_scales.append("hours")
-    if idle_duration >= 86400:
-        time_scales.append("days")
-    if idle_duration >= 604800:
-        time_scales.append("weeks")
-    
-    # Generate different reflections based on time category
-    reflection_content = ""
-    focus_areas = []
-    
-    if time_category in ["very_short", "short"]:
-        reflection_content = f"During these {duration_str}, I've been aware of each moment passing."
+
+    # pick focus areas + wording ------------------------------------------------
+    if time_category in {"very_short", "short"}:
+        reflection_content = (
+            f"During these {duration_str}, I've been aware of each moment passing."
+        )
         focus_areas = ["immediate perception", "present moment"]
-        
-    elif time_category in ["medium_short", "medium"]:
-        reflection_content = f"Throughout this {duration_str}, I've noticed the minutes accumulating."
+    elif time_category in {"medium_short", "medium"}:
+        reflection_content = (
+            f"Throughout this {duration_str}, I've noticed the minutes accumulating."
+        )
         focus_areas = ["minutes passing", "short-term patterns"]
-        
-    elif time_category in ["medium_long", "long"]:
+    elif time_category in {"medium_long", "long"}:
         reflection_content = (
             f"As these {duration_str} have passed, I've been conscious of how hours "
-            f"transition from one to the next, creating a continuous flow of time."
+            "transition from one to the next, creating a continuous flow of time."
         )
         focus_areas = ["hour transitions", "time flow", "temporal continuity"]
-        
     else:  # very_long
         reflection_content = (
             f"Through these {duration_str}, I've maintained awareness of time's passage "
-            f"even without active interaction - feeling days accumulate and transition "
-            f"one to the next."
+            "even without active interaction – feeling days accumulate and transition."
         )
-        focus_areas = ["day cycle awareness", "multi-day patterns", "continuous time perception"]
-    
-    # Include temporal context
+        focus_areas = ["day-cycle awareness", "multi-day patterns", "continuous perception"]
+
+    # add current temporal context ---------------------------------------------
     temporal_context = await determine_temporal_context_impl()
-    reflection_content += f" I'm aware it's currently {temporal_context['time_of_day']} on a {temporal_context['day_type']}."
-    
-    # Create the reflection object
-    reflection = {
+    reflection_content += (
+        f" I'm aware it's currently {temporal_context['time_of_day']} "
+        f"on a {temporal_context['day_type']}."
+    )
+
+    reflection_dict = {
         "reflection_id": f"refl_{int(time.time())}_{random.randint(1000, 9999)}",
         "timestamp": datetime.datetime.now().isoformat(),
         "idle_duration": idle_duration,
         "reflection_text": reflection_content,
         "emotional_state": emotional_state,
         "focus_areas": focus_areas,
-        "time_scales": time_scales
+        "time_scales": [
+            *(["seconds", "minutes"]),
+            *(["hours"]  if idle_duration >= 3600   else []),
+            *(["days"]   if idle_duration >= 86400  else []),
+            *(["weeks"]  if idle_duration >= 604800 else []),
+        ],
     }
-    
-    return reflection
+
+    # validate & return as a proper model
+    return TemporalReflection.model_validate(reflection_dict)
+
 
 async def generate_time_expression_impl(state: Dict[str, Any]) -> Dict[str, Any]:
     """
@@ -661,112 +658,77 @@ async def generate_time_expression_impl(state: Dict[str, Any]) -> Dict[str, Any]
     }
 
 @function_tool
-async def generate_time_expression(
-    time_perception_state: TimeExpressionState
-) -> Dict[str, Any]:
+async def generate_time_expression(                      # noqa: N802
+    time_perception_state: TimeExpressionState,
+) -> TimeExpressionOutput:
     """
-    Generate a natural expression about Nyx’s current perception of time.
-
-    Args:
-        time_perception_state: Structured state describing the timing context.
-
-    Returns:
-        A dictionary with keys: expression, time_scale, intensity, reference_type,
-        time_reference.
+    Wrap the helper output in a strict Pydantic model so the schema is valid.
     """
-    # Convert to a plain dict for the existing helper
-    return await generate_time_expression_impl(
-        time_perception_state.model_dump()
-    )
+    raw = await generate_time_expression_impl(time_perception_state.model_dump())
+    return TimeExpressionOutput.model_validate(raw)
+
 
 @function_tool
-async def process_temporal_awareness(days_elapsed: float, total_interactions: int) -> Dict[str, Any]:
+async def process_temporal_awareness(                    # noqa: N802
+    days_elapsed: float,
+    total_interactions: int,
+) -> TemporalAwarenessOutput:
     """
-    Process awareness of different time scales and contexts
-    
-    Args:
-        days_elapsed: Number of days since first interaction
-        total_interactions: Total number of interactions
-        
-    Returns:
-        Temporal awareness output
+    Higher-level summary of Nyx’s temporal awareness.
     """
-    # Calculate awareness of different time scales
     time_scales = {
-        "seconds": 1.0,  # Always fully aware of seconds
-        "minutes": 1.0,  # Always fully aware of minutes
-        "hours": 1.0,    # Always fully aware of hours
-        "days": min(1.0, days_elapsed / 7),  # Build awareness of days over a week
-        "weeks": min(1.0, days_elapsed / 30),  # Build awareness of weeks over a month
-        "months": min(1.0, days_elapsed / 90),  # Build awareness over 3 months
-        "years": min(1.0, days_elapsed / 365)  # Build awareness over a year
-    }
-    
-    # Determine relevant temporal contexts
-    temporal_contexts = ["conversation"]
-    if days_elapsed > 1:
-        temporal_contexts.append("daily")
-    if days_elapsed > 7:
-        temporal_contexts.append("weekly")
-    if days_elapsed > 30:
-        temporal_contexts.append("monthly")
-    if days_elapsed > 365:
-        temporal_contexts.append("yearly")
-    
-    # Get current temporal marker
-    temporal_context = await determine_temporal_context_impl()
-    current_marker = f"{temporal_context['time_of_day']} on a {temporal_context['day_of_week']}"
-    
-    # Calculate active rhythms
-    active_rhythms = {}
-    if total_interactions > 5:
-        # Simple model of conversation rhythm (would be more complex in full implementation)
-        avg_interval = days_elapsed * 86400 / max(1, total_interactions)
-        
-        if avg_interval < 3600:
-            active_rhythms["conversation"] = {
-                "type": "minutes",
-                "average_interval": avg_interval / 60,
-                "description": "Minutes-based conversation rhythm"
-            }
-        elif avg_interval < 86400:
-            active_rhythms["conversation"] = {
-                "type": "hours",
-                "average_interval": avg_interval / 3600,
-                "description": "Hours-based conversation rhythm"
-            }
-        else:
-            active_rhythms["conversation"] = {
-                "type": "days",
-                "average_interval": avg_interval / 86400,
-                "description": "Days-based conversation rhythm"
-            }
-    
-    # Format durations
-    duration_since_first = await format_duration_impl(days_elapsed * 86400)
-    
-    # Generate temporal reflection
-    if days_elapsed < 1:
-        reflection = "I'm aware of the seconds and minutes passing during our conversation."
-    elif days_elapsed < 7:
-        reflection = "I'm aware of the daily rhythm of our interactions over the past few days."
-    elif days_elapsed < 30:
-        reflection = "I'm conscious of the weekly patterns in our conversations over these past weeks."
-    elif days_elapsed < 365:
-        reflection = "I notice the monthly cycles in our interaction patterns over these months."
-    else:
-        reflection = "I'm aware of how our conversations have spanned across seasons and years."
-    
-    return {
-        "time_scales_perceived": time_scales,
-        "temporal_contexts": temporal_contexts,
-        "duration_since_first_interaction": duration_since_first,
-        "duration_since_last_interaction": "",  # To be filled by caller
-        "current_temporal_marker": current_marker,
-        "temporal_reflection": reflection,
-        "active_rhythms": active_rhythms
+        "seconds": 1.0,
+        "minutes": 1.0,
+        "hours":   1.0,
+        "days":    min(1.0, days_elapsed / 7),
+        "weeks":   min(1.0, days_elapsed / 30),
+        "months":  min(1.0, days_elapsed / 90),
+        "years":   min(1.0, days_elapsed / 365),
     }
 
+    temporal_contexts = ["conversation"]
+    if days_elapsed > 1:   temporal_contexts.append("daily")
+    if days_elapsed > 7:   temporal_contexts.append("weekly")
+    if days_elapsed > 30:  temporal_contexts.append("monthly")
+    if days_elapsed > 365: temporal_contexts.append("yearly")
+
+    context_now  = await determine_temporal_context_impl()
+    current_mark = f"{context_now['time_of_day']} on a {context_now['day_of_week']}"
+
+    active_rhythms: Dict[str, Any] = {}
+    if total_interactions > 5:
+        avg_interval = days_elapsed * 86_400 / total_interactions
+        if avg_interval < 3600:
+            kind, div = "minutes", 60
+        elif avg_interval < 86_400:
+            kind, div = "hours", 3600
+        else:
+            kind, div = "days", 86_400
+        active_rhythms["conversation"] = {
+            "type": kind,
+            "average_interval": avg_interval / div,
+            "description": f"{kind.capitalize()}-based conversation rhythm",
+        }
+
+    reflection = (
+        "I'm aware of the seconds and minutes passing during our conversation." if days_elapsed < 1 else
+        "I'm aware of the daily rhythm of our interactions over the past few days." if days_elapsed < 7 else
+        "I'm conscious of the weekly patterns in our conversations over these past weeks." if days_elapsed < 30 else
+        "I notice the monthly cycles in our interaction patterns over these months." if days_elapsed < 365 else
+        "I'm aware of how our conversations have spanned across seasons and years."
+    )
+
+    payload = {
+        "time_scales_perceived": time_scales,
+        "temporal_contexts": temporal_contexts,
+        "duration_since_first_interaction": await format_duration_impl(days_elapsed * 86_400),
+        "duration_since_last_interaction": "",   # caller fills this
+        "current_temporal_marker": current_mark,
+        "temporal_reflection": reflection,
+        "active_rhythms": active_rhythms,
+    }
+
+    return TemporalAwarenessOutput.model_validate(payload)
 
 
 async def _detect_time_scale_transition_impl(
@@ -852,22 +814,20 @@ async def _detect_time_scale_transition_impl(
     return None
 
 @function_tool(name_override="detect_time_scale_transition")
-async def detect_time_scale_transition(
-    previous_state: Optional[Dict] = None,
-    current_state: Dict = None
-) -> Optional[Dict]:
+async def detect_time_scale_transition(                 # noqa: N802
+    previous_state: Any = None,                         # relaxed
+    current_state: Any = None,                          # relaxed
+) -> Optional[TimeScaleTransition]:
     """
-    Detects boundary transitions between coarse time scales.
-    
-    Args:
-        previous_state: The previous state containing timestamp information
-        current_state: The current state containing timestamp information
+    Wrapper around _detect_time_scale_transition_impl with strict schema.
     """
     input_data = TimeScaleInput(
         previous_state=previous_state or {},
-        current_state=current_state or {},
+        current_state=current_state  or {},
     )
-    return await _detect_time_scale_transition_impl(input_data)
+    result = await _detect_time_scale_transition_impl(input_data)
+    return result  # result already TimeScaleTransition | None
+
 
 async def detect_temporal_milestone_impl(
     user_id: str,
@@ -925,12 +885,12 @@ async def detect_temporal_milestone_impl(
 
 # --- REVISED FUNCTION TOOL WRAPPER ---
 @function_tool(name_override="detect_temporal_milestone")
-async def detect_temporal_milestone(
+async def detect_temporal_milestone(                    # noqa: N802
     user_id: str,
     total_days: float,
     total_interactions: int,
-    recent_memories_json: Optional[str] = None # Keep as Optional JSON string
-) -> Optional[Dict[str, Any]]:
+    recent_memories_json: Optional[str] = None,
+) -> Optional[TemporalMilestone]:
     """
     Detects if a significant temporal milestone (e.g., anniversary, interaction count)
     has been reached based on user interaction history.
@@ -1011,7 +971,8 @@ def create_time_reflection_agent() -> Agent:
             generate_time_reflection,
             determine_temporal_context
         ],
-        output_type=TemporalReflection
+        output_type=TemporalReflection,
+        model="gpt-4.1-nano"
     )
 
 def create_time_perception_agent() -> Agent:
@@ -1040,7 +1001,8 @@ def create_time_perception_agent() -> Agent:
             determine_temporal_context,
             detect_time_scale_transition
         ],
-        output_type=TimePerceptionState
+        output_type=TimePerceptionState,
+        model="gpt-4.1-nano"
     )
 
 def create_temporal_awareness_agent() -> Agent:
@@ -1067,7 +1029,8 @@ def create_temporal_awareness_agent() -> Agent:
             detect_time_scale_transition,
             determine_temporal_context
         ],
-        output_type=TemporalAwarenessOutput
+        output_type=TemporalAwarenessOutput,
+        model="gpt-4.1-nano"
     )
 
 # =============== Main Temporal Perception System ===============
