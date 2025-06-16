@@ -731,38 +731,38 @@ class ExperienceConsolidationSystem:
     # ---------------------------------------------------------------------------
 
 
-    @staticmethod  
+    # ---------------------------------------------------------------------------
+    @staticmethod
     @function_tool
-    async def _calculate_significance_score(ctx: RunContextWrapper, 
-                                      experiences: List[ExperienceDetails]) -> SignificanceScore:
+    async def _calculate_significance_score(
+        ctx: RunContextWrapper,
+        experiences: Any                           # <— was List[ExperienceDetails]
+    ) -> SignificanceScore:
         """
-        Calculate significance score for consolidated experience
-        
-        Args:
-            experiences: List of experiences
-            
-        Returns:
-            Significance score (0.0-10.0)
+        Compute a 0-10 “significance” rating for a prospective consolidation.
         """
+    
+        # helper – works for either Pydantic objects or dicts
+        def _get(obj, key, default=None):
+            return getattr(obj, key, obj.get(key, default) if isinstance(obj, dict) else default)
+    
         if not experiences:
-            return SignificanceScore(score=5.0)
-        
-        # Base significance is average of source significances
-        base_significance = sum(e.significance for e in experiences) / len(experiences)
-        
-        # Adjust based on number of experiences
+            return SignificanceScore(score=5.0)    # neutral fallback
+    
+        # ---------- core formula --------------------------------------------------
+        base = sum(_get(e, "significance", 5.0) for e in experiences) / len(experiences)
+    
         size_factor = min(1.5, 1.0 + (len(experiences) - 1) * 0.1)
-        
-        # Adjust based on diversity
-        user_ids = [e.user_id for e in experiences]
-        unique_users = len(set(user_ids))
+    
+        unique_users = len({ _get(e, "user_id", "unknown") for e in experiences })
         diversity_factor = 1.0 + min(0.5, (unique_users - 1) * 0.1)
-        
-        # Calculate final significance
-        significance = base_significance * size_factor * diversity_factor
-        
-        # Cap at 10.0
-        return SignificanceScore(score=min(10.0, significance))
+    
+        score = base * size_factor * diversity_factor
+        # -------------------------------------------------------------------------
+    
+        return SignificanceScore(score=min(10.0, score))
+    # ---------------------------------------------------------------------------
+
 
     @staticmethod  
     @function_tool
