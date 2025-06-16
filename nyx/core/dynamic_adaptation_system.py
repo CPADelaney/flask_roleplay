@@ -1,37 +1,24 @@
 # nyx/core/dynamic_adaptation_system.py
-
-import asyncio
-import json
-import logging
-import math
-import random
+from __future__ import annotations   # good practice; not strictly required after the reorder
+import asyncio, json, logging, math, random
 from datetime import datetime, timedelta
-from typing import Dict, List, Any, Optional, Tuple, Union
-
+from typing import Any, Dict, List, Optional, Tuple, Union
 from agents import (
-    Agent, 
-    Runner, 
-    ModelSettings, 
-    function_tool, 
-    handoff, 
-    InputGuardrail,
-    GuardrailFunctionOutput,
-    trace,
-    RunContextWrapper
+    Agent, Runner, ModelSettings, function_tool, handoff,
+    InputGuardrail, GuardrailFunctionOutput, trace, RunContextWrapper
 )
 from pydantic import BaseModel, Field
-
 logger = logging.getLogger(__name__)
 
+# ──────────────────────────────── utility models ──────────────────────────
 class KVPair(BaseModel):
     key: str
     value: Any
 
 class MetricKV(BaseModel):
-    """name → value pair used for passing current metrics"""
     metric: str
     value: float
-
+# ───────────────────────────────── context analyses ───────────────────────
 class ExperienceContextAnalysis(BaseModel):
     has_experience: bool
     cross_user_experience: bool
@@ -40,14 +27,12 @@ class ExperienceContextAnalysis(BaseModel):
     scenario_type: str | None = None
     user_engagement: float | None = None
 
-
 class IdentityContextAnalysis(BaseModel):
     identity_impact: bool
     identity_stability: float
     preference_updates: list[KVPair] | None = None
     trait_updates: list[KVPair] | None = None
     update_magnitude: float | None = None
-
 
 class ExperiencePerformanceAnalysis(BaseModel):
     experience_effectiveness: float
@@ -57,44 +42,25 @@ class ExperiencePerformanceAnalysis(BaseModel):
     trend: str | None = None
     trend_magnitude: float | None = None
 
-
 class IdentityPerformanceAnalysis(BaseModel):
     identity_coherence: float
     coherence_category: str | None = None
     overall_stability: float | None = None
     trend: str | None = None
     trend_magnitude: float | None = None
-
-
-class ExperienceAdaptationSettings(ExperienceAdaptationParams):
-    # fields from the strategy that are not in ExperienceAdaptationParams
-    strategy_id: str
-    strategy_name: str
-    experience_sharing_rate: float
-
-
-class IdentityAdaptationSettings(IdentityAdaptationParams):
-    strategy_id: str
-    strategy_name: str
-    identity_evolution_rate: float       # copied from strategy
-    adaptation_rate: float               # copied from strategy
-
-
+# ───────────────────────────────── trend helpers ──────────────────────────
 class MetricTrend(BaseModel):
-    """output of the trend calculator"""
     metric: str
-    direction: str            # 'improving' | 'declining' | 'stable'
+    direction: str
     magnitude: float
     diff_from_avg: float | None = None
 
-
 class ResourceTrend(BaseModel):
-    """result of the resource-trend regression helper"""
-    direction: str            # 'increasing' | 'decreasing' | 'stable'
+    direction: str
     magnitude: float
     slope: float | None = None
     mean: float | None = None
-
+# ───────────────────────────────── raw-context  ───────────────────────────
 class RawContext(BaseModel):
     items: list[KVPair]
 
@@ -105,21 +71,16 @@ class RawContext(BaseModel):
     def from_dict(d: dict[str, Any]) -> "RawContext":
         return RawContext(items=[KVPair(key=k, value=v) for k, v in d.items()])
 
-
-    @staticmethod
-    def from_dict(d: dict[str, Any]) -> "RawContext":
-        return RawContext(items=[KVPair(key=k, value=v) for k, v in d.items()])
-
-# Pydantic models for structured I/O
+# ─────────────────────── strategy primitives & metrics ────────────────────
 class StrategyParameters(BaseModel):
-    exploration_rate: float = Field(default=0.2, ge=0.0, le=1.0, description="Rate of exploration vs exploitation")
-    adaptation_rate: float = Field(default=0.15, ge=0.0, le=1.0, description="Rate of adaptation to changes")
-    risk_tolerance: float = Field(default=0.5, ge=0.0, le=1.0, description="Tolerance for risk in decisions")
-    innovation_level: float = Field(default=0.5, ge=0.0, le=1.0, description="Level of innovation in strategies")
-    precision_focus: float = Field(default=0.5, ge=0.0, le=1.0, description="Focus on precision vs speed")
-    experience_sharing_rate: float = Field(default=0.5, ge=0.0, le=1.0, description="Rate of experience sharing")
-    cross_user_sharing: float = Field(default=0.3, ge=0.0, le=1.0, description="Level of cross-user experience sharing")
-    identity_evolution_rate: float = Field(default=0.2, ge=0.0, le=1.0, description="Rate of identity evolution")
+    exploration_rate:        float = Field(0.2, ge=0.0, le=1.0)
+    adaptation_rate:         float = Field(0.15, ge=0.0, le=1.0)
+    risk_tolerance:          float = Field(0.5, ge=0.0, le=1.0)
+    innovation_level:        float = Field(0.5, ge=0.0, le=1.0)
+    precision_focus:         float = Field(0.5, ge=0.0, le=1.0)
+    experience_sharing_rate: float = Field(0.5, ge=0.0, le=1.0)
+    cross_user_sharing:      float = Field(0.3, ge=0.0, le=1.0)
+    identity_evolution_rate: float = Field(0.2, ge=0.0, le=1.0)
 
 class Strategy(BaseModel):
     id: str
@@ -127,70 +88,83 @@ class Strategy(BaseModel):
     description: str
     parameters: StrategyParameters
 
-class ContextFeatures(BaseModel):
-    complexity: float = Field(default=0.5, ge=0.0, le=1.0, description="Complexity of the context")
-    volatility: float = Field(default=0.2, ge=0.0, le=1.0, description="Volatility of the context")
-    user_complexity: Optional[float] = Field(default=None, ge=0.0, le=1.0, description="Complexity of user inputs")
-    input_length: Optional[float] = Field(default=None, ge=0.0, le=1.0, description="Normalized length of user input")
-    task_familiarity: Optional[float] = Field(default=None, ge=0.0, le=1.0, description="Familiarity with the task")
-    emotional_intensity: Optional[float] = Field(default=None, ge=0.0, le=1.0, description="Emotional intensity in context")
-    user_engagement: Optional[float] = Field(default=None, ge=0.0, le=1.0, description="Level of user engagement")
-    identity_stability: Optional[float] = Field(default=None, ge=0.0, le=1.0, description="Stability of identity profile")
-    experience_relevance: Optional[float] = Field(default=None, ge=0.0, le=1.0, description="Relevance of experiences")
-    
-class PerformanceMetrics(BaseModel):
-    success_rate: Optional[float] = Field(default=None, ge=0.0, le=1.0)
-    error_rate: Optional[float] = Field(default=None, ge=0.0, le=1.0) 
-    response_time: Optional[float] = Field(default=None, ge=0.0)
-    efficiency: Optional[float] = Field(default=None, ge=0.0, le=1.0)
-    accuracy: Optional[float] = Field(default=None, ge=0.0, le=1.0)
-    experience_utility: Optional[float] = Field(default=None, ge=0.0, le=1.0, description="Utility of shared experiences")
-    user_satisfaction: Optional[float] = Field(default=None, ge=0.0, le=1.0, description="User satisfaction")
-
-class ContextAnalysisResult(BaseModel):
-    significant_change: bool = Field(description="Whether a significant context change was detected")
-    change_magnitude: float = Field(description="Magnitude of the context change (0.0-1.0)")
-    description: str = Field(description="Description of the detected changes")
-    features: ContextFeatures = Field(description="Extracted context features")
-    recommended_strategy_id: Optional[str] = Field(default=None, description="ID of recommended strategy if any")
-
-class StrategySelectionResult(BaseModel):
-    selected_strategy: Strategy = Field(description="The selected strategy")
-    confidence: float = Field(description="Confidence in the selection (0.0-1.0)")
-    reasoning: str = Field(description="Reasoning behind the selection")
-    alternatives: List[str] = Field(description="Alternative strategies considered")
-    experience_impact: Dict[str, float] = Field(default_factory=dict, description="Impact on experience sharing")
-    identity_impact: Dict[str, float] = Field(default_factory=dict, description="Impact on identity evolution")
-
-class MonitoringResult(BaseModel):
-    trends: Dict[str, Dict[str, Any]] = Field(description="Performance trends")
-    insights: List[str] = Field(description="Generated insights")
-    performance_changes: Dict[str, float] = Field(description="Notable performance changes")
-    bottlenecks: List[Dict[str, Any]] = Field(description="Identified bottlenecks")
-    experience_trends: Dict[str, Any] = Field(default_factory=dict, description="Trends in experience sharing")
-
+# ─────────────────────────── adaptation param bases ───────────────────────
 class ExperienceAdaptationParams(BaseModel):
-    cross_user_enabled: bool = Field(default=True, description="Whether cross-user sharing is enabled")
-    sharing_threshold: float = Field(default=0.7, description="Threshold for sharing experiences")
-    experience_types: List[str] = Field(default_factory=list, description="Prioritized experience types")
-    personalization_level: float = Field(default=0.5, description="Level of personalization")
+    cross_user_enabled:  bool = Field(True)
+    sharing_threshold:   float = Field(0.7)
+    experience_types:    List[str] = Field(default_factory=list)
+    personalization_level: float = Field(0.5)
 
 class IdentityAdaptationParams(BaseModel):
-    evolution_rate: float = Field(default=0.2, description="Rate of identity evolution")
-    trait_stability: float = Field(default=0.7, description="Stability of identity traits")
-    preference_adaptability: float = Field(default=0.5, description="Adaptability of preferences")
-    consolidation_frequency: float = Field(default=0.3, description="Frequency of identity consolidation")
+    evolution_rate:          float = Field(0.2)
+    trait_stability:         float = Field(0.7)
+    preference_adaptability: float = Field(0.5)
+    consolidation_frequency: float = Field(0.3)
+
+# ───────────────────── helper DTOs that *inherit* from the bases ──────────
+class ExperienceAdaptationSettings(ExperienceAdaptationParams):
+    strategy_id: str
+    strategy_name: str
+    experience_sharing_rate: float
+
+class IdentityAdaptationSettings(IdentityAdaptationParams):
+    strategy_id: str
+    strategy_name: str
+    identity_evolution_rate: float
+    adaptation_rate: float
+# ─────────────────────────────── context features ─────────────────────────
+class ContextFeatures(BaseModel):
+    complexity:          float = Field(0.5)
+    volatility:          float = Field(0.2)
+    user_complexity:     Optional[float] = None
+    input_length:        Optional[float] = None
+    task_familiarity:    Optional[float] = None
+    emotional_intensity: Optional[float] = None
+    user_engagement:     Optional[float] = None
+    identity_stability:  Optional[float] = None
+    experience_relevance:Optional[float] = None
+
+class PerformanceMetrics(BaseModel):
+    success_rate:        Optional[float] = None
+    error_rate:          Optional[float] = None
+    response_time:       Optional[float] = None
+    efficiency:          Optional[float] = None
+    accuracy:            Optional[float] = None
+    experience_utility:  Optional[float] = None
+    user_satisfaction:   Optional[float] = None
+# ──────────────────── high-level adaptation cycle results ─────────────────
+class ContextAnalysisResult(BaseModel):
+    significant_change: bool
+    change_magnitude:   float
+    description:        str
+    features:           ContextFeatures
+    recommended_strategy_id: Optional[str] = None
+
+class StrategySelectionResult(BaseModel):
+    selected_strategy: Strategy
+    confidence:        float
+    reasoning:         str
+    alternatives:      List[str]
+    experience_impact: Dict[str, float] = Field(default_factory=dict)
+    identity_impact:   Dict[str, float] = Field(default_factory=dict)
+
+class MonitoringResult(BaseModel):
+    trends:              Dict[str, Dict[str, Any]]
+    insights:            List[str]
+    performance_changes: Dict[str, float]
+    bottlenecks:         List[Dict[str, Any]]
+    experience_trends:   Dict[str, Any] = Field(default_factory=dict)
 
 class AdaptationCycleResult(BaseModel):
-    context_analysis: ContextAnalysisResult = Field(description="Results of context analysis")
-    selected_strategy: Optional[Strategy] = Field(default=None, description="Selected strategy")
-    strategy_confidence: float = Field(description="Confidence in strategy selection")
-    experience_adaptation: Optional[ExperienceAdaptationParams] = Field(default=None, description="Experience adaptation parameters")
-    identity_adaptation: Optional[IdentityAdaptationParams] = Field(default=None, description="Identity adaptation parameters")
-    insights: List[str] = Field(default_factory=list, description="Insights from the adaptation cycle")
+    context_analysis:     ContextAnalysisResult
+    selected_strategy:    Optional[Strategy] = None
+    strategy_confidence:  float
+    experience_adaptation:Optional[ExperienceAdaptationParams] = None
+    identity_adaptation:  Optional[IdentityAdaptationParams] = None
+    insights:             List[str] = Field(default_factory=list)
 
+# ─────────────────────────── helper util (unchanged) ──────────────────────
 def _kv_list_to_dict(kvs: Any) -> dict[str, Any]:
-    """Accept list[KVPair] *or* raw dict and return a plain dict."""
     if isinstance(kvs, list) and kvs and isinstance(kvs[0], KVPair):
         return {kv.key: kv.value for kv in kvs}
     if isinstance(kvs, dict):
