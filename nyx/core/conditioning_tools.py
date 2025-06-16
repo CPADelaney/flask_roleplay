@@ -12,6 +12,35 @@ from nyx.core.reward_system import RewardSignal
 
 logger = logging.getLogger(__name__)
 
+class BehaviorAssociationInfo(BaseModel, extra="forbid"):
+    key: str
+    behavior: str
+    consequence_type: str
+    strength: float = Field(..., ge=0.0, le=1.0)
+    valence: float = Field(..., ge=-1.0, le=1.0)
+    reinforcement_count: int
+    context_keys: List[str]
+
+
+# -----------------------------------------------------------------------------
+#  Helper
+# -----------------------------------------------------------------------------
+def _parse_context_json(ctx_json: Optional[str]) -> dict:
+    """Safely parse (optional) JSON string → dict; ignore errors."""
+    if not ctx_json:
+        return {}
+    try:
+        import json  # standard lib import is cheap and local
+        parsed = json.loads(ctx_json)
+        if isinstance(parsed, dict):
+            return parsed
+    except Exception as err:  # noqa: BLE001  (we want to swallow *any* JSON error)
+        import logging
+        logging.getLogger(__name__).warning(
+            "get_behavior_associations: ignoring bad context JSON: %s", err
+        )
+    return {}
+
 # ==================== Classical Conditioning Tools ====================
 
 @function_tool
@@ -311,38 +340,60 @@ async def generate_reward_signal(                   # noqa: N802
 
 # ==================== Behavior Evaluation Tools ====================
 
-@function_tool
-async def get_behavior_associations(
+@function_tool  # ← parameters are primitives / JSON strings  →  strict-schema OK
+async def get_behavior_associations(                    # noqa: N802
     ctx: RunContextWrapper,
     behavior: str,
-    behavior_context: Optional[Dict[str, Any]] = None
-) -> List[Dict[str, Any]]:
-    """Get all associations for a specific behavior"""
-    behavior_context = behavior_context or {}
-    result = []
-    behavior_lower = behavior.lower()
-    
+    behavior_context_json: Optional[str] = None,
+) -> List[BehaviorAssociationInfo]:
+    """
+    Return every operant-conditioning association that matches *behavior* **and**
+    whose required context keys are satisfied by *behavior_context_json*.
+
+    Parameters
+    ----------
+    behavior : str
+        Behaviour name to look up (case-insensitive).
+    behavior_context_json : str | None
+        JSON object with key/value pairs present during the behaviour.  Keys are
+        used for matching; values are ignored.  Pass `null` or omit if you have
+        no extra context.
+
+    Notes
+    -----
+    A JSON string is used instead of an arbitrary Python `dict` to avoid the
+    SDK’s `additionalProperties` restriction.
+    """
+    mgr = getattr(ctx.context, "operant_associations", None)
+    if mgr is None:
+        return []
+
+    context = _parse_context_json(behavior_context_json)
+    behavior_lc = behavior.lower()
+
+    matches: List[BehaviorAssociationInfo] = []
     for key, assoc in ctx.context.operant_associations.items():
-        if assoc.stimulus.lower() == behavior_lower:
-            context_match = True
-            if assoc.context_keys:
-                for req_key in assoc.context_keys:
-                    if req_key not in behavior_context:
-                        context_match = False
-                        break
-            
-            if context_match:
-                result.append({
-                    "key": key,
-                    "behavior": assoc.stimulus,
-                    "consequence_type": assoc.response,
-                    "strength": assoc.association_strength,
-                    "valence": assoc.valence,
-                    "reinforcement_count": assoc.reinforcement_count,
-                    "context_keys": assoc.context_keys
-                })
-    
-    return result
+        if assoc.stimulus.lower() != behavior_lc:
+            continue
+
+        # ----- context key matching ------------------------------------------
+        if assoc.context_keys:
+            if not all(req in context for req in assoc.context_keys):
+                continue
+
+        matches.append(
+            BehaviorAssociationInfo(
+                key=key,
+                behavior=assoc.stimulus,
+                consequence_type=assoc.response,
+                strength=assoc.association_strength,
+                valence=assoc.valence,
+                reinforcement_count=assoc.reinforcement_count,
+                context_keys=list(assoc.context_keys),
+            )
+        )
+
+    return matches
 
 @function_tool
 async def calculate_expected_valence(
