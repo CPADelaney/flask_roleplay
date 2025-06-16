@@ -1764,38 +1764,51 @@ class GoalManager:
     # Agent SDK tools for step execution agent
     @staticmethod
     @function_tool
-    async def _resolve_step_parameters_tool(ctx: RunContextWrapper, goal_id: str, step_parameters: Dict[str, Any]) -> Dict[str, Any]:
+    async def _resolve_step_parameters_tool(                       # noqa: N802
+        ctx: RunContextWrapper,
+        goal_id: str,
+        step_parameters_json: Json[Dict[str, Any]],                # ← strict-schema safe
+    ) -> Dict[str, Any]:
         """
-        Resolves parameter placeholders for a step
-        
+        Resolve any \"$step_n.some_field\" placeholders in a step’s parameter map
+        and report per-key resolution status.
+
         Args:
-            goal_id: The goal ID
-            step_parameters: The parameters to resolve
-            
+            goal_id:              ID of the goal that owns the plan/step
+            step_parameters_json: Raw parameter dict **as JSON** (strict-schema safe)
+
         Returns:
-            Resolved parameters
+            {
+                "resolved_parameters": { … },      # fully materialised dict
+                "resolution_status":   { … },      # per-key diagnostics
+                "all_resolved":        bool        # True iff nothing left unresolved
+            }
         """
-        resolved = await self._resolve_step_parameters(goal_id, step_parameters)
-        
-        # Check which parameters were successfully resolved
-        resolution_status = {}
-        for key, value in step_parameters.items():
-            original = value
-            resolved_value = resolved.get(key, None)
-            
+        # Convert the JSON-compatible payload back to a normal dict
+        step_parameters: Dict[str, Any] = step_parameters_json
+
+        # Delegate to the core resolver (must be accessible as a class attr)
+        resolved: Dict[str, Any] = await GoalSystem._resolve_step_parameters(   # type: ignore[name-defined]
+            ctx, goal_id, step_parameters
+        )
+
+        # Build diagnostics
+        resolution_status: Dict[str, Dict[str, Any]] = {}
+        for key, original in step_parameters.items():
             if isinstance(original, str) and original.startswith("$step_"):
+                resolved_value = resolved.get(key)
                 resolution_status[key] = {
                     "original": original,
                     "resolved": resolved_value is not None,
-                    "is_null": resolved_value is None
+                    "is_null":  resolved_value is None,
                 }
-        
+
         return {
             "resolved_parameters": resolved,
-            "resolution_status": resolution_status,
-            "all_resolved": all(status["resolved"] for status in resolution_status.values()) if resolution_status else True
+            "resolution_status":   resolution_status,
+            "all_resolved":        all(s["resolved"] for s in resolution_status.values())
+                                    if resolution_status else True,
         }
-
     @staticmethod
     @function_tool
     async def _execute_action(ctx: RunContextWrapper, action: str, parameters: Dict[str, Any]) -> Dict[str, Any]:
