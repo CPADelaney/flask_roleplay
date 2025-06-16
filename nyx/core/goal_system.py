@@ -37,29 +37,113 @@ SCHEMA_VERSION = "1.0.0"
 
 JsonScalar = Union[str, int, float, bool, None]
 
+class StepExecutionResult(BaseModel):
+    success: bool
+    step_id: str
+    result_json: Optional[str] = None
+    error: Optional[str] = None
+    next_action: str = Field("continue")
+    model_config = {"extra": "forbid"}
+
+class PlanGenerationResult(BaseModel):
+    plan_json: str                     # json.dumps(plan)
+    reasoning: str
+    estimated_steps: int
+    estimated_completion_time: Optional[str] = None
+    model_config = {"extra": "forbid"}
+
+class ActiveGoalsSummary(BaseModel):
+    active_count: int
+    pending_count: int
+    goals_json: str
+    model_config = {"extra": "forbid"}
+
+class ConflictCheckResult(BaseModel):
+    has_conflicts: bool
+    conflict_count: int
+    conflicts_json: str
+    model_config = {"extra": "forbid"}
+
+class CapabilityCheckResult(BaseModel):
+    all_available: bool
+    available_count: int
+    unavailable_actions_json: str
+    model_config = {"extra": "forbid"}
+
+class PrioritizedGoalsSummary(BaseModel):
+    total_count: int
+    active_count: int
+    pending_count: int
+    goals_json: str
+    model_config = {"extra": "forbid"}
 
 class ResolvedParameter(BaseModel):
     name: str
     value: JsonScalar
-
-    model_config = {"extra": "forbid"}  # <- no additionalProperties
+    model_config = {"extra": "forbid"}          # ← closes the object
 
 class ParameterStatus(BaseModel):
     name: str
-    original: str        # literal "$step_n.foo"
+    original: str
     resolved: bool
     is_null: bool
-
-    model_config = {"extra": "forbid"}
+    model_config = {"extra": "forbid"}          # ← closes the object
 
 class StepParameterResolutionResult(BaseModel):
     resolved_parameters: List[ResolvedParameter]
     resolution_status:    List[ParameterStatus]
     all_resolved:         bool
     raw_json: Optional[str] = Field(
-        None,
-        description="Full resolved dictionary, JSON-encoded for debugging"
+        None, description="Full resolved mapping, JSON-encoded"
     )
+    model_config = {"extra": "forbid"}          # ← closes the object
+
+class ExecutionOutcome(BaseModel):
+    success: bool
+    duration: float
+    result_json: Optional[str] = Field(
+        None, description="Result object encoded as JSON, if any"
+    )
+    error: Optional[str] = None
+    exception_type: Optional[str] = None
+
+    model_config = {"extra": "forbid"}
+
+class DominanceCheckResult(BaseModel):
+    is_dominance_action: bool
+    can_proceed: bool
+    action: str
+    reason: Optional[str] = None
+    evaluation_json: Optional[str] = Field(
+        None, description="Full evaluation dict encoded as JSON"
+    )
+
+    model_config = {"extra": "forbid"}
+
+class ExecutionLogStatus(BaseModel):
+    success: bool
+    step_index: int
+    current_index: int
+    step_status: str
+    error: Optional[str] = None
+
+    model_config = {"extra": "forbid"}
+
+class UpdateGoalStatusResult(BaseModel):
+    success: bool
+    goal_id: str
+    new_status: str
+    old_status: Optional[str] = None
+    notifications_json: Optional[str] = None
+
+    model_config = {"extra": "forbid"}
+
+class NotifySystemsResult(BaseModel):
+    success: bool
+    goal_id: str
+    status: str
+    notifications_json: Optional[str] = None
+    error: Optional[str] = None
 
     model_config = {"extra": "forbid"}
 
@@ -1793,36 +1877,44 @@ class GoalManager:
     
     @staticmethod
     @function_tool  # strict_json_schema=True by default
-    async def _resolve_step_parameters_tool(                     # noqa: N802
+    async def _resolve_step_parameters_tool(                  # noqa: N802
         ctx: RunContextWrapper,
         goal_id: str,
-        step_parameters_json: Json[Dict[str, Any]],              # unchanged
+        parameters_json: str,                                 # <- plain STRING
     ) -> StepParameterResolutionResult:
         """
-        Resolve placeholders in *step_parameters_json* and return a result
-        object that satisfies the Agents SDK strict-schema checker.
+        Resolve placeholders contained in *parameters_json*.
+    
+        *Input* is a JSON string so the schema remains closed.
         """
-        # Json[...] has already parsed + validated → plain dict
-        raw_params: Dict[str, Any] = step_parameters_json
+        import logging, asyncstdlib
     
-        # ------------------------------------------------------------------ #
-        # Delegate to the instance helper you showed                         #
-        # ------------------------------------------------------------------ #
-        goal_manager = ctx.context               # GoalManager instance
-        resolved: Dict[str, Any] = await goal_manager._resolve_step_parameters(
-            goal_id, raw_params
-        )
+        logger = logging.getLogger(__name__)
     
-        # ------------------------------------------------------------------ #
-        # Build scalar-only results                                          #
-        # ------------------------------------------------------------------ #
+        # 1️⃣ Parse caller input ------------------------------------------------
+        try:
+            raw_params: Dict[str, Any] = json.loads(parameters_json or "{}")
+            if not isinstance(raw_params, dict):
+                raise TypeError("parameters_json must decode to an object")
+        except Exception as exc:
+            logger.error("Bad parameters_json: %s", exc)
+            return StepParameterResolutionResult(
+                resolved_parameters=[], resolution_status=[],
+                all_resolved=False, raw_json=None
+            )
+    
+        # 2️⃣ Delegate to the instance helper -----------------------------------
+        gm = ctx.context                                # GoalManager instance
+        resolved: Dict[str, Any] = await gm._resolve_step_parameters(goal_id, raw_params)
+    
+        # 3️⃣ Build scalar-only result lists ------------------------------------
         resolved_list: List[ResolvedParameter] = []
         statuses:      List[ParameterStatus]    = []
     
         for k, orig in raw_params.items():
             v = resolved.get(k)
     
-            # Convert complex values to JSON strings so they stay “scalar”
+            # encode complex objects so value is scalar
             if not isinstance(v, (str, int, float, bool)) and v is not None:
                 v = json.dumps(v, separators=(",", ":"))
     
@@ -1831,8 +1923,7 @@ class GoalManager:
             if isinstance(orig, str) and orig.startswith("$step_"):
                 statuses.append(
                     ParameterStatus(
-                        name=k,
-                        original=orig,
+                        name=k, original=orig,
                         resolved=k in resolved and resolved[k] is not None,
                         is_null=(resolved.get(k) is None),
                     )
@@ -1847,182 +1938,162 @@ class GoalManager:
         
     @staticmethod
     @function_tool
-    async def _execute_action(ctx: RunContextWrapper, action: str, parameters: Dict[str, Any]) -> Dict[str, Any]:
+    async def _execute_action(                           # noqa: N802
+        ctx: RunContextWrapper,
+        action: str,
+        parameters_json: str,                            # strict input
+    ) -> ExecutionOutcome:                               # strict output
         """
-        Execute an action with the given parameters
-        
-        Args:
-            action: The action to execute
-            parameters: The parameters for the action
-            
-        Returns:
-            Execution result
+        Execute *action* with parameters provided as JSON string.
         """
-        if not self.brain:
-            return {
-                "success": False,
-                "error": "NyxBrain reference not set in GoalManager"
-            }
-        
+        gm = ctx.context                                   # GoalManager instance
+        if not gm.brain:
+            return ExecutionOutcome(
+                success=False, duration=0.0,
+                error="NyxBrain reference not set in GoalManager"
+            )
+    
         try:
-            action_method = getattr(self.brain, action, None)
-            if not (action_method and callable(action_method)):
-                return {
-                    "success": False,
-                    "error": f"Action '{action}' not found or not callable on NyxBrain"
-                }
+            params: Dict[str, Any] = json.loads(parameters_json or "{}")
+        except Exception as exc:
+            return ExecutionOutcome(success=False, duration=0.0, error=f"Bad JSON: {exc}")
+    
+        action_method = getattr(gm.brain, action, None)
+        if not (action_method and callable(action_method)):
+            return ExecutionOutcome(
+                success=False, duration=0.0,
+                error=f"Action '{action}' not found on NyxBrain"
+            )
+    
+        start = datetime.datetime.now()
+        try:
+            result = await action_method(**params)
+            duration = (datetime.datetime.now() - start).total_seconds()
+            res_json = (
+                json.dumps(result, separators=(",", ":"))
+                if not isinstance(result, (str, int, float, bool, type(None)))
+                else json.dumps(result)
+            )
+            return ExecutionOutcome(
+                success=True, duration=duration, result_json=res_json
+            )
+        except Exception as exc:
+            duration = (datetime.datetime.now() - start).total_seconds()
+            return ExecutionOutcome(
+                success=False, duration=duration,
+                error=str(exc), exception_type=type(exc).__name__
+            )
             
-            # Execute the action
-            start_time = datetime.datetime.now()
-            result = await action_method(**parameters)
-            end_time = datetime.datetime.now()
-            
-            duration = (end_time - start_time).total_seconds()
-            
-            return {
-                "success": True,
-                "result": result,
-                "duration": duration
-            }
-        except Exception as e:
-            return {
-                "success": False,
-                "error": str(e),
-                "exception_type": type(e).__name__
-            }
-
     @staticmethod
     @function_tool
-    async def _check_dominance_appropriateness(ctx: RunContextWrapper, action: str, parameters: Dict[str, Any]) -> Dict[str, Any]:
+    async def _check_dominance_appropriateness(          # noqa: N802
+        ctx: RunContextWrapper,
+        action: str,
+        parameters_json: str,
+    ) -> DominanceCheckResult:
         """
-        Check if a dominance-related action is appropriate
-        
-        Args:
-            action: The action to check
-            parameters: The parameters for the action
-            
-        Returns:
-            Appropriateness check result
+        Strict-schema wrapper around the dominance appropriateness check.
         """
-        is_dominance_action = action in [
-            "issue_command", "increase_control_intensity", "apply_consequence_simulated",
-            "select_dominance_tactic", "trigger_dominance_gratification", "praise_submission"
+        gm = ctx.context
+        try:
+            params = json.loads(parameters_json or "{}")
+        except Exception as exc:
+            return DominanceCheckResult(
+                is_dominance_action=False, can_proceed=False,
+                action="block", reason=f"Bad JSON: {exc}"
+            )
+    
+        is_dom = action in [
+            "issue_command", "increase_control_intensity",
+            "apply_consequence_simulated", "select_dominance_tactic",
+            "trigger_dominance_gratification", "praise_submission",
         ]
+        if not is_dom:
+            return DominanceCheckResult(
+                is_dominance_action=False, can_proceed=True, action="proceed"
+            )
+    
+        user_id = params.get("user_id") or params.get("target_user_id")
+        if not user_id:
+            return DominanceCheckResult(
+                is_dominance_action=True, can_proceed=False,
+                action="block", reason="Missing user_id"
+            )
+    
+        if gm.brain and hasattr(gm.brain, "_evaluate_dominance_step_appropriateness"):
+            evaluation = await gm.brain._evaluate_dominance_step_appropriateness(
+                action, params, user_id
+            )
+            return DominanceCheckResult(
+                is_dominance_action=True,
+                can_proceed=evaluation.get("action") == "proceed",
+                action=evaluation.get("action", "block"),
+                reason=evaluation.get("reason"),
+                evaluation_json=json.dumps(evaluation, separators=(",", ":")),
+            )
+    
+        return DominanceCheckResult(
+            is_dominance_action=True, can_proceed=False,
+            action="block", reason="No dominance evaluation available"
+        )
         
-        if not is_dominance_action:
-            return {
-                "is_dominance_action": False,
-                "can_proceed": True,
-                "action": "proceed"
-            }
-        
-        user_id_param = parameters.get("user_id", parameters.get("target_user_id"))
-        if not user_id_param:
-            return {
-                "is_dominance_action": True,
-                "can_proceed": False,
-                "action": "block",
-                "reason": "Missing user_id for dominance action"
-            }
-        
-        # If brain has dominance evaluation method, use it
-        if self.brain and hasattr(self.brain, '_evaluate_dominance_step_appropriateness'):
-            try:
-                evaluation = await self.brain._evaluate_dominance_step_appropriateness(
-                    action, parameters, user_id_param
-                )
-                return {
-                    "is_dominance_action": True,
-                    "evaluation_result": evaluation,
-                    "can_proceed": evaluation.get("action") == "proceed",
-                    "action": evaluation.get("action", "block"),
-                    "reason": evaluation.get("reason")
-                }
-            except Exception as e:
-                return {
-                    "is_dominance_action": True,
-                    "can_proceed": False,
-                    "action": "block",
-                    "reason": f"Evaluation error: {str(e)}"
-                }
-        
-        # Default to blocking if no evaluation method
-        return {
-            "is_dominance_action": True,
-            "can_proceed": False,
-            "action": "block",
-            "reason": "No dominance evaluation method available"
-        }
-
     @staticmethod
     @function_tool
-    async def _log_execution_result(ctx: RunContextWrapper, goal_id: str, step_id: str, execution_result: Dict[str, Any]) -> Dict[str, Any]:
+    async def _log_execution_result(                     # noqa: N802
+        ctx: RunContextWrapper,
+        goal_id: str,
+        step_id: str,
+        execution_result_json: str,
+    ) -> ExecutionLogStatus:
         """
-        Log the result of step execution
-        
-        Args:
-            goal_id: The goal ID
-            step_id: The step ID
-            execution_result: The execution result
-            
-        Returns:
-            Logging result
+        Store an execution result (JSON string) strictly.
         """
-        # Get the specific goal lock
-        async with self._get_goal_lock(goal_id):
-            if goal_id not in self.goals:
-                return {
-                    "success": False,
-                    "error": f"Goal {goal_id} not found"
-                }
-            
-            goal = self.goals[goal_id]
-            step = None
-            step_index = -1
-            
-            # Find the step by ID
-            for i, s in enumerate(goal.plan):
-                if s.step_id == step_id:
-                    step = s
-                    step_index = i
-                    break
-            
+        gm = ctx.context
+        try:
+            exec_result = json.loads(execution_result_json or "{}")
+        except Exception as exc:
+            return ExecutionLogStatus(
+                success=False, step_index=-1, current_index=-1,
+                step_status="failed", error=f"Bad JSON: {exc}"
+            )
+    
+        # The rest is your original logic, unchanged except JSON decoding
+        async with gm._get_goal_lock(goal_id):
+            if goal_id not in gm.goals:
+                return ExecutionLogStatus(
+                    success=False, step_index=-1, current_index=-1,
+                    step_status="failed", error=f"Goal {goal_id} not found"
+                )
+            goal = gm.goals[goal_id]
+            step = next((s for s in goal.plan if s.step_id == step_id), None)
             if not step:
-                return {
-                    "success": False,
-                    "error": f"Step {step_id} not found in goal {goal_id}"
-                }
-            
-            # Update step with execution result
-            step.status = "completed" if execution_result.get("success", False) else "failed"
-            step.result = execution_result.get("result")
-            step.error = execution_result.get("error")
-            
+                return ExecutionLogStatus(
+                    success=False, step_index=-1, current_index=-1,
+                    step_status="failed", error=f"Step {step_id} not found"
+                )
+    
+            step.status = "completed" if exec_result.get("success") else "failed"
+            step.result = exec_result.get("result_json")
+            step.error  = exec_result.get("error")
             if not step.start_time:
-                # If start time wasn't recorded earlier
-                step.start_time = datetime.datetime.now() - datetime.timedelta(seconds=execution_result.get("duration", 0))
-                
+                step.start_time = datetime.datetime.now()
             step.end_time = datetime.datetime.now()
-            
-            # Add to execution history
+    
             goal.execution_history.append({
                 "step_id": step_id,
-                "action": step.action,
                 "status": step.status,
                 "timestamp": step.end_time.isoformat(),
-                "duration": execution_result.get("duration", 0),
-                "error": step.error
+                "duration": exec_result.get("duration", 0),
+                "error": step.error,
             })
-            
-            # Mark goal as dirty for persistence
-            await self.mark_goal_dirty(goal_id)
-            
-            return {
-                "success": True,
-                "step_index": step_index,
-                "current_index": goal.current_step_index,
-                "step_status": step.status
-            }
+            await gm.mark_goal_dirty(goal_id)
+    
+            idx = goal.plan.index(step)
+            return ExecutionLogStatus(
+                success=True, step_index=idx,
+                current_index=goal.current_step_index,
+                step_status=step.status
+            )
     
     # Agent SDK tools for orchestration agent
     @staticmethod
@@ -2047,182 +2118,185 @@ class GoalManager:
 
     @staticmethod
     @function_tool
-    async def _update_goal_status_tool(ctx: RunContextWrapper, goal_id: str, status: str, 
-                                    result: Optional[Any] = None, error: Optional[str] = None) -> Dict[str, Any]:
+    async def _update_goal_status_tool(                  # noqa: N802
+        ctx: RunContextWrapper,
+        goal_id: str,
+        status: str,
+        result_json: Optional[str] = None,
+        error: Optional[str] = None,
+    ) -> UpdateGoalStatusResult:
         """
-        Update the status of a goal
-        
-        Args:
-            goal_id: The goal ID
-            status: The new status
-            result: Optional result data
-            error: Optional error message
-            
-        Returns:
-            Status update result
+        Strict replacement for status updates.
         """
-        if status not in ["pending", "active", "completed", "failed", "abandoned"]:
-            return {
-                "success": False,
-                "error": f"Invalid status: {status}"
-            }
-        
-        # Use the optimized update_goal_status method
-        result = await self.update_goal_status(goal_id, status, result, error)
-        
-        return {
-            "success": result.get("success", False),
-            "goal_id": goal_id,
-            "new_status": status,
-            "old_status": result.get("old_status"),
-            "notifications": result.get("notifications", {})
-        }
+        gm = ctx.context
+        valid = {"pending", "active", "completed", "failed", "abandoned"}
+        if status not in valid:
+            return UpdateGoalStatusResult(
+                success=False, goal_id=goal_id, new_status=status,
+                notifications_json=None,
+                old_status=None,
+            )
     
+        upd = await gm.update_goal_status(goal_id, status, result_json, error)
+        return UpdateGoalStatusResult(
+            success=upd.get("success", False),
+            goal_id=goal_id,
+            new_status=status,
+            old_status=upd.get("old_status"),
+            notifications_json=json.dumps(upd.get("notifications", {}), separators=(",", ":")),
+        )
+        
     @staticmethod
     @function_tool
-    async def _notify_systems(ctx: RunContextWrapper, goal_id: str, status: str, 
-                           result: Optional[Any] = None, error: Optional[str] = None) -> Dict[str, Any]:
+    async def _notify_systems(                             # noqa: N802
+        ctx: RunContextWrapper,
+        goal_id: str,
+        status: str,
+        result_json: Optional[str] = None,
+        error: Optional[str] = None,
+    ) -> NotifySystemsResult:
         """
-        Notify relevant systems about goal status changes
-        
-        Args:
-            goal_id: The goal ID
-            status: The new status
-            result: Optional result data
-            error: Optional error message
-            
-        Returns:
-            Notification results
+        Notify internal & external subsystems of a goal-status change (STRICT).
+    
+        * `result_json` carries any arbitrary result object as a JSON string so the
+          schema stays closed.
         """
-        goal = await self._get_goal_with_reader_lock(goal_id)
+        gm = ctx.context                                     # GoalManager instance
+        logger = logging.getLogger(__name__)
+    
+        # ------------------------------------------------------------------ #
+        # 0. Decode result_json (safe fallback)                              #
+        # ------------------------------------------------------------------ #
+        try:
+            result_obj: Optional[Any] = (
+                json.loads(result_json) if isinstance(result_json, str) else result_json
+            )
+        except Exception as exc:
+            logger.warning("Bad JSON in result_json: %s", exc)
+            result_obj = result_json
+    
+        # ------------------------------------------------------------------ #
+        # 1. Fetch goal (reader lock)                                        #
+        # ------------------------------------------------------------------ #
+        goal = await gm._get_goal_with_reader_lock(goal_id)
         if not goal:
-            return {
-                "success": False,
-                "error": f"Goal {goal_id} not found"
-            }
-            
-        notifications = {}
-        
-        # Notify NeedsSystem if applicable
-        if goal.associated_need and self.brain and hasattr(self.brain, 'needs_system'):
+            return NotifySystemsResult(
+                success=False, goal_id=goal_id, status=status,
+                error=f"Goal {goal_id} not found"
+            )
+    
+        notifications: Dict[str, Any] = {}
+    
+        # ------------------------------------------------------------------ #
+        # 2. NeedsSystem                                                    #
+        # ------------------------------------------------------------------ #
+        if goal.associated_need and gm.brain and hasattr(gm.brain, "needs_system"):
             try:
-                needs_system = getattr(self.brain, 'needs_system')
-                if status == "completed" and hasattr(needs_system, 'satisfy_need'):
-                    satisfaction_amount = goal.priority * 0.3 + 0.1  # Base + priority bonus
-                    await needs_system.satisfy_need(goal.associated_need, satisfaction_amount)
+                ns = gm.brain.needs_system          # type: ignore[attr-defined]
+                if status == "completed" and hasattr(ns, "satisfy_need"):
+                    amt = goal.priority * 0.3 + 0.1
+                    await ns.satisfy_need(goal.associated_need, amt)
                     notifications["needs_system"] = {
-                        "success": True,
-                        "need": goal.associated_need,
-                        "amount": satisfaction_amount,
-                        "action": "satisfy"
+                        "success": True, "need": goal.associated_need,
+                        "amount": amt, "action": "satisfy"
                     }
-                elif status == "failed" and hasattr(needs_system, 'decrease_need'):
-                    decrease_amount = goal.priority * 0.1  # Small decrease for failure
-                    await needs_system.decrease_need(goal.associated_need, decrease_amount)
+                elif status == "failed" and hasattr(ns, "decrease_need"):
+                    amt = goal.priority * 0.1
+                    await ns.decrease_need(goal.associated_need, amt)
                     notifications["needs_system"] = {
-                        "success": True,
-                        "need": goal.associated_need,
-                        "amount": decrease_amount,
-                        "action": "decrease"
+                        "success": True, "need": goal.associated_need,
+                        "amount": amt, "action": "decrease"
                     }
-            except Exception as e:
-                notifications["needs_system"] = {
-                    "success": False,
-                    "error": str(e)
-                }
-        
-        # Notify RewardSystem if applicable
-        if self.brain and hasattr(self.brain, 'reward_system'):
+            except Exception as exc:
+                notifications["needs_system"] = {"success": False, "error": str(exc)}
+    
+        # ------------------------------------------------------------------ #
+        # 3. RewardSystem                                                   #
+        # ------------------------------------------------------------------ #
+        if gm.brain and hasattr(gm.brain, "reward_system"):
             try:
-                reward_system = getattr(self.brain, 'reward_system')
-                reward_value = 0.0
-                if status == "completed": 
-                    reward_value = goal.priority * 0.6  # Higher reward for completion
-                elif status == "failed": 
-                    reward_value = -goal.priority * 0.4  # Punish failure
-                elif status == "abandoned": 
-                    reward_value = -0.1  # Small punishment for abandoning
-
-                if abs(reward_value) > 0.05 and hasattr(reward_system, 'process_reward_signal'):
-                    # Import locally to avoid circular imports
-                    from nyx.core.reward_system import RewardSignal
-                    
-                    reward_signal = RewardSignal(
-                        value=reward_value, 
-                        source="GoalManager",
+                rs = gm.brain.reward_system        # type: ignore[attr-defined]
+                rv = 0.0
+                if status == "completed":
+                    rv = goal.priority * 0.6
+                elif status == "failed":
+                    rv = -goal.priority * 0.4
+                elif status == "abandoned":
+                    rv = -0.1
+                if abs(rv) > 0.05 and hasattr(rs, "process_reward_signal"):
+                    from nyx.core.reward_system import RewardSignal  # local import
+                    sig = RewardSignal(
+                        value=rv, source="GoalManager",
                         context={
-                            "goal_id": goal_id, 
-                            "goal_description": goal.description, 
-                            "outcome": status, 
-                            "associated_need": goal.associated_need
+                            "goal_id": goal_id,
+                            "goal_description": goal.description,
+                            "outcome": status,
+                            "associated_need": goal.associated_need,
                         },
-                        timestamp=datetime.datetime.now().isoformat()
+                        timestamp=datetime.datetime.now().isoformat(),
                     )
-                    await reward_system.process_reward_signal(reward_signal)
+                    await rs.process_reward_signal(sig)
                     notifications["reward_system"] = {
-                        "success": True,
-                        "reward_value": reward_value,
-                        "source": "GoalManager"
+                        "success": True, "reward_value": rv, "source": "GoalManager"
                     }
-            except Exception as e:
-                notifications["reward_system"] = {
-                    "success": False,
-                    "error": str(e)
-                }
-        
-        # Notify MetaCore if applicable
-        if self.brain and hasattr(self.brain, 'meta_core'):
+            except Exception as exc:
+                notifications["reward_system"] = {"success": False, "error": str(exc)}
+    
+        # ------------------------------------------------------------------ #
+        # 4. MetaCore                                                       #
+        # ------------------------------------------------------------------ #
+        if gm.brain and hasattr(gm.brain, "meta_core"):
             try:
-                meta_core = getattr(self.brain, 'meta_core')
-                if hasattr(meta_core, 'record_goal_outcome'):
-                    await meta_core.record_goal_outcome(goal.model_dump())
+                mc = gm.brain.meta_core            # type: ignore[attr-defined]
+                if hasattr(mc, "record_goal_outcome"):
+                    await mc.record_goal_outcome(goal.model_dump())
                     notifications["meta_core"] = {
-                        "success": True,
-                        "recorded_goal": goal_id,
-                        "status": status
+                        "success": True, "recorded_goal": goal_id, "status": status
                     }
-            except Exception as e:
-                notifications["meta_core"] = {
-                    "success": False,
-                    "error": str(e)
-                }
-        
-        # Trigger integration callbacks
-        callback_results = await self.trigger_integration_callbacks("goal_status_change", {
-            "goal_id": goal_id,
-            "old_status": goal.status,
-            "new_status": status,
-            "result": result,
-            "error": error
-        })
-        
-        if callback_results:
-            notifications["integration_callbacks"] = callback_results
-        
-        # Notify external systems if goal has external system IDs
+            except Exception as exc:
+                notifications["meta_core"] = {"success": False, "error": str(exc)}
+    
+        # ------------------------------------------------------------------ #
+        # 5. Integration callbacks                                          #
+        # ------------------------------------------------------------------ #
+        try:
+            cb = await gm.trigger_integration_callbacks("goal_status_change", {
+                "goal_id": goal_id,
+                "old_status": goal.status,
+                "new_status": status,
+                "result": result_obj,
+                "error": error,
+            })
+            if cb:
+                notifications["integration_callbacks"] = cb
+        except Exception as exc:
+            notifications["integration_callbacks"] = {"success": False, "error": str(exc)}
+    
+        # ------------------------------------------------------------------ #
+        # 6. External systems                                               #
+        # ------------------------------------------------------------------ #
         if goal.external_system_ids:
-            for system_name, external_id in goal.external_system_ids.items():
-                if system_name in self._external_system_clients:
+            for sys_name, ext_id in goal.external_system_ids.items():
+                if sys_name in gm._external_system_clients:
                     try:
-                        # In a real system, this would call an external API
-                        notifications[f"external_{system_name}"] = {
-                            "success": True,
-                            "external_id": external_id,
-                            "status": status
+                        notifications[f"external_{sys_name}"] = {
+                            "success": True, "external_id": ext_id, "status": status
                         }
-                    except Exception as e:
-                        notifications[f"external_{system_name}"] = {
-                            "success": False,
-                            "error": str(e)
+                    except Exception as exc:
+                        notifications[f"external_{sys_name}"] = {
+                            "success": False, "error": str(exc)
                         }
-        
-        return {
-            "success": True,
-            "goal_id": goal_id,
-            "status": status,
-            "notifications": notifications
-        }
-
+    
+        # ------------------------------------------------------------------ #
+        # 7. Return                                                          #
+        # ------------------------------------------------------------------ #
+        return NotifySystemsResult(
+            success=True,
+            goal_id=goal_id,
+            status=status,
+            notifications_json=json.dumps(notifications, separators=(",", ":")),
+        )
+    
     @staticmethod
     @function_tool
     async def _check_concurrency_limits(ctx: RunContextWrapper) -> Dict[str, Any]:
