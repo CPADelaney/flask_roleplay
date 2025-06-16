@@ -35,28 +35,34 @@ logger = logging.getLogger(__name__)
 SCHEMA_VERSION = "1.0.0"
 
 
-class ResolvedParameter(BaseModel):
-    """A single fully-resolved parameter."""
-    name: str
-    value: Any
-    pass
+JsonScalar = Union[str, int, float, bool, None]
 
+
+class ResolvedParameter(BaseModel):
+    name: str
+    value: JsonScalar
+
+    model_config = {"extra": "forbid"}  # <- no additionalProperties
 
 class ParameterStatus(BaseModel):
-    """Diagnostics for a placeholder that needed resolution."""
     name: str
-    original: str          # literal “$step_n.foo”
-    resolved: bool         # did we find a value?
-    is_null: bool          # value exists but is None
-    pass
+    original: str        # literal "$step_n.foo"
+    resolved: bool
+    is_null: bool
 
+    model_config = {"extra": "forbid"}
 
 class StepParameterResolutionResult(BaseModel):
-    """Strict output for _resolve_step_parameters_tool."""
     resolved_parameters: List[ResolvedParameter]
     resolution_status:    List[ParameterStatus]
     all_resolved:         bool
-    pass
+    raw_json: Optional[str] = Field(
+        None,
+        description="Full resolved dictionary, JSON-encoded for debugging"
+    )
+
+    model_config = {"extra": "forbid"}
+
 
 class GoalStep(BaseModel):
     """A single step in a goal's execution plan"""
@@ -962,10 +968,10 @@ class GoalManager:
                 model="gpt-4.1-nano",
                 model_settings=ModelSettings(temperature=0.1),
                 tools=[
-                    function_tool(self._get_available_actions),
-                    function_tool(self._get_action_description),
-                    function_tool(self._get_goal_details),
-                    function_tool(self._get_recent_goals)
+                    self._get_available_actions,
+                    self._get_action_description,
+                    self._get_goal_details,
+                    self._get_recent_goals
                 ],
                 output_type=PlanGenerationResult
             )
@@ -990,9 +996,9 @@ class GoalManager:
             """,
             model="gpt-4.1-nano",
             tools=[
-                function_tool(self._get_active_goals), 
-                function_tool(self._check_goal_conflicts),
-                function_tool(self._verify_capabilities)
+                self._get_active_goals, 
+                self._check_goal_conflicts,
+                self._verify_capabilities
             ],
             output_type=GoalValidationResult
         )
@@ -1019,9 +1025,9 @@ class GoalManager:
             """,
             model="gpt-4.1-nano",
             tools=[
-                function_tool(self._validate_action_sequence),
-                function_tool(self._check_parameter_references),
-                function_tool(self._estimate_plan_efficiency)
+                self._validate_action_sequence,
+                self._check_parameter_references,
+                self._estimate_plan_efficiency
             ],
             output_type=PlanValidationResult
         )
@@ -1047,10 +1053,10 @@ class GoalManager:
             """,
             model="gpt-4.1-nano",
             tools=[
-                function_tool(self._resolve_step_parameters_tool),
-                function_tool(self._execute_action),
-                function_tool(self._check_dominance_appropriateness),
-                function_tool(self._log_execution_result)
+                self._resolve_step_parameters_tool,
+                self._execute_action,
+                self._check_dominance_appropriateness,
+                self._log_execution_result
             ],
             output_type=StepExecutionResult
         )
@@ -1091,10 +1097,10 @@ class GoalManager:
                        tool_description_override="Execute a step in the goal plan")
             ],
             tools=[
-                function_tool(self._get_prioritized_goals_tool),
-                function_tool(self._update_goal_status_tool),
-                function_tool(self._notify_systems),
-                function_tool(self._check_concurrency_limits)
+                self._get_prioritized_goals_tool,
+                self._update_goal_status_tool,
+                self._notify_systems,
+                self._check_concurrency_limits
             ],
             model="gpt-4.1-nano"
         )
@@ -1125,9 +1131,9 @@ class GoalManager:
             """,
             model="gpt-4.1-nano",
             tools=[
-                function_tool(self._analyze_goal_similarity),
-                function_tool(self._analyze_resource_conflicts),
-                function_tool(self._get_goal_details)
+                self._analyze_goal_similarity,
+                self._analyze_resource_conflicts,
+                self._get_goal_details
             ]
         )
     
@@ -1152,9 +1158,9 @@ class GoalManager:
             """,
             model="gpt-4.1-nano",
             tools=[
-                function_tool(self._propose_goal_modifications),
-                function_tool(self._evaluate_modification_impact),
-                function_tool(self._get_shared_subgoals)
+                self._propose_goal_modifications,
+                self._evaluate_modification_impact,
+                self._get_shared_subgoals
             ]
         )
     
@@ -1176,9 +1182,9 @@ class GoalManager:
             """,
             model="gpt-4.1-nano",
             tools=[
-                function_tool(self._get_goal_common_elements),
-                function_tool(self._generate_merged_goal_description),
-                function_tool(self._validate_merged_goal_coverage)
+                self._get_goal_common_elements,
+                self._generate_merged_goal_description,
+                self._validate_merged_goal_coverage
             ]
         )
     
@@ -1786,46 +1792,57 @@ class GoalManager:
         }
     
     @staticmethod
-    @function_tool
-    async def _resolve_step_parameters_tool(                      # noqa: N802
+    @function_tool  # strict_json_schema=True by default
+    async def _resolve_step_parameters_tool(                     # noqa: N802
         ctx: RunContextWrapper,
         goal_id: str,
-        step_parameters_json: Json[Dict[str, Any]],               # strict input
-    ) -> StepParameterResolutionResult:                           # strict output
+        step_parameters_json: Json[Dict[str, Any]],              # unchanged
+    ) -> StepParameterResolutionResult:
         """
-        Resolve placeholders in *step_parameters_json* and produce
-        a StepParameterResolutionResult that passes the SDK’s strict
-        JSON-Schema checks.
+        Resolve placeholders in *step_parameters_json* and return a result
+        object that satisfies the Agents SDK strict-schema checker.
         """
-        # 1) Json[...] has already been validated → plain dict
-        step_parameters: Dict[str, Any] = step_parameters_json
-
-        # 2) Delegate to the core resolver
-        resolved_dict: Dict[str, Any] = await GoalSystem._resolve_step_parameters(   # type: ignore[name-defined]
-            ctx, goal_id, step_parameters
+        # Json[...] has already parsed + validated → plain dict
+        raw_params: Dict[str, Any] = step_parameters_json
+    
+        # ------------------------------------------------------------------ #
+        # Delegate to the instance helper you showed                         #
+        # ------------------------------------------------------------------ #
+        goal_manager = ctx.context               # GoalManager instance
+        resolved: Dict[str, Any] = await goal_manager._resolve_step_parameters(
+            goal_id, raw_params
         )
-
-        # 3) Convert to lists of sealed objects
-        resolved_params: List[ResolvedParameter] = [
-            ResolvedParameter(name=k, value=v) for k, v in resolved_dict.items()
-        ]
-
-        statuses: List[ParameterStatus] = []
-        for key, original in step_parameters.items():
-            if isinstance(original, str) and original.startswith("$step_"):
+    
+        # ------------------------------------------------------------------ #
+        # Build scalar-only results                                          #
+        # ------------------------------------------------------------------ #
+        resolved_list: List[ResolvedParameter] = []
+        statuses:      List[ParameterStatus]    = []
+    
+        for k, orig in raw_params.items():
+            v = resolved.get(k)
+    
+            # Convert complex values to JSON strings so they stay “scalar”
+            if not isinstance(v, (str, int, float, bool)) and v is not None:
+                v = json.dumps(v, separators=(",", ":"))
+    
+            resolved_list.append(ResolvedParameter(name=k, value=v))
+    
+            if isinstance(orig, str) and orig.startswith("$step_"):
                 statuses.append(
                     ParameterStatus(
-                        name=key,
-                        original=original,
-                        resolved=key in resolved_dict and resolved_dict[key] is not None,
-                        is_null=(resolved_dict.get(key) is None),
+                        name=k,
+                        original=orig,
+                        resolved=k in resolved and resolved[k] is not None,
+                        is_null=(resolved.get(k) is None),
                     )
                 )
-
+    
         return StepParameterResolutionResult(
-            resolved_parameters=resolved_params,
+            resolved_parameters=resolved_list,
             resolution_status=statuses,
             all_resolved=all(s.resolved for s in statuses) if statuses else True,
+            raw_json=json.dumps(resolved, separators=(",", ":")),
         )
         
     @staticmethod
