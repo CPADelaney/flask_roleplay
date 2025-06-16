@@ -1602,54 +1602,163 @@ class GoalManager:
         top_field = field_path.split('.')[0]
         return top_field in available_fields or "result" in available_fields
 
-    @staticmethod
-    @function_tool
-    async def _estimate_plan_efficiency(ctx: RunContextWrapper, plan: List[Dict[str, Any]]) -> Dict[str, Any]:
+    @function_tool(name_override="_estimate_plan_efficiency")
+    async def estimate_plan_efficiency(                    # noqa: N802
+        ctx: RunContextWrapper,
+        plan_json: str | None = None,
+    ) -> Dict[str, Any]:
         """
-        Estimate the efficiency of a plan
-        
-        Args:
-            plan: The plan to evaluate
-            
-        Returns:
-            Efficiency analysis
+        Robust heuristic evaluation of plan *efficiency*.
+    
+        Parameters
+        ----------
+        plan_json : str
+            JSON-encoded list of step dictionaries.  The schema is intentionally
+            loose to stay compatible with strict-schema rules.
+    
+        Returns
+        -------
+        dict
+            step_count, action_distribution, efficiency_score, suggestions
         """
-        # Count actions by category
-        action_categories = {}
-        for step in plan:
-            action = step.get("action", "")
-            category = "unknown"
-            
+        import json, logging, math, hashlib
+        from collections import Counter
+    
+        logger = logging.getLogger(__name__)
+    
+        # ------------------------------------------------------------------ #
+        # 1) Parse & validate input                                          #
+        # ------------------------------------------------------------------ #
+        try:
+            plan: list[dict] = json.loads(plan_json or "[]")
+            if not isinstance(plan, list):
+                raise TypeError("plan_json must decode to a list")
+        except Exception as exc:
+            msg = f"Invalid plan_json supplied: {exc}"
+            logger.error(msg)
+            return {
+                "step_count": 0,
+                "action_distribution": {},
+                "efficiency_score": 0.0,
+                "suggestions": [msg],
+            }
+    
+        if not plan:
+            return {
+                "step_count": 0,
+                "action_distribution": {},
+                "efficiency_score": 1.0,
+                "suggestions": ["Plan is empty – nothing to optimise."],
+            }
+    
+        # ------------------------------------------------------------------ #
+        # 2) Helper functions                                                #
+        # ------------------------------------------------------------------ #
+        def _category(action: str) -> str:
             if action.startswith(("query_", "retrieve_")):
-                category = "retrieval"
-            elif action.startswith(("add_", "create_")):
-                category = "creation"
-            elif action.startswith(("update_", "modify_")):
-                category = "modification"
-            elif action.startswith(("analyze_", "evaluate_", "reason_")):
-                category = "analysis"
-            elif action.startswith(("generate_", "express_")):
-                category = "generation"
-            
-            action_categories[category] = action_categories.get(category, 0) + 1
-        
-        # Check for potential inefficiencies
-        retrieval_heavy = action_categories.get("retrieval", 0) > len(plan) * 0.5
-        creation_heavy = action_categories.get("creation", 0) > len(plan) * 0.4
-        
-        suggestions = []
+                return "retrieval"
+            if action.startswith(("add_", "create_")):
+                return "creation"
+            if action.startswith(("update_", "modify_")):
+                return "modification"
+            if action.startswith(("analyze_", "evaluate_", "reason_")):
+                return "analysis"
+            if action.startswith(("generate_", "express_")):
+                return "generation"
+            return "unknown"
+    
+        def _shannon_entropy(counter: Counter) -> float:
+            """Normalized entropy ∈ [0,1] (1 = perfectly uniform)."""
+            if not counter:
+                return 1.0
+            total = sum(counter.values())
+            probs = [v / total for v in counter.values() if v]
+            if not probs:
+                return 1.0
+            entropy = -sum(p * math.log2(p) for p in probs)
+            max_entropy = math.log2(len(counter))
+            return entropy / max_entropy if max_entropy else 1.0
+    
+        # ------------------------------------------------------------------ #
+        # 3) Analyse the plan                                                #
+        # ------------------------------------------------------------------ #
+        n_steps = len(plan)
+        categories = Counter(_category(s.get("action", "")) for s in plan)
+    
+        # --- Duplicate-work detection ------------------------------------- #
+        step_signature = lambda s: hashlib.sha1(                      # noqa: E731
+            json.dumps(
+                {"action": s.get("action"), "parameters": s.get("parameters", {})},
+                sort_keys=True,
+            ).encode()
+        ).hexdigest()
+        sigs = [step_signature(s) for s in plan]
+        duplicate_hits = len(sigs) - len(set(sigs))
+    
+        # --- Parallelism estimate ----------------------------------------- #
+        serial_dependencies = sum(
+            1
+            for s in plan
+            for v in (s.get("parameters") or {}).values()
+            if isinstance(v, str) and v.startswith("$step_")
+        )
+        parallelisable_ratio = 1.0 - (serial_dependencies / n_steps)
+    
+        # ------------------------------------------------------------------ #
+        # 4) Build suggestions & penalties                                   #
+        # ------------------------------------------------------------------ #
+        suggestions: list[str] = []
+    
+        # (a) Category skew (low entropy → skew)
+        entropy = _shannon_entropy(categories)
+        cat_penalty = (1 - entropy) * 0.25  # up to −0.25
+        if entropy < 0.6:
+            suggestions.append("Action mix is skewed; consider balancing categories.")
+    
+        # (b) Heavy retrieval / creation
+        retrieval_heavy = categories.get("retrieval", 0) > n_steps * 0.5
+        creation_heavy  = categories.get("creation", 0)  > n_steps * 0.4
+        cat_specific_penalty = 0.0
         if retrieval_heavy:
-            suggestions.append("Plan may benefit from combining multiple retrieval steps")
+            cat_specific_penalty += 0.15
+            suggestions.append("Combine or batch retrieval steps to reduce latency.")
         if creation_heavy:
-            suggestions.append("Plan has many creation steps; consider batching or combining some")
-        if len(plan) > 10:
-            suggestions.append("Plan is quite long; consider if some steps can be combined")
-        
+            cat_specific_penalty += 0.10
+            suggestions.append("Batch creation steps where possible to save overhead.")
+    
+        # (c) Plan length
+        length_penalty = 0.0
+        if n_steps > 8:
+            length_penalty = min(0.20, math.log(n_steps - 7, 10) * 0.10)
+            suggestions.append("Plan is long; investigate merging related steps.")
+    
+        # (d) Duplicate work
+        dup_penalty = min(0.20, 0.05 * duplicate_hits)
+        if duplicate_hits:
+            suggestions.append(f"Found {duplicate_hits} duplicate steps; consider deduplication.")
+    
+        # (e) Parallelism
+        parallel_penalty = 0.0
+        if parallelisable_ratio < 0.4:
+            parallel_penalty = (0.4 - parallelisable_ratio) * 0.375  # up to −0.15
+            suggestions.append(
+                "Low parallelism; many steps reference previous outputs. "
+                "Evaluate which can run concurrently."
+            )
+    
+        # ------------------------------------------------------------------ #
+        # 5) Final score                                                     #
+        # ------------------------------------------------------------------ #
+        score = 1.0 - sum(
+            [cat_penalty, cat_specific_penalty, length_penalty, dup_penalty, parallel_penalty]
+        )
+        score = round(max(0.0, score), 3)
+    
         return {
-            "step_count": len(plan),
-            "action_distribution": action_categories,
-            "efficiency_score": 0.7 if suggestions else 0.9,  # Simple scoring
-            "suggestions": suggestions
+            "step_count": n_steps,
+            "action_distribution": dict(categories),
+            "efficiency_score": score,
+            "suggestions": suggestions,
         }
     
     # Agent SDK tools for step execution agent
