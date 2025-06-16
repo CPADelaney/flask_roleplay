@@ -23,6 +23,7 @@ from agents import (
 from agents.exceptions import MaxTurnsExceeded, ModelBehaviorError
 from pydantic import BaseModel, Field, field_validator, ValidationError
 
+
 from typing import Dict, List, Any, Optional, Tuple, Union, TYPE_CHECKING
 
 # Add this conditional import to avoid circular imports
@@ -30,6 +31,36 @@ if TYPE_CHECKING:
     from .temporal_perception import TemporalPerceptionSystem
 
 logger = logging.getLogger(__name__)
+
+def _coerce_expression(raw: Any) -> Dict[str, Any]:
+    """
+    Ensure we always return a dict with a stable surface schema that contains
+    *no* Dict[…]-typed sub-fields (so the Agent SDK won't add `additionalProperties`)
+    """
+    safe: Dict[str, Any] = {
+        "expression":      "",
+        "time_scale":      None,
+        "intensity":       None,
+        "reference_type":  None,
+        # we flatten `time_reference` into a plain string to stay schema-safe
+        "time_reference":  None,
+    }
+
+    if isinstance(raw, dict):
+        # copy only the keys we expose
+        for k in safe.keys():
+            if k in raw:
+                # simple serialisation for nested structures
+                safe[k] = (
+                    raw[k] if not isinstance(raw[k], (dict, list))
+                    else json.dumps(raw[k], separators=(",", ":"))
+                )
+    else:
+        # fallback – just stringify whatever we got
+        safe["expression"] = str(raw)
+
+    return safe
+
 
 class TimeScaleInput(BaseModel):
     previous_state: Dict[str, Any] = Field(default_factory=dict)
@@ -657,39 +688,45 @@ async def generate_time_expression_impl(state: Dict[str, Any]) -> Dict[str, Any]
         "time_reference": time_reference
     }
 
-# ── temporal_perception.py – replace the existing function ────────────────────
-from pydantic import ValidationError
-
-@function_tool
-async def generate_time_expression(                      # noqa: N802
-    time_perception_state: TimeExpressionState,
-) -> TimeExpressionOutput:
+@function_tool  # ← no type-hints → the Agent SDK will make a *very* permissive
+async def generate_time_expression(time_perception_state: Any) -> Dict[str, Any]:
     """
-    Turn `time_perception_state` into natural-language output.
+    Safer re-implementation that avoids Dict[…] / Mapping[…] fields in the public
+    schema while *still* giving the helper a rich, validated model internally.
 
-    * Datetimes are serialised to ISO strings before they reach the helper.
-    * If the helper’s output contains unexpected keys or types, we fall back to
-      a safe, minimal `TimeExpressionOutput` instead of raising.
+    Input:
+        • `time_perception_state` – may be a dict, JSON string, or already a
+          `TimeExpressionState`.  Anything else is ignored.
+
+    Output:
+        • Flat dict (see `_coerce_expression`) – no nested arbitrary objects,
+          therefore no `additionalProperties` → plays nicely with strict schema.
     """
-    # 1.  Prepare a plain JSON-safe dict for the helper
-    safe_state = time_perception_state.model_dump(mode="json")
-
-    # 2.  Run the legacy helper
-    raw = await generate_time_expression_impl(safe_state)
-
-    # 3.  Validate & coerce into the strict schema; fall back gracefully
+    # -------- 1. normalise input ---------------------------------------------#
     try:
-        return TimeExpressionOutput.model_validate(raw)
+        if isinstance(time_perception_state, TimeExpressionState):
+            state_obj = time_perception_state
+        elif isinstance(time_perception_state, str):
+            state_obj = TimeExpressionState.model_validate_json(time_perception_state)
+        elif isinstance(time_perception_state, dict):
+            state_obj = TimeExpressionState.model_validate(time_perception_state)
+        else:
+            raise TypeError("Unsupported input type for time_perception_state")
     except ValidationError as err:
-        logger.warning(
-            "generate_time_expression_impl returned non-conforming data; "
-            "error=%s ; raw=%s", err, raw
+        logger.warning("TimeExpressionState validation failed – using defaults: %s", err)
+        state_obj = TimeExpressionState(
+            last_interaction=datetime.datetime.utcnow().isoformat(),
+            time_since_last_interaction=0,
+            current_time_category="very_short",
         )
-        # Minimal but valid fallback – keeps the Agent SDK happy
-        return TimeExpressionOutput(
-            expression=str(raw) if raw is not None else "",
-            time_scale=safe_state.get("current_time_category"),
-        )
+
+    # -------- 2. run legacy helper -------------------------------------------#
+    raw_output = await generate_time_expression_impl(
+        state_obj.model_dump(mode="json")  # safe for LLM / helper
+    )
+
+    # -------- 3. coerce & return --------------------------------------------#
+    return _coerce_expression(raw_output)
 
 
 
