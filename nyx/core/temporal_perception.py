@@ -971,8 +971,7 @@ def create_time_reflection_agent() -> Agent:
             generate_time_reflection,
             determine_temporal_context
         ],
-        output_type=TemporalReflection,
-        model="gpt-4.1-nano"
+        output_type=TemporalReflection
     )
 
 def create_time_perception_agent() -> Agent:
@@ -1001,8 +1000,7 @@ def create_time_perception_agent() -> Agent:
             determine_temporal_context,
             detect_time_scale_transition
         ],
-        output_type=TimePerceptionState,
-        model="gpt-4.1-nano"
+        output_type=TimePerceptionState
     )
 
 def create_temporal_awareness_agent() -> Agent:
@@ -1029,8 +1027,7 @@ def create_temporal_awareness_agent() -> Agent:
             detect_time_scale_transition,
             determine_temporal_context
         ],
-        output_type=TemporalAwarenessOutput,
-        model="gpt-4.1-nano"
+        output_type=TemporalAwarenessOutput
     )
 
 # =============== Main Temporal Perception System ===============
