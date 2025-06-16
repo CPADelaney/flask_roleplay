@@ -13,7 +13,7 @@ import json
 import os
 import aiofiles
 from typing import Dict, List, Any, Optional, Set, Union, Tuple, Callable, Type
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator, Json
 from enum import Enum
 from concurrent.futures import ThreadPoolExecutor
 from collections import defaultdict
@@ -26,7 +26,7 @@ import weakref
 # Import agent framework components
 from agents import (
     Agent, Runner, ModelSettings, trace, function_tool, RunContextWrapper,
-    handoff, GuardrailFunctionOutput, InputGuardrail, OutputGuardrail, Json
+    handoff, GuardrailFunctionOutput, InputGuardrail, OutputGuardrail
 )
 
 logger = logging.getLogger(__name__)
