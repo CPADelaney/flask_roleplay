@@ -39,7 +39,7 @@ class ResolvedParameter(BaseModel):
     """A single fully-resolved parameter."""
     name: str
     value: Any
-    model_config = {"extra": "forbid"}      # strict!
+    pass
 
 
 class ParameterStatus(BaseModel):
@@ -48,7 +48,7 @@ class ParameterStatus(BaseModel):
     original: str          # literal “$step_n.foo”
     resolved: bool         # did we find a value?
     is_null: bool          # value exists but is None
-    model_config = {"extra": "forbid"}      # strict!
+    pass
 
 
 class StepParameterResolutionResult(BaseModel):
@@ -56,7 +56,7 @@ class StepParameterResolutionResult(BaseModel):
     resolved_parameters: List[ResolvedParameter]
     resolution_status:    List[ParameterStatus]
     all_resolved:         bool
-    model_config = {"extra": "forbid"}  
+    pass
 
 class GoalStep(BaseModel):
     """A single step in a goal's execution plan"""
