@@ -764,308 +764,423 @@ class ExperienceConsolidationSystem:
     # ---------------------------------------------------------------------------
 
 
-    @staticmethod  
+    # ---------------------------------------------------------------------------
+    @staticmethod
     @function_tool
-    async def _calculate_coverage_score(ctx: RunContextWrapper,
-                                  consolidated: ExperienceDetails,
-                                  source_experiences: List[ExperienceDetails]) -> CoverageScore:
+    async def _calculate_coverage_score(
+        ctx: RunContextWrapper,
+        consolidated: Any,                    # ExperienceDetails *or* dict
+        source_experiences: List[Any]         # ditto
+    ) -> CoverageScore:
         """
-        Calculate how well the consolidation covers the source experiences
-        
-        Args:
-            consolidated: Consolidated experience
-            source_experiences: Source experiences
-            
-        Returns:
-            Coverage score (0.0-1.0)
+        Measure how thoroughly the consolidated memory represents its sources.
+    
+        Coverage for each source = |common_words| / |source_words|
+        (scaled ×2, capped at 1).  Final score = mean of per-source coverages.
         """
+        def _get(e, k, default=""):
+            return getattr(e, k, e.get(k, default) if isinstance(e, dict) else default)
+    
         if not source_experiences:
             return CoverageScore(score=0.0)
-        
-        consolidated_text = consolidated.content
+    
+        consolidated_text = _get(consolidated, "content", "")
         if not consolidated_text:
             return CoverageScore(score=0.0)
-        
-        # For each source experience, check if key elements are represented in the consolidation
-        coverage_scores = []
-        
-        for source in source_experiences:
-            source_text = source.content
-            if not source_text:
+    
+        cons_words = set(consolidated_text.lower().split())
+        scores: List[float] = []
+    
+        for src in source_experiences:
+            src_text = _get(src, "content", "")
+            if not src_text:
                 continue
-            
-            # Extract key elements from source (simple approach: key nouns and verbs)
-            source_words = set(source_text.lower().split())
-            
-            # Compare with consolidated text
-            consolidated_words = set(consolidated_text.lower().split())
-            common_words = source_words.intersection(consolidated_words)
-            
-            # Calculate coverage for this source
-            source_coverage = len(common_words) / max(1, len(source_words))
-            coverage_scores.append(min(1.0, source_coverage * 2))  # Scale up but cap at 1.0
-        
-        if not coverage_scores:
+            src_words = set(src_text.lower().split())
+            common    = src_words & cons_words
+            coverage  = len(common) / max(1, len(src_words))
+            scores.append(min(1.0, coverage * 2.0))   # scale but cap
+    
+        if not scores:
             return CoverageScore(score=0.0)
-        
-        # Overall coverage is average of individual coverages
-        return CoverageScore(score=sum(coverage_scores) / len(coverage_scores))
+    
+        return CoverageScore(score=sum(scores) / len(scores))
+    # ---------------------------------------------------------------------------
 
-    @staticmethod  
+
+    # ---------------------------------------------------------------------------
+    @staticmethod
     @function_tool
-    async def _calculate_coherence_score(ctx: RunContextWrapper, consolidated: ExperienceDetails) -> CoherenceScore:
+    async def _calculate_coherence_score(
+        ctx: RunContextWrapper,
+        consolidated: Any                     # ExperienceDetails OR dict
+    ) -> CoherenceScore:
         """
-        Calculate coherence of the consolidated experience
-        
-        Args:
-            consolidated: Consolidated experience
-            
-        Returns:
-            Coherence score (0.0-1.0)
+        Compute a robust 0-1 coherence score for a consolidated memory.
+    
+        ─────────────────────────────────────────────────────────────────────
+        COMPONENTS & WEIGHTS
+        ╭──────────────────────────────────────────────────────────────────╮
+        │   0.40  ➜  Lexical / Semantic cohesion between adjacent          │
+        │             sentences (spaCy vector cosine or Jaccard)           │
+        │   0.40  ➜  Readability (Flesch Reading-Ease, 0-100 ↦ 0-1)        │
+        │   0.20  ➜  Heuristic structure score (keyword presence)          │
+        ╰──────────────────────────────────────────────────────────────────╯
+        All heavy-weight libs are optional; graceful degradation ensures the
+        function never crashes in production.
         """
-        consolidated_text = consolidated.content
-        if not consolidated_text:
+    
+        # -------- helpers ---------------------------------------------------------
+        def _safe_get(obj, attr, default=""):
+            return getattr(obj, attr, obj.get(attr, default) if isinstance(obj, dict) else default)
+    
+        def _keyword_structure_score(text: str) -> float:
+            keys = ["pattern", "common", "across", "multiple", "experiences",
+                    "trend", "insight", "connection"]
+            return sum(k in text for k in keys) / len(keys)
+    
+        # Approx. Flesch Reading-Ease if textstat unavailable
+        def _flesch_fallback(words: List[str], sentences: List[str]) -> float:
+            # Very rough syllable estimate:   syllables ≈ vowels groups
+            vowels = "aeiouy"
+            syllables = 0
+            for w in words:
+                w = w.lower()
+                v_groups = 0
+                prev_is_vowel = False
+                for ch in w:
+                    is_vowel = ch in vowels
+                    if is_vowel and not prev_is_vowel:
+                        v_groups += 1
+                    prev_is_vowel = is_vowel
+                syllables += max(1, v_groups)
+            W, S = len(words), max(1, len(sentences))
+            # Flesch formula
+            return 206.835 - 1.015 * (W / S) - 84.6 * (syllables / W)
+    
+        # -------- extract text ----------------------------------------------------
+        text = _safe_get(consolidated, "content", "")
+        if not text.strip():
             return CoherenceScore(score=0.0)
-        
-        # Simple measure based on text structure and clarity
-        # In a full implementation, this would use more sophisticated NLP
-        
-        # Check for structured explanation
-        has_pattern = "pattern" in consolidated_text.lower()
-        has_common = "common" in consolidated_text.lower()
-        has_across = "across" in consolidated_text.lower()
-        has_multiple = "multiple" in consolidated_text.lower()
-        has_experiences = "experiences" in consolidated_text.lower()
-        
-        structure_score = sum([has_pattern, has_common, has_across, has_multiple, has_experiences]) / 5
-        
-        # Check for clear articulation
-        sentences = consolidated_text.split(".")
-        avg_sentence_length = sum(len(s.split()) for s in sentences) / max(1, len(sentences))
-        length_score = min(1.0, 20 / max(1, avg_sentence_length))  # Prefer concise sentences
-        
-        # Combined score with weights
-        coherence = structure_score * 0.7 + length_score * 0.3
-        
-        return CoherenceScore(score=coherence)
+    
+        low_text = text.lower()
+    
+        # -------- readability -----------------------------------------------------
+        try:
+            import textstat                  # optional dependency
+            flesch = textstat.flesch_reading_ease(text)
+        except Exception:
+            # lightweight fallback
+            tokens = text.split()
+            sents  = [s for s in text.replace(";", ".").split(".") if s.strip()]
+            flesch = _flesch_fallback(tokens, sents)
+    
+        # Map roughly 0-100 to 0-1 where ≥ 60 is “good”
+        readability = min(100.0, max(0.0, flesch)) / 100.0
+    
+        # -------- cohesion (lexical / semantic) -----------------------------------
+        cohesion_scores: List[float] = []
+    
+        # prefer spaCy semantic vectors if available
+        try:
+            import spacy
+            try:
+                nlp = spacy.load("en_core_web_md")
+            except Exception:
+                nlp = spacy.load("en_core_web_sm")     # has no vectors – will fall through
+            doc = nlp(text)
+            has_vectors = doc[0].vector_norm != 0
+            sentences = list(doc.sents) if doc.has_annotation("SENT_START") else [doc]
+            for sent_a, sent_b in zip(sentences, sentences[1:]):
+                if has_vectors:
+                    sim = sent_a.similarity(sent_b)
+                else:
+                    # fall back to Jaccard
+                    a_words = {t.lemma_.lower() for t in sent_a
+                               if not t.is_stop and t.is_alpha}
+                    b_words = {t.lemma_.lower() for t in sent_b
+                               if not t.is_stop and t.is_alpha}
+                    if not a_words or not b_words:
+                        continue
+                    sim = len(a_words & b_words) / len(a_words | b_words)
+                cohesion_scores.append(sim)
+        except Exception:
+            # Minimal tokenisation fallback
+            raw_sents = [s.strip() for s in text.replace(";", ".").split(".") if s.strip()]
+            for s1, s2 in zip(raw_sents, raw_sents[1:]):
+                w1 = set(s1.lower().split())
+                w2 = set(s2.lower().split())
+                if not w1 or not w2:
+                    continue
+                cohesion_scores.append(len(w1 & w2) / len(w1 | w2))
+    
+        lexical_cohesion = sum(cohesion_scores) / len(cohesion_scores) if cohesion_scores else 0.0
+        lexical_cohesion = min(1.0, max(0.0, lexical_cohesion))
+    
+        # -------- structure heuristic --------------------------------------------
+        structure = _keyword_structure_score(low_text)
+    
+        # -------- weighted aggregate ---------------------------------------------
+        coherence_score = (
+            lexical_cohesion * 0.40 +
+            readability     * 0.40 +
+            structure       * 0.20
+        )
+    
+        return CoherenceScore(score=round(coherence_score, 4))
+    # ---------------------------------------------------------------------------
 
-    @staticmethod  
+    # ---------------------------------------------------------------------------
+    @staticmethod
     @function_tool
-    async def _calculate_information_gain(ctx: RunContextWrapper,
-                                    consolidated: ExperienceDetails,
-                                    source_experiences: List[ExperienceDetails]) -> InformationGain:
+    async def _calculate_information_gain(
+        ctx: RunContextWrapper,
+        consolidated: Any,                    # ExperienceDetails or dict
+        source_experiences: List[Any]
+    ) -> InformationGain:
         """
-        Calculate information gain from consolidation
-        
-        Args:
-            consolidated: Consolidated experience
-            source_experiences: Source experiences
-            
-        Returns:
-            Information gain score (0.0-1.0)
+        Estimate how much new / abstracted value the consolidation adds.
+    
+        Components (weights):
+          • 0.40 insight markers          (“pattern”, “trend”, …)
+          • 0.40 compression_score        (shorter than sources)
+          • 0.20 abstraction_score        (generalising adverbs)
         """
+        def _get(e, k, default=""):
+            return getattr(e, k, e.get(k, default) if isinstance(e, dict) else default)
+    
         if not source_experiences:
             return InformationGain(score=0.0)
-        
-        consolidated_text = consolidated.content
-        if not consolidated_text:
+    
+        text = _get(consolidated, "content", "")
+        if not text:
             return InformationGain(score=0.0)
-        
-        # Check for higher-level insights
-        has_insight_markers = any(marker in consolidated_text.lower() for marker in 
+    
+        low = text.lower()
+        insight_markers = any(m in low for m in
                               ["pattern", "trend", "insight", "connection", "common", "across"])
-        
-        # Check if consolidation is shorter than sum of sources
-        source_length = sum(len(s.content) for s in source_experiences)
-        consolidated_length = len(consolidated_text)
-        compression_ratio = 1.0 - (consolidated_length / max(1, source_length))
-        compression_score = min(1.0, max(0.0, compression_ratio * 2))  # Scale up but cap at 1.0
-        
-        # Check if consolidation uses abstraction terms
-        abstraction_markers = ["generally", "typically", "tend to", "often", "usually", "pattern"]
-        has_abstractions = sum(1 for marker in abstraction_markers if marker in consolidated_text.lower())
-        abstraction_score = min(1.0, has_abstractions / 3)  # Scale but cap at 1.0
-        
-        # Combined score with weights
-        information_gain = (
-            (has_insight_markers * 0.4) +
-            (compression_score * 0.4) +
-            (abstraction_score * 0.2)
-        )
-        
-        return InformationGain(score=information_gain)
+        insight_score   = 1.0 if insight_markers else 0.0
+    
+        total_source_len = sum(len(_get(s, "content", "")) for s in source_experiences)
+        compression_ratio = 1.0 - (len(text) / max(1, total_source_len))
+        compression_score = min(1.0, max(0.0, compression_ratio * 2.0))
+    
+        abstraction_words  = ["generally", "typically", "tend to", "often",
+                              "usually", "pattern"]
+        abstractions_found = sum(1 for w in abstraction_words if w in low)
+        abstraction_score  = min(1.0, abstractions_found / 3.0)
+    
+        gain = (insight_score * 0.4 +
+                compression_score * 0.4 +
+                abstraction_score * 0.2)
+    
+        return InformationGain(score=gain)
+    # ---------------------------------------------------------------------------
+
     
     # New helper functions for orchestration
 
-    @staticmethod  
+    @staticmethod
     @function_tool
-    async def _update_consolidation_history(ctx: RunContextWrapper,
-                                       consolidated_id: str,
-                                       source_ids: List[str],
-                                       quality_score: float,
-                                       consolidation_type: str) -> UpdateHistoryResult:
+    async def _update_consolidation_history(                     # noqa: N802
+        ctx: RunContextWrapper,
+        consolidated_id: str,
+        source_ids: List[str],
+        quality_score: float,
+        consolidation_type: str
+    ) -> UpdateHistoryResult:
         """
-        Update consolidation history with new entry
-        
-        Args:
-            consolidated_id: ID of the consolidated experience
-            source_ids: IDs of source experiences
-            quality_score: Quality evaluation score
-            consolidation_type: Type of consolidation performed
-            
-        Returns:
-            Success status
+        Record a new consolidation entry.
+    
+        • De-duplicates identical entries (same consolidated_id).  
+        • Maintains `parent_system.consolidation_history` no longer than
+          `parent_system.max_history_size`.
         """
-        # Get parent system from context
-        parent_system = ctx.context.parent_system
-        
-        # Add to history
-        parent_system.consolidation_history.append({
-            "timestamp": datetime.now().isoformat(),
-            "consolidated_id": consolidated_id,
-            "source_ids": source_ids,
-            "source_count": len(source_ids),
-            "quality_score": quality_score,
-            "consolidation_type": consolidation_type
-        })
-        
-        # Limit history size
-        if len(parent_system.consolidation_history) > parent_system.max_history_size:
-            parent_system.consolidation_history = parent_system.consolidation_history[-parent_system.max_history_size:]
-        
+        ps = ctx.context.parent_system       # ↟ convenience alias
+        if not ps:                             # should never happen
+            return UpdateHistoryResult(success=False)
+    
+        # --- de-dup: if we already have this consolidated_id, update quality/type
+        for entry in ps.consolidation_history:
+            if entry["consolidated_id"] == consolidated_id:
+                entry.update(
+                    timestamp=datetime.now(timezone.utc).isoformat(),
+                    quality_score=quality_score,
+                    consolidation_type=consolidation_type,
+                    source_ids=list(set(entry["source_ids"]) | set(source_ids)),
+                    source_count=len(entry["source_ids"]),
+                )
+                break
+        else:
+            # new record
+            ps.consolidation_history.append(
+                {
+                    "timestamp":       datetime.now(timezone.utc).isoformat(),
+                    "consolidated_id": consolidated_id,
+                    "source_ids":      source_ids,
+                    "source_count":    len(source_ids),
+                    "quality_score":   quality_score,
+                    "consolidation_type": consolidation_type,
+                }
+            )
+    
+        # trim history ∵ bounded memory
+        if len(ps.consolidation_history) > ps.max_history_size:
+            ps.consolidation_history = ps.consolidation_history[-ps.max_history_size :]
+    
+        # keep convenience pointer to “last consolidation”
+        ps.last_consolidation = datetime.now(timezone.utc)
+    
         return UpdateHistoryResult(success=True)
 
-    @staticmethod  
+
+    @staticmethod
     @function_tool
-    async def _get_consolidation_statistics(ctx: RunContextWrapper) -> ConsolidationStatistics:
+    async def _get_consolidation_statistics(                     # noqa: N802
+        ctx: RunContextWrapper
+    ) -> ConsolidationStatistics:
         """
-        Get statistics about consolidation activities
-        
-        Returns:
-            Consolidation statistics
+        Return snapshot statistics with graceful handling of first-run state.
         """
-        # Get parent system from context
-        parent_system = ctx.context.parent_system
-        
-        if not parent_system.consolidation_history:
+        ps = ctx.context.parent_system
+        if not ps or not getattr(ps, "consolidation_history", None):
             return ConsolidationStatistics(
                 total_consolidations=0,
                 avg_quality=0.0,
                 type_distribution={},
                 ready_for_next=True,
-                hours_until_next=0.0
+                hours_until_next=0.0,
             )
-        
-        # Calculate statistics
-        total = len(parent_system.consolidation_history)
-        avg_quality = sum(entry.get("quality_score", 0.0) for entry in parent_system.consolidation_history) / total
-        
-        # Count consolidation types
-        type_counts = {}
-        for entry in parent_system.consolidation_history:
-            c_type = entry.get("consolidation_type", "unknown")
-            type_counts[c_type] = type_counts.get(c_type, 0) + 1
-        
-        # Check if ready for next consolidation
-        now = datetime.now()
-        time_since_last = (now - parent_system.last_consolidation).total_seconds() / 3600  # hours
-        ready_for_next = time_since_last >= parent_system.consolidation_interval
-        
+    
+        hist = ps.consolidation_history
+        total = len(hist)
+        avg_quality = sum(e.get("quality_score", 0.0) for e in hist) / total if total else 0.0
+    
+        type_dist: Dict[str, int] = {}
+        for e in hist:
+            ctype = e.get("consolidation_type", "unknown")
+            type_dist[ctype] = type_dist.get(ctype, 0) + 1
+    
+        # readiness for next consolidation
+        last_ts = getattr(ps, "last_consolidation", datetime.now(timezone.utc))
+        elapsed_hrs = (datetime.now(timezone.utc) - last_ts).total_seconds() / 3600
+        interval = getattr(ps, "consolidation_interval", 6)  # default 6 h
+        ready = elapsed_hrs >= interval
+    
         return ConsolidationStatistics(
             total_consolidations=total,
-            avg_quality=avg_quality,
-            type_distribution=type_counts,
-            ready_for_next=ready_for_next,
-            hours_until_next=max(0, parent_system.consolidation_interval - time_since_last)
+            avg_quality=round(avg_quality, 4),
+            type_distribution=type_dist,
+            ready_for_next=ready,
+            hours_until_next=max(0.0, interval - elapsed_hrs),
+        )
+
+    # Helper – very fast lexical Jaccard as a fallback
+    def _quick_jaccard(a: str, b: str) -> float:
+        a_set, b_set = set(a.lower().split()), set(b.lower().split())
+        if not a_set or not b_set:
+            return 0.0
+        return len(a_set & b_set) / len(a_set | b_set)
+    
+    # ---------------------------------------------------------------------------
+    @staticmethod
+    @function_tool
+    async def _find_similar_experiences(                        # noqa: N802
+        ctx: RunContextWrapper,
+        params: SimilarExperiencesParams
+    ) -> FindSimilarResult:
+        """
+        Concurrent, vector-based (if available) *or* lexical fallback similarity.
+        """
+        ps = ctx.context.parent_system
+        if not ps:
+            return FindSimilarResult(experiences=[])
+    
+        mem_core   = ps.memory_core
+        interface  = getattr(ps, "experience_interface", None)
+        vectors_ok = (
+            interface
+            and hasattr(interface, "_generate_experience_vector")
+            and hasattr(interface, "experience_vectors")
         )
     
-    # New implementation of find_similar_experiences with Pydantic model
-
-    @staticmethod  
-    @function_tool
-    async def _find_similar_experiences(ctx: RunContextWrapper,
-                                   params: SimilarExperiencesParams) -> FindSimilarResult:
-        """
-        Find experiences similar to the given one
-        
-        Args:
-            params: Parameters for finding similar experiences
-            
-        Returns:
-            List of similar experiences
-        """
-        # Get parent system from context
-        parent_system = ctx.context.parent_system
-        
-        # Extract parameters
-        experience_id = params.experience_id
-        similarity_threshold = params.similarity_threshold
-        max_similar = params.max_similar
-        
-        # Get the experience
-        try:
-            experience = await parent_system.memory_core.get_memory_by_id(experience_id)
-            
-            if not experience:
-                return FindSimilarResult(experiences=[])
-            
-            # Get the experience text
-            experience_text = experience.get("memory_text", "")
-            
-            if not experience_text:
-                return FindSimilarResult(experiences=[])
-            
-            # Get vector for this experience
-            if hasattr(parent_system.experience_interface, "_generate_experience_vector") and hasattr(parent_system.experience_interface, "experience_vectors"):
-                if experience_id in parent_system.experience_interface.experience_vectors:
-                    exp_vector = parent_system.experience_interface.experience_vectors[experience_id].get("vector", [])
-                else:
-                    # Generate vector
-                    exp_vector = await parent_system.experience_interface._generate_experience_vector(
-                        ctx, parent_system.experience_interface, experience_text
-                    )
-                    
-                    # Store for future use
-                    parent_system.experience_interface.experience_vectors[experience_id] = {
-                        "experience_id": experience_id,
-                        "vector": exp_vector,
-                        "metadata": {
-                            "user_id": experience.get("metadata", {}).get("user_id", "unknown"),
-                            "timestamp": experience.get("timestamp", datetime.now().isoformat())
-                        }
-                    }
-                
-                # Find similar experiences
-                similar_experiences = []
-                
-                for other_id, other_vector_data in parent_system.experience_interface.experience_vectors.items():
-                    if other_id != experience_id:
-                        other_vector = other_vector_data.get("vector", [])
-                        
-                        # Calculate similarity
-                        similarity = parent_system.experience_interface._calculate_cosine_similarity(exp_vector, other_vector)
-                        
-                        if similarity >= similarity_threshold:
-                            # Get the experience
-                            other_exp = await parent_system.memory_core.get_memory_by_id(other_id)
-                            
-                            if other_exp:
-                                other_exp["similarity"] = similarity
-                                similar_experiences.append(other_exp)
-                
-                # Sort by similarity
-                similar_experiences.sort(key=lambda x: x.get("similarity", 0), reverse=True)
-                
-                # Return top matches
-                return FindSimilarResult(experiences=similar_experiences[:max_similar])
-            else:
-                # Fallback method if vector search not available
-                logger.warning("Vector search not available, using fallback method")
-                return FindSimilarResult(experiences=[])
-                
-        except Exception as e:
-            logger.error(f"Error finding similar experiences: {e}")
+        # ── fetch target experience ────────────────────────────────────────────
+        target = await mem_core.get_memory_by_id(params.experience_id)
+        if not target:
             return FindSimilarResult(experiences=[])
+        target_text = target.get("memory_text", "")
+        if not target_text:
+            return FindSimilarResult(experiences=[])
+    
+        # ── obtain / compute vector ────────────────────────────────────────────
+        if vectors_ok:
+            if params.experience_id not in interface.experience_vectors:
+                vec = await interface._generate_experience_vector(  # pylint: disable=protected-access
+                    ctx, interface, target_text
+                )
+                interface.experience_vectors[params.experience_id] = {
+                    "experience_id": params.experience_id,
+                    "vector": vec,
+                    "metadata": {
+                        "user_id": target.get("metadata", {}).get("user_id", "unknown"),
+                        "timestamp": target.get("timestamp", datetime.now(timezone.utc).isoformat()),
+                    },
+                }
+            target_vec = interface.experience_vectors[params.experience_id]["vector"]
+        else:
+            target_vec = None  # lexical fallback
+    
+        # ── gather candidate ids quickly (reuse cached vectors if present) ─────
+        candidate_ids = (
+            list(interface.experience_vectors.keys()) if vectors_ok
+            else await mem_core.get_all_memory_ids()
+        )
+        candidate_ids = [cid for cid in candidate_ids if cid != params.experience_id]
+    
+        # ── concurrency: fetch & score ─────────────────────────────────────────
+        semaphore = asyncio.Semaphore(50)  # limit I/O concurrency
+    
+        async def _score(cid: str):
+            async with semaphore:
+                # fetch text (cached vectors may carry metadata already)
+                if vectors_ok and cid in interface.experience_vectors:
+                    cand_vec = interface.experience_vectors[cid]["vector"]
+                    cand_mem = None
+                else:
+                    cand_mem = await mem_core.get_memory_by_id(cid)
+                    if not cand_mem:
+                        return None
+                    cand_vec = None
+                cand_text = (
+                    cand_mem["memory_text"]
+                    if cand_mem
+                    else await mem_core.get_memory_by_id(cid)  # ensure we have text
+                ).get("memory_text", "")
+    
+                if not cand_text:
+                    return None
+    
+                # similarity
+                if target_vec is not None and cand_vec is not None:
+                    sim = interface._calculate_cosine_similarity(target_vec, cand_vec)  # pylint: disable=protected-access
+                else:
+                    sim = _quick_jaccard(target_text, cand_text)
+    
+                if sim < params.similarity_threshold:
+                    return None
+    
+                # ensure we expose same dict shape as upstream code expected
+                if not cand_mem:
+                    cand_mem = await mem_core.get_memory_by_id(cid)
+                cand_mem = dict(cand_mem)  # shallow copy
+                cand_mem["similarity"] = sim
+                return cand_mem
+    
+        tasks = [_score(cid) for cid in candidate_ids]
+        scored = [res for res in await asyncio.gather(*tasks) if res]
+    
+        # ── sort & truncate ────────────────────────────────────────────────────
+        scored.sort(key=lambda x: x["similarity"], reverse=True)
+        return FindSimilarResult(experiences=scored[: params.max_similar])
 
 # nyx/core/experience_consolidation.py - Part 3 (Public Methods)
     
