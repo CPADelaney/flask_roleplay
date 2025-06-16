@@ -27,6 +27,26 @@ class ContextRelevanceResult(BaseModel, extra="forbid"):
     relevance_scores: List[float]
     average_relevance: float = Field(..., ge=0.0, le=1.0)
 
+class TraitImbalance(BaseModel, extra="forbid"):
+    # Either a single trait OR an opposing-pair description is present
+    trait: Optional[str] = None
+    traits: Optional[List[str]] = None
+
+    # numerical details (only one of these will be filled per record)
+    value: Optional[float] = Field(None, ge=0.0, le=1.0)
+    difference: Optional[float] = Field(None, ge=0.0, le=1.0)
+
+    # descriptions
+    issue: str
+    recommendation: str
+
+
+class TraitBalanceResult(BaseModel, extra="forbid"):
+    balanced: bool
+    imbalances: List[TraitImbalance]
+    trait_count: int
+    average_value: float = Field(..., ge=0.0, le=1.0)
+
 
 # --------------------------------------------------------------------------- #
 #  Helpers
@@ -657,72 +677,110 @@ async def update_identity_trait(
     }
 
 @function_tool
-async def check_trait_balance(
+async def check_trait_balance(                         # noqa: N802
     ctx: RunContextWrapper,
-    traits_snapshot: Optional[Dict[str, float]] = None
-) -> Dict[str, Any]:
-    """Check balance of personality traits"""
-    if traits_snapshot is None:
-        return {
-            "balanced": False,
-            "imbalances": [{"issue": "No traits provided"}],
-            "trait_count": 0,
-            "average_value": 0.0
-        }
-    
-    imbalances = []
+    traits_snapshot_json: Optional[str] = None,
+) -> TraitBalanceResult:
+    """
+    Analyse a snapshot of personality-trait values (0-1 floats) and flag any
+    extreme or opposing imbalances.
+
+    Parameters
+    ----------
+    traits_snapshot_json : str | null
+        JSON object: `{"trait_name": 0-1, ...}`.  If null/empty, the call
+        returns `balanced=False` with an explanatory imbalance record.
+
+    Returns
+    -------
+    TraitBalanceResult
+        Structured result with `.balanced`, `.imbalances`, `.trait_count`,
+        `.average_value`.
+    """
+    # --------------------------- parse input safely --------------------------
+    traits_snapshot: Dict[str, float] = {}
+    if traits_snapshot_json:
+        try:
+            parsed = json.loads(traits_snapshot_json)
+            if isinstance(parsed, dict):
+                traits_snapshot = {
+                    str(k): float(v) for k, v in parsed.items()  # type: ignore[arg-type]
+                    if isinstance(v, (int, float))
+                }
+            else:
+                logger.warning(
+                    "check_trait_balance: expected JSON object, got %s", type(parsed)
+                )
+        except (ValueError, TypeError) as exc:
+            logger.error("check_trait_balance: bad JSON – %s", exc)
+
+    # ---------------------------- early exits --------------------------------
+    if not traits_snapshot:
+        return TraitBalanceResult(
+            balanced=False,
+            imbalances=[
+                TraitImbalance(
+                    issue="No traits provided",
+                    recommendation="Supply a non-empty trait snapshot",
+                )
+            ],
+            trait_count=0,
+            average_value=0.0,
+        )
+
+    imbalances: List[TraitImbalance] = []
     num_traits = len(traits_snapshot)
-    
-    if num_traits == 0:
-        return {
-            "balanced": True,
-            "imbalances": [],
-            "trait_count": 0,
-            "average_value": 0.0
-        }
-    
-    # Check extreme values
+
+    # ----------------------- extreme high / low checks -----------------------
     for trait, value in traits_snapshot.items():
         if value > 0.95:
-            imbalances.append({
-                "trait": trait,
-                "value": round(value, 3),
-                "issue": "extremely_high",
-                "recommendation": f"Consider moderating '{trait}'"
-            })
+            imbalances.append(
+                TraitImbalance(
+                    trait=trait,
+                    value=round(value, 3),
+                    issue="extremely_high",
+                    recommendation=f"Consider moderating '{trait}'.",
+                )
+            )
         elif value < 0.05:
-            imbalances.append({
-                "trait": trait,
-                "value": round(value, 3),
-                "issue": "extremely_low",
-                "recommendation": f"Consider developing '{trait}'"
-            })
-    
-    # Check opposing pairs
+            imbalances.append(
+                TraitImbalance(
+                    trait=trait,
+                    value=round(value, 3),
+                    issue="extremely_low",
+                    recommendation=f"Consider developing '{trait}'.",
+                )
+            )
+
+    # --------------------------- opposing pairs ------------------------------
     opposing_pairs = [
         ("dominance", "patience"),
         ("playfulness", "strictness"),
-        ("intensity", "nurturing")
+        ("intensity", "nurturing"),
     ]
-    
     for t1, t2 in opposing_pairs:
         if t1 in traits_snapshot and t2 in traits_snapshot:
             diff = abs(traits_snapshot[t1] - traits_snapshot[t2])
             if diff > 0.7:
-                imbalances.append({
-                    "traits": [t1, t2],
-                    "difference": round(diff, 3),
-                    "issue": "opposing_imbalance",
-                    "recommendation": f"Balance {t1} and {t2}"
-                })
-    
-    return {
-        "balanced": len(imbalances) == 0,
-        "imbalances": imbalances,
-        "trait_count": num_traits,
-        "average_value": round(sum(traits_snapshot.values()) / num_traits, 3) if num_traits > 0 else 0.0
-    }
+                imbalances.append(
+                    TraitImbalance(
+                        traits=[t1, t2],
+                        difference=round(diff, 3),
+                        issue="opposing_imbalance",
+                        recommendation=f"Balance '{t1}' and '{t2}'.",
+                    )
+                )
 
+    # --------------------------- final package -------------------------------
+    balanced = not imbalances
+    avg_val = sum(traits_snapshot.values()) / num_traits
+
+    return TraitBalanceResult(
+        balanced=balanced,
+        imbalances=imbalances,
+        trait_count=num_traits,
+        average_value=round(avg_val, 3),
+    )
 # ==================== Orchestration Tools ====================
 
 @function_tool
