@@ -2243,13 +2243,18 @@ class IdentityEvolutionSystem:
         impact: float,
         neurochemical_impacts: Optional[Dict[str, float]] = None,
     ) -> Dict[str, Any]:
+        """
+        Adjust a single trait, record its history, and (optionally) cascade the
+        change into matching neurochemical baselines.
+        """
+        import sys, datetime                                
         ic = ctx.context
         if trait not in ic.identity_traits:
             return {"error": f"Trait not found: {trait}",
                     "available_traits": list(ic.identity_traits.keys())}
     
-        data = ic.identity_traits[trait]
-        curr, stab = data["value"], data["stability"]
+        data        = ic.identity_traits[trait]
+        curr, stab  = data["value"], data["stability"]
         resistance  = stab * 0.8
         raw_change  = impact * ic.evolution_rate
         actual      = raw_change * (1.0 - resistance)
@@ -2264,28 +2269,27 @@ class IdentityEvolutionSystem:
             if len(data["evolution_history"]) > ic.max_history_entries:
                 data["evolution_history"] = data["evolution_history"][-ic.max_history_entries:]
     
-        # --- NEW: use qualified call so static helper is resolvable -----
-        neuro_results = {}
+        neuro_results: Dict[str, Any] = {}
         if neurochemical_impacts:
+            update_chem = getattr(sys.modules[__name__], "IdentityEvolutionSystem")._update_neurochemical_baseline
             for chem, chem_imp in neurochemical_impacts.items():
                 if chem in ic.neurochemical_profile:
                     scaled = chem_imp * abs(actual) / ic.min_impact_threshold
-                    neuro_results[chem] = await IdentityEvolutionSystem._update_neurochemical_baseline(
+                    neuro_results[chem] = await update_chem(
                         ctx, chemical=chem, impact=scaled,
                         reason=f"trait_{trait}_update",
                     )
-        # ----------------------------------------------------------------
     
         return {
-            "trait": trait,
-            "old_value": curr,
-            "raw_change": raw_change,
-            "actual_change": actual,
-            "resistance": resistance,
-            "new_value": new_val,
+            "trait":               trait,
+            "old_value":           curr,
+            "raw_change":          raw_change,
+            "actual_change":       actual,
+            "resistance":          resistance,
+            "new_value":           new_val,
             "neurochemical_impacts": neuro_results,
         }
-    
+        
     @staticmethod
     @function_tool
     async def _update_preference(
@@ -2294,7 +2298,13 @@ class IdentityEvolutionSystem:
         preference: str,
         impact: float,
     ) -> Dict[str, Any]:
+        """
+        Adjust a single preference, record its history, and cascade the change into
+        the relevant neurochemical baselines.
+        """
+        import sys, datetime                             
         ic = ctx.context
+    
         if category not in ic.identity_preferences:
             return {"error": f"Category not found: {category}",
                     "available_categories": list(ic.identity_preferences.keys())}
@@ -2302,12 +2312,12 @@ class IdentityEvolutionSystem:
             return {"error": f"Preference not found: {preference}",
                     "available_preferences": list(ic.identity_preferences[category].keys())}
     
-        pdata = ic.identity_preferences[category][preference]
-        curr, adapt = pdata["value"], pdata["adaptability"]
-        adapt_factor = adapt * 1.2
-        raw_change   = impact * ic.evolution_rate
-        actual       = raw_change * adapt_factor
-        new_val      = max(0.0, min(1.0, curr + actual))
+        pdata          = ic.identity_preferences[category][preference]
+        curr, adapt    = pdata["value"], pdata["adaptability"]
+        adapt_factor   = adapt * 1.2
+        raw_change     = impact * ic.evolution_rate
+        actual         = raw_change * adapt_factor
+        new_val        = max(0.0, min(1.0, curr + actual))
         pdata["value"] = new_val
     
         if abs(actual) >= ic.min_impact_threshold:
@@ -2318,28 +2328,28 @@ class IdentityEvolutionSystem:
             if len(pdata["evolution_history"]) > ic.max_history_entries:
                 pdata["evolution_history"] = pdata["evolution_history"][-ic.max_history_entries:]
     
-        # --- NEW: qualified helper call ---------------------------------
-        neuro_results = {}
-        for chem, mod in pdata.get("neurochemical_modifiers", {}).items():
-            if chem in ic.neurochemical_profile:
-                scaled = mod * abs(actual) / ic.min_impact_threshold * 0.3
-                neuro_results[chem] = await IdentityEvolutionSystem._update_neurochemical_baseline(
-                    ctx, chemical=chem, impact=scaled,
-                    reason=f"preference_{category}_{preference}_update",
-                )
-        # ----------------------------------------------------------------
+        neuro_results: Dict[str, Any] = {}
+        if pdata.get("neurochemical_modifiers"):
+            update_chem = getattr(sys.modules[__name__], "IdentityEvolutionSystem")._update_neurochemical_baseline
+            for chem, mod in pdata["neurochemical_modifiers"].items():
+                if chem in ic.neurochemical_profile:
+                    scaled = mod * abs(actual) / ic.min_impact_threshold * 0.3
+                    neuro_results[chem] = await update_chem(
+                        ctx, chemical=chem, impact=scaled,
+                        reason=f"preference_{category}_{preference}_update",
+                    )
     
         return {
-            "category": category,
-            "preference": preference,
-            "old_value": curr,
-            "raw_change": raw_change,
-            "actual_change": actual,
-            "adaptability": adapt_factor,
-            "new_value": new_val,
+            "category":            category,
+            "preference":          preference,
+            "old_value":           curr,
+            "raw_change":          raw_change,
+            "actual_change":       actual,
+            "adaptability":        adapt_factor,
+            "new_value":           new_val,
             "neurochemical_impacts": neuro_results,
         }
-        
+
     @staticmethod
     @function_tool
     async def _calculate_neurochemical_impacts(
