@@ -784,7 +784,7 @@ async def check_trait_balance(                         # noqa: N802
 # ==================== Orchestration Tools ====================
 
 @function_tool
-async def determine_conditioning_type(
+async def determine_conditioning_type(                    # noqa: N802
     ctx: RunContextWrapper,
     stimulus: Optional[str] = None,
     response: Optional[str] = None,
@@ -792,22 +792,63 @@ async def determine_conditioning_type(
     consequence_type: Optional[str] = None,
     trait: Optional[str] = None,
     preference_type: Optional[str] = None,
-    emotion_trigger_details: Optional[Dict[str, Any]] = None
+    emotion_trigger_details_json: Optional[str] = None,
 ) -> str:
-    """Determine the type of conditioning based on input parameters"""
+    """
+    Decide which conditioning subsystem a caller should use.
+
+    Parameters
+    ----------
+    * stimulus / response : classical-conditioning cues
+    * behavior / consequence_type : operant-conditioning pair
+    * trait : personality-trait conditioning
+    * preference_type : e.g. 'scenario_types', 'emotional_tones' …
+    * emotion_trigger_details_json : JSON object with keys
+        - trigger   (str)   : the stimulus
+        - emotion   (str)   : the emotion name
+
+    Returns
+    -------
+    str
+        One of:  'personality_trait' | 'preference' | 'emotion_trigger'
+                  'operant' | 'classical' | 'behavior_evaluation' | 'unknown'
+    """
+    # ---------- parse emotion-trigger details safely -------------------------
+    et_details = {}
+    if emotion_trigger_details_json:
+        try:
+            parsed = json.loads(emotion_trigger_details_json)
+            if isinstance(parsed, dict):
+                et_details = parsed
+            else:
+                logger.warning(
+                    "determine_conditioning_type: expected JSON object for "
+                    "'emotion_trigger_details_json', got %s", type(parsed)
+                )
+        except (json.JSONDecodeError, TypeError) as exc:
+            logger.error(
+                "determine_conditioning_type: could not parse JSON (%s)", exc
+            )
+
+    # ------------------------- decision tree ---------------------------------
     if trait:
         return "personality_trait"
+
     if preference_type and stimulus:
         return "preference"
-    if emotion_trigger_details and emotion_trigger_details.get("trigger") and emotion_trigger_details.get("emotion"):
+
+    if et_details.get("trigger") and et_details.get("emotion"):
         return "emotion_trigger"
+
     if behavior and consequence_type:
         return "operant"
+
     if stimulus and response:
         return "classical"
+
     if behavior and not consequence_type:
         return "behavior_evaluation"
-    
+
     return "unknown"
 
 @function_tool
