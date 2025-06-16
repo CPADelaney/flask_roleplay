@@ -2353,35 +2353,42 @@ class IdentityEvolutionSystem:
             "neurochemical_impacts": neuro_results,
         }
     
+    # ---------------------------------------------------------------------------
     @staticmethod
     @function_tool
     async def _calculate_neurochemical_impacts(
         ctx: RunContextWrapper,
-        experience: Dict[str, Any]
-    ) -> "NeurochemicalImpact":            # forward ref keeps type-checkers happy
-        ic = ctx.context
+        experience: Any,                           # <= was Dict[str, Any]
+    ) -> NeurochemicalImpact:                      # <= dropped the quotes
+        """
+        Derive baseline-level neurochemical impacts from an experience
+        (emotion + valence/arousal + scenario).  Logic unchanged; only the
+        type hints were tweaked to keep the Agents SDK strict-schema happy.
+        """
+        import datetime
+        ic        = ctx.context
         emotional = experience.get("emotional_context", {})
         scenario  = experience.get("scenario_type", "general")
-        sig       = experience.get("significance", 5) / 10
+        sig       = experience.get("significance", 5) / 10  # scale 0-10 → 0-1
     
         impacts = dict.fromkeys(
             ["nyxamine", "seranix", "oxynixin", "cortanyx", "adrenyx"], 0.0
         )
     
-        # --- emotion mapping ---------------------------------------------------
+        # ------------------------------------------------------------------ emotion
         emotion_map = {
-            "Joy": {"nyxamine": .4, "cortanyx": -.2},
-            "Sadness": {"cortanyx": .3, "nyxamine": -.2},
-            "Fear": {"cortanyx": .4, "adrenyx": .3},
-            "Anger": {"cortanyx": .4, "adrenyx": .3, "oxynixin": -.2},
-            "Trust": {"oxynixin": .4, "cortanyx": -.2},
-            "Disgust": {"cortanyx": .3, "oxynixin": -.3},
-            "Anticipation": {"adrenyx": .3, "nyxamine": .2},
-            "Surprise": {"adrenyx": .4, "nyxamine": .2},
-            "Teasing": {"nyxamine": .3, "adrenyx": .2},
-            "Controlling": {"adrenyx": .3, "oxynixin": -.2},
-            "Cruel": {"cortanyx": .3, "oxynixin": -.4},
-            "Detached": {"cortanyx": .2, "oxynixin": -.3, "seranix": .2},
+            "Joy":          {"nyxamine": .4, "cortanyx": -.2},
+            "Sadness":      {"cortanyx": .3, "nyxamine": -.2},
+            "Fear":         {"cortanyx": .4, "adrenyx":  .3},
+            "Anger":        {"cortanyx": .4, "adrenyx":  .3, "oxynixin": -.2},
+            "Trust":        {"oxynixin": .4, "cortanyx": -.2},
+            "Disgust":      {"cortanyx": .3, "oxynixin": -.3},
+            "Anticipation": {"adrenyx":  .3, "nyxamine": .2},
+            "Surprise":     {"adrenyx":  .4, "nyxamine": .2},
+            "Teasing":      {"nyxamine": .3, "adrenyx":  .2},
+            "Controlling":  {"adrenyx":  .3, "oxynixin": -.2},
+            "Cruel":        {"cortanyx": .3, "oxynixin": -.4},
+            "Detached":     {"cortanyx": .2, "oxynixin": -.3, "seranix":  .2},
         }
         emo = emotional.get("primary_emotion", "")
         if emo in emotion_map:
@@ -2389,9 +2396,9 @@ class IdentityEvolutionSystem:
             for chem, val in emotion_map[emo].items():
                 impacts[chem] += val * inten * sig
     
-        # valence / arousal
+        # ----------------------------------------------------------- valence/arousal
         val, arous = emotional.get("valence", 0.0), emotional.get("arousal", 0.5)
-        if val > .3:
+        if val >  .3:
             impacts["nyxamine"] += val * .2 * sig
             impacts["cortanyx"] -= val * .1 * sig
         elif val < -.3:
@@ -2402,31 +2409,34 @@ class IdentityEvolutionSystem:
         elif arous < .4:
             impacts["seranix"] += (1 - arous) * .2 * sig
     
-        # scenario mapping
+        # ---------------------------------------------------------------- scenario
         scenario_map = {
-            "teasing": {"nyxamine": .3, "adrenyx": .2},
-            "dark": {"cortanyx": .3, "adrenyx": .2},
-            "indulgent": {"nyxamine": .3, "seranix": .2},
-            "psychological": {"nyxamine": .2, "cortanyx": .2},
-            "nurturing": {"oxynixin": .3, "seranix": .2},
-            "discipline": {"cortanyx": .2, "adrenyx": .2},
-            "training": {"nyxamine": .1, "cortanyx": .1},
-            "service": {"oxynixin": .2, "seranix": .1},
-            "worship": {"oxynixin": .3, "nyxamine": .2},
+            "teasing":      {"nyxamine": .3, "adrenyx":  .2},
+            "dark":         {"cortanyx": .3, "adrenyx":  .2},
+            "indulgent":    {"nyxamine": .3, "seranix":  .2},
+            "psychological":{"nyxamine": .2, "cortanyx": .2},
+            "nurturing":    {"oxynixin": .3, "seranix":  .2},
+            "discipline":   {"cortanyx": .2, "adrenyx":  .2},
+            "training":     {"nyxamine": .1, "cortanyx": .1},
+            "service":      {"oxynixin": .2, "seranix":  .1},
+            "worship":      {"oxynixin": .3, "nyxamine": .2},
         }
         if scenario in scenario_map:
             for chem, val in scenario_map[scenario].items():
                 impacts[chem] += val * sig
     
+        # --------------------------------------------------------- package & return
         strength = sum(abs(v) for v in impacts.values()) / len(impacts)
         return NeurochemicalImpact(
-            nyxamine_impact=impacts["nyxamine"],
-            seranix_impact=impacts["seranix"],
-            oxynixin_impact=impacts["oxynixin"],
-            cortanyx_impact=impacts["cortanyx"],
-            adrenyx_impact=impacts["adrenyx"],
-            impact_strength=strength
+            nyxamine_impact = impacts["nyxamine"],
+            seranix_impact  = impacts["seranix"],
+            oxynixin_impact = impacts["oxynixin"],
+            cortanyx_impact = impacts["cortanyx"],
+            adrenyx_impact  = impacts["adrenyx"],
+            impact_strength = strength,
         )
+    # ---------------------------------------------------------------------------
+
     
     @staticmethod
     @function_tool
