@@ -328,12 +328,12 @@ class CrossUserExperienceManager:
     
     @staticmethod
     @function_tool
-    async def filter_experiences_by_permission(       # noqa: N802
+    async def filter_experiences_by_permission(        # noqa: N802
         ctx: RunContextWrapper,
-        experiences: List[Dict[str, Any]],
+        experiences: List[Any],                        # ← relaxed
         source_user_id: str,
         target_user_id: str,
-    ) -> List[Dict[str, Any]]:
+    ) -> List[Any]:
         """Whitelist experiences according to the stored permission matrix."""
         mgr = _get_mgr(ctx)
         if mgr is None:
@@ -346,16 +346,17 @@ class CrossUserExperienceManager:
                 ctx, source_user_id, target_user_id
             )
     
-        permitted, plevel = permission.get("scenario_types", []), permission.get("permission_level", 0.0)
-        excluded = set(permission.get("excluded_scenario_types", []))
+        allowed   = set(permission.get("scenario_types", []))
+        excluded  = set(permission.get("excluded_scenario_types", []))
+        plevel    = permission.get("permission_level", 0.0)
     
-        filtered: List[Dict[str, Any]] = []
+        filtered: List[Any] = []
         for exp in experiences:
             scenario = exp.get("scenario_type", "general")
             if scenario in excluded:
                 continue
-            if scenario in permitted or plevel >= 0.7:
-                if mgr._calculate_privacy_level(exp) <= plevel:   # noqa: SLF001
+            if scenario in allowed or plevel >= 0.7:
+                if mgr._calculate_privacy_level(exp) <= plevel:          # noqa: SLF001
                     filtered.append(exp)
         return filtered
     
@@ -387,11 +388,11 @@ class CrossUserExperienceManager:
 
     @staticmethod
     @function_tool
-    async def personalize_experience(                 # noqa: N802
+    async def personalize_experience(                  # noqa: N802
         ctx: RunContextWrapper,
-        experience: Dict[str, Any],
+        experience: Any,                               # ← relaxed
         target_user_id: str,
-    ) -> Dict[str, Any]:
+    ) -> Any:
         """Run the personalization-agent, add metadata & record sharing."""
         mgr = _get_mgr(ctx)
         if mgr is None:
@@ -415,7 +416,7 @@ class CrossUserExperienceManager:
             }
         )
     
-        mgr._record_sharing(   # noqa: SLF001
+        mgr._record_sharing(                            # noqa: SLF001
             source_user_id=experience.get("user_id", "unknown"),
             target_user_id=target_user_id,
             experience_id=experience.get("id", "unknown"),
