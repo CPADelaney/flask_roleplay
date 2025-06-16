@@ -34,22 +34,29 @@ logger = logging.getLogger(__name__)
 # Schema version for persistence
 SCHEMA_VERSION = "1.0.0"
 
+
+class ResolvedParameter(BaseModel):
+    """A single fully-resolved parameter."""
+    name: str
+    value: Any
+    model_config = {"extra": "forbid"}      # strict!
+
+
 class ParameterStatus(BaseModel):
-    """Schema for per-key placeholder-resolution diagnostics"""
-    original: str          # the literal “$step_n.foo” text
-    resolved: bool         # True iff we found a value
-    is_null: bool          # True iff the resolved value is None
-    model_config = {"extra": "forbid"}      # <- *strict*
+    """Diagnostics for a placeholder that needed resolution."""
+    name: str
+    original: str          # literal “$step_n.foo”
+    resolved: bool         # did we find a value?
+    is_null: bool          # value exists but is None
+    model_config = {"extra": "forbid"}      # strict!
 
 
 class StepParameterResolutionResult(BaseModel):
-    """Return type for _resolve_step_parameters_tool()"""
-    resolved_parameters: Dict[str, Any]                         # fully materialised map
-    resolution_status: Dict[str, ParameterStatus] = Field(      # keyed by param name
-        default_factory=dict
-    )
-    all_resolved: bool
-    model_config = {"extra": "forbid"}      # <- *strict*
+    """Strict output for _resolve_step_parameters_tool."""
+    resolved_parameters: List[ResolvedParameter]
+    resolution_status:    List[ParameterStatus]
+    all_resolved:         bool
+    model_config = {"extra": "forbid"}  
 
 class GoalStep(BaseModel):
     """A single step in a goal's execution plan"""
@@ -1780,40 +1787,45 @@ class GoalManager:
     
     @staticmethod
     @function_tool
-    async def _resolve_step_parameters_tool(                    # noqa: N802
+    async def _resolve_step_parameters_tool(                      # noqa: N802
         ctx: RunContextWrapper,
         goal_id: str,
-        step_parameters_json: Json[Dict[str, Any]],             # strict input
-    ) -> StepParameterResolutionResult:                         # strict output
+        step_parameters_json: Json[Dict[str, Any]],               # strict input
+    ) -> StepParameterResolutionResult:                           # strict output
         """
-        Resolve any “$step_n.some_field” placeholders in *step_parameters_json*.
-
-        Returns a StepParameterResolutionResult whose schema is strict enough
-        for the Agents SDK.
+        Resolve placeholders in *step_parameters_json* and produce
+        a StepParameterResolutionResult that passes the SDK’s strict
+        JSON-Schema checks.
         """
-        # 1.  Json[...] is already a plain dict once the guardrail passes
+        # 1) Json[...] has already been validated → plain dict
         step_parameters: Dict[str, Any] = step_parameters_json
 
-        # 2.  Delegate to the system-level resolver
-        resolved: Dict[str, Any] = await GoalSystem._resolve_step_parameters(   # type: ignore[name-defined]
+        # 2) Delegate to the core resolver
+        resolved_dict: Dict[str, Any] = await GoalSystem._resolve_step_parameters(   # type: ignore[name-defined]
             ctx, goal_id, step_parameters
         )
 
-        # 3.  Build diagnostics
-        status: Dict[str, ParameterStatus] = {}
+        # 3) Convert to lists of sealed objects
+        resolved_params: List[ResolvedParameter] = [
+            ResolvedParameter(name=k, value=v) for k, v in resolved_dict.items()
+        ]
+
+        statuses: List[ParameterStatus] = []
         for key, original in step_parameters.items():
             if isinstance(original, str) and original.startswith("$step_"):
-                resolved_value = resolved.get(key)
-                status[key] = ParameterStatus(
-                    original=original,
-                    resolved=resolved_value is not None,
-                    is_null=resolved_value is None,
+                statuses.append(
+                    ParameterStatus(
+                        name=key,
+                        original=original,
+                        resolved=key in resolved_dict and resolved_dict[key] is not None,
+                        is_null=(resolved_dict.get(key) is None),
+                    )
                 )
 
         return StepParameterResolutionResult(
-            resolved_parameters=resolved,
-            resolution_status=status,
-            all_resolved=all(s.resolved for s in status.values()) if status else True,
+            resolved_parameters=resolved_params,
+            resolution_status=statuses,
+            all_resolved=all(s.resolved for s in statuses) if statuses else True,
         )
         
     @staticmethod
