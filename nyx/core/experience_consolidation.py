@@ -579,51 +579,47 @@ class ExperienceConsolidationSystem:
             logger.error(f"Error finding common theme: {e}")
             return CommonTheme(theme="Unknown theme")
 
-    @staticmethod  
+    @staticmethod
     @function_tool
-    async def _sort_candidate_groups(ctx: RunContextWrapper, 
-                                groups: List[Dict[str, Any]]) -> SortedGroups:
+    async def _sort_candidate_groups(
+        ctx: RunContextWrapper,
+        groups: Any                       # <— was List[Dict[str, Any]]
+    ) -> SortedGroups:
         """
-        Sort candidate groups by quality for consolidation
-        
-        Args:
-            groups: List of candidate groups
-            
-        Returns:
-            Sorted groups
+        Rank and sort candidate groups for consolidation.
+    
+        • Uses similarity, size, consolidation-type, and user diversity.
+        • Returns a SortedGroups model, ready for the next agent step.
         """
-        # Get parent system from context
         parent_system = ctx.context.parent_system
-        
-        # Define scoring function
-        def score_group(group):
-            similarity = group.get("similarity_score", 0)
+        # sensible default in case the attribute isn’t present
+        max_size = getattr(parent_system, "max_group_size", 10)
+    
+        def _score(group: Dict[str, Any]) -> float:
+            sim  = group.get("similarity_score", 0.0)
             size = len(group.get("source_ids", []))
-            size_factor = min(1.0, size / parent_system.max_group_size)
-            
-            # Basic score is similarity * size factor
-            score = similarity * 0.7 + size_factor * 0.3
-            
-            # Adjust score based on consolidation type
-            consolidation_type = group.get("consolidation_type", "pattern")
-            if consolidation_type == "pattern":
-                score *= 1.2  # Favor pattern consolidations
-            elif consolidation_type == "abstraction":
-                score *= 1.1  # Slightly favor abstractions
-            
-            # Adjust score based on user diversity
+            size_factor = min(1.0, size / max_size)
+    
+            score = sim * 0.7 + size_factor * 0.3
+    
+            ctype = group.get("consolidation_type", "pattern")
+            if ctype == "pattern":
+                score *= 1.2
+            elif ctype == "abstraction":
+                score *= 1.1
+    
             user_ids = group.get("user_ids", [])
-            unique_users = len(set(user_ids))
-            if unique_users > 1:
-                # Favor groups with experiences from multiple users
-                score *= 1.0 + min(0.3, (unique_users - 1) * 0.1)
-            
+            uniq = len(set(user_ids))
+            if uniq > 1:
+                score *= 1.0 + min(0.3, (uniq - 1) * 0.1)
+    
             return score
-        
-        # Sort groups by score
-        scored_groups = [(group, score_group(group)) for group in groups]
-        sorted_groups = [group for group, _ in sorted(scored_groups, key=lambda x: x[1], reverse=True)]
-        
+    
+        # Pair each group with its score, sort descending, strip scores.
+        ranked = sorted(((g, _score(g)) for g in (groups or [])),
+                        key=lambda t: t[1], reverse=True)
+        sorted_groups = [g for g, _ in ranked]
+    
         return SortedGroups(groups=sorted_groups)
 
     @staticmethod  
