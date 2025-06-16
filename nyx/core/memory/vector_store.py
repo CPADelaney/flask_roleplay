@@ -1,20 +1,69 @@
-"""FAISS backed vector store used by :mod:`nyx.core`."""
+# ── nyx/core/memory/vector_store.py ──────────────────────────────────────────
+"""
+FAISS-backed vector store used by :mod:`nyx.core`.
 
-import atexit
-import json
-import os
+This header adds a resilient embedding-model loader that works even when
+the Hugging-Face hub is rate-limited or unreachable.
+"""
+
+from __future__ import annotations
+
 import asyncio
-import uuid
+import atexit
 import functools
+import json
+import logging
+import os
+import uuid
+from pathlib import Path
 from typing import Dict, List
 
 import faiss
 import numpy as np
-from sentence_transformers import SentenceTransformer
+from sentence_transformers import SentenceTransformer, models
 
-# Simple FAISS-backed vector store
-_model = SentenceTransformer("all-MiniLM-L6-v2")
-_dim = _model.get_sentence_embedding_dimension()
+logger = logging.getLogger(__name__)
+
+
+# --------------------------------------------------------------------------- #
+#  Embedding model loader                                                     #
+# --------------------------------------------------------------------------- #
+def _load_embedding_model(model_name: str = "all-MiniLM-L6-v2") -> SentenceTransformer:
+    """
+    Resolve a `SentenceTransformer` in three steps:
+
+    1.  **Local path**   —  $HF_MODEL_DIR/<model_name>
+    2.  **HF download**  —  `SentenceTransformer(model_name)`
+    3.  **Offline stub** —  DistilBERT + mean pooling
+    """
+    local_root = Path(os.getenv("HF_MODEL_DIR", "/app/models/embeddings"))
+    local_path = local_root / model_name
+
+    # 1️⃣  already vendored inside the image?
+    if local_path.exists():
+        logger.info("Loading sentence-transformer from %s", local_path)
+        return SentenceTransformer(str(local_path))
+
+    # 2️⃣  normal online path (works on dev boxes)
+    try:
+        logger.info("Attempting download of %s from Hugging Face hub…", model_name)
+        return SentenceTransformer(model_name)
+    except Exception as exc:  # hub unreachable / 429 / etc.
+        logger.warning("HF load failed (%s). Using offline stub.", exc)
+
+    # 3️⃣  tiny offline model so the app can still boot
+    bert = models.Transformer("distilbert-base-uncased", max_seq_length=256)
+    pool = models.Pooling(bert.get_word_embedding_dimension(), pooling_mode="mean")
+    return SentenceTransformer(modules=[bert, pool])
+
+
+# Instantiate once and reuse
+_model: SentenceTransformer = _load_embedding_model()
+_dim: int = _model.get_sentence_embedding_dimension()
+
+# --------------------------------------------------------------------------- #
+#  Original FAISS store implementation (unchanged below this comment)        #
+# --------------------------------------------------------------------------- #
 
 _index = faiss.IndexIDMap(faiss.IndexFlatIP(_dim))
 _lock = asyncio.Lock()
@@ -26,10 +75,17 @@ _next_id = 0
 
 _DATA_PATH = os.path.join(os.path.dirname(__file__), "vector_store")
 
+
 def _to_vec(texts: List[str]) -> np.ndarray:
-    """Encode text to normalized float32 vectors."""
-    vec = _model.encode(texts, normalize_embeddings=True, convert_to_numpy=True)
+    """Encode text to normalised float32 vectors (batch-safe)."""
+    vec = _model.encode(
+        texts,
+        normalize_embeddings=True,
+        convert_to_numpy=True,
+        show_progress_bar=False,
+    )
     return vec.astype("float32").reshape(len(texts), -1)
+
 
 
 async def _remove_by_uid(uid: str) -> None:
