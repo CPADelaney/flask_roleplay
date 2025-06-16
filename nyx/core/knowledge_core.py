@@ -620,9 +620,9 @@ async def add_knowledge(
 
     content = json.loads(content_json) 
     
-    core = ctx.context
-    node_id = f"node_{core.next_node_id}"
-    core.next_node_id += 1
+    core_ctx = ctx.context
+    node_id = f"node_{core_ctx.next_node_id}"
+    core_ctx.next_node_id += 1
     
     # Create node
     node = KnowledgeNode(
@@ -669,13 +669,13 @@ async def add_knowledge(
     
     return node_id
 
-@function_tool
+@function_tool(strict_mode=False)
 async def add_relation(
-    ctx: RunContextWrapper[KnowledgeCoreContext],
+    ctx: RunContextWrapper["KnowledgeCoreContext"],
     source_id: str,
     target_id: str,
     type: str,
-    weight: Optional[float],
+    weight: Optional[float] = None,
     metadata: Optional[Dict[str, Any]] = None
 ) -> bool:
     """
@@ -741,11 +741,11 @@ async def add_relation(
 
 @function_tool
 async def query_knowledge(
-    ctx: RunContextWrapper[KnowledgeCoreContext],
+    ctx: RunContextWrapper["KnowledgeCoreContext"],
     type: Optional[str] = None,
     content_filter_json: Optional[str] = None,
     relation_filter_json: Optional[str] = None,
-    limit: Optional[int] = None # <--- REMOVED default value assignment
+    limit: Optional[int] = None
 ) -> List[Dict[str, Any]]:
     """
     Search the knowledge graph for nodes matching certain criteria.
@@ -880,12 +880,11 @@ async def query_knowledge(
 
 @function_tool
 async def get_related_knowledge(
-    ctx: RunContextWrapper[KnowledgeCoreContext],
-    # --- Parameters MUST be non-optional basic types ---
+    ctx: RunContextWrapper["KnowledgeCoreContext"],
     node_id: str,
-    relation_type: str, # Treat as required string
-    direction: str,     # Treat as required string
-    limit: int          # Treat as required int
+    relation_type: str,
+    direction: str,
+    limit: int
 ) -> List[Dict[str, Any]]:
     """
     Get nodes related to a specific knowledge node.
@@ -984,7 +983,7 @@ async def get_related_knowledge(
 
 @function_tool
 async def identify_knowledge_gaps(
-    ctx: RunContextWrapper[KnowledgeCoreContext]
+    ctx: RunContextWrapper["KnowledgeCoreContext"]
 ) -> List[Dict[str, Any]]:
     """
     Identify knowledge gaps from the knowledge map.
@@ -1014,9 +1013,9 @@ async def identify_knowledge_gaps(
     
     return gap_dicts
 
-@function_tool
+@function_tool(strict_mode=False)
 async def create_exploration_target(
-    ctx: RunContextWrapper[KnowledgeCoreContext],
+    ctx: RunContextWrapper["KnowledgeCoreContext"],
     domain: str,
     topic: str,
     importance: float = 0.5,
@@ -1064,7 +1063,7 @@ async def create_exploration_target(
 
 @function_tool
 async def get_exploration_targets(
-    ctx: RunContextWrapper[KnowledgeCoreContext],
+    ctx: RunContextWrapper["KnowledgeCoreContext"],
     limit: int = 10,
     min_priority: float = 0.0
 ) -> List[Dict[str, Any]]:
@@ -1097,9 +1096,9 @@ async def get_exploration_targets(
     # Convert to dictionaries
     return [target.to_dict() for target in targets]
 
-@function_tool
+@function_tool(strict_mode=False)
 async def record_exploration(
-    ctx: RunContextWrapper[KnowledgeCoreContext],
+    ctx: RunContextWrapper["KnowledgeCoreContext"],
     target_id: str,
     result: Dict[str, Any]
 ) -> Dict[str, Any]:
@@ -1163,9 +1162,10 @@ async def record_exploration(
         "updated_knowledge_level": 1.0 - target.knowledge_gap
     }
 
+
 @function_tool
 async def generate_questions(
-    ctx: RunContextWrapper[KnowledgeCoreContext],
+    ctx: RunContextWrapper["KnowledgeCoreContext"],
     target_id: str,
     limit: int = 5
 ) -> List[str]:
@@ -1211,9 +1211,10 @@ async def generate_questions(
     
     return questions[:limit]
 
+
 @function_tool
 async def save_knowledge(
-    ctx: RunContextWrapper[KnowledgeCoreContext]
+    ctx: RunContextWrapper["KnowledgeCoreContext"]
 ) -> bool:
     """
     Save the current knowledge graph to storage.
@@ -1261,7 +1262,7 @@ async def save_knowledge(
 
 @function_tool
 async def load_knowledge(
-    ctx: RunContextWrapper[KnowledgeCoreContext]
+    ctx: RunContextWrapper["KnowledgeCoreContext"]
 ) -> bool:
     """
     Load knowledge from storage.
@@ -1322,7 +1323,7 @@ async def load_knowledge(
 
 @function_tool
 async def get_knowledge_statistics(
-    ctx: RunContextWrapper[KnowledgeCoreContext]
+    ctx: RunContextWrapper["KnowledgeCoreContext"]
 ) -> Dict[str, Any]:
     """
     Get statistics about the knowledge graph.
@@ -1391,7 +1392,7 @@ async def get_knowledge_statistics(
 
 @function_tool
 async def run_integration_cycle(
-    ctx: RunContextWrapper[KnowledgeCoreContext]
+    ctx: RunContextWrapper["KnowledgeCoreContext"]
 ) -> Dict[str, Any]:
     """
     Run a knowledge integration cycle (maintenance operations).
@@ -2004,7 +2005,8 @@ Use your tools to perform these operations efficiently.
         save_knowledge,
         load_knowledge,
         get_knowledge_statistics
-    ]
+    ],
+    model="gpt-4.1-nano",
 )
 
 curiosity_agent = Agent(
@@ -2024,7 +2026,8 @@ Use your tools to guide knowledge exploration efficiently.
         get_exploration_targets,
         record_exploration,
         generate_questions
-    ]
+    ],
+    model="gpt-4.1-nano",
 )
 
 class KnowledgeCoreAgents:
