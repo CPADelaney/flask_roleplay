@@ -245,19 +245,54 @@ async def calculate_valence_and_reward(
         "reward_value": reward_value
     }
 
-@function_tool
-async def generate_reward_signal(
+
+@function_tool  # ← SAFE: only primitives & JSON-string params ⇒ no additionalProperties
+async def generate_reward_signal(                   # noqa: N802
     ctx: RunContextWrapper,
     behavior: str,
     consequence_type: str,
     reward_value: float,
-    metadata: Optional[Dict[str, Any]] = None
+    metadata_json: Optional[str] = None,
 ) -> bool:
-    """Generate a reward signal for the reward system"""
-    if not ctx.context.reward_system:
-        logger.warning("Reward system not available")
+    """
+    Emit a RewardSignal to the global reward-system.
+
+    Parameters
+    ----------
+    behavior : str
+        Behaviour that triggered the consequence (“submits”, “asks_question”, …).
+    consequence_type : str
+        Kind of operant consequence (“positive_reinforcement”, “punishment”, …).
+    reward_value : float
+        Signed magnitude of the reward (-1.0 … +1.0 recommended, but any float is
+        accepted).
+    metadata_json : str | None
+        **Optional** JSON string with arbitrary extra context.  Passing JSON keeps
+        the public schema free of open-ended objects, which would otherwise add
+        `additionalProperties` and break the strict validator.
+
+    Returns
+    -------
+    bool
+        *True* on success, *False* on failure or if the reward system is missing.
+    """
+    rsys = getattr(ctx.context, "reward_system", None)
+    if rsys is None:
+        logger.warning("Reward system not available – skipping reward signal.")
         return False
-    
+
+    # ---------- parse metadata ------------------------------------------------
+    metadata: Dict[str, Any] = {}
+    if metadata_json:
+        try:
+            metadata = json.loads(metadata_json)
+            if not isinstance(metadata, dict):
+                logger.warning("metadata_json must encode a JSON object – got %s", type(metadata))
+                metadata = {}
+        except Exception as err:  # broad-except: want to swallow all JSON errors
+            logger.warning("Could not parse metadata_json – ignoring. Error: %s", err)
+
+    # ---------- build & dispatch signal --------------------------------------
     try:
         reward_signal = RewardSignal(
             value=reward_value,
@@ -265,14 +300,13 @@ async def generate_reward_signal(
             context={
                 "behavior": behavior,
                 "consequence_type": consequence_type,
-                **(metadata or {})
-            }
+                **metadata,
+            },
         )
-        
-        await ctx.context.reward_system.process_reward_signal(reward_signal)
+        await rsys.process_reward_signal(reward_signal)
         return True
-    except Exception as e:
-        logger.error(f"Error generating reward signal: {e}")
+    except Exception as err:
+        logger.error("Error while dispatching RewardSignal: %s", err)
         return False
 
 # ==================== Behavior Evaluation Tools ====================
