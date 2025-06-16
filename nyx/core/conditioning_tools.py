@@ -21,6 +21,41 @@ class BehaviorAssociationInfo(BaseModel, extra="forbid"):
     reinforcement_count: int
     context_keys: List[str]
 
+class ContextRelevanceResult(BaseModel, extra="forbid"):
+    relevance_scores: List[float]
+    average_relevance: float = Field(..., ge=0.0, le=1.0)
+
+
+# --------------------------------------------------------------------------- #
+#  Helpers
+# --------------------------------------------------------------------------- #
+def _safe_json_obj(js: Optional[str]) -> dict:
+    if not js:
+        return {}
+    try:
+        data = json.loads(js)
+        if isinstance(data, dict):
+            return data
+    except Exception as exc:  # noqa: BLE001  (broad on purpose)
+        logger.warning("check_context_relevance: bad context JSON ignored: %s", exc)
+    return {}
+
+
+def _safe_json_listlist(js: Optional[str]) -> List[List[str]]:
+    if not js:
+        return []
+    try:
+        data = json.loads(js)
+        if isinstance(data, list) and all(isinstance(item, list) for item in data):
+            # Ensure every element is a list of strings
+            cleaned: List[List[str]] = []
+            for sub in data:
+                cleaned.append([str(x) for x in sub if isinstance(x, (str, int, float))])
+            return cleaned
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("check_context_relevance: bad keys JSON ignored: %s", exc)
+    return []
+
 
 # -----------------------------------------------------------------------------
 #  Helper
@@ -446,32 +481,52 @@ async def calculate_expected_valence(
         "total_reinforcements": total_reinforcements
     }
 
-@function_tool
-async def check_context_relevance(
+@function_tool  # ← all parameters are JSON-serialisable primitives
+async def check_context_relevance(                      # noqa: N802
     ctx: RunContextWrapper,
-    current_context: Optional[Dict[str, Any]] = None,
-    context_keys_list: Optional[List[List[str]]] = None
-) -> Dict[str, Any]:
-    """Check relevance of context to association requirements"""
-    current_context = current_context or {}
-    context_keys_list = context_keys_list or []
-    
-    relevance_scores = []
-    
-    for required_keys in context_keys_list:
-        if not required_keys:
+    current_context_json: Optional[str] = None,
+    context_keys_json: Optional[str] = None,
+) -> ContextRelevanceResult:
+    """
+    Compute how well *current_context_json* satisfies each set of required
+    keys in *context_keys_json*.
+
+    Parameters
+    ----------
+    current_context_json : str | null
+        JSON object whose keys describe the present context.
+    context_keys_json : str | null
+        JSON array of arrays – each sub-array lists the keys required for one
+        association.  Example: `[["mood","location"], ["time_of_day"]]`
+
+    Returns
+    -------
+    ContextRelevanceResult
+        - **relevance_scores** : list(float) in [0,1] for each key-set.
+        - **average_relevance** : overall mean of the scores.
+    """
+    # ------------------------------------------------------------------ parse
+    current_context = _safe_json_obj(current_context_json)
+    keys_sets: List[List[str]] = _safe_json_listlist(context_keys_json)
+
+    if not keys_sets:
+        return ContextRelevanceResult(relevance_scores=[], average_relevance=0.0)
+
+    # --------------------------------------------------------------- compute
+    relevance_scores: List[float] = []
+    for required in keys_sets:
+        if not required:                       # empty set → full relevance
             relevance_scores.append(1.0)
-        else:
-            matching = sum(1 for key in required_keys if key in current_context)
-            relevance = matching / len(required_keys)
-            relevance_scores.append(relevance)
-    
-    avg_relevance = sum(relevance_scores) / len(relevance_scores) if relevance_scores else 0.0
-    
-    return {
-        "relevance_scores": relevance_scores,
-        "average_relevance": round(avg_relevance, 3)
-    }
+            continue
+        match = sum(1 for k in required if k in current_context)
+        relevance_scores.append(match / len(required))
+
+    avg = sum(relevance_scores) / len(relevance_scores)
+
+    return ContextRelevanceResult(
+        relevance_scores=relevance_scores,
+        average_relevance=round(avg, 3),
+    )
 
 @function_tool
 async def get_reinforcement_history(
