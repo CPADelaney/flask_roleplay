@@ -1474,59 +1474,106 @@ class GoalManager:
             "issues": issues,
         }
 
-    @staticmethod
-    @function_tool
-    async def _check_parameter_references(ctx: RunContextWrapper, plan: List[Dict[str, Any]]) -> Dict[str, Any]:
+    @function_tool(name_override="_check_parameter_references")
+    async def check_parameter_references(            # noqa: N802
+        ctx: RunContextWrapper,
+        plan_json: str | None = None,
+    ) -> Dict[str, Any]:
         """
-        Check if parameter references between steps are valid
-        
-        Args:
-            plan: The plan to validate
-            
-        Returns:
-            Parameter reference validation results
+        Validate that all `$step_X.*` parameter references in *plan_json*
+        point to fields that plausibly exist in the output of earlier steps.
+    
+        Parameters
+        ----------
+        plan_json : str
+            JSON-encoded list of step dictionaries. Each step should contain
+            ``action`` and optional ``parameters``.
+    
+        Returns
+        -------
+        dict
+            ``is_valid``    – bool  
+            ``issue_count`` – int  
+            ``issues``      – list[str]
         """
-        issues = []
-        provided_outputs = {}  # Track what each step provides
-        
-        for i, step in enumerate(plan):
-            step_num = i + 1
-            # Analyze expected outputs
+        import json, re, logging
+    
+        issues: list[str] = []
+        try:
+            plan: list[dict] = json.loads(plan_json or "[]")
+            if not isinstance(plan, list):
+                raise TypeError("plan_json must decode to a list")
+        except Exception as exc:  # JSON / type errors
+            err = f"Invalid plan_json: {exc}"
+            logging.getLogger(__name__).error(err)
+            return {"is_valid": False, "issue_count": 1, "issues": [err]}
+    
+        if not plan:
+            return {"is_valid": True, "issue_count": 0, "issues": []}
+    
+        # -----------------------------------------------------------------
+        # Helpers – intentionally simple, no external dependencies
+        # -----------------------------------------------------------------
+        def _guess_output_fields(action_name: str) -> set[str]:
+            """
+            Heuristic: infer what top-level keys an action might return.
+            • If ctx.context has .action_output_schemas, try that.
+            • Else common defaults.
+            """
+            brain = getattr(ctx.context, "brain", None)
+            if brain and hasattr(brain, "action_output_schemas"):
+                sch = brain.action_output_schemas.get(action_name)
+                if isinstance(sch, (list, set)):
+                    return set(sch)
+                if isinstance(sch, dict):
+                    return set(sch.keys())
+            # Fallback – assume at least 'result' plus snake-case variants
+            return {"result", "output", "data"}
+    
+        _field_re = re.compile(r"^[a-zA-Z_][\w\.]*$")
+    
+        def _field_exists(candidates: set[str], dotted_path: str) -> bool:
+            """
+            Very light check: if the first segment of the dotted path matches
+            a known candidate field we treat it as available.
+            """
+            if not _field_re.match(dotted_path):
+                return False
+            first, *_ = dotted_path.split(".")
+            return first in candidates
+    
+        # -----------------------------------------------------------------
+        # Walk through the plan
+        # -----------------------------------------------------------------
+        provided: dict[int, set[str]] = {}
+        for idx, step in enumerate(plan, start=1):
             action = step.get("action", "")
-            provided_outputs[step_num] = self._estimate_action_output_fields(action)
-            
-            # Check parameter references
-            for param_name, param_value in step.get("parameters", {}).items():
-                if isinstance(param_value, str) and param_value.startswith("$step_"):
-                    parts = param_value[1:].split('.')
-                    if len(parts) < 2:
-                        issues.append(f"Step {step_num}: Invalid reference format: {param_value}")
-                        continue
-                        
-                    # Extract referenced step and field
+            provided[idx] = _guess_output_fields(action)
+    
+            params = step.get("parameters") or {}
+            for p_name, p_val in params.items():
+                if isinstance(p_val, str) and p_val.startswith("$step_"):
+                    # Expect formats like "$step_3.result" or "$step_2.data.id"
                     try:
-                        ref_step_str = parts[0]
-                        ref_step = int(ref_step_str.replace("step_", ""))
-                        field_path = '.'.join(parts[1:])
-                        
-                        if ref_step >= step_num:
-                            issues.append(f"Step {step_num}: References non-executed step {ref_step}")
-                            continue
-                            
-                        if ref_step not in provided_outputs:
-                            issues.append(f"Step {step_num}: References unknown step {ref_step}")
-                            continue
-                            
-                        # Check if the referenced field exists in the output
-                        if not self._check_field_availability(provided_outputs[ref_step], field_path):
-                            issues.append(f"Step {step_num}: Referenced field '{field_path}' may not exist in step {ref_step} output")
-                    except (ValueError, IndexError):
-                        issues.append(f"Step {step_num}: Invalid step reference: {param_value}")
-        
+                        ref_part, field_part = p_val.lstrip("$").split(".", 1)
+                        ref_idx = int(ref_part.replace("step_", ""))
+                    except Exception:
+                        issues.append(f"Step {idx}: malformed reference '{p_val}'")
+                        continue
+    
+                    if ref_idx >= idx:
+                        issues.append(f"Step {idx}: references future/self step {ref_idx}")
+                    elif ref_idx not in provided:
+                        issues.append(f"Step {idx}: references unknown step {ref_idx}")
+                    elif not _field_exists(provided[ref_idx], field_part):
+                        issues.append(
+                            f"Step {idx}: field '{field_part}' may not exist in output of step {ref_idx}"
+                        )
+    
         return {
             "is_valid": len(issues) == 0,
             "issue_count": len(issues),
-            "issues": issues
+            "issues": issues,
         }
     
     def _estimate_action_output_fields(self, action: str) -> List[str]:
