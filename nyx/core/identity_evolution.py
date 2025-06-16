@@ -874,7 +874,7 @@ class IdentityEvolutionSystem:
         # State tracking
         self.impact_history = []
         self.reflection_history = []
-        self.max_history_size = 100
+        self.max_history_entries = 100
         
         # Configuration settings
         self.reflection_interval = 10  # update count between reflections
@@ -2014,413 +2014,479 @@ class IdentityEvolutionSystem:
             "sync_time": self.last_system_sync.isoformat(),
             "updated_systems": ["system_context", "action_history", "traits"]
         }
-
-# Tool functions
-@staticmethod  
-@function_tool
-async def _get_current_identity_context(ctx: RunContextWrapper) -> IdentityContext:
-    """
-    Get the current identity context for agents
     
-    Returns:
-        Current identity context
-    """
-    return IdentityContext(
-        neurochemical_profile=self.neurochemical_profile,
-        emotional_tendencies=self.emotional_tendencies,
-        identity_traits=self.identity_traits,
-        identity_preferences=self.identity_preferences,
-        impact_history=self.impact_history,
-        update_count=self.update_count,
-        last_update=self.last_update,
-        evolution_rate=self.evolution_rate,
-        coherence_score=self.coherence_score,
-        min_impact_threshold=self.min_impact_threshold,
-        max_history_entries=self.max_history_entries,
-        gen_trace_id=self.trace_group_id
-    )
-
-@staticmethod  
-@function_tool
-async def _get_current_identity(ctx: RunContextWrapper) -> Dict[str, Any]:
-    """
-    Get the current identity profile
-    
-    Returns:
-        Current identity profile with neurochemical integration
-    """
-    # Combine all identity components
-    identity = {
-        "neurochemical_profile": self.neurochemical_profile,
-        "emotional_tendencies": self.emotional_tendencies,
-        "traits": self.identity_traits,
-        "preferences": self.identity_preferences,
-        "update_count": self.update_count,
-        "last_update": self.last_update,
-        "evolution_rate": self.evolution_rate,
-        "coherence_score": self.coherence_score
-    }
-    
-    return identity
-
-@staticmethod      
-@function_tool
-async def _get_neurochemical_profile(ctx: RunContextWrapper) -> Dict[str, Any]:
-    """
-    Get the current neurochemical profile
-    
-    Returns:
-        Current neurochemical baseline profile
-    """
-    return self.neurochemical_profile
-
-@staticmethod  
-@function_tool
-async def _get_emotional_tendencies(ctx: RunContextWrapper) -> Dict[str, Any]:
-    """
-    Get the current emotional tendencies
-    
-    Returns:
-        Current emotional tendencies
-    """
-    return self.emotional_tendencies
-
-@staticmethod  
-@function_tool
-async def _update_neurochemical_baseline(
-    ctx: RunContextWrapper,
-    chemical: str,
-    impact: float,
-    reason: str = "experience"
-) -> Dict[str, Any]:
-    """
-    Update a neurochemical baseline
-    
-    Args:
-        chemical: The neurochemical to update
-        impact: Impact value (-1.0 to 1.0)
-        reason: Reason for the update
+    # Tool functions
+    @staticmethod  
+    @function_tool
+    async def _get_current_identity_context(ctx: RunContextWrapper) -> IdentityContext:
+        """
+        Get the current identity context for agents
         
-    Returns:
-        Update result
-    """
-    if chemical not in self.neurochemical_profile:
+        Returns:
+            Current identity context
+        """
+        ic = ctx.context
+        return IdentityContext(
+            neurochemical_profile=ic.neurochemical_profile,
+            emotional_tendencies=ic.emotional_tendencies,
+            identity_traits=ic.identity_traits,
+            identity_preferences=ic.identity_preferences,
+            impact_history=ic.impact_history,
+            update_count=ic.update_count,
+            last_update=ic.last_update,
+            evolution_rate=ic.evolution_rate,
+            coherence_score=ic.coherence_score,
+            min_impact_threshold=ic.min_impact_threshold,
+            max_history_entries=ic.max_history_entries,
+            gen_trace_id=ic.trace_group_id,
+        )
+    
+    @staticmethod  
+    @function_tool
+    async def _get_current_identity(ctx: RunContextWrapper) -> Dict[str, Any]:
+        """
+        Get the current identity profile
+        
+        Returns:
+            Current identity profile with neurochemical integration
+        """
+        # Combine all identity components
+        ic = ctx.context
         return {
-            "error": f"Unknown neurochemical: {chemical}",
-            "available_chemicals": list(self.neurochemical_profile.keys())
+            "neurochemical_profile": ic.neurochemical_profile,
+            "emotional_tendencies": ic.emotional_tendencies,
+            "traits": ic.identity_traits,
+            "preferences": ic.identity_preferences,
+            "update_count": ic.update_count,
+            "last_update": ic.last_update,
+            "evolution_rate": ic.evolution_rate,
+            "coherence_score": ic.coherence_score,
         }
     
-    # Get chemical data
-    chemical_data = self.neurochemical_profile[chemical]
-    current_value = chemical_data["value"]
-    adaptability = chemical_data["adaptability"]
+    @staticmethod      
+    @function_tool
+    async def _get_neurochemical_profile(ctx: RunContextWrapper) -> Dict[str, Any]:
+        """
+        Get the current neurochemical profile
+        
+        Returns:
+            Current neurochemical baseline profile
+        """
+        return ctx.context.neurochemical_profile
     
-    # Calculate change based on impact and adaptability
-    adjusted_impact = impact * adaptability * self.evolution_rate
+    @staticmethod  
+    @function_tool
+    async def _get_emotional_tendencies(ctx: RunContextWrapper) -> Dict[str, Any]:
+        """
+        Get the current emotional tendencies
+        
+        Returns:
+            Current emotional tendencies
+        """
+        return ctx.context.emotional_tendencies
     
-    # Ensure result stays in valid range
-    new_value = max(0.1, min(0.9, current_value + adjusted_impact))
-    
-    # Record history
-    if abs(adjusted_impact) >= self.min_impact_threshold:
-        chemical_data["evolution_history"].append({
-            "timestamp": datetime.datetime.now().isoformat(),
+    @staticmethod  
+    @function_tool
+    async def _update_neurochemical_baseline(
+        ctx: RunContextWrapper,
+        chemical: str,
+        impact: float,
+        reason: str = "experience"
+    ) -> Dict[str, Any]:
+        """
+        Update a neurochemical baseline
+        
+        Args:
+            chemical: The neurochemical to update
+            impact: Impact value (-1.0 to 1.0)
+            reason: Reason for the update
+            
+        Returns:
+            Update result
+        """
+        ic = ctx.context
+        if chemical not in ic.neurochemical_profile:
+            return {
+                "error": f"Unknown neurochemical: {chemical}",
+                "available_chemicals": list(ic.neurochemical_profile.keys())
+            }
+        
+        # Get chemical data
+        chemical_data = ic.neurochemical_profile[chemical]
+        current_value = chemical_data["value"]
+        adaptability = chemical_data["adaptability"]
+        
+        # Calculate change based on impact and adaptability
+        adjusted_impact = impact * adaptability * ic.evolution_rate
+        
+        # Ensure result stays in valid range
+        new_value = max(0.1, min(0.9, current_value + adjusted_impact))
+        
+        # Record history
+        if abs(adjusted_impact) >= ic.min_impact_threshold:
+            chemical_data["evolution_history"].append({
+                "timestamp": datetime.datetime.now().isoformat(),
+                "old_value": current_value,
+                "change": adjusted_impact,
+                "new_value": new_value,
+                "reason": reason
+            })
+            
+            # Limit history size
+            if len(chemical_data["evolution_history"]) > ic.max_history_entries:
+                chemical_data["evolution_history"] = chemical_data["evolution_history"][-ic.max_history_entries:]
+        
+        # Update value
+        chemical_data["value"] = new_value
+        
+        return {
+            "chemical": chemical,
             "old_value": current_value,
-            "change": adjusted_impact,
+            "impact": impact,
+            "adjusted_impact": adjusted_impact,
             "new_value": new_value,
-            "reason": reason
-        })
+            "adaptability": adaptability
+        }
+    
+    @staticmethod  
+    @function_tool
+    async def _update_emotional_tendency(
+        ctx: RunContextWrapper,
+        emotion: str,
+        likelihood_change: float = 0.0,
+        intensity_change: float = 0.0,
+        threshold_change: float = 0.0,
+        reason: str = "experience"
+    ) -> Dict[str, Any]:
+        """
+        Update an emotional tendency
         
-        # Limit history size
-        if len(chemical_data["evolution_history"]) > self.max_history_entries:
-            chemical_data["evolution_history"] = chemical_data["evolution_history"][-self.max_history_entries:]
-    
-    # Update value
-    chemical_data["value"] = new_value
-    
-    return {
-        "chemical": chemical,
-        "old_value": current_value,
-        "impact": impact,
-        "adjusted_impact": adjusted_impact,
-        "new_value": new_value,
-        "adaptability": adaptability
-    }
-
-@staticmethod  
-@function_tool
-async def _update_emotional_tendency(
-    ctx: RunContextWrapper,
-    emotion: str,
-    likelihood_change: float = 0.0,
-    intensity_change: float = 0.0,
-    threshold_change: float = 0.0,
-    reason: str = "experience"
-) -> Dict[str, Any]:
-    """
-    Update an emotional tendency
-    
-    Args:
-        emotion: The emotion to update
-        likelihood_change: Change to likelihood (-1.0 to 1.0)
-        intensity_change: Change to intensity baseline (-1.0 to 1.0)
-        threshold_change: Change to trigger threshold (-1.0 to 1.0)
-        reason: Reason for the update
+        Args:
+            emotion: The emotion to update
+            likelihood_change: Change to likelihood (-1.0 to 1.0)
+            intensity_change: Change to intensity baseline (-1.0 to 1.0)
+            threshold_change: Change to trigger threshold (-1.0 to 1.0)
+            reason: Reason for the update
+            
+        Returns:
+            Update result
+        """
+        ic = ctx.context
+        if emotion not in ic.emotional_tendencies:
+            return {
+                "error": f"Unknown emotion: {emotion}",
+                "available_emotions": list(ic.emotional_tendencies.keys())
+            }
         
-    Returns:
-        Update result
-    """
-    if emotion not in self.emotional_tendencies:
+        # Get emotion data
+        emotion_data = ic.emotional_tendencies[emotion]
+        changes = {}
+        
+        # Update likelihood if specified
+        if abs(likelihood_change) >= ic.min_impact_threshold:
+            old_likelihood = emotion_data["likelihood"]
+            adjusted_change = likelihood_change * ic.evolution_rate
+            new_likelihood = max(0.1, min(0.9, old_likelihood + adjusted_change))
+            emotion_data["likelihood"] = new_likelihood
+            changes["likelihood"] = {
+                "old_value": old_likelihood,
+                "change": adjusted_change,
+                "new_value": new_likelihood
+            }
+        
+        # Update intensity baseline if specified
+        if abs(intensity_change) >= ic.min_impact_threshold:
+            old_intensity = emotion_data["intensity_baseline"]
+            adjusted_change = intensity_change * ic.evolution_rate
+            new_intensity = max(0.1, min(0.9, old_intensity + adjusted_change))
+            emotion_data["intensity_baseline"] = new_intensity
+            changes["intensity_baseline"] = {
+                "old_value": old_intensity,
+                "change": adjusted_change,
+                "new_value": new_intensity
+            }
+        
+        # Update trigger threshold if specified
+        if abs(threshold_change) >= ic.min_impact_threshold:
+            old_threshold = emotion_data["trigger_threshold"]
+            adjusted_change = threshold_change * ic.evolution_rate
+            new_threshold = max(0.1, min(0.9, old_threshold + adjusted_change))
+            emotion_data["trigger_threshold"] = new_threshold
+            changes["trigger_threshold"] = {
+                "old_value": old_threshold,
+                "change": adjusted_change,
+                "new_value": new_threshold
+            }
+        
+        # Record history if any changes were made
+        if changes:
+            emotion_data["evolution_history"].append({
+                "timestamp": datetime.datetime.now().isoformat(),
+                "changes": changes,
+                "reason": reason
+            })
+            
+            # Limit history size
+            if len(emotion_data["evolution_history"]) > ic.max_history_entries:
+                emotion_data["evolution_history"] = emotion_data["evolution_history"][-ic.max_history_entries:]
+        
         return {
-            "error": f"Unknown emotion: {emotion}",
-            "available_emotions": list(self.emotional_tendencies.keys())
+            "emotion": emotion,
+            "changes": changes
         }
+
+    @staticmethod
+    @function_tool
+    async def _update_trait(
+        ctx: RunContextWrapper,
+        trait: str,
+        impact: float,
+        neurochemical_impacts: Optional[Dict[str, float]] = None,
+    ) -> Dict[str, Any]:
+        ic = ctx.context
+        if trait not in ic.identity_traits:
+            return {"error": f"Trait not found: {trait}",
+                    "available_traits": list(ic.identity_traits.keys())}
     
-    # Get emotion data
-    emotion_data = self.emotional_tendencies[emotion]
-    changes = {}
+        data = ic.identity_traits[trait]
+        curr, stab = data["value"], data["stability"]
+        resistance  = stab * 0.8
+        raw_change  = impact * ic.evolution_rate
+        actual      = raw_change * (1.0 - resistance)
+        new_val     = max(0.0, min(1.0, curr + actual))
+        data["value"] = new_val
     
-    # Update likelihood if specified
-    if abs(likelihood_change) >= self.min_impact_threshold:
-        old_likelihood = emotion_data["likelihood"]
-        adjusted_change = likelihood_change * self.evolution_rate
-        new_likelihood = max(0.1, min(0.9, old_likelihood + adjusted_change))
-        emotion_data["likelihood"] = new_likelihood
-        changes["likelihood"] = {
-            "old_value": old_likelihood,
-            "change": adjusted_change,
-            "new_value": new_likelihood
-        }
-    
-    # Update intensity baseline if specified
-    if abs(intensity_change) >= self.min_impact_threshold:
-        old_intensity = emotion_data["intensity_baseline"]
-        adjusted_change = intensity_change * self.evolution_rate
-        new_intensity = max(0.1, min(0.9, old_intensity + adjusted_change))
-        emotion_data["intensity_baseline"] = new_intensity
-        changes["intensity_baseline"] = {
-            "old_value": old_intensity,
-            "change": adjusted_change,
-            "new_value": new_intensity
-        }
-    
-    # Update trigger threshold if specified
-    if abs(threshold_change) >= self.min_impact_threshold:
-        old_threshold = emotion_data["trigger_threshold"]
-        adjusted_change = threshold_change * self.evolution_rate
-        new_threshold = max(0.1, min(0.9, old_threshold + adjusted_change))
-        emotion_data["trigger_threshold"] = new_threshold
-        changes["trigger_threshold"] = {
-            "old_value": old_threshold,
-            "change": adjusted_change,
-            "new_value": new_threshold
-        }
-    
-    # Record history if any changes were made
-    if changes:
-        emotion_data["evolution_history"].append({
-            "timestamp": datetime.datetime.now().isoformat(),
-            "changes": changes,
-            "reason": reason
-        })
-        
-        # Limit history size
-        if len(emotion_data["evolution_history"]) > self.max_history_entries:
-            emotion_data["evolution_history"] = emotion_data["evolution_history"][-self.max_history_entries:]
-    
-    return {
-        "emotion": emotion,
-        "changes": changes
-    }
-
-@function_tool
-async def _update_trait(
-    ctx: RunContextWrapper,
-    trait: str,
-    impact: float,
-    neurochemical_impacts: Optional[Dict[str, float]] = None
-) -> Dict[str, Any]:
-    ic = ctx.context  # <— formerly `self`
-    if trait not in ic.identity_traits:
-        return {"error": f"Trait not found: {trait}",
-                "available_traits": list(ic.identity_traits.keys())}
-
-    data = ic.identity_traits[trait]
-    curr, stab = data["value"], data["stability"]
-    resistance  = stab * 0.8
-    raw_change  = impact * ic.evolution_rate
-    actual      = raw_change * (1.0 - resistance)
-    new_val     = max(0.0, min(1.0, curr + actual))
-    data["value"] = new_val
-
-    if abs(actual) >= ic.min_impact_threshold:
-        data["evolution_history"].append(
-            {"timestamp": datetime.datetime.now().isoformat(),
-             "old_value": curr, "change": actual, "new_value": new_val}
-        )
-        if len(data["evolution_history"]) > ic.max_history_entries:
-            data["evolution_history"] = data["evolution_history"][-ic.max_history_entries:]
-
-    # cascade neuro-chemical impacts
-    neuro_results = {}
-    if neurochemical_impacts:
-        for chem, chem_imp in neurochemical_impacts.items():
-            if chem in ic.neurochemical_profile:
-                scaled = chem_imp * abs(actual) / ic.min_impact_threshold
-                neuro_results[chem] = await _update_neurochemical_baseline(
-                    ctx, chemical=chem, impact=scaled,
-                    reason=f"trait_{trait}_update"
-                )
-
-    return {"trait": trait, "old_value": curr, "raw_change": raw_change,
-            "actual_change": actual, "resistance": resistance,
-            "new_value": new_val, "neurochemical_impacts": neuro_results}
-
-@function_tool
-async def _update_preference(
-    ctx: RunContextWrapper,
-    category: str,
-    preference: str,
-    impact: float
-) -> Dict[str, Any]:
-    ic = ctx.context
-    if category not in ic.identity_preferences:
-        return {"error": f"Category not found: {category}",
-                "available_categories": list(ic.identity_preferences.keys())}
-    if preference not in ic.identity_preferences[category]:
-        return {"error": f"Preference not found: {preference}",
-                "available_preferences": list(ic.identity_preferences[category].keys())}
-
-    pdata = ic.identity_preferences[category][preference]
-    curr, adapt = pdata["value"], pdata["adaptability"]
-    adapt_factor = adapt * 1.2
-    raw_change   = impact * ic.evolution_rate
-    actual       = raw_change * adapt_factor
-    new_val      = max(0.0, min(1.0, curr + actual))
-    pdata["value"] = new_val
-
-    if abs(actual) >= ic.min_impact_threshold:
-        pdata["evolution_history"].append(
-            {"timestamp": datetime.datetime.now().isoformat(),
-             "old_value": curr, "change": actual, "new_value": new_val}
-        )
-        if len(pdata["evolution_history"]) > ic.max_history_entries:
-            pdata["evolution_history"] = pdata["evolution_history"][-ic.max_history_entries:]
-
-    neuro_results = {}
-    for chem, mod in pdata.get("neurochemical_modifiers", {}).items():
-        if chem in ic.neurochemical_profile:
-            scaled = mod * abs(actual) / ic.min_impact_threshold * 0.3
-            neuro_results[chem] = await _update_neurochemical_baseline(
-                ctx, chemical=chem, impact=scaled,
-                reason=f"preference_{category}_{preference}_update"
+        if abs(actual) >= ic.min_impact_threshold:
+            data["evolution_history"].append(
+                {"timestamp": datetime.datetime.now().isoformat(),
+                 "old_value": curr, "change": actual, "new_value": new_val}
             )
-
-    return {"category": category, "preference": preference,
-            "old_value": curr, "raw_change": raw_change,
-            "actual_change": actual, "adaptability": adapt_factor,
-            "new_value": new_val, "neurochemical_impacts": neuro_results}
-
-
-@function_tool
-async def _calculate_neurochemical_impacts(
-    ctx: RunContextWrapper,
-    experience: Dict[str, Any]
-) -> "NeurochemicalImpact":            # forward ref keeps type-checkers happy
-    ic = ctx.context
-    emotional = experience.get("emotional_context", {})
-    scenario  = experience.get("scenario_type", "general")
-    sig       = experience.get("significance", 5) / 10
-
-    impacts = dict.fromkeys(
-        ["nyxamine", "seranix", "oxynixin", "cortanyx", "adrenyx"], 0.0
-    )
-
-    # --- emotion mapping ---------------------------------------------------
-    emotion_map = {
-        "Joy": {"nyxamine": .4, "cortanyx": -.2},
-        "Sadness": {"cortanyx": .3, "nyxamine": -.2},
-        "Fear": {"cortanyx": .4, "adrenyx": .3},
-        "Anger": {"cortanyx": .4, "adrenyx": .3, "oxynixin": -.2},
-        "Trust": {"oxynixin": .4, "cortanyx": -.2},
-        "Disgust": {"cortanyx": .3, "oxynixin": -.3},
-        "Anticipation": {"adrenyx": .3, "nyxamine": .2},
-        "Surprise": {"adrenyx": .4, "nyxamine": .2},
-        "Teasing": {"nyxamine": .3, "adrenyx": .2},
-        "Controlling": {"adrenyx": .3, "oxynixin": -.2},
-        "Cruel": {"cortanyx": .3, "oxynixin": -.4},
-        "Detached": {"cortanyx": .2, "oxynixin": -.3, "seranix": .2},
-    }
-    emo = emotional.get("primary_emotion", "")
-    if emo in emotion_map:
-        inten = emotional.get("primary_intensity", 0.5)
-        for chem, val in emotion_map[emo].items():
-            impacts[chem] += val * inten * sig
-
-    # valence / arousal
-    val, arous = emotional.get("valence", 0.0), emotional.get("arousal", 0.5)
-    if val > .3:
-        impacts["nyxamine"] += val * .2 * sig
-        impacts["cortanyx"] -= val * .1 * sig
-    elif val < -.3:
-        impacts["cortanyx"] += abs(val) * .2 * sig
-        impacts["nyxamine"] -= abs(val) * .1 * sig
-    if arous > .6:
-        impacts["adrenyx"] += arous * .2 * sig
-    elif arous < .4:
-        impacts["seranix"] += (1 - arous) * .2 * sig
-
-    # scenario mapping
-    scenario_map = {
-        "teasing": {"nyxamine": .3, "adrenyx": .2},
-        "dark": {"cortanyx": .3, "adrenyx": .2},
-        "indulgent": {"nyxamine": .3, "seranix": .2},
-        "psychological": {"nyxamine": .2, "cortanyx": .2},
-        "nurturing": {"oxynixin": .3, "seranix": .2},
-        "discipline": {"cortanyx": .2, "adrenyx": .2},
-        "training": {"nyxamine": .1, "cortanyx": .1},
-        "service": {"oxynixin": .2, "seranix": .1},
-        "worship": {"oxynixin": .3, "nyxamine": .2},
-    }
-    if scenario in scenario_map:
-        for chem, val in scenario_map[scenario].items():
-            impacts[chem] += val * sig
-
-    strength = sum(abs(v) for v in impacts.values()) / len(impacts)
-    return NeurochemicalImpact(
-        nyxamine_impact=impacts["nyxamine"],
-        seranix_impact=impacts["seranix"],
-        oxynixin_impact=impacts["oxynixin"],
-        cortanyx_impact=impacts["cortanyx"],
-        adrenyx_impact=impacts["adrenyx"],
-        impact_strength=strength
-    )
-
-
-@function_tool
-async def _calculate_emotional_impacts(
-    ctx: RunContextWrapper,
-    experience: Dict[str, Any],
-    neurochemical_impacts: "NeurochemicalImpact"
-) -> Dict[str, Dict[str, float]]:
-    ic = ctx.context
-    emotional  = experience.get("emotional_context", {})
-    primary    = emotional.get("primary_emotion", "")
-    sig        = experience.get("significance", 5) / 10
-    impacts: Dict[str, Dict[str, float]] = {}
-
-    if primary in ic.emotional_tendencies:
-        impacts[primary] = {"likelihood": .1 * sig,
-                            "intensity": .05 * sig,
-                            "threshold": -.05 * sig}
-
-        chem_emotion = {
-            "nyxamine": ["Joy", "Anticipation", "Teasing"],
-            "seranix": ["Contentment", "Trust"],
-            "oxynixin": ["Trust", "Love", "Nurturing"],
-            "cortanyx": ["Sadness", "Fear", "Anger", "Disgust", "Cruel", "Detached"],
-            "adrenyx": ["Fear", "Surprise", "Anticipation", "Controlling"]
+            if len(data["evolution_history"]) > ic.max_history_entries:
+                data["evolution_history"] = data["evolution_history"][-ic.max_history_entries:]
+    
+        # --- NEW: use qualified call so static helper is resolvable -----
+        neuro_results = {}
+        if neurochemical_impacts:
+            for chem, chem_imp in neurochemical_impacts.items():
+                if chem in ic.neurochemical_profile:
+                    scaled = chem_imp * abs(actual) / ic.min_impact_threshold
+                    neuro_results[chem] = await IdentityEvolutionSystem._update_neurochemical_baseline(
+                        ctx, chemical=chem, impact=scaled,
+                        reason=f"trait_{trait}_update",
+                    )
+        # ----------------------------------------------------------------
+    
+        return {
+            "trait": trait,
+            "old_value": curr,
+            "raw_change": raw_change,
+            "actual_change": actual,
+            "resistance": resistance,
+            "new_value": new_val,
+            "neurochemical_impacts": neuro_results,
         }
+    
+    @staticmethod
+    @function_tool
+    async def _update_preference(
+        ctx: RunContextWrapper,
+        category: str,
+        preference: str,
+        impact: float,
+    ) -> Dict[str, Any]:
+        ic = ctx.context
+        if category not in ic.identity_preferences:
+            return {"error": f"Category not found: {category}",
+                    "available_categories": list(ic.identity_preferences.keys())}
+        if preference not in ic.identity_preferences[category]:
+            return {"error": f"Preference not found: {preference}",
+                    "available_preferences": list(ic.identity_preferences[category].keys())}
+    
+        pdata = ic.identity_preferences[category][preference]
+        curr, adapt = pdata["value"], pdata["adaptability"]
+        adapt_factor = adapt * 1.2
+        raw_change   = impact * ic.evolution_rate
+        actual       = raw_change * adapt_factor
+        new_val      = max(0.0, min(1.0, curr + actual))
+        pdata["value"] = new_val
+    
+        if abs(actual) >= ic.min_impact_threshold:
+            pdata["evolution_history"].append(
+                {"timestamp": datetime.datetime.now().isoformat(),
+                 "old_value": curr, "change": actual, "new_value": new_val}
+            )
+            if len(pdata["evolution_history"]) > ic.max_history_entries:
+                pdata["evolution_history"] = pdata["evolution_history"][-ic.max_history_entries:]
+    
+        # --- NEW: qualified helper call ---------------------------------
+        neuro_results = {}
+        for chem, mod in pdata.get("neurochemical_modifiers", {}).items():
+            if chem in ic.neurochemical_profile:
+                scaled = mod * abs(actual) / ic.min_impact_threshold * 0.3
+                neuro_results[chem] = await IdentityEvolutionSystem._update_neurochemical_baseline(
+                    ctx, chemical=chem, impact=scaled,
+                    reason=f"preference_{category}_{preference}_update",
+                )
+        # ----------------------------------------------------------------
+    
+        return {
+            "category": category,
+            "preference": preference,
+            "old_value": curr,
+            "raw_change": raw_change,
+            "actual_change": actual,
+            "adaptability": adapt_factor,
+            "new_value": new_val,
+            "neurochemical_impacts": neuro_results,
+        }
+        
+    @staticmethod
+    @function_tool
+    async def _calculate_neurochemical_impacts(
+        ctx: RunContextWrapper,
+        experience: Dict[str, Any]
+    ) -> "NeurochemicalImpact":            # forward ref keeps type-checkers happy
+        ic = ctx.context
+        emotional = experience.get("emotional_context", {})
+        scenario  = experience.get("scenario_type", "general")
+        sig       = experience.get("significance", 5) / 10
+    
+        impacts = dict.fromkeys(
+            ["nyxamine", "seranix", "oxynixin", "cortanyx", "adrenyx"], 0.0
+        )
+    
+        # --- emotion mapping ---------------------------------------------------
+        emotion_map = {
+            "Joy": {"nyxamine": .4, "cortanyx": -.2},
+            "Sadness": {"cortanyx": .3, "nyxamine": -.2},
+            "Fear": {"cortanyx": .4, "adrenyx": .3},
+            "Anger": {"cortanyx": .4, "adrenyx": .3, "oxynixin": -.2},
+            "Trust": {"oxynixin": .4, "cortanyx": -.2},
+            "Disgust": {"cortanyx": .3, "oxynixin": -.3},
+            "Anticipation": {"adrenyx": .3, "nyxamine": .2},
+            "Surprise": {"adrenyx": .4, "nyxamine": .2},
+            "Teasing": {"nyxamine": .3, "adrenyx": .2},
+            "Controlling": {"adrenyx": .3, "oxynixin": -.2},
+            "Cruel": {"cortanyx": .3, "oxynixin": -.4},
+            "Detached": {"cortanyx": .2, "oxynixin": -.3, "seranix": .2},
+        }
+        emo = emotional.get("primary_emotion", "")
+        if emo in emotion_map:
+            inten = emotional.get("primary_intensity", 0.5)
+            for chem, val in emotion_map[emo].items():
+                impacts[chem] += val * inten * sig
+    
+        # valence / arousal
+        val, arous = emotional.get("valence", 0.0), emotional.get("arousal", 0.5)
+        if val > .3:
+            impacts["nyxamine"] += val * .2 * sig
+            impacts["cortanyx"] -= val * .1 * sig
+        elif val < -.3:
+            impacts["cortanyx"] += abs(val) * .2 * sig
+            impacts["nyxamine"] -= abs(val) * .1 * sig
+        if arous > .6:
+            impacts["adrenyx"] += arous * .2 * sig
+        elif arous < .4:
+            impacts["seranix"] += (1 - arous) * .2 * sig
+    
+        # scenario mapping
+        scenario_map = {
+            "teasing": {"nyxamine": .3, "adrenyx": .2},
+            "dark": {"cortanyx": .3, "adrenyx": .2},
+            "indulgent": {"nyxamine": .3, "seranix": .2},
+            "psychological": {"nyxamine": .2, "cortanyx": .2},
+            "nurturing": {"oxynixin": .3, "seranix": .2},
+            "discipline": {"cortanyx": .2, "adrenyx": .2},
+            "training": {"nyxamine": .1, "cortanyx": .1},
+            "service": {"oxynixin": .2, "seranix": .1},
+            "worship": {"oxynixin": .3, "nyxamine": .2},
+        }
+        if scenario in scenario_map:
+            for chem, val in scenario_map[scenario].items():
+                impacts[chem] += val * sig
+    
+        strength = sum(abs(v) for v in impacts.values()) / len(impacts)
+        return NeurochemicalImpact(
+            nyxamine_impact=impacts["nyxamine"],
+            seranix_impact=impacts["seranix"],
+            oxynixin_impact=impacts["oxynixin"],
+            cortanyx_impact=impacts["cortanyx"],
+            adrenyx_impact=impacts["adrenyx"],
+            impact_strength=strength
+        )
+    
+    @staticmethod
+    @function_tool
+    async def _calculate_emotional_impacts(
+        ctx: RunContextWrapper,
+        experience: Dict[str, Any],
+        neurochemical_impacts: "NeurochemicalImpact"
+    ) -> Dict[str, Dict[str, float]]:
+        ic = ctx.context
+        emotional  = experience.get("emotional_context", {})
+        primary    = emotional.get("primary_emotion", "")
+        sig        = experience.get("significance", 5) / 10
+        impacts: Dict[str, Dict[str, float]] = {}
+    
+        if primary in ic.emotional_tendencies:
+            impacts[primary] = {"likelihood": .1 * sig,
+                                "intensity": .05 * sig,
+                                "threshold": -.05 * sig}
+    
+            chem_emotion = {
+                "nyxamine": ["Joy", "Anticipation", "Teasing"],
+                "seranix": ["Contentment", "Trust"],
+                "oxynixin": ["Trust", "Love", "Nurturing"],
+                "cortanyx": ["Sadness", "Fear", "Anger", "Disgust", "Cruel", "Detached"],
+                "adrenyx": ["Fear", "Surprise", "Anticipation", "Controlling"]
+            }
+            for chem, delta in [
+                ("nyxamine", neurochemical_impacts.nyxamine_impact),
+                ("seranix", neurochemical_impacts.seranix_impact),
+                ("oxynixin", neurochemical_impacts.oxynixin_impact),
+                ("cortanyx", neurochemical_impacts.cortanyx_impact),
+                ("adrenyx", neurochemical_impacts.adrenyx_impact)
+            ]:
+                if abs(delta) < .1: continue
+                for emo in chem_emotion.get(chem, []):
+                    if emo not in ic.emotional_tendencies or emo == primary:
+                        continue
+                    scale = .6 * abs(delta) * sig
+                    impacts.setdefault(emo, {"likelihood":0,"intensity":0,"threshold":0})
+                    if delta > 0:
+                        impacts[emo]["likelihood"] += .05 * scale
+                        impacts[emo]["intensity"]  += .03 * scale
+                        impacts[emo]["threshold"]  -= .02 * scale
+                    else:
+                        impacts[emo]["likelihood"] -= .05 * scale
+                        impacts[emo]["intensity"]  -= .03 * scale
+                        impacts[emo]["threshold"]  += .02 * scale
+        return impacts
+
+    @staticmethod
+    @function_tool
+    async def _update_identity_history(
+        ctx: RunContextWrapper,
+        trait_changes: Dict[str, Dict[str, Any]],
+        preference_changes: Dict[str, Dict[str, Dict[str, Any]]],
+        neurochemical_impacts: "NeurochemicalImpact",
+        emotional_impacts: Dict[str, Dict[str, float]],
+        experience_id: str
+    ) -> Dict[str, Any]:
+        ic = ctx.context
+        ts = datetime.datetime.now().isoformat()
+        sig_changes = {}
+    
+        # traits
+        for trait, ch in trait_changes.items():
+            if abs(ch.get("actual_change", 0)) >= ic.min_impact_threshold:
+                sig_changes[f"trait.{trait}"] = ch["actual_change"]
+        # prefs
+        for cat, prefs in preference_changes.items():
+            for pref, ch in prefs.items():
+                if abs(ch.get("actual_change", 0)) >= ic.min_impact_threshold:
+                    sig_changes[f"preference.{cat}.{pref}"] = ch["actual_change"]
+        # neurochemicals
         for chem, delta in [
             ("nyxamine", neurochemical_impacts.nyxamine_impact),
             ("seranix", neurochemical_impacts.seranix_impact),
@@ -2428,388 +2494,347 @@ async def _calculate_emotional_impacts(
             ("cortanyx", neurochemical_impacts.cortanyx_impact),
             ("adrenyx", neurochemical_impacts.adrenyx_impact)
         ]:
-            if abs(delta) < .1: continue
-            for emo in chem_emotion.get(chem, []):
-                if emo not in ic.emotional_tendencies or emo == primary:
-                    continue
-                scale = .6 * abs(delta) * sig
-                impacts.setdefault(emo, {"likelihood":0,"intensity":0,"threshold":0})
-                if delta > 0:
-                    impacts[emo]["likelihood"] += .05 * scale
-                    impacts[emo]["intensity"]  += .03 * scale
-                    impacts[emo]["threshold"]  -= .02 * scale
-                else:
-                    impacts[emo]["likelihood"] -= .05 * scale
-                    impacts[emo]["intensity"]  -= .03 * scale
-                    impacts[emo]["threshold"]  += .02 * scale
-    return impacts
-    
-@function_tool
-async def _update_identity_history(
-    ctx: RunContextWrapper,
-    trait_changes: Dict[str, Dict[str, Any]],
-    preference_changes: Dict[str, Dict[str, Dict[str, Any]]],
-    neurochemical_impacts: "NeurochemicalImpact",
-    emotional_impacts: Dict[str, Dict[str, float]],
-    experience_id: str
-) -> Dict[str, Any]:
-    ic = ctx.context
-    ts = datetime.datetime.now().isoformat()
-    sig_changes = {}
-
-    # traits
-    for trait, ch in trait_changes.items():
-        if abs(ch.get("actual_change", 0)) >= ic.min_impact_threshold:
-            sig_changes[f"trait.{trait}"] = ch["actual_change"]
-    # prefs
-    for cat, prefs in preference_changes.items():
-        for pref, ch in prefs.items():
-            if abs(ch.get("actual_change", 0)) >= ic.min_impact_threshold:
-                sig_changes[f"preference.{cat}.{pref}"] = ch["actual_change"]
-    # neurochemicals
-    for chem, delta in [
-        ("nyxamine", neurochemical_impacts.nyxamine_impact),
-        ("seranix", neurochemical_impacts.seranix_impact),
-        ("oxynixin", neurochemical_impacts.oxynixin_impact),
-        ("cortanyx", neurochemical_impacts.cortanyx_impact),
-        ("adrenyx", neurochemical_impacts.adrenyx_impact)
-    ]:
-        if abs(delta) >= ic.min_impact_threshold:
-            sig_changes[f"neurochemical.{chem}"] = delta
-    # emotions
-    for emo, emo_ch in emotional_impacts.items():
-        for aspect, delta in emo_ch.items():
             if abs(delta) >= ic.min_impact_threshold:
-                sig_changes[f"emotion.{emo}.{aspect}"] = delta
-
-    ic.update_count += 1
-    ic.last_update = ts
-    ic.impact_history.append({
-        "timestamp": ts,
-        "experience_id": experience_id,
-        "significant_changes": sig_changes,
-        "update_count": ic.update_count,
-        "neurochemical_impacts": neurochemical_impacts.model_dump(),
-        "emotional_impacts": emotional_impacts
-    })
-    if len(ic.impact_history) > ic.max_history_size:
-        ic.impact_history = ic.impact_history[-ic.max_history_size:]
-
-    return {"significant_changes": len(sig_changes),
-            "update_count": ic.update_count,
-            "timestamp": ts}
-
-@function_tool
-async def _get_recent_impacts(ctx: RunContextWrapper, limit: int = 10) -> List[Dict[str, Any]]:
-    return ctx.context.impact_history[-limit:]
+                sig_changes[f"neurochemical.{chem}"] = delta
+        # emotions
+        for emo, emo_ch in emotional_impacts.items():
+            for aspect, delta in emo_ch.items():
+                if abs(delta) >= ic.min_impact_threshold:
+                    sig_changes[f"emotion.{emo}.{aspect}"] = delta
     
-@function_tool
-async def _calculate_identity_changes(ctx: RunContextWrapper, time_period: str = "recent") -> Dict[str, Dict[str, float]]:
-    ic = ctx.context
-    impacts = ic.impact_history[-10:] if time_period == "recent" else ic.impact_history
-    changes = {"traits": {}, "preferences": {}, "neurochemicals": {}, "emotions": {}}
-    if not impacts:
+        ic.update_count += 1
+        ic.last_update = ts
+        ic.impact_history.append({
+            "timestamp": ts,
+            "experience_id": experience_id,
+            "significant_changes": sig_changes,
+            "update_count": ic.update_count,
+            "neurochemical_impacts": neurochemical_impacts.model_dump(),
+            "emotional_impacts": emotional_impacts
+        })
+        if len(ic.impact_history) > ic.max_history_entries:
+            ic.impact_history = ic.impact_history[-ic.max_history_entries:]
+    
+        return {"significant_changes": len(sig_changes),
+                "update_count": ic.update_count,
+                "timestamp": ts}
+
+    @staticmethod
+    @function_tool
+    async def _get_recent_impacts(ctx: RunContextWrapper, limit: int = 10) -> List[Dict[str, Any]]:
+        return ctx.context.impact_history[-limit:]
+
+    @staticmethod
+    @function_tool
+    async def _calculate_identity_changes(ctx: RunContextWrapper, time_period: str = "recent") -> Dict[str, Dict[str, float]]:
+        ic = ctx.context
+        impacts = ic.impact_history[-10:] if time_period == "recent" else ic.impact_history
+        changes = {"traits": {}, "preferences": {}, "neurochemicals": {}, "emotions": {}}
+        if not impacts:
+            return changes
+        for impact in impacts:
+            for key, val in impact.get("significant_changes", {}).items():
+                parts = key.split(".")
+                if parts[0] == "trait":
+                    changes["traits"].setdefault(parts[1], 0.0)
+                    changes["traits"][parts[1]] += val
+                elif parts[0] == "preference":
+                    cat, pref = parts[1], parts[2]
+                    changes["preferences"].setdefault(cat, {}).setdefault(pref, 0.0)
+                    changes["preferences"][cat][pref] += val
+                elif parts[0] == "neurochemical":
+                    changes["neurochemicals"].setdefault(parts[1], 0.0)
+                    changes["neurochemicals"][parts[1]] += val
+                elif parts[0] == "emotion":
+                    emo, aspect = parts[1], parts[2]
+                    changes["emotions"].setdefault(emo, {}).setdefault(aspect, 0.0)
+                    changes["emotions"][emo][aspect] += val
         return changes
-    for impact in impacts:
-        for key, val in impact.get("significant_changes", {}).items():
-            parts = key.split(".")
-            if parts[0] == "trait":
-                changes["traits"].setdefault(parts[1], 0.0)
-                changes["traits"][parts[1]] += val
-            elif parts[0] == "preference":
-                cat, pref = parts[1], parts[2]
-                changes["preferences"].setdefault(cat, {}).setdefault(pref, 0.0)
-                changes["preferences"][cat][pref] += val
-            elif parts[0] == "neurochemical":
-                changes["neurochemicals"].setdefault(parts[1], 0.0)
-                changes["neurochemicals"][parts[1]] += val
-            elif parts[0] == "emotion":
-                emo, aspect = parts[1], parts[2]
-                changes["emotions"].setdefault(emo, {}).setdefault(aspect, 0.0)
-                changes["emotions"][emo][aspect] += val
-    return changes
-
-# ---------------------------------------------------------------------------
-@function_tool
-async def _get_neurochemical_patterns(ctx: RunContextWrapper) -> Dict[str, Any]:
-    """
-    Analyse each baseline’s history, label its trend, and then compare chemicals
-    to flag “aligned”, “divergent”, or “inversely_related” pairs exactly as in
-    the original implementation.
-    """
-    ic = ctx.context
-    patterns: Dict[str, Dict[str, Any]] = {}
-
-    # ---------- per-chemical trend & volatility --------------------------------
-    for chem, data in ic.neurochemical_profile.items():
-        hist = data.get("evolution_history", [])
-        if not hist:
+    
+    # ---------------------------------------------------------------------------
+    @staticmethod
+    @function_tool
+    async def _get_neurochemical_patterns(ctx: RunContextWrapper) -> Dict[str, Any]:
+        """
+        Analyse each baseline’s history, label its trend, and then compare chemicals
+        to flag “aligned”, “divergent”, or “inversely_related” pairs exactly as in
+        the original implementation.
+        """
+        ic = ctx.context
+        patterns: Dict[str, Dict[str, Any]] = {}
+    
+        # ---------- per-chemical trend & volatility --------------------------------
+        for chem, data in ic.neurochemical_profile.items():
+            hist = data.get("evolution_history", [])
+            if not hist:
+                patterns[chem] = {
+                    "pattern": "stable",
+                    "current_value": data["value"],
+                    "baseline": data["value"],
+                    "adaptability": data["adaptability"],
+                }
+                continue
+    
+            deltas = [h.get("change", 0.0) for h in hist]
+            avg = sum(deltas) / len(deltas)
+            vol = (
+                sum(abs(deltas[i] - deltas[i - 1]) for i in range(1, len(deltas)))
+                / (len(deltas) - 1)
+                if len(deltas) > 1
+                else 0.0
+            )
+    
+            if abs(avg) < 0.01:
+                pattern = "stable" if vol < 0.02 else "fluctuating"
+            else:
+                pattern = "increasing" if avg > 0 else "decreasing"
+    
             patterns[chem] = {
-                "pattern": "stable",
+                "pattern": pattern,
                 "current_value": data["value"],
-                "baseline": data["value"],
+                "average_change": avg,
+                "volatility": vol,
                 "adaptability": data["adaptability"],
             }
-            continue
-
-        deltas = [h.get("change", 0.0) for h in hist]
-        avg = sum(deltas) / len(deltas)
-        vol = (
-            sum(abs(deltas[i] - deltas[i - 1]) for i in range(1, len(deltas)))
-            / (len(deltas) - 1)
-            if len(deltas) > 1
-            else 0.0
-        )
-
-        if abs(avg) < 0.01:
-            pattern = "stable" if vol < 0.02 else "fluctuating"
-        else:
-            pattern = "increasing" if avg > 0 else "decreasing"
-
-        patterns[chem] = {
-            "pattern": pattern,
-            "current_value": data["value"],
-            "average_change": avg,
-            "volatility": vol,
-            "adaptability": data["adaptability"],
+    
+        # ---------- inter-chemical relationship checks ----------------------------
+        relationships: Dict[str, str] = {}
+    
+        # helper
+        def _set_alignment(a: str, b: str) -> None:
+            relationships[f"{a}_{b}"] = (
+                "aligned"
+                if patterns[a]["pattern"] == patterns[b]["pattern"]
+                else "divergent"
+            )
+    
+        _set_alignment("nyxamine", "oxynixin")
+        _set_alignment("cortanyx", "adrenyx")
+        _set_alignment("seranix", "cortanyx")
+    
+        # inverse-trend checks (increasing vs decreasing)
+        def _inverse(a: str, b: str) -> None:
+            pa, pb = patterns[a]["pattern"], patterns[b]["pattern"]
+            if (pa == "increasing" and pb == "decreasing") or (
+                pa == "decreasing" and pb == "increasing"
+            ):
+                relationships[f"{a}_{b}"] = "inversely_related"
+    
+        _inverse("nyxamine", "cortanyx")
+        _inverse("oxynixin", "cortanyx")
+    
+        return {
+            "chemical_patterns": patterns,
+            "relationships": relationships,
         }
-
-    # ---------- inter-chemical relationship checks ----------------------------
-    relationships: Dict[str, str] = {}
-
-    # helper
-    def _set_alignment(a: str, b: str) -> None:
-        relationships[f"{a}_{b}"] = (
-            "aligned"
-            if patterns[a]["pattern"] == patterns[b]["pattern"]
-            else "divergent"
-        )
-
-    _set_alignment("nyxamine", "oxynixin")
-    _set_alignment("cortanyx", "adrenyx")
-    _set_alignment("seranix", "cortanyx")
-
-    # inverse-trend checks (increasing vs decreasing)
-    def _inverse(a: str, b: str) -> None:
-        pa, pb = patterns[a]["pattern"], patterns[b]["pattern"]
-        if (pa == "increasing" and pb == "decreasing") or (
-            pa == "decreasing" and pb == "increasing"
-        ):
-            relationships[f"{a}_{b}"] = "inversely_related"
-
-    _inverse("nyxamine", "cortanyx")
-    _inverse("oxynixin", "cortanyx")
-
-    return {
-        "chemical_patterns": patterns,
-        "relationships": relationships,
-    }
-# ---------------------------------------------------------------------------
-
+    # ---------------------------------------------------------------------------
     
-@function_tool
-async def _calculate_trait_consistency(ctx: RunContextWrapper) -> Dict[str, float]:
-    ic = ctx.context
-    scores = {}
-    for trait, data in ic.identity_traits.items():
-        hist = [h.get("change",0) for h in data.get("evolution_history",[])]
-        if not hist:
-            scores[trait] = 1.0
-            continue
-        mean = sum(hist)/len(hist)
-        var  = sum((x-mean)**2 for x in hist)/len(hist)
-        scores[trait] = max(0.0, 1.0 - math.sqrt(var)*5)
-    return scores
-    
-@function_tool
-async def _calculate_preference_consistency(ctx: RunContextWrapper) -> Dict[str, Dict[str, float]]:
-    ic = ctx.context
-    out: Dict[str, Dict[str, float]] = {}
-    for cat, prefs in ic.identity_preferences.items():
-        out[cat] = {}
-        for pref, data in prefs.items():
-            hist = [h.get("change",0) for h in data.get("evolution_history",[]) if "change" in h]
+    @staticmethod    
+    @function_tool
+    async def _calculate_trait_consistency(ctx: RunContextWrapper) -> Dict[str, float]:
+        ic = ctx.context
+        scores = {}
+        for trait, data in ic.identity_traits.items():
+            hist = [h.get("change",0) for h in data.get("evolution_history",[])]
             if not hist:
-                out[cat][pref] = 1.0
+                scores[trait] = 1.0
                 continue
             mean = sum(hist)/len(hist)
             var  = sum((x-mean)**2 for x in hist)/len(hist)
-            out[cat][pref] = max(0.0, 1.0 - math.sqrt(var)*5)
-    return out
+            scores[trait] = max(0.0, 1.0 - math.sqrt(var)*5)
+        return scores
 
-
-# ---------------------------------------------------------------------------
-@function_tool
-async def _identify_contradictions(ctx: RunContextWrapper) -> List[Dict[str, Any]]:
-    """
-    Scan the current identity state and return a list of potential contradictions /
-    mis-alignments exactly as the legacy implementation did.
-    """
-    ic = ctx.context        # <- convenient alias
-
-    contradictions: List[Dict[str, Any]] = []
-
-    # ---------- 1. Trait-vs-Trait conflicts -----------------------------------
-    trait_pairs = [
-        ("dominance",  "patience"),
-        ("playfulness","strictness"),
-        ("cruelty",    "patience"),
-    ]
-    for t1, t2 in trait_pairs:
-        if t1 in ic.identity_traits and t2 in ic.identity_traits:
-            v1 = ic.identity_traits[t1]["value"]
-            v2 = ic.identity_traits[t2]["value"]
-            if v1 > 0.7 and v2 > 0.7:
-                contradictions.append({
-                    "type": "trait_contradiction",
-                    "elements": [t1, t2],
-                    "values":   [v1, v2],
-                    "description": (
-                        f"Traits '{t1}' ({v1:.2f}) and '{t2}' ({v2:.2f}) are both high "
-                        "even though they typically oppose each other."
-                    ),
-                })
-
-    # ---------- 2. Neurochemical high-high anomalies --------------------------
-    def _chem_val(c: str) -> float:
-        return ic.neurochemical_profile.get(c, {}).get("value", 0.0)
-
-    if _chem_val("nyxamine") > 0.7 and _chem_val("cortanyx") > 0.7:
-        contradictions.append({
-            "type": "neurochemical_contradiction",
-            "elements": ["nyxamine", "cortanyx"],
-            "values":   [_chem_val("nyxamine"), _chem_val("cortanyx")],
-            "description": "Pleasure (nyxamine) and stress (cortanyx) are simultaneously very high.",
-        })
-
-    if _chem_val("seranix") > 0.7 and _chem_val("adrenyx") > 0.7:
-        contradictions.append({
-            "type": "neurochemical_contradiction",
-            "elements": ["seranix", "adrenyx"],
-            "values":   [_chem_val("seranix"), _chem_val("adrenyx")],
-            "description": "Calm (seranix) and high alertness (adrenyx) are both very high.",
-        })
-
-    # ---------- 3. Emotion-vs-Emotion clashes ---------------------------------
-    emotion_pairs = [
-        ("Joy",   "Sadness"),
-        ("Trust", "Disgust"),
-        ("Teasing","Detached"),
-    ]
-    for e1, e2 in emotion_pairs:
-        if e1 in ic.emotional_tendencies and e2 in ic.emotional_tendencies:
-            l1 = ic.emotional_tendencies[e1]["likelihood"]
-            l2 = ic.emotional_tendencies[e2]["likelihood"]
-            if l1 > 0.7 and l2 > 0.7:
-                contradictions.append({
-                    "type": "emotion_contradiction",
-                    "elements": [e1, e2],
-                    "values":   [l1, l2],
-                    "description": (
-                        f"Both emotions '{e1}' ({l1:.2f}) and '{e2}' ({l2:.2f}) "
-                        "have high likelihoods despite being opposites."
-                    ),
-                })
-
-    # ---------- 4. Trait ↔ Preference mismatches ------------------------------
-    tp_pairs = [
-        ("dominance", "scenario_types", "discipline"),
-        ("playfulness","scenario_types", "teasing"),
-        ("strictness", "emotional_tones","stern"),
-        ("creativity", "interaction_styles","metaphorical"),
-        ("cruelty",    "emotional_tones","cruel"),
-    ]
-    for trait, cat, pref in tp_pairs:
-        if (trait in ic.identity_traits and
-            cat   in ic.identity_preferences and
-            pref  in ic.identity_preferences[cat]):
-            tv = ic.identity_traits[trait]["value"]
-            pv = ic.identity_preferences[cat][pref]["value"]
-            if (tv > 0.7 and pv < 0.3) or (tv < 0.3 and pv > 0.7):
-                contradictions.append({
-                    "type": "trait_preference_mismatch",
-                    "elements": [trait, f"{cat}.{pref}"],
-                    "values":   [tv, pv],
-                    "description": (
-                        f"Trait '{trait}' ({tv:.2f}) and preference '{pref}' "
-                        f"within '{cat}' ({pv:.2f}) are strongly mis-aligned."
-                    ),
-                })
-
-    # ---------- 5. Neurochemical ↔ Trait align / inverse checks --------------
-    # (chem, trait, inverse_expected)
-    ct_pairs = [
-        ("nyxamine", "creativity",  False),
-        ("seranix",  "patience",    False),
-        ("oxynixin", "cruelty",     True),   # expects inverse
-        ("cortanyx", "strictness",  False),
-        ("adrenyx",  "intensity",   False),
-    ]
-    for chem, trait, inverse in ct_pairs:
-        if chem in ic.neurochemical_profile and trait in ic.identity_traits:
-            cv = _chem_val(chem)
-            tv = ic.identity_traits[trait]["value"]
-            if inverse:
-                # expect one high & one low; flag if both high or both low
-                if (cv > 0.7 and tv > 0.7) or (cv < 0.3 and tv < 0.3):
+    @staticmethod
+    @function_tool
+    async def _calculate_preference_consistency(ctx: RunContextWrapper) -> Dict[str, Dict[str, float]]:
+        ic = ctx.context
+        out: Dict[str, Dict[str, float]] = {}
+        for cat, prefs in ic.identity_preferences.items():
+            out[cat] = {}
+            for pref, data in prefs.items():
+                hist = [h.get("change",0) for h in data.get("evolution_history",[]) if "change" in h]
+                if not hist:
+                    out[cat][pref] = 1.0
+                    continue
+                mean = sum(hist)/len(hist)
+                var  = sum((x-mean)**2 for x in hist)/len(hist)
+                out[cat][pref] = max(0.0, 1.0 - math.sqrt(var)*5)
+        return out
+    
+    
+    # ---------------------------------------------------------------------------
+    @staticmethod
+    @function_tool
+    async def _identify_contradictions(ctx: RunContextWrapper) -> List[Dict[str, Any]]:
+        """
+        Scan the current identity state and return a list of potential contradictions /
+        mis-alignments exactly as the legacy implementation did.
+        """
+        ic = ctx.context        # <- convenient alias
+    
+        contradictions: List[Dict[str, Any]] = []
+    
+        # ---------- 1. Trait-vs-Trait conflicts -----------------------------------
+        trait_pairs = [
+            ("dominance",  "patience"),
+            ("playfulness","strictness"),
+            ("cruelty",    "patience"),
+        ]
+        for t1, t2 in trait_pairs:
+            if t1 in ic.identity_traits and t2 in ic.identity_traits:
+                v1 = ic.identity_traits[t1]["value"]
+                v2 = ic.identity_traits[t2]["value"]
+                if v1 > 0.7 and v2 > 0.7:
                     contradictions.append({
-                        "type": "neurochemical_trait_mismatch",
-                        "elements": [chem, trait],
-                        "values":   [cv, tv],
+                        "type": "trait_contradiction",
+                        "elements": [t1, t2],
+                        "values":   [v1, v2],
                         "description": (
-                            f"Expected inverse relationship between {chem} and '{trait}', "
-                            "but both are aligned."
+                            f"Traits '{t1}' ({v1:.2f}) and '{t2}' ({v2:.2f}) are both high "
+                            "even though they typically oppose each other."
                         ),
                     })
+    
+        # ---------- 2. Neurochemical high-high anomalies --------------------------
+        def _chem_val(c: str) -> float:
+            return ic.neurochemical_profile.get(c, {}).get("value", 0.0)
+    
+        if _chem_val("nyxamine") > 0.7 and _chem_val("cortanyx") > 0.7:
+            contradictions.append({
+                "type": "neurochemical_contradiction",
+                "elements": ["nyxamine", "cortanyx"],
+                "values":   [_chem_val("nyxamine"), _chem_val("cortanyx")],
+                "description": "Pleasure (nyxamine) and stress (cortanyx) are simultaneously very high.",
+            })
+    
+        if _chem_val("seranix") > 0.7 and _chem_val("adrenyx") > 0.7:
+            contradictions.append({
+                "type": "neurochemical_contradiction",
+                "elements": ["seranix", "adrenyx"],
+                "values":   [_chem_val("seranix"), _chem_val("adrenyx")],
+                "description": "Calm (seranix) and high alertness (adrenyx) are both very high.",
+            })
+    
+        # ---------- 3. Emotion-vs-Emotion clashes ---------------------------------
+        emotion_pairs = [
+            ("Joy",   "Sadness"),
+            ("Trust", "Disgust"),
+            ("Teasing","Detached"),
+        ]
+        for e1, e2 in emotion_pairs:
+            if e1 in ic.emotional_tendencies and e2 in ic.emotional_tendencies:
+                l1 = ic.emotional_tendencies[e1]["likelihood"]
+                l2 = ic.emotional_tendencies[e2]["likelihood"]
+                if l1 > 0.7 and l2 > 0.7:
+                    contradictions.append({
+                        "type": "emotion_contradiction",
+                        "elements": [e1, e2],
+                        "values":   [l1, l2],
+                        "description": (
+                            f"Both emotions '{e1}' ({l1:.2f}) and '{e2}' ({l2:.2f}) "
+                            "have high likelihoods despite being opposites."
+                        ),
+                    })
+    
+        # ---------- 4. Trait ↔ Preference mismatches ------------------------------
+        tp_pairs = [
+            ("dominance", "scenario_types", "discipline"),
+            ("playfulness","scenario_types", "teasing"),
+            ("strictness", "emotional_tones","stern"),
+            ("creativity", "interaction_styles","metaphorical"),
+            ("cruelty",    "emotional_tones","cruel"),
+        ]
+        for trait, cat, pref in tp_pairs:
+            if (trait in ic.identity_traits and
+                cat   in ic.identity_preferences and
+                pref  in ic.identity_preferences[cat]):
+                tv = ic.identity_traits[trait]["value"]
+                pv = ic.identity_preferences[cat][pref]["value"]
+                if (tv > 0.7 and pv < 0.3) or (tv < 0.3 and pv > 0.7):
+                    contradictions.append({
+                        "type": "trait_preference_mismatch",
+                        "elements": [trait, f"{cat}.{pref}"],
+                        "values":   [tv, pv],
+                        "description": (
+                            f"Trait '{trait}' ({tv:.2f}) and preference '{pref}' "
+                            f"within '{cat}' ({pv:.2f}) are strongly mis-aligned."
+                        ),
+                    })
+    
+        # ---------- 5. Neurochemical ↔ Trait align / inverse checks --------------
+        # (chem, trait, inverse_expected)
+        ct_pairs = [
+            ("nyxamine", "creativity",  False),
+            ("seranix",  "patience",    False),
+            ("oxynixin", "cruelty",     True),   # expects inverse
+            ("cortanyx", "strictness",  False),
+            ("adrenyx",  "intensity",   False),
+        ]
+        for chem, trait, inverse in ct_pairs:
+            if chem in ic.neurochemical_profile and trait in ic.identity_traits:
+                cv = _chem_val(chem)
+                tv = ic.identity_traits[trait]["value"]
+                if inverse:
+                    # expect one high & one low; flag if both high or both low
+                    if (cv > 0.7 and tv > 0.7) or (cv < 0.3 and tv < 0.3):
+                        contradictions.append({
+                            "type": "neurochemical_trait_mismatch",
+                            "elements": [chem, trait],
+                            "values":   [cv, tv],
+                            "description": (
+                                f"Expected inverse relationship between {chem} and '{trait}', "
+                                "but both are aligned."
+                            ),
+                        })
+                else:
+                    # expect alignment; flag if poles apart
+                    if (cv > 0.7 and tv < 0.3) or (cv < 0.3 and tv > 0.7):
+                        contradictions.append({
+                            "type": "neurochemical_trait_mismatch",
+                            "elements": [chem, trait],
+                            "values":   [cv, tv],
+                            "description": (
+                                f"{chem} and '{trait}' should align, "
+                                "yet they are strongly divergent."
+                            ),
+                        })
+    
+        return contradictions
+    # ---------------------------------------------------------------------------
+    
+    @staticmethod
+    @function_tool
+    async def _assess_neurochemical_coherence(ctx: RunContextWrapper) -> Dict[str, Any]:
+        ic = ctx.context
+        relations = [("nyxamine","cortanyx","inverse"),
+                     ("seranix","adrenyx","inverse"),
+                     ("oxynixin","cortanyx","inverse"),
+                     ("nyxamine","oxynixin","aligned"),
+                     ("cortanyx","adrenyx","aligned")]
+        scores, imbalances = {}, []
+        for c1,c2,rel in relations:
+            v1, v2 = ic.neurochemical_profile[c1]["value"], ic.neurochemical_profile[c2]["value"]
+            if rel=="inverse":
+                coh = abs(v1-v2)
+                if coh < .3:
+                    imbalances.append({"type":"unexpected_similarity","chemicals":[c1,c2],
+                                       "values":[v1,v2],"expected":"inverse","coherence":coh})
             else:
-                # expect alignment; flag if poles apart
-                if (cv > 0.7 and tv < 0.3) or (cv < 0.3 and tv > 0.7):
-                    contradictions.append({
-                        "type": "neurochemical_trait_mismatch",
-                        "elements": [chem, trait],
-                        "values":   [cv, tv],
-                        "description": (
-                            f"{chem} and '{trait}' should align, "
-                            "yet they are strongly divergent."
-                        ),
-                    })
-
-    return contradictions
-# ---------------------------------------------------------------------------
-
-
-@function_tool
-async def _assess_neurochemical_coherence(ctx: RunContextWrapper) -> Dict[str, Any]:
-    ic = ctx.context
-    relations = [("nyxamine","cortanyx","inverse"),
-                 ("seranix","adrenyx","inverse"),
-                 ("oxynixin","cortanyx","inverse"),
-                 ("nyxamine","oxynixin","aligned"),
-                 ("cortanyx","adrenyx","aligned")]
-    scores, imbalances = {}, []
-    for c1,c2,rel in relations:
-        v1, v2 = ic.neurochemical_profile[c1]["value"], ic.neurochemical_profile[c2]["value"]
-        if rel=="inverse":
-            coh = abs(v1-v2)
-            if coh < .3:
-                imbalances.append({"type":"unexpected_similarity","chemicals":[c1,c2],
-                                   "values":[v1,v2],"expected":"inverse","coherence":coh})
-        else:
-            coh = 1.0-abs(v1-v2)
-            if coh < .7:
-                imbalances.append({"type":"unexpected_difference","chemicals":[c1,c2],
-                                   "values":[v1,v2],"expected":"aligned","coherence":coh})
-        scores[f"{c1}_{c2}"] = coh
-
-    for chem, data in ic.neurochemical_profile.items():
-        if data["value"]>0.9:
-            imbalances.append({"type":"extreme_high","chemical":chem,"value":data["value"]})
-        elif data["value"]<0.1:
-            imbalances.append({"type":"extreme_low","chemical":chem,"value":data["value"]})
-
-    overall = (sum(scores.values())/len(scores) if scores else 0.7) - len(imbalances)*0.05
-    overall = max(.1, min(1.0, overall))
-    return {"overall_coherence":overall, "relation_scores":scores,
-            "imbalances":imbalances,
-            "balanced_chemicals":[c for c in ic.neurochemical_profile if not any(i.get("chemical")==c for i in imbalances)],
-            "assessment_time":datetime.datetime.now().isoformat()}
+                coh = 1.0-abs(v1-v2)
+                if coh < .7:
+                    imbalances.append({"type":"unexpected_difference","chemicals":[c1,c2],
+                                       "values":[v1,v2],"expected":"aligned","coherence":coh})
+            scores[f"{c1}_{c2}"] = coh
+    
+        for chem, data in ic.neurochemical_profile.items():
+            if data["value"]>0.9:
+                imbalances.append({"type":"extreme_high","chemical":chem,"value":data["value"]})
+            elif data["value"]<0.1:
+                imbalances.append({"type":"extreme_low","chemical":chem,"value":data["value"]})
+    
+        overall = (sum(scores.values())/len(scores) if scores else 0.7) - len(imbalances)*0.05
+        overall = max(.1, min(1.0, overall))
+        return {"overall_coherence":overall, "relation_scores":scores,
+                "imbalances":imbalances,
+                "balanced_chemicals":[c for c in ic.neurochemical_profile if not any(i.get("chemical")==c for i in imbalances)],
+                "assessment_time":datetime.datetime.now().isoformat()}
