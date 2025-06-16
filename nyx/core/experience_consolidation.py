@@ -686,52 +686,50 @@ class ExperienceConsolidationSystem:
             logger.error(f"Error extracting emotional context: {e}")
             return EmotionalContextSummary()
 
-    @staticmethod  
+    # ---------------------------------------------------------------------------
+    @staticmethod
     @function_tool
-    async def _generate_consolidation_type(ctx: RunContextWrapper, experiences: List[ExperienceDetails]) -> ConsolidationType:
+    async def _generate_consolidation_type(
+        ctx: RunContextWrapper,
+        experiences: Any                      # <— was List[ExperienceDetails]
+    ) -> ConsolidationType:
         """
-        Determine appropriate consolidation type based on experiences
-        
-        Args:
-            experiences: List of experiences
-            
-        Returns:
-            Consolidation type
+        Decide which consolidation strategy (“pattern”, “abstraction”, “trend”)
+        best fits the supplied experiences.
         """
         if not experiences:
             return ConsolidationType(type="pattern")
-        
-        # Count consolidated experiences
-        consolidated_count = sum(1 for e in experiences if e.is_consolidated)
-        
-        # If many experiences are already consolidations, use abstraction
-        if consolidated_count >= len(experiences) / 2:
+    
+        # --- helper to safely unwrap attrs whether they’re Pydantic objects
+        #     or plain dicts -------------------------------------------------
+        def _get(obj, key, default=None):
+            return getattr(obj, key, obj.get(key, default) if isinstance(obj, dict) else default)
+    
+        consolidated_cnt = sum(1 for e in experiences if _get(e, "is_consolidated", False))
+    
+        if consolidated_cnt >= len(experiences) / 2:
             return ConsolidationType(type="abstraction")
-        
-        # Check for scenario diversity
-        scenarios = [e.scenario_type for e in experiences]
-        unique_scenarios = len(set(scenarios))
-        
-        # If multiple scenarios, use abstraction
-        if unique_scenarios > 1:
+    
+        scenario_set = {_get(e, "scenario_type", "general") for e in experiences}
+        if len(scenario_set) > 1:
             return ConsolidationType(type="abstraction")
-        
-        # Check for temporal relationships
-        timestamps = []
+    
+        # temporal spread check
+        ts_list = []
         for e in experiences:
-            if e.timestamp:
+            ts = _get(e, "timestamp", "")
+            if ts:
                 try:
-                    ts = datetime.fromisoformat(e.timestamp.replace("Z", "+00:00"))
-                    timestamps.append(ts)
-                except:
-                    pass
-        
-        # If experiences span a significant time period, use trend
-        if timestamps and max(timestamps) - min(timestamps) > timedelta(days=7):
+                    ts_list.append(datetime.fromisoformat(ts.replace("Z", "+00:00")))
+                except ValueError:
+                    continue
+    
+        if ts_list and (max(ts_list) - min(ts_list)) > timedelta(days=7):
             return ConsolidationType(type="trend")
-        
-        # Default to pattern
+    
         return ConsolidationType(type="pattern")
+    # ---------------------------------------------------------------------------
+
 
     @staticmethod  
     @function_tool
