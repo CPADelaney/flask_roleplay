@@ -1,10 +1,12 @@
 # nyx/core/conditioning_tools.py
+from __future__ import annotations
 
 import datetime
 import json
 import logging
 import math
 from typing import Dict, List, Any, Optional, Union
+from pydantic import BaseModel, Field
 
 from agents import function_tool, RunContextWrapper
 from nyx.core.conditioning_models import *
