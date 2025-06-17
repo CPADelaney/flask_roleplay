@@ -31,6 +31,13 @@ logger = logging.getLogger(__name__)
 
 # =============== Pydantic Models for Structured Output ===============
 
+class StabilityEvaluationDTO(BaseModel):
+    is_stable: bool
+    avg_change: float
+    changes_json: str            # JSON-encoded dict of per-variable deltas
+    stability_confidence: float
+    model_config = {"extra": "forbid"}   # ← strict
+
 class GoalCheckResultDTO(BaseModel):
     goal_met: bool
     conditions_met_json: str            # JSON-encoded dict
@@ -611,52 +618,61 @@ async def check_goal_condition(
 @function_tool
 async def evaluate_simulation_stability(
     ctx: RunContextWrapper[SimulationContext],
-    current_state: Dict[str, Any],
-    previous_state: Dict[str, Any]
-) -> Dict[str, Any]:
+    current_state_json: str,
+    previous_state_json: str,
+) -> StabilityEvaluationDTO:
     """
-    Check if the simulation has reached a stable state.
-    
+    Determine whether the simulation has reached a stable state by measuring
+    the average absolute change in numeric state_variables between successive
+    steps.
+
     Args:
-        current_state: Current simulation state
-        previous_state: Previous simulation state
-        
-    Returns:
-        Stability evaluation
+        current_state_json:  JSON string of the *current* SimulationState
+        previous_state_json: JSON string of the *previous* SimulationState
     """
     with custom_span("evaluate_simulation_stability"):
-        # Get state variables
-        current_vars = current_state.get("state_variables", {})
-        previous_vars = previous_state.get("state_variables", {})
-        
-        # Calculate changes in each variable
-        changes = {}
+
+        # ---------- parse JSON safely ------------------------------------
+        try:
+            current_state = json.loads(current_state_json)
+        except Exception as e:
+            logger.error(f"Bad current_state JSON: {e}")
+            current_state = {}
+
+        try:
+            previous_state = json.loads(previous_state_json)
+        except Exception as e:
+            logger.error(f"Bad previous_state JSON: {e}")
+            previous_state = {}
+
+        cur_vars = current_state.get("state_variables", {}) or {}
+        prev_vars = previous_state.get("state_variables", {}) or {}
+
+        # ---------- compute per-variable deltas --------------------------
+        changes: Dict[str, float] = {}
         total_change = 0.0
-        num_variables = 0
-        
-        for var_name, current_value in current_vars.items():
-            if var_name in previous_vars:
-                previous_value = previous_vars[var_name]
-                
-                # Calculate change for numeric variables
-                if isinstance(current_value, (int, float)) and isinstance(previous_value, (int, float)):
-                    change = abs(current_value - previous_value)
-                    changes[var_name] = change
-                    total_change += change
-                    num_variables += 1
-        
-        # Calculate average change
-        avg_change = total_change / num_variables if num_variables > 0 else 0.0
-        
-        # Determine stability
-        is_stable = avg_change < 0.05  # Less than 5% average change
-        
-        return {
-            "is_stable": is_stable,
-            "avg_change": avg_change,
-            "changes": changes,
-            "stability_confidence": 1.0 - min(1.0, avg_change * 10)  # Convert change to confidence
-        }
+        counted = 0
+
+        for name, cur_val in cur_vars.items():
+            if name in prev_vars:
+                prev_val = prev_vars[name]
+                if isinstance(cur_val, (int, float)) and isinstance(prev_val, (int, float)):
+                    delta = abs(cur_val - prev_val)
+                    changes[name] = delta
+                    total_change += delta
+                    counted += 1
+
+        avg_change = total_change / counted if counted else 0.0
+        is_stable  = avg_change < 0.05          # < 5 % average change
+        confidence = 1.0 - min(1.0, avg_change * 10)
+
+        # ---------- return DTO -------------------------------------------
+        return StabilityEvaluationDTO(
+            is_stable=is_stable,
+            avg_change=avg_change,
+            changes_json=json.dumps(changes, separators=(",", ":")),
+            stability_confidence=confidence,
+        )
 
 @function_tool
 async def analyze_simulation_result(
