@@ -1144,9 +1144,9 @@ class GoalManager:
             """,
             model="gpt-4.1-nano",
             tools=[
-                self._validate_action_sequence,
-                self._check_parameter_references,
-                self._estimate_plan_efficiency
+                self.validate_action_sequence,
+                self.check_parameter_references,
+                self.estimate_plan_efficiency
             ],
             output_type=PlanValidationResult
         )
