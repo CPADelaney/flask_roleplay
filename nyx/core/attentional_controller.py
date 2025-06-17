@@ -555,8 +555,8 @@ class AttentionalController:
     @staticmethod
     @function_tool
     async def _calculate_saliency(
-        ctx: "RunContextWrapper[AttentionContext]",
-        item: dict,
+        ctx: RunContextWrapper[AttentionContext],
+        item: Any,          # <- was dict
     ) -> float:
         ctl = ctx.context.controller
         novelty = item.get("novelty", 0.5)
