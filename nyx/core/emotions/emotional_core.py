@@ -1,4 +1,5 @@
 # nyx/core/emotions/emotional_core.py
+from __future__ import annotations
 
 import asyncio
 import datetime
@@ -6,6 +7,7 @@ import json
 import logging
 from collections import defaultdict
 from typing import Dict, List, Any, Optional, Union, AsyncIterator, TypeVar
+from pydantic import BaseModel, Field
 
 from agents import (
     Agent, Runner, RunContextWrapper, function_tool, ItemHelpers,
@@ -19,10 +21,14 @@ from agents.tracing import custom_span, agent_span, gen_trace_id
 
 from nyx.core.emotions.context import EmotionalContext
 from nyx.core.emotions.schemas import (
-    EmotionalResponseOutput, EmotionUpdateInput, TextAnalysisOutput,
-    InternalThoughtOutput, EmotionalStateMatrix, NeurochemicalRequest,
-    NeurochemicalResponse, ReflectionRequest, LearningRequest,
-    StreamEvent, ChemicalUpdateEvent, EmotionChangeEvent
+    # Strict DTOs
+    NeurochemicalRequestDTO,  NeurochemicalResponseDTO,
+    ReflectionRequestDTO,     LearningRequestDTO,
+    EmotionalStateMatrixDTO,  InternalThoughtDTO,
+    EmotionalResponseDTO,
+    # (rich models you still use internally)
+    StreamEvent, ChemicalUpdateEvent, EmotionChangeEvent,
+    EmotionUpdateInput, TextAnalysisOutput, EmotionalStateMatrix,
 )
 from nyx.core.emotions.hooks import EmotionalAgentHooks
 from nyx.core.emotions.guardrails import EmotionalGuardrails
@@ -31,6 +37,8 @@ from nyx.core.emotions.tools.neurochemical_tools import NeurochemicalTools
 from nyx.core.emotions.tools.emotion_tools import EmotionTools
 from nyx.core.emotions.tools.reflection_tools import ReflectionTools
 from nyx.core.emotions.tools.learning_tools import LearningTools
+
+STRICT = {"extra": "forbid"}
 
 logger = logging.getLogger(__name__)
 
@@ -406,28 +414,30 @@ class EmotionalCore:
                 "current_chemicals": {c: d["value"] for c, d in self.neurochemicals.items()}
             }),
             tools=[
-                function_tool(self.neurochemical_tools.update_neurochemical),
-                function_tool(self.neurochemical_tools.apply_chemical_decay),
-                function_tool(self.neurochemical_tools.process_chemical_interactions),
-                function_tool(self.neurochemical_tools.get_neurochemical_state)
+                self.neurochemical_tools.update_neurochemical,
+                self.neurochemical_tools.apply_chemical_decay,
+                self.neurochemical_tools.process_chemical_interactions,
+                self.neurochemical_tools.get_neurochemical_state
             ],
             input_guardrails=[
                 EmotionalGuardrails.validate_emotional_input
             ],
-            output_type=NeurochemicalResponse,
-            model_settings=ModelSettings(temperature=0.3)  # Lower temperature for precision
+            output_type=NeurochemicalResponseDTO,
+            model_settings=ModelSettings(temperature=0.3),
+            model="gpt-4.1-nano"
         )
         
         # Create emotion derivation agent
         self.agents["emotion_derivation"] = base_agent.clone(
             name="Emotion Derivation Agent",
             tools=[
-                function_tool(self.neurochemical_tools.get_neurochemical_state),
-                function_tool(self.emotion_tools.derive_emotional_state),
-                function_tool(self.emotion_tools.get_emotional_state_matrix)
+                self.neurochemical_tools.get_neurochemical_state,
+                self.emotion_tools.derive_emotional_state,
+                self.emotion_tools.get_emotional_state_matrix
             ],
-            output_type=EmotionalStateMatrix,
-            model_settings=ModelSettings(temperature=0.4)
+            output_type=EmotionalStateMatrixDTO,
+            model_settings=ModelSettings(temperature=0.4),
+            model="gpt-4.1-nano"
         )
         
         # Create reflection agent with the external analyze_emotional_patterns function
@@ -435,31 +445,33 @@ class EmotionalCore:
         self.agents["reflection"] = base_agent.clone(
             name="Emotional Reflection Agent",
             tools=[
-                function_tool(self.emotion_tools.get_emotional_state_matrix),
-                function_tool(self.reflection_tools.generate_internal_thought),
+                self.emotion_tools.get_emotional_state_matrix,
+                self.reflection_tools.generate_internal_thought,
                 # Use the standalone function with partial application to pass self reference
-                function_tool(self.analyze_patterns_wrapper)
+                self.analyze_patterns_wrapper
             ],
             model_settings=ModelSettings(temperature=0.7),  # Higher temperature for creative reflection
-            output_type=InternalThoughtOutput
+            output_type=InternalThoughtDTO,
+            model="gpt-4.1-nano"
         )
         
         # Create learning agent
         self.agents["learning"] = base_agent.clone(
             name="Emotional Learning Agent",
             tools=[
-                function_tool(self.learning_tools.record_interaction_outcome),
-                function_tool(self.learning_tools.update_learning_rules),
-                function_tool(self.learning_tools.apply_learned_adaptations)
+                self.learning_tools.record_interaction_outcome,
+                self.learning_tools.update_learning_rules,
+                self.learning_tools.apply_learned_adaptations
             ],
-            model_settings=ModelSettings(temperature=0.4)  # Medium temperature for balanced learning
+            model_settings=ModelSettings(temperature=0.4),
+            model="gpt-4.1-nano"
         )
         
         # Create orchestrator with handoffs
         self.agents["orchestrator"] = base_agent.clone(
             name="Emotion Orchestrator",
             tools=[
-                function_tool(self.emotion_tools.analyze_text_sentiment)
+                self.emotion_tools.analyze_text_sentiment
             ],
             input_guardrails=[
                 EmotionalGuardrails.validate_emotional_input
@@ -467,9 +479,10 @@ class EmotionalCore:
             output_guardrails=[
                 EmotionalGuardrails.validate_emotional_output
             ],
-            output_type=EmotionalResponseOutput,
+            output_type=EmotionalResponseDTO,
             # The handoffs configuration is now separated for clarity
-            handoffs=self._configure_enhanced_handoffs()
+            handoffs=self._configure_enhanced_handoffs(),
+            model="gpt-4.1-nano"
         )
         
         # Configure handoffs after all agents are created
@@ -478,7 +491,7 @@ class EmotionalCore:
                 self.agents["neurochemical"], 
                 tool_name_override="process_emotions", 
                 tool_description_override="Process and update neurochemicals based on emotional input analysis.",
-                input_type=NeurochemicalRequest,
+                input_type=NeurochemicalRequestDTO,
                 input_filter=self._neurochemical_input_filter,
                 on_handoff=self._on_neurochemical_handoff
             ),
@@ -486,7 +499,7 @@ class EmotionalCore:
                 self.agents["reflection"], 
                 tool_name_override="generate_reflection",
                 tool_description_override="Generate emotional reflection for deeper introspection.",
-                input_type=ReflectionRequest,
+                input_type=ReflectionRequestDTO,
                 input_filter=self._reflection_input_filter,
                 on_handoff=self._on_reflection_handoff
             ),
@@ -494,7 +507,7 @@ class EmotionalCore:
                 self.agents["learning"],
                 tool_name_override="record_and_learn",
                 tool_description_override="Record interaction patterns and apply learning adaptations.",
-                input_type=LearningRequest,
+                input_type=LearningRequestDTO,
                 input_filter=self.keep_relevant_history,
                 on_handoff=self._on_learning_handoff
             )
@@ -575,7 +588,7 @@ class EmotionalCore:
                     "analysis_time": datetime.datetime.now().isoformat()
                 }
     
-    async def update_neurochemical(self, chemical: str, value: float, source: str = "system") -> Dict[str, Any]:
+    async def update_neurochemical(self, chemical: str, value: float, source: str = "system") -> NeurochemicalResponseDTO:
         """
         Wrapper method to update a neurochemical via neurochemical_tools
         
@@ -612,7 +625,7 @@ class EmotionalCore:
                     "the foundation of all emotional responses. Use when an emotional response "
                     "requires updating the internal neurochemical state."
                 ),
-                input_type=NeurochemicalRequest,
+                input_type=NeurochemicalRequestDTO,
                 input_filter=self._enhanced_neurochemical_input_filter,
                 on_handoff=self._on_neurochemical_handoff
             ),
@@ -625,7 +638,7 @@ class EmotionalCore:
                     "based on the current emotional state. Use when introspection or "
                     "emotional processing depth is needed."
                 ),
-                input_type=ReflectionRequest,
+                input_type=ReflectionRequestDTO,
                 input_filter=self._enhanced_reflection_input_filter,
                 on_handoff=self._on_reflection_handoff
             ),
@@ -638,7 +651,7 @@ class EmotionalCore:
                     "develops learning rules to adapt emotional responses. Use when "
                     "the system needs to learn from interactions or adapt future responses."
                 ),
-                input_type=LearningRequest,
+                input_type=LearningRequestDTO,
                 input_filter=self._enhanced_learning_input_filter,
                 on_handoff=self._on_learning_handoff
             )
