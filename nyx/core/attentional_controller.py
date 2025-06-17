@@ -146,13 +146,13 @@ class AttentionalController:
             Your decisions should be explainable and based on the available data.
             """,
             tools=[
-                function_tool(self._calculate_saliency),
-                function_tool(self._focus_attention),
-                function_tool(self._inhibit_attention),
-                function_tool(self._maintain_attention),
-                function_tool(self._calculate_attention_weight),
-                function_tool(self._recover_attentional_resources),
-                function_tool(self._get_current_attentional_state)
+                self._calculate_saliency,
+                self._focus_attention,
+                self._inhibit_attention,
+                self._maintain_attention,
+                self._calculate_attention_weight,
+                self._recover_attentional_resources,
+                self._get_current_attentional_state
             ],
             handoffs=[
                 handoff(self.saliency_agent),
@@ -184,8 +184,8 @@ class AttentionalController:
             Calculate a saliency score between 0.0 (not salient) and 1.0 (extremely salient).
             """,
             tools=[
-                function_tool(self._calculate_emotional_impact),
-                function_tool(self._calculate_goal_relevance)
+                self._calculate_emotional_impact,
+                self._calculate_goal_relevance
             ],
             model="gpt-4.1-nano"
         )
@@ -205,8 +205,8 @@ class AttentionalController:
             Prioritize focus based on saliency, goals, and available resources.
             """,
             tools=[
-                function_tool(self._focus_attention),
-                function_tool(self._maintain_attention)
+                self._focus_attention,
+                self._maintain_attention
             ],
             model="gpt-4.1-nano"
         )
@@ -225,7 +225,7 @@ class AttentionalController:
             Inhibit targets that are distracting, irrelevant, or have been processed sufficiently.
             """,
             tools=[
-                function_tool(self._inhibit_attention)
+                self._inhibit_attention
             ],
             model="gpt-4.1-nano"
         )
@@ -384,6 +384,7 @@ class AttentionalController:
             return self.current_foci
 
     @staticmethod
+    @function_tool
     async def _recover_attentional_resources(
             ctx: RunContextWrapper[AttentionContext]
     ) -> dict:
@@ -412,6 +413,7 @@ class AttentionalController:
 
 
     @staticmethod
+    @function_tool
     async def _focus_attention(
         ctx: "RunContextWrapper[AttentionContext]",
         target: str,
@@ -468,6 +470,7 @@ class AttentionalController:
 
 
     @staticmethod
+    @function_tool
     async def _inhibit_attention(
         ctx: "RunContextWrapper[AttentionContext]",
         target: str,
@@ -493,6 +496,7 @@ class AttentionalController:
 
 
     @staticmethod
+    @function_tool
     async def _maintain_attention(
         ctx: "RunContextWrapper[AttentionContext]",
         target: str,
@@ -549,6 +553,7 @@ class AttentionalController:
 
 
     @staticmethod
+    @function_tool
     async def _calculate_saliency(
         ctx: "RunContextWrapper[AttentionContext]",
         item: dict,
@@ -584,6 +589,7 @@ class AttentionalController:
 
 
     @staticmethod
+    @function_tool
     async def _calculate_emotional_impact(
         ctx: "RunContextWrapper[AttentionContext]",
         item: dict,
@@ -604,6 +610,7 @@ class AttentionalController:
 
 
     @staticmethod
+    @function_tool
     async def _calculate_goal_relevance(
         ctx: "RunContextWrapper[AttentionContext]",
         item: dict,
@@ -639,6 +646,7 @@ class AttentionalController:
 
 
     @staticmethod
+    @function_tool
     async def _calculate_attention_weight(
         ctx: "RunContextWrapper[AttentionContext]",
         item: "Any",
@@ -687,6 +695,7 @@ class AttentionalController:
 
 
     @staticmethod
+    @function_tool
     async def _get_current_attentional_state(
         ctx: "RunContextWrapper[AttentionContext]",
     ) -> dict:
