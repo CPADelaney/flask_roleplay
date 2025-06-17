@@ -37,6 +37,13 @@ SCHEMA_VERSION = "1.0.0"
 
 JsonScalar = Union[str, int, float, bool, None]
 
+class GoalModificationProposal(BaseModel):
+    goal_id: str
+    proposed_modifications_json: str        # full list, JSON-encoded
+    modification_count: int
+    requires_user_input: bool
+    model_config = {"extra": "forbid"}
+
 class StepExecutionResult(BaseModel):
     success: bool
     step_id: str
@@ -2695,105 +2702,127 @@ class GoalManager:
             "total_conflict_severity": "high" if len(conflicts) > 2 or time_conflict else "medium" if conflicts else "low"
         }
 
+    # --------------------------------------------------------------------------- #
     @staticmethod
     @function_tool
-    async def _propose_goal_modifications(ctx: RunContextWrapper, goal_id: str, 
-                                       conflict_analysis: Dict[str, Any]) -> Dict[str, Any]:
+    async def _propose_goal_modifications(              # noqa: N802
+        ctx: RunContextWrapper,
+        goal_id: str,
+        conflict_analysis_json: str,                    # <-- plain STRING
+    ) -> GoalModificationProposal:                      # <-- closed model
         """
-        Propose modifications to a goal to resolve conflicts
-        
-        Args:
-            goal_id: Goal ID to modify
-            conflict_analysis: Conflict analysis results
-            
-        Returns:
-            Proposed modifications
+        Suggest modifications to *goal_id* given JSON-encoded conflict analysis.
         """
-        goal = await self._get_goal_with_reader_lock(goal_id)
+        gm = ctx.context
+        try:
+            analysis = json.loads(conflict_analysis_json or "{}")
+            if not isinstance(analysis, dict):
+                raise TypeError
+        except Exception as exc:
+            # Return an empty-but-valid result so downstream tools can react
+            return GoalModificationProposal(
+                goal_id=goal_id,
+                proposed_modifications_json=json.dumps([{"error": f"Bad JSON: {exc}"}]),
+                modification_count=1,
+                requires_user_input=True,
+            )
+    
+        goal = await gm._get_goal_with_reader_lock(goal_id)
         if not goal:
-            return {"error": "Goal not found"}
-        
-        modifications = []
-        
-        # Check for resource conflicts
-        if conflict_analysis.get("resource_conflicts"):
-            resource_conflicts = conflict_analysis["resource_conflicts"]
-            
-            for conflict in resource_conflicts:
-                resource = conflict["resource"]
-                severity = conflict["severity"]
-                
-                if resource == "computational" and severity == "high":
-                    modifications.append({
+            return GoalModificationProposal(
+                goal_id=goal_id,
+                proposed_modifications_json=json.dumps(
+                    [{"error": "Goal not found"}], separators=(",", ":")
+                ),
+                modification_count=1,
+                requires_user_input=True,
+            )
+    
+        mods: list[dict] = []
+    
+        # ---------------- resource conflicts ---------------------------------- #
+        for confl in analysis.get("resource_conflicts", []):
+            res   = confl.get("resource")
+            sev   = confl.get("severity", "low")
+            if res == "computational" and sev == "high":
+                mods.append(
+                    {
                         "type": "plan_optimization",
-                        "description": "Optimize computational steps by combining or caching results",
-                        "impact": "medium"
-                    })
-                
-                elif resource == "knowledge" or resource == "memory":
-                    modifications.append({
-                        "type": "resource_sharing",
-                        "description": f"Share {resource} retrieval results between conflicting goals",
-                        "impact": "high"
-                    })
-                
-                elif resource == "emotional" and severity == "high":
-                    modifications.append({
-                        "type": "priority_adjustment",
-                        "description": "Reduce priority temporarily to delay execution",
+                        "description": "Combine or cache heavy compute steps.",
                         "impact": "medium",
-                        "new_priority": max(0.1, goal.priority - 0.2)
-                    })
-        
-        # Check for time conflicts
-        if conflict_analysis.get("time_conflict"):
-            # If deadline is causing conflict
-            if conflict_analysis.get("time_conflict_reason") == "deadlines_close" and goal.deadline:
-                # Propose adjusting deadline
-                new_deadline = goal.deadline + datetime.timedelta(hours=24)
-                modifications.append({
-                    "type": "deadline_adjustment",
-                    "description": "Extend deadline by 24 hours",
-                    "impact": "medium",
-                    "new_deadline": new_deadline.isoformat()
-                })
-        
-        # Check for time horizon conflicts
-        if conflict_analysis.get("time_horizon_conflict"):
-            if goal.time_horizon == TimeHorizon.SHORT_TERM:
-                # No change to short-term goals
-                pass
-            elif goal.time_horizon == TimeHorizon.MEDIUM_TERM:
-                modifications.append({
-                    "type": "time_horizon_adjustment",
-                    "description": "Adjust to long-term horizon to reduce scheduling pressure",
-                    "impact": "medium",
-                    "new_time_horizon": TimeHorizon.LONG_TERM
-                })
+                    }
+                )
+            elif res in ("knowledge", "memory"):
+                mods.append(
+                    {
+                        "type": "resource_sharing",
+                        "description": f"Share {res} retrieval results.",
+                        "impact": "high",
+                    }
+                )
+            elif res == "emotional" and sev == "high":
+                mods.append(
+                    {
+                        "type": "priority_adjustment",
+                        "description": "Lower priority to ease emotional load.",
+                        "impact": "medium",
+                        "new_priority": max(0.1, goal.priority - 0.2),
+                    }
+                )
+    
+        # ---------------- time conflicts -------------------------------------- #
+        if analysis.get("time_conflict"):
+            if analysis.get("time_conflict_reason") == "deadlines_close" and goal.deadline:
+                new_dl = goal.deadline + datetime.timedelta(hours=24)
+                mods.append(
+                    {
+                        "type": "deadline_adjustment",
+                        "description": "Extend deadline by 24 h.",
+                        "impact": "medium",
+                        "new_deadline": new_dl.isoformat(),
+                    }
+                )
+    
+        # ---------------- horizon conflicts ----------------------------------- #
+        if analysis.get("time_horizon_conflict"):
+            if goal.time_horizon == TimeHorizon.MEDIUM_TERM:
+                mods.append(
+                    {
+                        "type": "time_horizon_adjustment",
+                        "description": "Switch to long-term to relieve pressure.",
+                        "impact": "medium",
+                        "new_time_horizon": TimeHorizon.LONG_TERM,
+                    }
+                )
             elif goal.time_horizon == TimeHorizon.LONG_TERM:
-                # Suggest breaking into stages
-                modifications.append({
-                    "type": "goal_staging",
-                    "description": "Break goal into immediate and future stages",
+                mods.append(
+                    {
+                        "type": "goal_staging",
+                        "description": "Split into immediate + future stages.",
+                        "impact": "high",
+                        "requires_restructuring": True,
+                        "requires_user_input": True,
+                    }
+                )
+    
+        # ---------------- severity fallback ----------------------------------- #
+        if analysis.get("total_conflict_severity") == "high" and len(mods) < 2:
+            mods.append(
+                {
+                    "type": "priority_adjustment",
+                    "description": "Significantly lower priority.",
                     "impact": "high",
-                    "requires_restructuring": True
-                })
-        
-        # If conflict severity is high and no good modifications found
-        if conflict_analysis.get("total_conflict_severity") == "high" and len(modifications) < 2:
-            modifications.append({
-                "type": "priority_adjustment",
-                "description": "Significantly reduce priority to defer to other goal",
-                "impact": "high",
-                "new_priority": max(0.1, goal.priority - 0.3)
-            })
-        
-        return {
-            "goal_id": goal_id,
-            "proposed_modifications": modifications,
-            "modification_count": len(modifications),
-            "requires_user_input": any(mod.get("requires_user_input", False) for mod in modifications)
-        }
+                    "new_priority": max(0.1, goal.priority - 0.3),
+                }
+            )
+    
+        return GoalModificationProposal(
+            goal_id=goal_id,
+            proposed_modifications_json=json.dumps(mods, separators=(",", ":")),
+            modification_count=len(mods),
+            requires_user_input=any(m.get("requires_user_input") for m in mods),
+        )
+    # --------------------------------------------------------------------------- #
 
     @staticmethod
     @function_tool
