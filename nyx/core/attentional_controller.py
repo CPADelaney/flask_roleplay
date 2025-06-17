@@ -46,6 +46,20 @@ class InvalidInputGuardrailOutput(BaseModel):
     is_valid: bool = Field(..., description="Whether the input is valid")
     reason: str = Field(..., description="Reason for invalid input")
 
+class AttentionalStateOutput(BaseModel):
+    """
+    Strict DTO returned by `_get_current_attentional_state`.
+    Making this a model (and setting extra='forbid') keeps the Agents SDK happy.
+    """
+    current_foci:        List[AttentionalFocus]
+    inhibited_targets:   List[Dict[str, Any]]
+    attentional_resources: float
+    total_capacity:        float
+    shift_count:           int
+    miss_count:            int
+
+    model_config = {"extra": "forbid"}   # 👈 turn off additionalProperties
+
 # Define an AttentionContext for strong typing
 class AttentionContext:
     """
@@ -591,8 +605,8 @@ class AttentionalController:
     @staticmethod
     @function_tool
     async def _calculate_emotional_impact(
-        ctx: "RunContextWrapper[AttentionContext]",
-        item: dict,
+        ctx: RunContextWrapper[AttentionContext],
+        item: Any,
     ) -> float:
         ctl = ctx.context.controller
         impact = item.get("emotional_impact", 0.5)
@@ -612,8 +626,8 @@ class AttentionalController:
     @staticmethod
     @function_tool
     async def _calculate_goal_relevance(
-        ctx: "RunContextWrapper[AttentionContext]",
-        item: dict,
+        ctx: RunContextWrapper[AttentionContext],
+        item: Any,
     ) -> float:
         ctl = ctx.context.controller
         relevance = item.get("goal_relevance", 0.5)
@@ -648,8 +662,8 @@ class AttentionalController:
     @staticmethod
     @function_tool
     async def _calculate_attention_weight(
-        ctx: "RunContextWrapper[AttentionContext]",
-        item: "Any",
+        ctx: RunContextWrapper[AttentionContext],
+        item: Any,
         modality: str | None = None,
     ) -> float:
         ctl = ctx.context.controller
@@ -693,35 +707,42 @@ class AttentionalController:
         
         self.attention_biases[target] = new_bias
 
-
+    
     @staticmethod
     @function_tool
     async def _get_current_attentional_state(
         ctx: "RunContextWrapper[AttentionContext]",
-    ) -> dict:
+    ) -> AttentionalStateOutput:
+        """
+        Return a strict snapshot of the controller’s attentional state.
+        """
         ctl = ctx.context.controller
-        foci = [
-            {
-                "target": f.target,
-                "strength": f.strength,
-                "duration_ms": f.duration_ms,
-                "source": f.source,
-                "timestamp": f.timestamp,
-            }
+    
+        # Convert `AttentionalFocus` objects into plain dicts so they survive JSON
+        foci_payload = [
+            AttentionalFocus(
+                target=f.target,
+                strength=f.strength,
+                duration_ms=f.duration_ms,
+                source=f.source,
+                timestamp=f.timestamp,
+            )
             for f in ctl.current_foci
         ]
-        inhibited = [
+    
+        inhibited_payload = [
             {"target": t, "expires_at": exp}
             for t, exp in ctl.inhibited_targets.items()
         ]
-        return {
-            "current_foci": foci,
-            "inhibited_targets": inhibited,
-            "attentional_resources": ctl.attentional_resources,
-            "total_capacity": ctl.total_attentional_capacity,
-            "shift_count": ctl.shift_count,
-            "miss_count": ctl.miss_count,
-        }
+    
+        return AttentionalStateOutput(
+            current_foci=foci_payload,
+            inhibited_targets=inhibited_payload,
+            attentional_resources=ctl.attentional_resources,
+            total_capacity=ctl.total_attentional_capacity,
+            shift_count=ctl.shift_count,
+            miss_count=ctl.miss_count,
+        )
 
     
     async def get_attention_statistics(self) -> Dict[str, Any]:
