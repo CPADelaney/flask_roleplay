@@ -26,6 +26,43 @@ logger = logging.getLogger(__name__)
 
 # --------------------- Context and Type Definitions ---------------------
 
+class CausalModelDump(BaseModel):
+    model_id: str
+    model_json: str
+    model_config = {"extra": "forbid"}
+
+class CounterfactualResult(BaseModel):
+    model_id: str
+    result_json: str
+    model_config = {"extra": "forbid"}
+
+class RelationsDiscoveryResult(BaseModel):
+    model_id: str
+    relations_json: str
+    model_config = {"extra": "forbid"}
+
+class ConceptSpaceDump(BaseModel):
+    space_id: str
+    space_json: str
+    model_config = {"extra": "forbid"}
+
+class BlendInfo(BaseModel):
+    blend_id: str
+    blend_json: str
+    model_config = {"extra": "forbid"}
+
+class CreativeInterventionResult(BaseModel):
+    intervention_json: str
+    model_config = {"extra": "forbid"}
+
+class IntegratedModelResult(BaseModel):
+    integrated_json: str
+    model_config = {"extra": "forbid"}
+
+class ReasoningStats(BaseModel):
+    stats_json: str
+    model_config = {"extra": "forbid"}
+
 class ReasoningContext(BaseModel):
     """Context for all reasoning agents"""
     knowledge_core: Optional[Any] = None
@@ -214,15 +251,15 @@ async def add_relation_to_model(
 
 @function_tool
 async def get_causal_model(
-    ctx: RunContextWrapper[ReasoningContext], 
-    model_id: str
-) -> Dict[str, Any]:
-    """Get a causal model by ID."""
-    # Update context stats
+    ctx: RunContextWrapper[ReasoningContext],
+    model_id: str,
+) -> CausalModelDump:
     ctx.context.total_calls += 1
-    
-    model = await reasoning_core.get_causal_model(model_id)
-    return model
+    mdl = await reasoning_core.get_causal_model(model_id)
+    return CausalModelDump(
+        model_id=model_id,
+        model_json=json.dumps(mdl, separators=(",", ":")),
+    )
 
 @function_tool
 async def define_intervention(
@@ -249,34 +286,34 @@ async def define_intervention(
 @function_tool
 async def reason_counterfactually(
     ctx: RunContextWrapper[ReasoningContext],
-    input_data: CounterfactualInput
-) -> Dict[str, Any]:
-    """Perform counterfactual reasoning using a causal model."""
-    # Update context stats
+    input_data: CounterfactualInput,
+) -> CounterfactualResult:
     ctx.context.total_calls += 1
-    
-    result = await reasoning_core.reason_counterfactually(
+    res = await reasoning_core.reason_counterfactually(
         model_id=input_data.model_id,
         query={
             "factual_values": input_data.factual_values,
             "counterfactual_values": input_data.counterfactual_values,
-            "target_nodes": input_data.target_nodes
-        }
+            "target_nodes": input_data.target_nodes,
+        },
     )
-    
-    return result
+    return CounterfactualResult(
+        model_id=input_data.model_id,
+        result_json=json.dumps(res, separators=(",", ":")),
+    )
 
 @function_tool
 async def discover_causal_relations(
     ctx: RunContextWrapper[ReasoningContext],
-    model_id: str
-) -> Dict[str, Any]:
-    """Discover causal relations in a model automatically."""
-    # Update context stats
+    model_id: str,
+) -> RelationsDiscoveryResult:
     ctx.context.total_calls += 1
-    
-    result = await reasoning_core.discover_causal_relations(model_id)
-    return result
+    rels = await reasoning_core.discover_causal_relations(model_id)
+    return RelationsDiscoveryResult(
+        model_id=model_id,
+        relations_json=json.dumps(rels, separators=(",", ":")),
+    )
+
 
 # --------------------- Conceptual Reasoning Agent Tools ---------------------
 
@@ -346,35 +383,35 @@ async def add_relation_to_space(
 @function_tool
 async def get_concept_space(
     ctx: RunContextWrapper[ReasoningContext],
-    space_id: str
-) -> Dict[str, Any]:
-    """Get a concept space by ID."""
-    # Update context stats
+    space_id: str,
+) -> ConceptSpaceDump:
     ctx.context.total_calls += 1
-    
-    space = await reasoning_core.get_concept_space(space_id)
-    return space
+    spc = await reasoning_core.get_concept_space(space_id)
+    return ConceptSpaceDump(
+        space_id=space_id,
+        space_json=json.dumps(spc, separators=(",", ":")),
+    )
+
 
 @function_tool
 async def create_blend(
     ctx: RunContextWrapper[ReasoningContext],
-    input_data: BlendInput
-) -> Dict[str, Any]:
-    """Create a blend between two conceptual spaces."""
-    # Update context stats
+    input_data: BlendInput,
+) -> BlendInfo:
     ctx.context.total_calls += 1
-    
-    # Find mappings between spaces (simplified)
-    mappings = []
+    mappings = []  # (placeholder; your real mapping logic here)
     blend_id = f"blend_{datetime.now().strftime('%Y%m%d%H%M%S')}"
-    
-    return {
+    payload = {
         "blend_id": blend_id,
         "blend_type": input_data.blend_type,
         "input_spaces": [input_data.space_id_1, input_data.space_id_2],
-        "status": "created"
+        "mappings": mappings,
+        "status": "created",
     }
-
+    return BlendInfo(
+        blend_id=blend_id,
+        blend_json=json.dumps(payload, separators=(",", ":")),
+    )
 # --------------------- Integrated Reasoning Agent Tools ---------------------
 
 @function_tool
@@ -421,56 +458,54 @@ async def convert_causal_model_to_concept_space(
     
     return f"Converted causal model {model_id} to concept space {space_id}"
 
+
 @function_tool
 async def create_creative_intervention(
     ctx: RunContextWrapper[ReasoningContext],
-    input_data: CreativeInterventionInput
-) -> Dict[str, Any]:
-    """Create a creative intervention using conceptual blending and causal reasoning."""
-    # Update context stats
+    input_data: CreativeInterventionInput,
+) -> CreativeInterventionResult:
     ctx.context.total_calls += 1
-    
-    result = await reasoning_core.create_creative_intervention(
+    res = await reasoning_core.create_creative_intervention(
         model_id=input_data.model_id,
         target_node=input_data.target_node,
         description=input_data.description,
-        use_blending=input_data.use_blending
+        use_blending=input_data.use_blending,
     )
-    
-    return result
+    return CreativeInterventionResult(
+        intervention_json=json.dumps(res, separators=(",", ":")),
+    )
+
 
 @function_tool
 async def create_integrated_model(
     ctx: RunContextWrapper[ReasoningContext],
-    input_data: IntegratedModelInput
-) -> Dict[str, Any]:
-    """Create an integrated model with both causal and conceptual reasoning."""
-    # Update context stats
+    input_data: IntegratedModelInput,
+) -> IntegratedModelResult:
     ctx.context.total_calls += 1
-    
-    result = await reasoning_core.create_integrated_model(
+    res = await reasoning_core.create_integrated_model(
         domain=input_data.domain,
-        base_on_causal=input_data.base_on_causal
+        base_on_causal=input_data.base_on_causal,
     )
-    
-    # Update context
-    if "causal_model_id" in result:
-        ctx.context.active_model_id = result["causal_model_id"]
-    if "concept_space_id" in result:
-        ctx.context.active_space_id = result["concept_space_id"]
-    
-    return result
+    # update context if IDs returned
+    ctx.context.active_model_id = res.get("causal_model_id")
+    ctx.context.active_space_id = res.get("concept_space_id")
+    return IntegratedModelResult(
+        integrated_json=json.dumps(res, separators=(",", ":")),
+    )
+
+
+
+
 
 @function_tool
 async def get_reasoning_stats(
-    ctx: RunContextWrapper[ReasoningContext]
-) -> Dict[str, Any]:
-    """Get statistics about the integrated reasoning system."""
-    # Update context stats
+    ctx: RunContextWrapper[ReasoningContext],
+) -> ReasoningStats:
     ctx.context.total_calls += 1
-    
     stats = await reasoning_core.get_stats()
-    return stats
+    return ReasoningStats(
+        stats_json=json.dumps(stats, separators=(",", ":")),
+    )
 
 # --------------------- Define the Agents ---------------------
 
@@ -497,7 +532,8 @@ When working with causal models, help the user understand the implications of di
         define_intervention,
         reason_counterfactually,
         discover_causal_relations
-    ]
+    ],
+    model="gpt-4.1-nano"
 )
 
 # Define the Conceptual Reasoning Agent
@@ -520,7 +556,8 @@ When working with conceptual blends, highlight emergent structures and novel pro
         add_relation_to_space,
         get_concept_space,
         create_blend
-    ]
+    ],
+    model="gpt-4.1-nano"
 )
 
 # Define the Integrated Reasoning Agent
@@ -549,7 +586,8 @@ Always explain how the integration of different reasoning approaches enhances un
                 tool_description_override="Transfer to the causal reasoning agent for detailed causal modeling and analysis"),
         handoff(conceptual_reasoning_agent, 
                 tool_description_override="Transfer to the conceptual reasoning agent for conceptual space creation and blending")
-    ]
+    ],
+    model="gpt-4.1-nano"
 )
 
 # --------------------- Define Triage Agent and Guardrails ---------------------
@@ -594,7 +632,8 @@ Always help the user understand which type of reasoning would be most beneficial
     ],
     input_guardrails=[
         InputGuardrail(guardrail_function=homework_guardrail)
-    ]
+    ],
+    model="gpt-4.1-nano"
 )
 
 # --------------------- Main Entry Point ---------------------
