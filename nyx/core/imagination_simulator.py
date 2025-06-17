@@ -87,6 +87,17 @@ class SimulationAnalysisOutput(BaseModel):
     confidence: float = Field(0.5, ge=0.0, le=1.0)
     recommended_followup: Optional[str] = None
 
+class CausalModelOutput(BaseModel):
+    """
+    Strict DTO returned by `get_causal_model_for_simulation`.
+    The `model` blob is serialised as JSON to avoid open-ended objects
+    in the schema, and `extra = "forbid"` keeps the schema strict.
+    """
+    status: Literal["cached", "retrieved", "created"]
+    model_json: str                     # ← JSON-encoded causal model
+
+    model_config = {"extra": "forbid"}
+
 class SimulationContext:
     """Context object for simulation agents."""
     def __init__(self, 
@@ -167,40 +178,33 @@ async def setup_simulation_from_description(
 @function_tool
 async def get_causal_model_for_simulation(
     ctx: RunContextWrapper[SimulationContext],
-    domain: str = "general"
-) -> Dict[str, Any]:
+    domain: str = "general",
+) -> CausalModelOutput:                   # ←  strict DTO return type
     """
-    Retrieve or create a causal model for the specified domain.
-    
-    Args:
-        domain: Domain for the causal model
-        
-    Returns:
-        Causal model structure
+    Retrieve (or create) a causal model for the requested *domain*.
+
+    If we already have one in context cache, use it.  Otherwise try the
+    reasoning-core; if that fails, build a small default skeleton.
     """
     with custom_span("get_causal_model_for_simulation"):
-        # Try to get from context cache first
+        # 1️⃣  Cached?
         if domain in ctx.context.causal_models:
-            return {
-                "status": "cached",
-                "model": ctx.context.causal_models[domain]
-            }
-        
-        # Try to get from reasoning core
+            model = ctx.context.causal_models[domain]
+            return CausalModelOutput(status="cached",
+                                     model_json=json.dumps(model))
+
+        # 2️⃣  Reasoning core?
         if ctx.context.reasoning_core:
             try:
                 model = await ctx.context.reasoning_core.get_causal_model(domain)
                 if model:
-                    # Cache the model
-                    ctx.context.causal_models[domain] = model
-                    return {
-                        "status": "retrieved",
-                        "model": model
-                    }
+                    ctx.context.causal_models[domain] = model            # cache
+                    return CausalModelOutput(status="retrieved",
+                                             model_json=json.dumps(model))
             except Exception as e:
-                logger.error(f"Error getting causal model: {str(e)}")
-        
-        # Create a simple default model
+                logger.error(f"[Causal-Model] retrieval error: {e}")
+
+        # 3️⃣  Build a simple default
         default_model = {
             "id": f"model_{uuid.uuid4().hex[:8]}",
             "name": f"Default {domain} model",
@@ -209,60 +213,52 @@ async def get_causal_model_for_simulation(
             "relations": [],
             "metadata": {
                 "created_at": datetime.datetime.now().isoformat(),
-                "is_default": True
-            }
+                "is_default": True,
+            },
         }
-        
-        # Add some basic nodes based on domain
+
+        # --- domain-specific scaffolding ------------------------------------
         if domain == "social":
             default_model["nodes"] = {
-                "user_trust": {"name": "User Trust", "type": "variable", "current_value": 0.5},
-                "user_satisfaction": {"name": "User Satisfaction", "type": "variable", "current_value": 0.5},
-                "relationship_depth": {"name": "Relationship Depth", "type": "variable", "current_value": 0.3},
-                "communication_quality": {"name": "Communication Quality", "type": "variable", "current_value": 0.6}
+                "user_trust":            {"type": "variable", "current_value": 0.5},
+                "user_satisfaction":     {"type": "variable", "current_value": 0.5},
+                "relationship_depth":    {"type": "variable", "current_value": 0.3},
+                "communication_quality": {"type": "variable", "current_value": 0.6},
             }
-            
-            # Add basic relations
             default_model["relations"] = [
-                {"source": "communication_quality", "target": "user_satisfaction", "type": "causal", "strength": 0.7},
-                {"source": "user_satisfaction", "target": "user_trust", "type": "causal", "strength": 0.8},
-                {"source": "user_trust", "target": "relationship_depth", "type": "causal", "strength": 0.6}
+                {"source": "communication_quality", "target": "user_satisfaction", "strength": 0.7},
+                {"source": "user_satisfaction",     "target": "user_trust",        "strength": 0.8},
+                {"source": "user_trust",            "target": "relationship_depth","strength": 0.6},
             ]
+
         elif domain == "problem_solving":
             default_model["nodes"] = {
-                "problem_complexity": {"name": "Problem Complexity", "type": "variable", "current_value": 0.5},
-                "solution_quality": {"name": "Solution Quality", "type": "variable", "current_value": 0.5},
-                "user_comprehension": {"name": "User Comprehension", "type": "variable", "current_value": 0.6},
-                "implementation_feasibility": {"name": "Implementation Feasibility", "type": "variable", "current_value": 0.7}
+                "problem_complexity":      {"type": "variable", "current_value": 0.5},
+                "solution_quality":        {"type": "variable", "current_value": 0.5},
+                "user_comprehension":      {"type": "variable", "current_value": 0.6},
+                "implementation_feasibility": {"type": "variable", "current_value": 0.7},
             }
-            
-            # Add basic relations
             default_model["relations"] = [
-                {"source": "problem_complexity", "target": "solution_quality", "type": "causal", "strength": -0.6},
-                {"source": "solution_quality", "target": "implementation_feasibility", "type": "causal", "strength": 0.7},
-                {"source": "user_comprehension", "target": "implementation_feasibility", "type": "causal", "strength": 0.5}
+                {"source": "problem_complexity", "target": "solution_quality",        "strength": -0.6},
+                {"source": "solution_quality",   "target": "implementation_feasibility","strength": 0.7},
+                {"source": "user_comprehension", "target": "implementation_feasibility","strength": 0.5},
             ]
-        else:
-            # Generic default model
+
+        else:  # generic template
             default_model["nodes"] = {
-                "user_satisfaction": {"name": "User Satisfaction", "type": "variable", "current_value": 0.5},
-                "system_performance": {"name": "System Performance", "type": "variable", "current_value": 0.7},
-                "interaction_quality": {"name": "Interaction Quality", "type": "variable", "current_value": 0.6}
+                "user_satisfaction":  {"type": "variable", "current_value": 0.5},
+                "system_performance": {"type": "variable", "current_value": 0.7},
+                "interaction_quality": {"type": "variable", "current_value": 0.6},
             }
-            
-            # Add basic relations
             default_model["relations"] = [
-                {"source": "system_performance", "target": "user_satisfaction", "type": "causal", "strength": 0.6},
-                {"source": "interaction_quality", "target": "user_satisfaction", "type": "causal", "strength": 0.7}
+                {"source": "system_performance", "target": "user_satisfaction", "strength": 0.6},
+                {"source": "interaction_quality", "target": "user_satisfaction","strength": 0.7},
             ]
-        
-        # Cache the model
-        ctx.context.causal_models[domain] = default_model
-        
-        return {
-            "status": "created",
-            "model": default_model
-        }
+        # --------------------------------------------------------------------
+
+        ctx.context.causal_models[domain] = default_model                # cache
+        return CausalModelOutput(status="created",
+                                 model_json=json.dumps(default_model))
 
 @function_tool
 async def predict_simulation_step(
