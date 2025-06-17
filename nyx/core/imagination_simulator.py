@@ -449,99 +449,102 @@ async def apply_hypothetical_event(
 @function_tool
 async def apply_counterfactual_condition(
     ctx: RunContextWrapper[SimulationContext],
-    initial_state: Dict[str, Any],
-    counterfactual: Dict[str, Any],
-    causal_model: Dict[str, Any]
-) -> Dict[str, Any]:
+    initial_state_json: str,                   # <<< JSON strings
+    counterfactual_json: str,
+    causal_model_json: str | None = None,
+) -> SimulationStateDTO:
     """
-    Apply a counterfactual condition to the initial state.
-    
+    Apply a counterfactual (‘what-if’) condition to the simulation state.
+
     Args:
-        initial_state: Initial simulation state
-        counterfactual: Counterfactual condition to apply
-        causal_model: Causal model for simulation
-        
+        initial_state_json:  JSON of the starting state.
+        counterfactual_json: JSON describing the counterfactual.
+        causal_model_json:   JSON causal model (optional, only needed for
+                             name-matching heuristics).
+
     Returns:
-        Updated state after applying counterfactual
+        SimulationStateDTO with the updated state in `state_json`.
     """
     with custom_span("apply_counterfactual_condition"):
-        # Start with a copy of the initial state
-        updated_state = initial_state.copy()
+        # ---------- parse inputs ------------------------------------------
+        try:
+            updated_state: Dict[str, Any] = json.loads(initial_state_json)
+        except Exception as e:
+            logger.error(f"Bad initial_state JSON: {e}")
+            updated_state = {}
+
+        try:
+            counterfactual: Dict[str, Any] = json.loads(counterfactual_json)
+        except Exception as e:
+            logger.error(f"Bad counterfactual JSON: {e}")
+            counterfactual = {}
+
+        causal_nodes: Dict[str, Any] = {}
+        if causal_model_json:
+            try:
+                causal_nodes = json.loads(causal_model_json).get("nodes", {})
+            except Exception:
+                pass
+
+        # ---------- helpers ----------------------------------------------
         state_vars = updated_state.get("state_variables", {}).copy()
-        
-        # Extract counterfactual information
+
+        def set_var(var: str, val: float):
+            state_vars[var] = max(0.0, min(1.0, val))
+
+        def bump(var: str, delta: float):
+            if var in state_vars and isinstance(state_vars[var], (int, float)):
+                set_var(var, state_vars[var] + delta)
+
+        # ---------- apply counterfactual ----------------------------------
         node_id = counterfactual.get("node_id")
-        value = counterfactual.get("value")
+        val     = counterfactual.get("value")
         description = counterfactual.get("description", "")
-        
-        # If node_id and value provided, apply directly
-        if node_id and value is not None:
-            state_vars[node_id] = value
-        
-        # Otherwise, interpret from description
-        elif description:
-            description_lower = description.lower()
-            
-            # Look for phrases matching "what if X was Y"
+        text = description.lower()
+
+        if node_id and val is not None:
+            set_var(node_id, float(val))
+
+        else:      # try to infer from description
             matched = False
-            
-            # Check nodes in model
-            nodes = causal_model.get("nodes", {})
-            for node_id, node_data in nodes.items():
-                node_name = node_data.get("name", "").lower()
-                
-                # Check if node name is in description
-                if node_name in description_lower:
-                    # Look for value indicators
-                    if "high" in description_lower or "increase" in description_lower:
-                        state_vars[node_id] = min(1.0, (state_vars.get(node_id, 0.5) + 0.3))
-                        matched = True
-                    elif "low" in description_lower or "decrease" in description_lower:
-                        state_vars[node_id] = max(0.0, (state_vars.get(node_id, 0.5) - 0.3))
-                        matched = True
-                    elif "very high" in description_lower:
-                        state_vars[node_id] = 0.9
-                        matched = True
-                    elif "very low" in description_lower:
-                        state_vars[node_id] = 0.1
-                        matched = True
-            
-            # If no match, look for emotional counterfactuals
+            for n_id, n_data in causal_nodes.items():
+                name = n_data.get("name", "").lower()
+                if name and name in text:
+                    if any(w in text for w in ["high", "increase"]):
+                        bump(n_id, 0.3)
+                    elif any(w in text for w in ["low", "decrease"]):
+                        bump(n_id, -0.3)
+                    elif "very high" in text:
+                        set_var(n_id, 0.9)
+                    elif "very low"  in text:
+                        set_var(n_id, 0.1)
+                    matched = True
             if not matched:
-                if "user was happy" in description_lower or "user felt good" in description_lower:
-                    if "user_satisfaction" in state_vars:
-                        state_vars["user_satisfaction"] = 0.8
-                    emotional_state = updated_state.get("emotional_state", {}).copy()
-                    emotional_state["valence"] = 0.7
-                    emotional_state["primary_emotion"] = {"name": "Joy", "intensity": 0.8}
-                    updated_state["emotional_state"] = emotional_state
-                    
-                elif "user was unhappy" in description_lower or "user felt bad" in description_lower:
-                    if "user_satisfaction" in state_vars:
-                        state_vars["user_satisfaction"] = 0.2
-                    emotional_state = updated_state.get("emotional_state", {}).copy()
-                    emotional_state["valence"] = -0.6
-                    emotional_state["primary_emotion"] = {"name": "Sadness", "intensity": 0.7}
-                    updated_state["emotional_state"] = emotional_state
-                    
-                elif "relationship was stronger" in description_lower:
-                    if "relationship_depth" in state_vars:
-                        state_vars["relationship_depth"] = 0.8
-                    if "user_trust" in state_vars:
-                        state_vars["user_trust"] = 0.8
-                
-                elif "relationship was weaker" in description_lower:
-                    if "relationship_depth" in state_vars:
-                        state_vars["relationship_depth"] = 0.2
-                    if "user_trust" in state_vars:
-                        state_vars["user_trust"] = 0.3
-        
-        # Update the state variables
+                # sentiment / emotion shortcuts
+                if "user was happy" in text or "felt good" in text:
+                    set_var("user_satisfaction", 0.8)
+                    emo = updated_state.get("emotional_state", {}).copy()
+                    emo.update({"valence": 0.7,
+                                "primary_emotion": {"name": "Joy", "intensity": 0.8}})
+                    updated_state["emotional_state"] = emo
+                elif "user was unhappy" in text or "felt bad" in text:
+                    set_var("user_satisfaction", 0.2)
+                    emo = updated_state.get("emotional_state", {}).copy()
+                    emo.update({"valence": -0.6,
+                                "primary_emotion": {"name": "Sadness", "intensity": 0.7}})
+                    updated_state["emotional_state"] = emo
+                elif "relationship was stronger" in text:
+                    bump("relationship_depth", 0.3)
+                    bump("user_trust", 0.3)
+                elif "relationship was weaker" in text:
+                    bump("relationship_depth", -0.3)
+                    bump("user_trust", -0.2)
+
         updated_state["state_variables"] = state_vars
         updated_state["reasoning_focus"] = f"Counterfactual: {description}"
-        
-        return updated_state
 
+        # ---------- return strict DTO ------------------------------------
+        return SimulationStateDTO(state_json=json.dumps(updated_state, separators=(",", ":")))
 @function_tool
 async def check_goal_condition(
     ctx: RunContextWrapper[SimulationContext],
