@@ -12,7 +12,7 @@ import asyncio
 import json
 import os
 import aiofiles
-from typing import Dict, List, Any, Optional, Set, Union, Tuple, Callable, Type
+from typing import Dict, List, Any, Optional, Set, Union, Tuple, Callable, Type, Literal
 from pydantic import BaseModel, Field, field_validator, model_validator, Json
 from enum import Enum
 from concurrent.futures import ThreadPoolExecutor
@@ -39,11 +39,12 @@ JsonScalar = Union[str, int, float, bool, None]
 
 class ModificationImpactSummary(BaseModel):
     goal_id: str
-    modification_impacts_json: str      # full list, JSON-encoded
+    modification_impacts_json: str
     overall_impact_score: float
     acceptable: bool
     requires_user_approval: bool
-    recommendation: str = Field(..., regex="^(proceed|seek_approval)$")
+    # option A – Literal (simplest, future-proof)
+    recommendation: Literal["proceed", "seek_approval"]
 
     model_config = {"extra": "forbid"}
 
