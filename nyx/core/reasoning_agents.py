@@ -85,123 +85,157 @@ class ReasoningContext(BaseModel):
 # --------------------- Pydantic Models for Tool Inputs/Outputs ---------------------
 
 class CausalModelInput(BaseModel):
-    name: str = Field(..., description="Name of the causal model")
-    domain: str = Field(..., description="Domain of the causal model")
-    metadata: Optional[Dict[str, Any]] = Field(None, description="Optional metadata for the model")
+    name: str
+    domain: str
+    metadata_json: Optional[str] = Field(
+        None, description="Arbitrary metadata encoded as a JSON object string"
+    )
+    model_config = {"extra": "forbid"}
 
 class CausalModelOutput(BaseModel):
     model_id: str = Field(..., description="ID of the created causal model")
     message: str = Field(..., description="Status message")
 
 class CausalNodeInput(BaseModel):
-    model_id: str = Field(..., description="ID of the causal model")
-    name: str = Field(..., description="Name of the node")
-    domain: Optional[str] = Field(None, description="Domain of the node (optional)")
-    node_type: str = Field("variable", description="Type of node (variable, event, action, state, etc.)")
-    metadata: Optional[Dict[str, Any]] = Field(None, description="Optional metadata for the node")
+    model_id: str
+    name: str
+    domain: Optional[str] = None
+    node_type: str = "variable"
+    metadata_json: Optional[str] = None
+    model_config = {"extra": "forbid"}
 
 class CausalNodeOutput(BaseModel):
     node_id: str = Field(..., description="ID of the created node")
     message: str = Field(..., description="Status message")
 
 class CausalRelationInput(BaseModel):
-    model_id: str = Field(..., description="ID of the causal model")
-    source_id: str = Field(..., description="ID of the source node")
-    target_id: str = Field(..., description="ID of the target node")
-    relation_type: str = Field("causal", description="Type of relation (causal, correlation, etc.)")
-    strength: float = Field(0.5, description="Strength of the relation (0.0 to 1.0)")
-    mechanism: str = Field("", description="Description of the causal mechanism")
+    model_id: str
+    source_id: str
+    target_id: str
+    relation_type: str = "causal"
+    strength: float = 0.5
+    mechanism: str = ""
+    model_config = {"extra": "forbid"}
 
 class CausalRelationOutput(BaseModel):
     relation_id: str = Field(..., description="ID of the created relation")
     message: str = Field(..., description="Status message")
 
 class InterventionInput(BaseModel):
-    model_id: str = Field(..., description="ID of the causal model")
-    target_node: str = Field(..., description="ID of the target node")
-    target_value: Any = Field(..., description="Target value for the intervention")
-    name: str = Field(..., description="Name of the intervention")
-    description: str = Field("", description="Description of the intervention")
+    model_id: str
+    target_node: str
+    target_value_json: str = Field(
+        ..., description="JSON string representing the desired value/state"
+    )
+    name: str
+    description: str = ""
+    model_config = {"extra": "forbid"}
 
 class InterventionOutput(BaseModel):
     intervention_id: str = Field(..., description="ID of the created intervention")
     message: str = Field(..., description="Status message")
 
 class CounterfactualInput(BaseModel):
-    model_id: str = Field(..., description="ID of the causal model")
-    factual_values: Dict[str, Any] = Field({}, description="Current/factual values")
-    counterfactual_values: Dict[str, Any] = Field(..., description="Counterfactual values to reason about")
-    target_nodes: List[str] = Field([], description="Target nodes to analyze (optional)")
+    model_id: str
+    factual_json: Optional[str] = None          # current world
+    counterfactual_json: str                    # counterfactual world
+    target_nodes: List[str] = []
+    model_config = {"extra": "forbid"}
 
 class ConceptSpaceInput(BaseModel):
-    name: str = Field(..., description="Name of the concept space")
-    domain: str = Field("", description="Domain of the concept space")
-    metadata: Optional[Dict[str, Any]] = Field(None, description="Optional metadata")
+    name: str
+    domain: str = ""
+    metadata_json: Optional[str] = None
+    model_config = {"extra": "forbid"}
 
 class ConceptSpaceOutput(BaseModel):
     space_id: str = Field(..., description="ID of the created concept space")
     message: str = Field(..., description="Status message")
 
 class ConceptInput(BaseModel):
-    space_id: str = Field(..., description="ID of the concept space")
-    name: str = Field(..., description="Name of the concept")
-    properties: Dict[str, Any] = Field({}, description="Properties of the concept")
+    space_id: str
+    name: str
+    properties_json: Optional[str] = None
+    model_config = {"extra": "forbid"}
 
 class ConceptOutput(BaseModel):
     concept_id: str = Field(..., description="ID of the created concept")
     message: str = Field(..., description="Status message")
 
 class ConceptRelationInput(BaseModel):
-    space_id: str = Field(..., description="ID of the concept space")
-    source_id: str = Field(..., description="ID of the source concept")
-    target_id: str = Field(..., description="ID of the target concept")
-    relation_type: str = Field(..., description="Type of relation")
-    strength: float = Field(1.0, description="Strength of the relation")
+    space_id: str
+    source_id: str
+    target_id: str
+    relation_type: str
+    strength: float = 1.0
+    model_config = {"extra": "forbid"}
 
 class BlendInput(BaseModel):
-    space_id_1: str = Field(..., description="ID of the first concept space")
-    space_id_2: str = Field(..., description="ID of the second concept space")
-    blend_type: str = Field("composition", description="Type of blend (composition, fusion, completion, elaboration, contrast)")
+    space_id_1: str
+    space_id_2: str
+    blend_type: str = "composition"
+    model_config = {"extra": "forbid"}
 
 class CreativeInterventionInput(BaseModel):
-    model_id: str = Field(..., description="ID of the causal model")
-    target_node: str = Field(..., description="ID of the target node")
-    description: str = Field("", description="Description of the intervention")
-    use_blending: bool = Field(True, description="Whether to use conceptual blending")
+    model_id: str
+    target_node: str
+    description: str = ""
+    use_blending: bool = True
+    model_config = {"extra": "forbid"}
 
 class IntegratedModelInput(BaseModel):
-    domain: str = Field(..., description="Domain for the integrated model")
-    base_on_causal: bool = Field(True, description="Whether to base the integration on causal models")
+    domain: str
+    base_on_causal: bool = True
+    model_config = {"extra": "forbid"}
 
 # Homework check for guardrails
 class HomeworkCheck(BaseModel):
     is_homework: bool = Field(False, description="Whether the query is asking for homework help")
     reasoning: str = Field("", description="Reasoning for the determination")
-
 # --------------------- Causal Reasoning Agent Tools ---------------------
 
 @function_tool
 async def create_causal_model(
-    ctx: RunContextWrapper[ReasoningContext], 
-    input_data: CausalModelInput
+    ctx: RunContextWrapper[ReasoningContext],
+    input_data: CausalModelInput,
 ) -> CausalModelOutput:
-    """Create a new causal model."""
-    # Update context stats
+    """
+    Create a causal model.
+
+    • `metadata_json` is an OPTIONAL JSON-encoded object.
+    """
     ctx.context.total_calls += 1
-    
+    log = logging.getLogger(__name__)
+
+    # ------------------------------------------------------------------ #
+    # 1. Decode optional metadata                                        #
+    # ------------------------------------------------------------------ #
+    metadata: Optional[Dict[str, Any]] = None
+    if input_data.metadata_json:
+        try:
+            metadata = json.loads(input_data.metadata_json)
+            if not isinstance(metadata, dict):
+                raise TypeError("metadata_json must decode to an object")
+        except Exception as exc:
+            log.warning("create_causal_model: bad metadata_json – %s", exc)
+            metadata = None
+
+    # ------------------------------------------------------------------ #
+    # 2. Delegate to the reasoning core                                  #
+    # ------------------------------------------------------------------ #
     model_id = await reasoning_core.create_causal_model(
         name=input_data.name,
         domain=input_data.domain,
-        metadata=input_data.metadata
+        metadata=metadata,
     )
-    
-    # Set active model in context
+
+    # Track active model in context
     ctx.context.active_model_id = model_id
-    ctx.context.current_domain = input_data.domain
-    
+    ctx.context.current_domain  = input_data.domain
+
     return CausalModelOutput(
         model_id=model_id,
-        message=f"Created causal model with ID: {model_id}"
+        message=f"Created causal model with ID: {model_id}",
     )
 
 @function_tool
