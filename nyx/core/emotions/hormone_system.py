@@ -626,44 +626,115 @@ class HormoneSystem:
         phase_descriptions = {
             "melatonyx": {
                 0.0: "night peak",
+                0.125: "late night plateau",
                 0.25: "morning decline", 
+                0.375: "mid-morning transition",
                 0.5: "daytime low",
-                0.75: "evening rise"
+                0.625: "afternoon stability",
+                0.75: "evening rise",
+                0.875: "twilight surge"
             },
             "estradyx": {
                 0.0: "follicular phase",
+                0.125: "early follicular",
                 0.25: "ovulatory phase",
+                0.375: "peak fertility",
                 0.5: "luteal phase",
-                0.75: "late luteal phase"
+                0.625: "mid-luteal plateau",
+                0.75: "late luteal phase",
+                0.875: "pre-menstrual transition"
             },
             "testoryx": {
                 0.0: "morning peak",
+                0.125: "post-dawn maximum",
                 0.25: "midday plateau",
+                0.375: "early afternoon stability",
                 0.5: "afternoon decline",
-                0.75: "evening/night low"
+                0.625: "early evening decrease",
+                0.75: "evening/night low",
+                0.875: "midnight nadir"
             },
             "endoryx": {
                 0.0: "baseline state",
+                0.125: "initial activation",
                 0.25: "rising phase",
+                0.375: "acceleration phase",
                 0.5: "peak activity",
-                0.75: "declining phase"
+                0.625: "sustained elevation",
+                0.75: "declining phase",
+                0.875: "recovery phase"
             },
             "oxytonyx": {
                 0.0: "baseline bonding",
+                0.125: "social receptivity",
                 0.25: "rising connection",
+                0.375: "bonding acceleration",
                 0.5: "peak bonding",
-                0.75: "sustained connection"
+                0.625: "deep attachment",
+                0.75: "sustained connection",
+                0.875: "gentle decline"
+            },
+            "libidyx": {
+                0.0: "dormant phase",
+                0.125: "awakening interest",
+                0.25: "rising desire",
+                0.375: "building intensity",
+                0.5: "peak drive",
+                0.625: "sustained arousal",
+                0.75: "gradual decline",
+                0.875: "refractory transition"
+            },
+            "serenity_boost": {
+                0.0: "activation phase",
+                0.125: "rapid onset",
+                0.25: "peak serenity",
+                0.375: "maximum calm",
+                0.5: "plateau phase",
+                0.625: "gentle decline",
+                0.75: "fading effect",
+                0.875: "minimal influence"
             }
         }
         
         # Find closest phase category
         if hormone in phase_descriptions:
             phase_points = sorted(phase_descriptions[hormone].keys())
+            
+            # Find the closest phase point
             closest_point = min(phase_points, key=lambda x: abs(x - phase))
-            return phase_descriptions[hormone][closest_point]
+            
+            # If we're very close to a point, use it directly
+            if abs(closest_point - phase) < 0.0625:  # Within 1/16 of a cycle
+                return phase_descriptions[hormone][closest_point]
+            
+            # Otherwise, find the two surrounding points and interpolate description
+            for i in range(len(phase_points) - 1):
+                if phase_points[i] <= phase < phase_points[i + 1]:
+                    # We're between these two points
+                    lower_desc = phase_descriptions[hormone][phase_points[i]]
+                    upper_desc = phase_descriptions[hormone][phase_points[i + 1]]
+                    
+                    # Calculate how far we are between the points
+                    progress = (phase - phase_points[i]) / (phase_points[i + 1] - phase_points[i])
+                    
+                    if progress < 0.5:
+                        return f"{lower_desc} (transitioning)"
+                    else:
+                        return f"approaching {upper_desc}"
+            
+            # Handle wrap-around case (phase very close to 1.0)
+            if phase >= phase_points[-1]:
+                return f"{phase_descriptions[hormone][phase_points[-1]]} (completing cycle)"
         
-        # Default
-        return "standard phase"
+        # Default for unknown hormones
+        if phase < 0.25:
+            return "early cycle phase"
+        elif phase < 0.5:
+            return "rising phase"
+        elif phase < 0.75:
+            return "declining phase"
+        else:
+            return "late cycle phase"
     
     @handle_errors("Error updating environmental factor")
     def update_environmental_factor(self, 
