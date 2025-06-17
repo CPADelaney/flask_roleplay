@@ -31,6 +31,16 @@ logger = logging.getLogger(__name__)
 
 # =============== Pydantic Models for Structured Output ===============
 
+class SimulationStateDTO(BaseModel):
+    """
+    Strict DTO used by predict_simulation_step.
+    The whole next-state object is JSON-encoded in `state_json`
+    so the schema is closed (additionalProperties == false).
+    """
+    state_json: str
+
+    model_config = {"extra": "forbid"}
+
 class SimulationState(BaseModel):
     """Represents a state within a simulation."""
     step: int
@@ -279,117 +289,79 @@ async def get_causal_model_for_simulation(
 @function_tool
 async def predict_simulation_step(
     ctx: RunContextWrapper[SimulationContext],
-    current_state: Dict[str, Any],
-    causal_model: Dict[str, Any],
-    step: int
-) -> Dict[str, Any]:
+    current_state_json: str,           # <<<  JSON strings, not raw dicts
+    causal_model_json: str,            # <<<
+    step: int,
+) -> SimulationStateDTO:               # <<<  strict output
     """
-    Predict the next simulation state based on causal model.
-    
+    Predict the next simulation state.
+
     Args:
-        current_state: Current simulation state
-        causal_model: Causal model to use for prediction
-        step: Current step number
-        
+        current_state_json: JSON string for the current state.
+        causal_model_json:  JSON string for the causal model.
+        step:               Step number being simulated.
+
     Returns:
-        Updated simulation state
+        SimulationStateDTO whose `state_json` field contains the full
+        next-state record in JSON form.
     """
     with custom_span("predict_simulation_step"):
-        # Start with a copy of the current state
-        next_state = current_state.copy()
+        # ---------- Parse inputs -------------------------------------------
+        try:
+            next_state: Dict[str, Any] = json.loads(current_state_json)
+        except Exception as e:
+            logger.error(f"Bad current_state JSON: {e}")
+            next_state = {}
+        try:
+            causal_model: Dict[str, Any] = json.loads(causal_model_json)
+        except Exception as e:
+            logger.error(f"Bad causal_model JSON: {e}")
+            causal_model = {}
+
+        # ---------- Populate base fields -----------------------------------
+        next_state = next_state.copy()
         next_state["step"] = step
         next_state["timestamp"] = datetime.datetime.now().isoformat()
-        
-        # Get the state variables
+
+        # ---------- Causal propagation -------------------------------------
         state_vars = next_state.get("state_variables", {}).copy()
-        
-        # Propagate causal effects through the model
-        nodes = causal_model.get("nodes", {})
-        relations = causal_model.get("relations", [])
-        
-        # Process each causal relation
-        for relation in relations:
-            source_id = relation.get("source")
-            target_id = relation.get("target")
-            relation_type = relation.get("type", "causal")
-            strength = relation.get("strength", 0.5)
-            
-            # Skip if not a causal relation
-            if relation_type != "causal":
+        for rel in causal_model.get("relations", []):
+            if rel.get("type", "causal") != "causal":
                 continue
-                
-            # Skip if nodes don't exist in model
-            if source_id not in nodes or target_id not in nodes:
+            s, t = rel.get("source"), rel.get("target")
+            if s not in state_vars:
                 continue
-                
-            # Skip if source not in state variables
-            if source_id not in state_vars:
-                continue
-                
-            # Initialize target if not exists
-            if target_id not in state_vars:
-                state_vars[target_id] = nodes[target_id].get("current_value", 0.5)
-                
-            # Get current values
-            source_value = state_vars[source_id]
-            target_value = state_vars[target_id]
-            
-            # Apply causal influence with some random variation
-            if isinstance(source_value, (int, float)) and isinstance(target_value, (int, float)):
-                # Calculate influence
-                change = (source_value - 0.5) * strength * 0.2  # Scale the effect
-                
-                # Add some noise
-                noise = random.uniform(-0.05, 0.05)
-                
-                # Apply change
-                new_value = target_value + change + noise
-                
-                # Clamp between 0 and 1
-                new_value = max(0.0, min(1.0, new_value))
-                
-                # Update state
-                state_vars[target_id] = new_value
-        
-        # Update emotional state based on state variables
-        emotional_state = next_state.get("emotional_state", {}).copy()
-        
-        # Map key variables to emotional impacts
+            if t not in state_vars:
+                t_node = causal_model.get("nodes", {}).get(t, {})
+                state_vars[t] = t_node.get("current_value", 0.5)
+
+            sv, tv = state_vars[s], state_vars[t]
+            if isinstance(sv, (int, float)) and isinstance(tv, (int, float)):
+                delta = (sv - 0.5) * rel.get("strength", 0.5) * 0.2
+                tv = max(0.0, min(1.0, tv + delta + random.uniform(-0.05, 0.05)))
+                state_vars[t] = tv
+
+        # ---------- Emotion update -----------------------------------------
+        emo = next_state.get("emotional_state", {}).copy()
         if "user_satisfaction" in state_vars:
-            # Satisfaction impacts valence
-            emotional_state["valence"] = state_vars["user_satisfaction"] * 2 - 1  # Map 0-1 to -1 to 1
-            
+            emo["valence"] = state_vars["user_satisfaction"] * 2 - 1
         if "interaction_quality" in state_vars:
-            # Interaction quality impacts arousal
-            emotional_state["arousal"] = state_vars["interaction_quality"]
-            
-        # Set a primary emotion based on valence and arousal
-        valence = emotional_state.get("valence", 0)
-        arousal = emotional_state.get("arousal", 0.5)
-        
-        # Simple emotion mapping based on valence and arousal
-        primary_emotion = "Neutral"
-        if valence > 0.3:
-            if arousal > 0.6:
-                primary_emotion = "Joy"
-            else:
-                primary_emotion = "Contentment"
-        elif valence < -0.3:
-            if arousal > 0.6:
-                primary_emotion = "Frustration"
-            else:
-                primary_emotion = "Sadness"
-        
-        emotional_state["primary_emotion"] = {
-            "name": primary_emotion,
-            "intensity": abs(valence) * 0.8 + 0.2  # Scale to 0.2-1.0
-        }
-        
-        # Update the next state
+            emo["arousal"] = state_vars["interaction_quality"]
+
+        val, ar = emo.get("valence", 0), emo.get("arousal", 0.5)
+        if val > 0.3:
+            emo_name = "Joy" if ar > 0.6 else "Contentment"
+        elif val < -0.3:
+            emo_name = "Frustration" if ar > 0.6 else "Sadness"
+        else:
+            emo_name = "Neutral"
+        emo["primary_emotion"] = {"name": emo_name, "intensity": abs(val) * 0.8 + 0.2}
+
+        # ---------- Assemble & return --------------------------------------
         next_state["state_variables"] = state_vars
-        next_state["emotional_state"] = emotional_state
-        
-        return next_state
+        next_state["emotional_state"] = emo
+
+        return SimulationStateDTO(state_json=json.dumps(next_state, separators=(",", ":")))
 
 @function_tool
 async def apply_hypothetical_event(
