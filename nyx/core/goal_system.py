@@ -37,6 +37,14 @@ SCHEMA_VERSION = "1.0.0"
 
 JsonScalar = Union[str, int, float, bool, None]
 
+class MergedGoalCoverageResult(BaseModel):
+    coverage_goal1: float
+    coverage_goal2: float
+    overall_coverage: float
+    need_coverage: bool
+    is_sufficient: bool
+    missing_elements_json: str   # JSON-encoded list
+    model_config = {"extra": "forbid"}
 
 class MergedGoalDescription(BaseModel):
     merged_goal_data_json: str          # full dict, JSON-encoded
@@ -3203,51 +3211,71 @@ class GoalManager:
 
     @staticmethod
     @function_tool
-    async def _validate_merged_goal_coverage(ctx: RunContextWrapper, merged_goal_data: Dict[str, Any], 
-                                          goal_id1: str, goal_id2: str) -> Dict[str, Any]:
+    async def _validate_merged_goal_coverage(               # noqa: N802
+        ctx: RunContextWrapper,
+        merged_goal_data_json: str,                         # ← plain STRING
+        goal_id1: str,
+        goal_id2: str,
+    ) -> MergedGoalCoverageResult:                          # ← closed model
         """
-        Validate that a merged goal adequately covers the original goals
-        
-        Args:
-            merged_goal_data: Merged goal data
-            goal_id1: First goal ID
-            goal_id2: Second goal ID
-            
-        Returns:
-            Coverage validation
+        Check that the merged goal covers both originals (strict).
         """
-        goal1 = await self._get_goal_with_reader_lock(goal_id1)
-        goal2 = await self._get_goal_with_reader_lock(goal_id2)
-        
-        if not goal1 or not goal2:
-            return {"error": "One or both goals not found"}
-        
-        # Extract significant keywords from each goal
-        keywords1 = set([w.lower() for w in goal1.description.split() if len(w) > 4])
-        keywords2 = set([w.lower() for w in goal2.description.split() if len(w) > 4])
-        merged_keywords = set([w.lower() for w in merged_goal_data["description"].split() if len(w) > 4])
-        
-        # Calculate coverage percentage
-        coverage1 = len(keywords1.intersection(merged_keywords)) / max(1, len(keywords1))
-        coverage2 = len(keywords2.intersection(merged_keywords)) / max(1, len(keywords2))
-        
-        # Check need coverage
-        need_covered = True
-        if goal1.associated_need and goal2.associated_need:
-            need_covered = merged_goal_data.get("associated_need") in [goal1.associated_need, goal2.associated_need]
-        
-        # Overall coverage assessment
-        overall_coverage = min(coverage1, coverage2)
-        
-        return {
-            "coverage_goal1": coverage1,
-            "coverage_goal2": coverage2,
-            "overall_coverage": overall_coverage,
-            "need_coverage": need_covered,
-            "is_sufficient": overall_coverage > 0.7 and need_covered,
-            "missing_elements": []  # Would be populated with missing key elements in a full implementation
-        }
+        gm = ctx.context
+        logger = logging.getLogger(__name__)
     
+        # 1️⃣ decode merged goal -------------------------------------------------
+        try:
+            merged = json.loads(merged_goal_data_json or "{}")
+            if not isinstance(merged, dict):
+                raise TypeError
+        except Exception as exc:
+            logger.error("Bad merged_goal_data_json: %s", exc)
+            return MergedGoalCoverageResult(
+                coverage_goal1=0.0, coverage_goal2=0.0,
+                overall_coverage=0.0, need_coverage=False,
+                is_sufficient=False,
+                missing_elements_json=json.dumps(
+                    [f"Bad JSON: {exc}"], separators=(",", ":")
+                ),
+            )
+    
+        # 2️⃣ fetch original goals ---------------------------------------------
+        g1 = await gm._get_goal_with_reader_lock(goal_id1)
+        g2 = await gm._get_goal_with_reader_lock(goal_id2)
+        if not g1 or not g2:
+            return MergedGoalCoverageResult(
+                coverage_goal1=0.0, coverage_goal2=0.0,
+                overall_coverage=0.0, need_coverage=False,
+                is_sufficient=False,
+                missing_elements_json=json.dumps(
+                    ["One or both goals not found"], separators=(",", ":")
+                ),
+            )
+    
+        # 3️⃣ simple keyword coverage ------------------------------------------
+        kw = lambda desc: {w.lower() for w in desc.split() if len(w) > 4}
+        kw1, kw2 = kw(g1.description), kw(g2.description)
+        kwm      = kw(merged.get("description", ""))
+    
+        cov1 = len(kw1 & kwm) / max(1, len(kw1))
+        cov2 = len(kw2 & kwm) / max(1, len(kw2))
+    
+        # 4️⃣ need coverage -----------------------------------------------------
+        need_ok = True
+        if g1.associated_need and g2.associated_need:
+            need_ok = merged.get("associated_need") in {g1.associated_need, g2.associated_need}
+    
+        overall = min(cov1, cov2)
+        sufficient = overall > 0.7 and need_ok
+    
+        return MergedGoalCoverageResult(
+            coverage_goal1=round(cov1, 3),
+            coverage_goal2=round(cov2, 3),
+            overall_coverage=round(overall, 3),
+            need_coverage=need_ok,
+            is_sufficient=sufficient,
+            missing_elements_json="[]",       # placeholder
+        )
     #==========================================================================
     # Integration with External Systems
     #==========================================================================
