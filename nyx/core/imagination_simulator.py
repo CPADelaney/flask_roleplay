@@ -6,7 +6,7 @@ import datetime
 import random
 import uuid
 import json
-from typing import Dict, List, Any, Optional, Sequence, Mapping, Union, TypedDict
+from typing import Dict, List, Any, Optional, Sequence, Mapping, Union, TypedDict, Literal
 from pydantic import BaseModel, Field
 
 # Import OpenAI Agents SDK components
