@@ -300,14 +300,6 @@ class PlanValidationResult(BaseModel):
     reason: Optional[str] = Field(None, description="Reason for invalidation if not valid")
     suggestions: List[str] = Field(default_factory=list, description="Suggested improvements")
 
-class StepExecutionResult(BaseModel):
-    """Output model for step execution agent"""
-    success: bool = Field(..., description="Whether the step executed successfully")
-    step_id: str = Field(..., description="ID of the executed step")
-    result: Optional[Any] = Field(None, description="Result from the execution")
-    error: Optional[str] = Field(None, description="Error message if execution failed")
-    next_action: str = Field("continue", description="continue, retry, skip, or abort")
-
 class PlanGenerationResult(BaseModel):
     """Output model for plan generation agent"""
     plan: List[Dict[str, Any]] = Field(..., description="Generated plan steps")
@@ -516,44 +508,74 @@ class GoalManager:
 
     # Add these methods to your existing GoalManager class in goal_system.py
     
-    async def update_goal_priority(self, goal_id: str, new_priority: float, reason: str = "context_adjustment") -> Dict[str, Any]:
+    async def update_goal_priority(
+        self,
+        goal_id: str,
+        new_priority: float,
+        reason: str = "context_adjustment",
+    ) -> Dict[str, Any]:
         """
-        Update the priority of a specific goal
-        
-        Args:
-            goal_id: Goal ID
-            new_priority: New priority value (0.0-1.0)
-            reason: Reason for the priority change
-            
-        Returns:
-            Update result
+        Change the priority of a goal and log the adjustment.
+    
+        Parameters
+        ----------
+        goal_id : str
+            ID of the goal to update.
+        new_priority : float
+            New priority (0.0 – 1.0).
+        reason : str, optional
+            Short reason for the change, by default "context_adjustment".
+    
+        Returns
+        -------
+        dict
+            Result information with keys:
+            • success (bool)  
+            • goal_id (str)  
+            • new_priority (float)  
+            • old_priority (float, optional)  
+            • reason (str, optional)  
+            • error (str, optional)
         """
+        # ----- validate input ------------------------------------------------- #
         if not (0.0 <= new_priority <= 1.0):
             return {"success": False, "error": "Priority must be between 0.0 and 1.0"}
-        
-        success = await self._update_goal_with_writer_lock(
-            goal_id,
-            lambda goal: (
-                setattr(goal, "priority", new_priority),
-                goal.execution_history.append({
+    
+        old_priority: float | None = None          # <-- outer-scope placeholder
+    
+        # ----- writer-locked update ------------------------------------------ #
+        async def _apply(goal: Goal) -> None:
+            nonlocal old_priority                  # <-- bring it into inner scope
+            old_priority = goal.priority
+            goal.priority = new_priority
+            goal.execution_history.append(
+                {
                     "timestamp": datetime.datetime.now().isoformat(),
                     "type": "priority_update",
-                    "old_priority": goal.priority,
+                    "old_priority": old_priority,
                     "new_priority": new_priority,
-                    "reason": reason
-                })
+                    "reason": reason,
+                }
             )
-        )
-        
+    
+        success = await self._update_goal_with_writer_lock(goal_id, _apply)
+    
+        # ----- post-update bookkeeping --------------------------------------- #
         if success:
-            logger.info(f"Updated priority for goal '{goal_id}' to {new_priority:.2f}. Reason: {reason}")
+            logger.info(
+                "Updated priority for goal '%s' from %.2f to %.2f (%s)",
+                goal_id,
+                old_priority,
+                new_priority,
+                reason,
+            )
             await self.mark_goal_dirty(goal_id)
-            
             return {
                 "success": True,
                 "goal_id": goal_id,
+                "old_priority": old_priority,
                 "new_priority": new_priority,
-                "reason": reason
+                "reason": reason,
             }
         else:
             return {"success": False, "error": f"Goal {goal_id} not found"}
@@ -1391,17 +1413,18 @@ class GoalManager:
         Returns:
             Dictionary with active and pending goals
         """
+        gm = ctx.context  # Get GoalManager instance
         # Use reader lock for access to goals dictionary
         goals = []
         
-        async with self._reader_lock:
-            self._reader_count += 1
-            if self._reader_count == 1:
-                await self._writer_lock.acquire()
+        async with gm._reader_lock:
+            gm._reader_count += 1
+            if gm._reader_count == 1:
+                await gm._writer_lock.acquire()
         
         try:
             # Safe to read goals dictionary with reader lock
-            for goal_id, goal in self.goals.items():
+            for goal_id, goal in gm.goals.items():
                 if goal.status in ["active", "pending"]:
                     goals.append({
                         "id": goal.id,
@@ -1413,10 +1436,10 @@ class GoalManager:
                     })
         finally:
             # Release reader lock
-            async with self._reader_lock:
-                self._reader_count -= 1
-                if self._reader_count == 0:
-                    self._writer_lock.release()
+            async with gm._reader_lock:
+                gm._reader_count -= 1
+                if gm._reader_count == 0:
+                    gm._writer_lock.release()
         
         return {
             "active_count": len([g for g in goals if g["status"] == "active"]),
@@ -1436,30 +1459,31 @@ class GoalManager:
         Returns:
             Conflict information
         """
+        gm = ctx.context  # Get GoalManager instance
         conflicts = []
         
         # Use enhanced conflict detection based on configuration
-        similarity_threshold = self.conflict_config.similarity_threshold
+        similarity_threshold = gm.conflict_config.similarity_threshold
         
         # Get all active and pending goals with reader lock
         goals = []
         
-        async with self._reader_lock:
-            self._reader_count += 1
-            if self._reader_count == 1:
-                await self._writer_lock.acquire()
+        async with gm._reader_lock:
+            gm._reader_count += 1
+            if gm._reader_count == 1:
+                await gm._writer_lock.acquire()
         
         try:
             # Safe to read goals dictionary with reader lock
-            for goal_id, goal in self.goals.items():
+            for goal_id, goal in gm.goals.items():
                 if goal.status in ["active", "pending"]:
                     goals.append(goal)
         finally:
             # Release reader lock
-            async with self._reader_lock:
-                self._reader_count -= 1
-                if self._reader_count == 0:
-                    self._writer_lock.release()
+            async with gm._reader_lock:
+                gm._reader_count -= 1
+                if gm._reader_count == 0:
+                    gm._writer_lock.release()
         
         # Check for conflicts
         for goal in goals:
@@ -1477,7 +1501,7 @@ class GoalManager:
                 })
         
         # Enhanced conflict detection
-        if self.conflict_config.resource_conflict_detection and len(conflicts) > 0:
+        if gm.conflict_config.resource_conflict_detection and len(conflicts) > 0:
             # Analyze potential resource conflicts for the most similar goals
             most_similar = max(conflicts, key=lambda x: x["similarity"]) if conflicts else None
             
@@ -1511,6 +1535,7 @@ class GoalManager:
             "conflicts": conflicts
         }
 
+
     @staticmethod
     @function_tool
     async def _verify_capabilities(ctx: RunContextWrapper, required_actions: List[str]) -> Dict[str, Any]:
@@ -1523,7 +1548,8 @@ class GoalManager:
         Returns:
             Capability verification results
         """
-        available_actions = await self._get_available_actions(ctx)
+        gm = ctx.context  # Get GoalManager instance
+        available_actions = await gm._get_available_actions(ctx)
         available_action_names = [a["name"] for a in available_actions["actions"]]
         
         unavailable = [action for action in required_actions if action not in available_action_names]
@@ -1533,8 +1559,10 @@ class GoalManager:
             "available_count": len(required_actions) - len(unavailable),
             "unavailable_actions": unavailable
         }
+
     
     # Agent SDK tools for plan validation agent
+    @staticmethod
     @function_tool(name_override="_validate_action_sequence")
     async def validate_action_sequence(                      # noqa: N802
         ctx: RunContextWrapper,
@@ -1623,6 +1651,7 @@ class GoalManager:
             "issues": issues,
         }
 
+    @staticmethod
     @function_tool(name_override="_check_parameter_references")
     async def check_parameter_references(            # noqa: N802
         ctx: RunContextWrapper,
@@ -1751,6 +1780,7 @@ class GoalManager:
         top_field = field_path.split('.')[0]
         return top_field in available_fields or "result" in available_fields
 
+    @staticmethod
     @function_tool(name_override="_estimate_plan_efficiency")
     async def estimate_plan_efficiency(                    # noqa: N802
         ctx: RunContextWrapper,
@@ -2140,9 +2170,10 @@ class GoalManager:
         Returns:
             Prioritized goals information
         """
+        gm = ctx.context  # Get GoalManager instance
         # Call the async version of the method
-        goals = await self.get_prioritized_goals()
-
+        goals = await gm.get_prioritized_goals()
+    
         return {
             "total_count": len(goals),
             "active_count": len([g for g in goals if g.status == "active"]),
@@ -2150,7 +2181,7 @@ class GoalManager:
             # Return summaries for the tool, excluding large fields
             "goals": [g.model_dump(exclude={'plan', 'execution_history', 'checksum', 'emotional_state_snapshots', 'external_feedback'}) for g in goals[:5]]
         }
-
+    
     @staticmethod
     @function_tool
     async def _update_goal_status_tool(                  # noqa: N802
@@ -2341,16 +2372,17 @@ class GoalManager:
         Returns:
             Concurrency information
         """
+        gm = ctx.context  # Get GoalManager instance
         # Get count of active goals with lock
-        async with self._active_goals_lock:
-            active_count = len(self.active_goals)
-            can_activate = active_count < self.max_concurrent_goals
-            remaining_slots = max(0, self.max_concurrent_goals - active_count)
+        async with gm._active_goals_lock:
+            active_count = len(gm.active_goals)
+            can_activate = active_count < gm.max_concurrent_goals
+            remaining_slots = max(0, gm.max_concurrent_goals - active_count)
             
             active_goals = []
             # Get details of active goals
-            for goal_id in self.active_goals:
-                goal = await self._get_goal_with_reader_lock(goal_id)
+            for goal_id in gm.active_goals:
+                goal = await gm._get_goal_with_reader_lock(goal_id)
                 if goal:
                     active_goals.append({
                         "id": goal_id,
@@ -2360,12 +2392,12 @@ class GoalManager:
         
         return {
             "active_count": active_count,
-            "max_concurrent": self.max_concurrent_goals,
+            "max_concurrent": gm.max_concurrent_goals,
             "can_activate_more": can_activate,
             "remaining_slots": remaining_slots,
             "active_goals": active_goals
         }
-    
+        
     # Additional tools used by multiple agents
     @staticmethod
     @function_tool
@@ -2376,6 +2408,7 @@ class GoalManager:
         Returns:
             Available actions with descriptions
         """
+        gm = ctx.context  # Get GoalManager instance
         available_actions = [
             # Basic interaction
             "process_input", "generate_response", 
@@ -2410,7 +2443,7 @@ class GoalManager:
         # Build list with descriptions
         actions_with_descriptions = []
         for action in available_actions:
-            description = self._generate_action_description(action)
+            description = gm._generate_action_description(action)
             actions_with_descriptions.append({
                 "name": action,
                 "description": description
@@ -2433,8 +2466,9 @@ class GoalManager:
         Returns:
             Action description
         """
-        description = self._generate_action_description(action)
-        actions_result = await self._get_available_actions(ctx)
+        gm = ctx.context  # Get GoalManager instance
+        description = gm._generate_action_description(action)
+        actions_result = await gm._get_available_actions(ctx)
         available_action_names = [a["name"] for a in actions_result["actions"]]
         
         return {
@@ -2455,7 +2489,8 @@ class GoalManager:
         Returns:
             Goal details
         """
-        goal = await self._get_goal_with_reader_lock(goal_id)
+        gm = ctx.context  # Get GoalManager instance
+        goal = await gm._get_goal_with_reader_lock(goal_id)
         if not goal:
             return {
                 "success": False,
@@ -2484,7 +2519,7 @@ class GoalManager:
             "last_modified": goal.last_modified.isoformat(),
             "has_conflicts": len(goal.conflict_data) > 0 if goal.conflict_data else False
         }
-
+        
     @staticmethod
     @function_tool
     async def _get_recent_goals(ctx: RunContextWrapper, limit: int = 3) -> Dict[str, Any]:
@@ -2497,26 +2532,27 @@ class GoalManager:
         Returns:
             Recent goals
         """
+        gm = ctx.context  # Get GoalManager instance
         # Get all goals with reader lock
         all_goals = []
         
-        async with self._reader_lock:
-            self._reader_count += 1
-            if self._reader_count == 1:
-                await self._writer_lock.acquire()
+        async with gm._reader_lock:
+            gm._reader_count += 1
+            if gm._reader_count == 1:
+                await gm._writer_lock.acquire()
         
         try:
             # Safe to read goals dictionary with reader lock
             all_goals = [
-                goal.model_copy() for goal in self.goals.values()
+                goal.model_copy() for goal in gm.goals.values()
                 if goal.status == "completed" and goal.completion_time is not None
             ]
         finally:
             # Release reader lock
-            async with self._reader_lock:
-                self._reader_count -= 1
-                if self._reader_count == 0:
-                    self._writer_lock.release()
+            async with gm._reader_lock:
+                gm._reader_count -= 1
+                if gm._reader_count == 0:
+                    gm._writer_lock.release()
         
         # Sort by completion time (newest first)
         all_goals.sort(key=lambda g: g.completion_time, reverse=True)
@@ -2545,6 +2581,7 @@ class GoalManager:
             "count": len(recent_goals),
             "goals": recent_goals
         }
+
     
     # Conflict resolution tools
     @staticmethod
@@ -2560,8 +2597,9 @@ class GoalManager:
         Returns:
             Similarity analysis
         """
-        goal1 = await self._get_goal_with_reader_lock(goal_id1)
-        goal2 = await self._get_goal_with_reader_lock(goal_id2)
+        gm = ctx.context  # Get GoalManager instance
+        goal1 = await gm._get_goal_with_reader_lock(goal_id1)
+        goal2 = await gm._get_goal_with_reader_lock(goal_id2)
         
         if not goal1 or not goal2:
             return {
@@ -2637,6 +2675,7 @@ class GoalManager:
             "is_duplicate": weighted_similarity > 0.85
         }
 
+
     @staticmethod
     @function_tool
     async def _analyze_resource_conflicts(ctx: RunContextWrapper, goal_id1: str, goal_id2: str) -> Dict[str, Any]:
@@ -2650,8 +2689,9 @@ class GoalManager:
         Returns:
             Resource conflict analysis
         """
-        goal1 = await self._get_goal_with_reader_lock(goal_id1)
-        goal2 = await self._get_goal_with_reader_lock(goal_id2)
+        gm = ctx.context  # Get GoalManager instance
+        goal1 = await gm._get_goal_with_reader_lock(goal_id1)
+        goal2 = await gm._get_goal_with_reader_lock(goal_id2)
         
         if not goal1 or not goal2:
             return {
@@ -2982,8 +3022,9 @@ class GoalManager:
         Returns:
             Shared subgoals information
         """
-        goal1 = await self._get_goal_with_reader_lock(goal_id1)
-        goal2 = await self._get_goal_with_reader_lock(goal_id2)
+        gm = ctx.context  # Get GoalManager instance
+        goal1 = await gm._get_goal_with_reader_lock(goal_id1)
+        goal2 = await gm._get_goal_with_reader_lock(goal_id2)
         
         if not goal1 or not goal2:
             return {"error": "One or both goals not found"}
@@ -3068,8 +3109,9 @@ class GoalManager:
         Returns:
             Common elements analysis
         """
-        goal1 = await self._get_goal_with_reader_lock(goal_id1)
-        goal2 = await self._get_goal_with_reader_lock(goal_id2)
+        gm = ctx.context  # Get GoalManager instance
+        goal1 = await gm._get_goal_with_reader_lock(goal_id1)
+        goal2 = await gm._get_goal_with_reader_lock(goal_id2)
         
         if not goal1 or not goal2:
             return {"error": "One or both goals not found"}
