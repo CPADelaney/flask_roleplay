@@ -2,17 +2,27 @@
 """
 Enhanced schema definitions for the Nyx emotional system.
 Contains all Pydantic models used throughout the emotional core with 
-added handoff request/response structures and improved SDK integration.
+added handoff request/response structures, improved SDK integration,
+and strict DTOs for the Agents SDK.
+
+* Section 1 – Base Models and Enums
+* Section 2 – Neurochemical Models
+* Section 3 – Emotion Models
+* Section 4 – Input/Output Models
+* Section 5 – Handoff Request/Response Models
+* Section 6 – Stream Event Models
+* Section 7 – Strict DTOs for the Agents SDK
 """
 
 import datetime
+import json
 from enum import Enum
-from typing import Dict, List, Any, Optional, Tuple, Union, Set, TypedDict, Literal
+from typing import Dict, List, Any, Optional, Literal
 
 from pydantic import BaseModel, Field, validator, model_validator, NonNegativeFloat, confloat
 
 # =============================================================================
-# Base Models and Enums
+# SECTION 1: Base Models and Enums
 # =============================================================================
 
 class EmotionValence(str, Enum):
@@ -57,21 +67,14 @@ class ChemicalSource(str, Enum):
     LEARNING = "adaptive_learning"
 
 # =============================================================================
-# Neurochemical Models
+# SECTION 2: Neurochemical Models
 # =============================================================================
 
 class DigitalNeurochemical(BaseModel):
-    """Schema for a digital neurochemical with validators"""
+    """Schema for a digital neurochemical"""
     value: confloat(ge=0.0, le=1.0) = Field(..., description="Current level (0.0-1.0)")
     baseline: confloat(ge=0.0, le=1.0) = Field(..., description="Baseline level (0.0-1.0)")
     decay_rate: confloat(ge=0.0, le=1.0) = Field(..., description="Decay rate toward baseline")
-    
-    @validator('value', 'baseline', 'decay_rate')
-    def validate_range(cls, v):
-        """Ensure values are within valid range"""
-        if v < 0.0 or v > 1.0:
-            raise ValueError("Values must be between 0.0 and 1.0")
-        return v
 
 class NeurochemicalState(BaseModel):
     """Schema for the complete neurochemical state"""
@@ -83,9 +86,8 @@ class NeurochemicalState(BaseModel):
     timestamp: str = Field(default_factory=lambda: datetime.datetime.now().isoformat(), 
                           description="Timestamp of the state")
     
-    class Config:
-        """Pydantic config"""
-        json_schema_extra = {
+    model_config = {
+        "json_schema_extra": {
             "example": {
                 "nyxamine": {"value": 0.5, "baseline": 0.5, "decay_rate": 0.05},
                 "seranix": {"value": 0.6, "baseline": 0.6, "decay_rate": 0.03},
@@ -94,9 +96,10 @@ class NeurochemicalState(BaseModel):
                 "adrenyx": {"value": 0.2, "baseline": 0.2, "decay_rate": 0.08}
             }
         }
+    }
 
 # =============================================================================
-# Emotion Models
+# SECTION 3: Emotion Models
 # =============================================================================
 
 class DerivedEmotion(BaseModel):
@@ -158,7 +161,7 @@ class EmotionalStateMatrix(BaseModel):
         }
 
 # =============================================================================
-# Input/Output Models
+# SECTION 4: Input/Output Models
 # =============================================================================
 
 class EmotionUpdateInput(BaseModel):
@@ -232,9 +235,7 @@ class EmotionalResponseOutput(BaseModel):
     valence: confloat(ge=-1.0, le=1.0) = Field(..., description="Overall valence")
     arousal: confloat(ge=0.0, le=1.0) = Field(..., description="Overall arousal")
     
-    class Config:
-        # This ensures all fields are included in the schema
-        extra = "forbid"
+    model_config = {"extra": "forbid"}
     
     @property
     def valence_category(self) -> EmotionValence:
@@ -261,7 +262,7 @@ class EmotionalResponseOutput(BaseModel):
         return self
 
 # =============================================================================
-# Handoff Request/Response Models
+# SECTION 5: Handoff Request/Response Models
 # =============================================================================
 
 class NeurochemicalRequest(BaseModel):
@@ -309,7 +310,7 @@ class LearningRequest(BaseModel):
         return v
 
 # =============================================================================
-# Stream Event Models
+# SECTION 6: Stream Event Models
 # =============================================================================
 
 class StreamEventType(str, Enum):
@@ -334,10 +335,10 @@ class StreamEvent(BaseModel):
     timestamp: str = Field(default_factory=lambda: datetime.datetime.now().isoformat(), 
                           description="Event timestamp")
     
-    class Config:
-        """Pydantic configuration"""
-        extra = "allow"
-        use_enum_values = True
+    model_config = {
+        "extra": "allow",
+        "use_enum_values": True
+    }
 
 # Specialized stream event types
 class ChemicalUpdateEvent(StreamEvent):
@@ -362,6 +363,84 @@ class StreamResponse(BaseModel):
     start_time: str = Field(..., description="Start timestamp")
     events: List[StreamEvent] = Field(default_factory=list, description="Events generated so far")
     
-    class Config:
-        """Pydantic configuration"""
-        arbitrary_types_allowed = True
+    model_config = {"arbitrary_types_allowed": True}
+
+# =============================================================================
+# SECTION 7: Strict DTOs for the Agents SDK
+# =============================================================================
+
+# Shortcut for strict configuration
+STRICT = {"extra": "forbid"}
+
+# Helper functions
+def _dumps(obj: Any) -> str:
+    """Compact JSON serialization helper"""
+    return json.dumps(obj, separators=(",", ":"))
+
+# Neurochemical Agent DTOs
+class NeurochemicalRequestDTO(BaseModel):
+    """Strict DTO for neurochemical agent requests"""
+    chemical: str
+    delta: confloat(ge=-1.0, le=1.0)
+    source: str = "system"
+    context_json: Optional[str] = None
+    model_config = STRICT
+
+class NeurochemicalResponseDTO(BaseModel):
+    """Strict DTO for neurochemical agent responses"""
+    chemical: str
+    old_value: confloat(ge=0.0, le=1.0)
+    new_value: confloat(ge=0.0, le=1.0)
+    timestamp: str = Field(default_factory=lambda: datetime.datetime.utcnow().isoformat())
+    model_config = STRICT
+
+# Emotion State / Internal Thought DTOs
+class EmotionalStateMatrixDTO(BaseModel):
+    """Strict DTO for emotional state matrix"""
+    primary_emotion: str
+    intensity: confloat(ge=0.0, le=1.0)
+    valence: confloat(ge=-1.0, le=1.0)
+    arousal: confloat(ge=0.0, le=1.0)
+    secondary_json: Optional[str] = None  # Encoded dict of secondary emotions (must be a string, not a dict)
+    model_config = STRICT
+
+class InternalThoughtDTO(BaseModel):
+    """Strict DTO for internal thoughts"""
+    thought: str
+    relevance: confloat(ge=0.0, le=1.0)
+    timestamp: str = Field(default_factory=lambda: datetime.datetime.utcnow().isoformat())
+    model_config = STRICT
+
+# Reflection & Learning DTOs
+class ReflectionRequestDTO(BaseModel):
+    """Strict DTO for reflection requests"""
+    primary_emotion: str
+    intensity: confloat(ge=0.0, le=1.0)
+    matrix_json: Optional[str] = None
+    model_config = STRICT
+
+class LearningRequestDTO(BaseModel):
+    """Strict DTO for learning requests"""
+    pattern_json: str
+    outcome: str
+    reward_score: Optional[confloat(ge=-1.0, le=1.0)] = None
+    model_config = STRICT
+
+# Orchestrator Response DTO
+class EmotionalResponseDTO(BaseModel):
+    """Strict DTO for emotional responses"""
+    system_message: str
+    stream_events_json: Optional[str] = None
+    model_config = STRICT
+
+# Utility converter function
+def rich_matrix_to_dto(r: EmotionalStateMatrix) -> EmotionalStateMatrixDTO:
+    """Convert rich emotional state matrix to strict DTO"""
+    return EmotionalStateMatrixDTO(
+        primary_emotion=r.primary_emotion.name,
+        intensity=r.primary_emotion.intensity,
+        valence=r.valence,
+        arousal=r.arousal,
+        secondary_json=_dumps({k: e.model_dump() for k, e in r.secondary_emotions.items()})
+        if r.secondary_emotions else None,
+    )
