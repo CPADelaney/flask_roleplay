@@ -37,6 +37,16 @@ SCHEMA_VERSION = "1.0.0"
 
 JsonScalar = Union[str, int, float, bool, None]
 
+class ModificationImpactSummary(BaseModel):
+    goal_id: str
+    modification_impacts_json: str      # full list, JSON-encoded
+    overall_impact_score: float
+    acceptable: bool
+    requires_user_approval: bool
+    recommendation: str = Field(..., regex="^(proceed|seek_approval)$")
+
+    model_config = {"extra": "forbid"}
+
 class GoalModificationProposal(BaseModel):
     goal_id: str
     proposed_modifications_json: str        # full list, JSON-encoded
@@ -2826,95 +2836,120 @@ class GoalManager:
 
     @staticmethod
     @function_tool
-    async def _evaluate_modification_impact(ctx: RunContextWrapper, goal_id: str, 
-                                         modifications: List[Dict[str, Any]]) -> Dict[str, Any]:
+    async def _evaluate_modification_impact(             # noqa: N802
+        ctx: RunContextWrapper,
+        goal_id: str,
+        modifications_json: str,                         # ← plain STRING
+    ) -> ModificationImpactSummary:                      # ← closed model
         """
-        Evaluate the impact of proposed goal modifications
-        
-        Args:
-            goal_id: Goal ID
-            modifications: List of proposed modifications
-            
-        Returns:
-            Impact evaluation
+        Evaluate impact of *JSON-encoded* modifications on the goal.
         """
-        goal = await self._get_goal_with_reader_lock(goal_id)
+        gm = ctx.context
+        logger = logging.getLogger(__name__)
+    
+        # 1️⃣  Parse input -------------------------------------------------------
+        try:
+            mods: list[dict] = json.loads(modifications_json or "[]")
+            if not isinstance(mods, list):
+                raise TypeError
+        except Exception as exc:
+            logger.error("Bad modifications_json: %s", exc)
+            return ModificationImpactSummary(
+                goal_id=goal_id,
+                modification_impacts_json=json.dumps(
+                    [{"error": f"Bad JSON: {exc}"}], separators=(",", ":")
+                ),
+                overall_impact_score=1.0,
+                acceptable=False,
+                requires_user_approval=True,
+                recommendation="seek_approval",
+            )
+    
+        # 2️⃣  Fetch goal --------------------------------------------------------
+        goal = await gm._get_goal_with_reader_lock(goal_id)
         if not goal:
-            return {"error": "Goal not found"}
-        
-        impacts = []
-        overall_impact_score = 0.0
-        
-        for mod in modifications:
-            mod_type = mod.get("type")
-            impact_level = {
-                "low": 0.2,
-                "medium": 0.5,
-                "high": 0.8
-            }.get(mod.get("impact", "medium"), 0.5)
-            
-            impact_data = {
-                "type": mod_type,
-                "score": impact_level,
+            return ModificationImpactSummary(
+                goal_id=goal_id,
+                modification_impacts_json=json.dumps(
+                    [{"error": "Goal not found"}], separators=(",", ":")
+                ),
+                overall_impact_score=1.0,
+                acceptable=False,
+                requires_user_approval=True,
+                recommendation="seek_approval",
+            )
+    
+        impacts: list[dict] = []
+        overall = 0.0
+    
+        impact_map = {"low": 0.2, "medium": 0.5, "high": 0.8}
+    
+        for mod in mods:
+            mtype = mod.get("type")
+            level = impact_map.get(mod.get("impact", "medium"), 0.5)
+    
+            data = {
+                "type": mtype,
+                "score": level,
                 "affects_outcome": False,
                 "affects_timing": False,
-                "affects_resources": False
+                "affects_resources": False,
             }
-            
-            # Evaluate based on modification type
-            if mod_type == "priority_adjustment":
-                new_priority = mod.get("new_priority", goal.priority)
-                priority_change = abs(new_priority - goal.priority)
-                
-                impact_data["affects_timing"] = True
-                if priority_change > 0.3:
-                    impact_data["affects_outcome"] = True
-                    impact_data["assessment"] = "May significantly delay goal completion"
+    
+            # --- evaluate by type -------------------------------------------- #
+            if mtype == "priority_adjustment":
+                new_p = mod.get("new_priority", goal.priority)
+                if abs(new_p - goal.priority) > 0.3:
+                    data.update(
+                        affects_timing=True,
+                        affects_outcome=True,
+                        assessment="May significantly delay goal completion",
+                    )
                 else:
-                    impact_data["assessment"] = "Moderate delay in execution"
-            
-            elif mod_type == "deadline_adjustment":
-                impact_data["affects_timing"] = True
-                impact_data["assessment"] = "Extended timeline for completion"
-            
-            elif mod_type == "time_horizon_adjustment":
-                impact_data["affects_timing"] = True
-                impact_data["affects_outcome"] = True
-                impact_data["assessment"] = "Shifts goal to longer-term perspective"
-            
-            elif mod_type == "goal_staging":
-                impact_data["affects_timing"] = True
-                impact_data["affects_outcome"] = True
-                impact_data["affects_resources"] = True
-                impact_data["assessment"] = "Significant restructuring of goal execution"
-            
-            elif mod_type == "plan_optimization":
-                impact_data["affects_resources"] = True
-                impact_data["assessment"] = "Reduces resource usage but may require plan changes"
-            
-            elif mod_type == "resource_sharing":
-                impact_data["affects_resources"] = True
-                impact_data["assessment"] = "Enables more efficient concurrent execution"
-            
-            impacts.append(impact_data)
-            overall_impact_score += impact_level
-        
-        # Normalize overall impact
-        if impacts:
-            overall_impact_score /= len(impacts)
-        
-        # Assess acceptability
-        acceptable = overall_impact_score < 0.7
-        requires_user_approval = overall_impact_score > 0.6
-        
-        return {
-            "goal_id": goal_id,
-            "modification_impacts": impacts,
-            "overall_impact_score": overall_impact_score,
-            "acceptable": acceptable,
-            "requires_user_approval": requires_user_approval,
-            "recommendation": "proceed" if acceptable else "seek_approval"
-        }
+                    data.update(affects_timing=True, assessment="Moderate delay")
+            elif mtype == "deadline_adjustment":
+                data.update(affects_timing=True, assessment="Extended timeline")
+            elif mtype == "time_horizon_adjustment":
+                data.update(
+                    affects_timing=True,
+                    affects_outcome=True,
+                    assessment="Shift to longer-term horizon",
+                )
+            elif mtype == "goal_staging":
+                data.update(
+                    affects_timing=True,
+                    affects_outcome=True,
+                    affects_resources=True,
+                    assessment="Major restructuring",
+                )
+            elif mtype == "plan_optimization":
+                data.update(
+                    affects_resources=True,
+                    assessment="Lower resource use; plan tweaks needed",
+                )
+            elif mtype == "resource_sharing":
+                data.update(
+                    affects_resources=True,
+                    assessment="Enables concurrent execution efficiencies",
+                )
+            else:
+                data["assessment"] = "Unknown modification type"
+    
+            impacts.append(data)
+            overall += level
+    
+        overall = overall / len(impacts) if impacts else 0.0
+        acceptable = overall < 0.7
+        requires_user = overall > 0.6
+    
+        return ModificationImpactSummary(
+            goal_id=goal_id,
+            modification_impacts_json=json.dumps(impacts, separators=(",", ":")),
+            overall_impact_score=round(overall, 3),
+            acceptable=acceptable,
+            requires_user_approval=requires_user,
+            recommendation="proceed" if acceptable else "seek_approval",
+        )
 
     @staticmethod
     @function_tool
