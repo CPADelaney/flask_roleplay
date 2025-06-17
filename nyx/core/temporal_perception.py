@@ -159,19 +159,18 @@ class TemporalMemoryMetadata(BaseModel):
     # model_config = {"json_schema_extra": {"required": []}}
 
 class TemporalMilestone(BaseModel):
-    """Significant milestone in the relationship timeline"""
-    milestone_id: str = Field(..., description="Unique ID for the milestone")
-    timestamp: datetime.datetime = Field(..., description="When the milestone occurred")
-    name: str = Field(..., description="Name of the milestone")
-    description: str = Field(..., description="Description of the milestone")
-    significance: float = Field(..., description="Significance score (0.0-1.0)")
-    associated_memory_ids: List[str] = Field(default_factory=list, description="Associated memories")
-    next_anniversary: Optional[datetime.datetime] = Field(None, description="Next anniversary date")
+    """Significant milestone in the relationship timeline."""
+    milestone_id: str
+    timestamp: datetime.datetime
+    name: str
+    description: str
+    significance: float                     # 0.0 – 1.0
+    associated_memory_ids: List[str] = Field(default_factory=list)
+    next_anniversary: Optional[datetime.datetime] = None
 
     model_config = {
-        "json_schema_extra": {
-            "required": []  # Make all fields optional in the JSON schema
-        }
+        "extra": "forbid",                  # <- **strict!**
+        # no need for the json_schema_extra hack any more
     }
 
 class TemporalReflection(BaseModel):
@@ -994,16 +993,7 @@ async def detect_temporal_milestone(                    # noqa: N802
     milestone_model = await detect_temporal_milestone_impl(
         user_id, total_days, total_interactions, parsed_memories
     )
-    if milestone_model:
-        logger.info(f"Milestone '{milestone_model.name}' detected for user {user_id}.")
-        try:
-            return milestone_model.model_dump(mode='json')
-        except Exception as e:
-            logger.error(f"Error dumping milestone model: {e}")
-            return {"milestone_id": milestone_model.milestone_id, "name": milestone_model.name, "error": "serialization failed"}
-    else:
-        logger.debug(f"No milestone detected for user {user_id}.")
-        return None
+    return milestone_model                   # <-- just hand back the model
 
 
 # =============== Temporal Agents ===============
