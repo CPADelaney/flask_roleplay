@@ -67,6 +67,16 @@ class SimulationInput(BaseModel):
     domain: str = "general"
     use_reflection: bool = True
 
+class SimulationInputDTO(BaseModel):
+    """
+    Strict DTO returned by setup_simulation_from_description.
+    The full SimulationInput object is JSON-encoded in `simulation_json`
+    so that the schema stays closed (additionalProperties == false).
+    """
+    simulation_json: str                  # JSON string of a SimulationInput
+
+    model_config = {"extra": "forbid"}
+
 class ScenarioGenerationOutput(BaseModel):
     """Output from the scenario generation agent."""
     scenario_description: str
@@ -134,46 +144,52 @@ class SimulationContext:
 async def setup_simulation_from_description(
     ctx: RunContextWrapper[SimulationContext],
     description: str,
-    current_brain_state: Dict[str, Any],
-    domain: str = "general"
-) -> Dict[str, Any]:
+    current_brain_state_json: str,          # <<< was Dict[str, Any]
+    domain: str = "general",
+) -> SimulationInputDTO:                    # <<< strict output
     """
-    Interpret a simulation description into a structured simulation setup.
-    
+    Interpret a simulation description into a structured SimulationInput.
+
     Args:
-        description: User description of the desired simulation
-        current_brain_state: Current state variables
-        domain: Domain for the simulation
-        
+        description:              User’s natural-language description.
+        current_brain_state_json: JSON string with the current brain state.
+        domain:                   (optional) simulation domain.
+
     Returns:
-        Structured simulation setup
+        SimulationInputDTO whose `simulation_json` field contains the full
+        SimulationInput record (JSON-encoded).
     """
     with custom_span("setup_simulation_from_description"):
-        # Create base simulation input
-        sim_input = {
-            "simulation_id": f"sim_{uuid.uuid4().hex[:8]}",
-            "description": description,
-            "initial_state": current_brain_state.copy(),
-            "domain": domain,
-            "max_steps": 10,
-            "focus_variables": []
-        }
-        
-        # Extract simulation type from description
-        if "what if i" in description.lower():
-            sim_input["hypothetical_event"] = {
+        # --- Parse the incoming brain state ---------------------------------
+        try:
+            current_brain_state: Dict[str, Any] = json.loads(
+                current_brain_state_json
+            )
+        except Exception as e:                         # fall back to empty dict
+            logger.error(f"Malformed brain-state JSON: {e}")
+            current_brain_state = {}
+
+        # --- Build the SimulationInput --------------------------------------
+        sim_input = SimulationInput(
+            description=description,
+            initial_state=current_brain_state,
+            domain=domain,
+            max_steps=10,
+            focus_variables=[],
+        )
+
+        # Detect “what if” / counterfactual clues in the prompt
+        d_lower = description.lower()
+        if "what if i" in d_lower:
+            sim_input.hypothetical_event = {
                 "action": "hypothetical_user_action",
-                "description": description
+                "description": description,
             }
-        elif "what if" in description.lower():
-            sim_input["counterfactual_condition"] = {
-                "description": description
-            }
-        
-        # Add timestamp
-        sim_input["timestamp"] = datetime.datetime.now().isoformat()
-        
-        return sim_input
+        elif "what if" in d_lower:
+            sim_input.counterfactual_condition = {"description": description}
+
+        # --- Return as strict DTO -------------------------------------------
+        return SimulationInputDTO(simulation_json=sim_input.model_dump_json())
 
 @function_tool
 async def get_causal_model_for_simulation(
@@ -1174,8 +1190,8 @@ class ImaginationSimulator:
             model="gpt-4.1-nano",
             model_settings=base_model_settings,
             tools=[
-                function_tool(setup_simulation_from_description),
-                function_tool(get_causal_model_for_simulation)
+                setup_simulation_from_description,
+                get_causal_model_for_simulation
             ],
             output_type=ScenarioGenerationOutput
         )
@@ -1200,9 +1216,9 @@ class ImaginationSimulator:
             model="gpt-4.1-nano",
             model_settings=low_temp_settings,
             tools=[
-                function_tool(analyze_simulation_result),
-                function_tool(generate_simulation_reflection),
-                function_tool(generate_abstraction_from_simulation)
+                analyze_simulation_result,
+                generate_simulation_reflection,
+                generate_abstraction_from_simulation
             ],
             output_type=SimulationAnalysisOutput
         )
@@ -1234,13 +1250,13 @@ class ImaginationSimulator:
                        tool_description_override="Analyze the results of a simulation run")
             ],
             tools=[
-                function_tool(setup_simulation_from_description),
-                function_tool(get_causal_model_for_simulation),
-                function_tool(predict_simulation_step),
-                function_tool(apply_hypothetical_event),
-                function_tool(apply_counterfactual_condition),
-                function_tool(check_goal_condition),
-                function_tool(evaluate_simulation_stability)
+                setup_simulation_from_description,
+                get_causal_model_for_simulation,
+                predict_simulation_step,
+                apply_hypothetical_event,
+                apply_counterfactual_condition,
+                check_goal_condition,
+                evaluate_simulation_stability
             ]
         )
     
