@@ -31,6 +31,16 @@ logger = logging.getLogger(__name__)
 
 # =============== Pydantic Models for Structured Output ===============
 
+class SimulationAnalysisDTO(BaseModel):
+    simulation_id: str
+    variable_changes_json: str        # json.dumps(variable_changes)
+    significant_changes_json: str     # json.dumps(significant_changes)
+    emotional_impact_json: str        # json.dumps(emotional_impact)
+    insights_json: str                # json.dumps(insights   )
+    confidence: float
+    confidence_factors_json: str      # json.dumps(confidence_factors)
+    model_config = {"extra": "forbid"}   # strict!
+
 class StabilityEvaluationDTO(BaseModel):
     is_stable: bool
     avg_change: float
@@ -677,132 +687,127 @@ async def evaluate_simulation_stability(
 @function_tool
 async def analyze_simulation_result(
     ctx: RunContextWrapper[SimulationContext],
-    simulation_result: Dict[str, Any]
-) -> Dict[str, Any]:
+    simulation_result_json: str,
+) -> SimulationAnalysisDTO:
     """
-    Analyze the results of a simulation run.
-    
+    Strict version of analyse_simulation_result.
+
     Args:
-        simulation_result: Simulation result to analyze
-        
-    Returns:
-        Analysis of simulation results
+        simulation_result_json: JSON-encoded SimulationResult (or similar dict)
     """
+
     with custom_span("analyze_simulation_result"):
-        # Extract key information
-        simulation_id = simulation_result.get("simulation_id", "unknown")
-        success = simulation_result.get("success", False)
-        termination_reason = simulation_result.get("termination_reason", "unknown")
-        final_state = simulation_result.get("final_state", {})
-        trajectory = simulation_result.get("trajectory", [])
-        
-        # Calculate key metrics
-        state_vars = final_state.get("state_variables", {})
-        initial_state = trajectory[0].get("state_variables", {}) if trajectory else {}
-        
-        # Track changes in key variables
-        variable_changes = {}
-        for var_name, final_value in state_vars.items():
-            if var_name in initial_state:
-                initial_value = initial_state[var_name]
-                if isinstance(final_value, (int, float)) and isinstance(initial_value, (int, float)):
-                    change = final_value - initial_value
-                    variable_changes[var_name] = {
-                        "initial": initial_value,
-                        "final": final_value,
-                        "change": change,
-                        "percent_change": (change / initial_value) * 100 if initial_value != 0 else 0
-                    }
-        
-        # Identify significant changes
-        significant_changes = {k: v for k, v in variable_changes.items() if abs(v["change"]) > 0.1}
-        
-        # Analyze emotional impact
-        emotional_impact = {}
-        if "emotional_state" in final_state:
-            final_emotional = final_state["emotional_state"]
-            
-            if trajectory and "emotional_state" in trajectory[0]:
-                initial_emotional = trajectory[0]["emotional_state"]
-                
-                # Compare emotional states
-                if "valence" in final_emotional and "valence" in initial_emotional:
-                    valence_change = final_emotional["valence"] - initial_emotional["valence"]
-                    emotional_impact["valence_change"] = valence_change
-                
-                if "arousal" in final_emotional and "arousal" in initial_emotional:
-                    arousal_change = final_emotional["arousal"] - initial_emotional["arousal"]
-                    emotional_impact["arousal_change"] = arousal_change
-                
-                # Compare primary emotions
-                if "primary_emotion" in final_emotional and "primary_emotion" in initial_emotional:
-                    initial_emotion = initial_emotional["primary_emotion"].get("name") if isinstance(initial_emotional["primary_emotion"], dict) else initial_emotional["primary_emotion"]
-                    final_emotion = final_emotional["primary_emotion"].get("name") if isinstance(final_emotional["primary_emotion"], dict) else final_emotional["primary_emotion"]
-                    
-                    emotional_impact["emotion_transition"] = f"{initial_emotion} -> {final_emotion}"
-            
-            # Set current emotional state
-            if "primary_emotion" in final_emotional:
-                if isinstance(final_emotional["primary_emotion"], dict):
-                    emotional_impact["final_emotion"] = final_emotional["primary_emotion"].get("name", "Unknown")
-                    emotional_impact["emotion_intensity"] = final_emotional["primary_emotion"].get("intensity", 0.5)
-                else:
-                    emotional_impact["final_emotion"] = final_emotional["primary_emotion"]
-                    emotional_impact["emotion_intensity"] = 0.5
-        
-        # Generate insights
-        insights = []
-        
-        # Insight about success/failure
-        if success:
-            insights.append(f"The simulation was successful, terminating due to {termination_reason}.")
-        else:
-            insights.append(f"The simulation was unsuccessful, terminating due to {termination_reason}.")
-        
-        # Insights about significant changes
-        if significant_changes:
-            changes_text = ", ".join([f"{k} ({v['change']:.2f})" for k, v in significant_changes.items()])
-            insights.append(f"Significant changes occurred in: {changes_text}")
-        else:
-            insights.append("No significant changes occurred in state variables.")
-        
-        # Insight about emotional impact
-        if emotional_impact:
-            if "emotion_transition" in emotional_impact:
-                insights.append(f"Emotional transition: {emotional_impact['emotion_transition']}")
-            if "valence_change" in emotional_impact:
-                valence_desc = "positive" if emotional_impact["valence_change"] > 0 else "negative"
-                insights.append(f"Emotional valence shifted in a {valence_desc} direction.")
-        
-        # Confidence calculation based on trajectory length and termination reason
-        confidence_factors = {
-            "trajectory_length": min(1.0, len(trajectory) / 10) * 0.3,  # More steps = more confidence
-            "termination": 0.0,
-            "stability": 0.0
-        }
-        
-        # Adjust for termination reason
-        if termination_reason == "goal_reached":
-            confidence_factors["termination"] = 0.4
-        elif termination_reason == "stable_state":
-            confidence_factors["termination"] = 0.3
-            confidence_factors["stability"] = 0.2
-        elif termination_reason == "max_steps":
-            confidence_factors["termination"] = 0.1
-        
-        # Calculate overall confidence
-        confidence = sum(confidence_factors.values()) + 0.2  # Base confidence of 0.2
-        
-        return {
-            "simulation_id": simulation_id,
-            "variable_changes": variable_changes,
-            "significant_changes": significant_changes,
-            "emotional_impact": emotional_impact,
-            "insights": insights,
-            "confidence": confidence,
-            "confidence_factors": confidence_factors
+        try:
+            simulation_result = json.loads(simulation_result_json)
+        except Exception as e:
+            logger.error(f"Bad simulation_result JSON: {e}")
+            simulation_result = {}
+
+        # ---------- extract basics --------------------------------------
+        sim_id   = simulation_result.get("simulation_id", "unknown")
+        success  = simulation_result.get("success", False)
+        reason   = simulation_result.get("termination_reason", "unknown")
+        final    = simulation_result.get("final_state", {})
+        traj     = simulation_result.get("trajectory", [])
+
+        state_vars     = final.get("state_variables", {}) or {}
+        init_state_vars = (
+            traj[0].get("state_variables", {}) if traj else {}
+        )
+
+        # ---------- variable deltas -------------------------------------
+        variable_changes: Dict[str, Any] = {}
+        for k, v_final in state_vars.items():
+            v_init = init_state_vars.get(k)
+            if isinstance(v_final, (int, float)) and isinstance(v_init, (int, float)):
+                delta = v_final - v_init
+                variable_changes[k] = {
+                    "initial": v_init,
+                    "final": v_final,
+                    "change": delta,
+                    "percent_change": (delta / v_init * 100) if v_init else 0,
+                }
+
+        significant_changes = {
+            k: v for k, v in variable_changes.items() if abs(v["change"]) > 0.1
         }
 
+        # ---------- emotional impact ------------------------------------
+        emotional_impact: Dict[str, Any] = {}
+        if "emotional_state" in final:
+            final_em = final["emotional_state"]
+            if traj and "emotional_state" in traj[0]:
+                init_em = traj[0]["emotional_state"]
+
+                if all(x in final_em and x in init_em for x in ("valence", "arousal")):
+                    emotional_impact["valence_change"] = final_em["valence"] - init_em["valence"]
+                    emotional_impact["arousal_change"] = final_em["arousal"] - init_em["arousal"]
+
+                if "primary_emotion" in final_em and "primary_emotion" in init_em:
+                    init_name = init_em["primary_emotion"]["name"] if isinstance(
+                        init_em["primary_emotion"], dict
+                    ) else init_em["primary_emotion"]
+                    fin_name = final_em["primary_emotion"]["name"] if isinstance(
+                        final_em["primary_emotion"], dict
+                    ) else final_em["primary_emotion"]
+                    emotional_impact["emotion_transition"] = f"{init_name} -> {fin_name}"
+
+            pe = final_em.get("primary_emotion")
+            if pe:
+                if isinstance(pe, dict):
+                    emotional_impact["final_emotion"]     = pe.get("name", "Unknown")
+                    emotional_impact["emotion_intensity"] = pe.get("intensity", 0.5)
+                else:
+                    emotional_impact["final_emotion"] = pe
+                    emotional_impact["emotion_intensity"] = 0.5
+
+        # ---------- insights -------------------------------------------
+        insights: List[str] = []
+        insights.append(
+            f"The simulation was {'successful' if success else 'unsuccessful'}, "
+            f"terminating due to {reason}."
+        )
+        if significant_changes:
+            changes_txt = ", ".join(
+                f"{k} ({v['change']:.2f})" for k, v in significant_changes.items()
+            )
+            insights.append(f"Significant changes occurred in: {changes_txt}")
+        else:
+            insights.append("No significant changes occurred in state variables.")
+
+        if "emotion_transition" in emotional_impact:
+            insights.append(f"Emotional transition: {emotional_impact['emotion_transition']}")
+        if "valence_change" in emotional_impact:
+            direction = "positive" if emotional_impact["valence_change"] > 0 else "negative"
+            insights.append(f"Emotional valence shifted in a {direction} direction.")
+
+        # ---------- confidence -----------------------------------------
+        conf_factors = {
+            "trajectory_length": min(1.0, len(traj) / 10) * 0.3,
+            "termination": 0.0,
+            "stability": 0.0,
+        }
+        if reason == "goal_reached":
+            conf_factors["termination"] = 0.4
+        elif reason == "stable_state":
+            conf_factors["termination"] = 0.3
+            conf_factors["stability"] = 0.2
+        elif reason == "max_steps":
+            conf_factors["termination"] = 0.1
+
+        confidence = sum(conf_factors.values()) + 0.2
+
+        # ---------- return DTO -----------------------------------------
+        return SimulationAnalysisDTO(
+            simulation_id=sim_id,
+            variable_changes_json=json.dumps(variable_changes, separators=(",", ":")),
+            significant_changes_json=json.dumps(significant_changes, separators=(",", ":")),
+            emotional_impact_json=json.dumps(emotional_impact, separators=(",", ":")),
+            insights_json=json.dumps(insights, separators=(",", ":")),
+            confidence=confidence,
+            confidence_factors_json=json.dumps(conf_factors, separators=(",", ":")),
+        )
+        
 @function_tool
 async def generate_simulation_reflection(
     ctx: RunContextWrapper[SimulationContext],
