@@ -31,6 +31,13 @@ logger = logging.getLogger(__name__)
 
 # =============== Pydantic Models for Structured Output ===============
 
+class SimulationReflectionDTO(BaseModel):
+    reflection: str
+    confidence: float
+    source: Literal["reflection_engine", "basic_generation", "error"]
+    timestamp: str
+    model_config = {"extra": "forbid"}   # strict!
+
 class SimulationAnalysisDTO(BaseModel):
     simulation_id: str
     variable_changes_json: str        # json.dumps(variable_changes)
@@ -811,147 +818,154 @@ async def analyze_simulation_result(
 @function_tool
 async def generate_simulation_reflection(
     ctx: RunContextWrapper[SimulationContext],
-    simulation_result: Dict[str, Any],
-    analysis: Dict[str, Any]
-) -> Dict[str, Any]:
+    simulation_result_json: str,
+    analysis_json: str,
+) -> SimulationReflectionDTO:
     """
-    Generate reflection on a simulation using the reflection engine.
-    
+    Strict version of generate_simulation_reflection.
+
     Args:
-        simulation_result: Simulation result
-        analysis: Analysis of simulation result
-        
-    Returns:
-        Reflection on simulation
+        simulation_result_json: JSON-encoded SimulationResult dict
+        analysis_json:          JSON-encoded analysis dict (from analyse_simulation_result)
     """
+
     with custom_span("generate_simulation_reflection"):
-        reflection_text = ""
-        confidence = 0.0
-        
-        # Check if reflection engine is available
+        try:
+            sim = json.loads(simulation_result_json)
+        except Exception as e:
+            logger.error(f"Bad simulation_result JSON: {e}")
+            sim = {}
+
+        try:
+            analysis = json.loads(analysis_json)
+        except Exception as e:
+            logger.error(f"Bad analysis JSON: {e}")
+            analysis = {}
+
+        reflection_txt: str = ""
+        confidence: float = 0.0
+        src: str = "error"
+
+        # ---------- use ReflectionEngine if available ------------------
         if ctx.context.reflection_engine:
             try:
-                # Convert simulation result to memories format for reflection
-                memories = []
-                
-                # Add initial state as memory
-                if simulation_result.get("trajectory"):
-                    initial_state = simulation_result["trajectory"][0]
-                    initial_memory = {
-                        "id": f"sim_init_{simulation_result['simulation_id']}",
-                        "memory_text": f"Initial state of simulation '{simulation_result.get('description', 'Simulation')}' with variables: {json.dumps(initial_state.get('state_variables', {}))}",
+                memories: List[Dict[str, Any]] = []
+
+                # initial state
+                if sim.get("trajectory"):
+                    init_state = sim["trajectory"][0]
+                    memories.append(
+                        {
+                            "id": f"sim_init_{sim.get('simulation_id','?')}",
+                            "memory_text": (
+                                f"Initial state of simulation '{sim.get('description','Simulation')}' "
+                                f"with variables: {json.dumps(init_state.get('state_variables', {}))}"
+                            ),
+                            "memory_type": "simulation",
+                            "metadata": {
+                                "emotional_context": init_state.get("emotional_state", {}),
+                                "simulation_step": 0,
+                                "simulation_id": sim.get("simulation_id"),
+                            },
+                        }
+                    )
+
+                # final state
+                final_state = sim.get("final_state", {})
+                memories.append(
+                    {
+                        "id": f"sim_final_{sim.get('simulation_id','?')}",
+                        "memory_text": (
+                            f"Final state of simulation '{sim.get('description','Simulation')}' "
+                            f"with variables: {json.dumps(final_state.get('state_variables', {}))}"
+                        ),
                         "memory_type": "simulation",
                         "metadata": {
-                            "emotional_context": initial_state.get("emotional_state", {}),
-                            "simulation_step": 0,
-                            "simulation_id": simulation_result["simulation_id"]
+                            "emotional_context": final_state.get("emotional_state", {}),
+                            "simulation_step": len(sim.get("trajectory", [])) - 1,
+                            "simulation_id": sim.get("simulation_id"),
+                            "termination_reason": sim.get("termination_reason", "unknown"),
+                        },
+                    }
+                )
+
+                # significant steps (≤3)
+                traj = sim.get("trajectory", [])
+                sig_idxs: List[int] = []
+                for i in range(1, len(traj)):
+                    prev = traj[i - 1].get("state_variables", {})
+                    cur  = traj[i].get("state_variables", {})
+                    if any(
+                        isinstance(cur.get(k), (int, float)) and isinstance(prev.get(k), (int, float))
+                        and abs(cur[k] - prev[k]) >= 0.1
+                        for k in cur
+                    ):
+                        sig_idxs.append(i)
+                for idx in sig_idxs[:3]:
+                    step = traj[idx]
+                    memories.append(
+                        {
+                            "id": f"sim_step_{sim.get('simulation_id','?')}_{idx}",
+                            "memory_text": (
+                                f"At step {idx} of simulation '{sim.get('description','Simulation')}', "
+                                f"variables changed to: {json.dumps(step.get('state_variables', {}))}"
+                            ),
+                            "memory_type": "simulation",
+                            "metadata": {
+                                "emotional_context": step.get("emotional_state", {}),
+                                "simulation_step": idx,
+                                "simulation_id": sim.get("simulation_id"),
+                                "last_action": step.get("last_action", ""),
+                            },
                         }
-                    }
-                    memories.append(initial_memory)
-                
-                # Add final state as memory
-                final_state = simulation_result.get("final_state", {})
-                final_memory = {
-                    "id": f"sim_final_{simulation_result['simulation_id']}",
-                    "memory_text": f"Final state of simulation '{simulation_result.get('description', 'Simulation')}' with variables: {json.dumps(final_state.get('state_variables', {}))}",
-                    "memory_type": "simulation",
-                    "metadata": {
-                        "emotional_context": final_state.get("emotional_state", {}),
-                        "simulation_step": len(simulation_result.get("trajectory", [])) - 1,
-                        "simulation_id": simulation_result["simulation_id"],
-                        "termination_reason": simulation_result.get("termination_reason", "unknown")
-                    }
-                }
-                memories.append(final_memory)
-                
-                # Add key events from trajectory (significant changes) as memories
-                trajectory = simulation_result.get("trajectory", [])
-                significant_steps = []
-                
-                # Find steps with significant changes
-                for i in range(1, len(trajectory)):
-                    prev_state = trajectory[i-1].get("state_variables", {})
-                    curr_state = trajectory[i].get("state_variables", {})
-                    
-                    # Look for significant changes
-                    has_significant_change = False
-                    for var_name, curr_value in curr_state.items():
-                        if var_name in prev_state:
-                            prev_value = prev_state[var_name]
-                            if isinstance(curr_value, (int, float)) and isinstance(prev_value, (int, float)):
-                                if abs(curr_value - prev_value) >= 0.1:  # 10% change threshold
-                                    has_significant_change = True
-                                    break
-                    
-                    if has_significant_change:
-                        significant_steps.append(i)
-                
-                # Add memories for significant steps
-                for step_idx in significant_steps[:3]:  # Limit to 3 significant steps
-                    step = trajectory[step_idx]
-                    step_memory = {
-                        "id": f"sim_step_{simulation_result['simulation_id']}_{step_idx}",
-                        "memory_text": f"At step {step_idx} of simulation '{simulation_result.get('description', 'Simulation')}', variables changed to: {json.dumps(step.get('state_variables', {}))}",
-                        "memory_type": "simulation",
-                        "metadata": {
-                            "emotional_context": step.get("emotional_state", {}),
-                            "simulation_step": step_idx,
-                            "simulation_id": simulation_result["simulation_id"],
-                            "last_action": step.get("last_action", "")
-                        }
-                    }
-                    memories.append(step_memory)
-                
-                # Get neurochemical state from emotional core or use default
-                neurochemical_state = None
-                if ctx.context.emotional_core and hasattr(ctx.context.emotional_core, "_get_neurochemical_state"):
-                    neurochemical_state = {c: d["value"] for c, d in ctx.context.emotional_core.neurochemicals.items()}
-                
-                # Generate reflection using reflection engine
-                topic = f"Simulation: {simulation_result.get('description', 'Hypothetical scenario')}"
-                reflection_text, confidence = await ctx.context.reflection_engine.generate_reflection(
+                    )
+
+                # optional neurochemicals
+                neuro = None
+                if ctx.context.emotional_core and hasattr(ctx.context.emotional_core, "neurochemicals"):
+                    neuro = {c: d["value"] for c, d in ctx.context.emotional_core.neurochemicals.items()}
+
+                topic = f"Simulation: {sim.get('description','Hypothetical scenario')}"
+                reflection_txt, confidence = await ctx.context.reflection_engine.generate_reflection(
                     memories=memories,
                     topic=topic,
-                    neurochemical_state=neurochemical_state
+                    neurochemical_state=neuro,
                 )
+                src = "reflection_engine"
+
             except Exception as e:
-                logger.error(f"Error generating reflection: {str(e)}")
-                reflection_text = f"I tried to reflect on this simulation but encountered difficulties: {str(e)}"
+                logger.error(f"ReflectionEngine failure: {e}")
+                reflection_txt = f"I tried to reflect on this simulation but encountered difficulties: {e}"
                 confidence = 0.3
-        else:
-            # Generate a basic reflection without the reflection engine
+                src = "error"
+
+        # ---------- fallback basic reflection --------------------------
+        if src == "error" and not reflection_txt:
             insights = analysis.get("insights", [])
-            emotional_impact = analysis.get("emotional_impact", {})
-            
-            reflection_parts = [
-                f"When I imagine this scenario of {simulation_result.get('description', 'this hypothetical situation')}, I notice several interesting patterns.",
-                f"The simulation {simulation_result.get('success', False) and 'succeeded' or 'did not succeed'}, ending due to {simulation_result.get('termination_reason', 'unknown reasons')}."
+            emo_imp  = analysis.get("emotional_impact", {})
+
+            parts: List[str] = [
+                f"When I imagine this scenario of {sim.get('description','this hypothetical situation')}, I notice several interesting patterns.",
+                f"The simulation {('succeeded' if sim.get('success') else 'did not succeed')}, ending due to {sim.get('termination_reason','unknown reasons')}."
             ]
-            
-            # Add insights
-            for insight in insights[:2]:  # Limit to 2 insights
-                reflection_parts.append(insight)
-            
-            # Add emotional reflection
-            if emotional_impact:
-                if "emotion_transition" in emotional_impact:
-                    reflection_parts.append(f"I observe an emotional shift from {emotional_impact['emotion_transition']}, which suggests this scenario could have significant emotional impact.")
-                elif "final_emotion" in emotional_impact:
-                    reflection_parts.append(f"This scenario appears to lead to a primary emotion of {emotional_impact['final_emotion']}, which is worth considering.")
-            
-            # Add conclusion
-            reflection_parts.append(f"This simulation helps me understand potential outcomes and prepare for similar situations.")
-            
-            # Join parts
-            reflection_text = " ".join(reflection_parts)
-            confidence = 0.5  # Moderate confidence without reflection engine
-        
-        return {
-            "reflection": reflection_text,
-            "confidence": confidence,
-            "source": "reflection_engine" if ctx.context.reflection_engine else "basic_generation",
-            "timestamp": datetime.datetime.now().isoformat()
-        }
+            parts.extend(insights[:2])
+            if emo_imp:
+                if "emotion_transition" in emo_imp:
+                    parts.append(f"Emotional shift observed: {emo_imp['emotion_transition']}.")
+                elif "final_emotion" in emo_imp:
+                    parts.append(f"The scenario seems to result in {emo_imp['final_emotion']}.")
+
+            parts.append("This exercise helps me anticipate possible outcomes and prepare for similar situations.")
+            reflection_txt = " ".join(parts)
+            confidence = 0.5
+            src = "basic_generation"
+
+        return SimulationReflectionDTO(
+            reflection=reflection_txt,
+            confidence=confidence,
+            source=src,
+            timestamp=datetime.datetime.now().isoformat(),
+        )
 
 @function_tool
 async def generate_abstraction_from_simulation(
