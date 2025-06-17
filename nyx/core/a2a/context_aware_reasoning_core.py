@@ -8,8 +8,6 @@ import logging
 from collections import defaultdict
 import networkx as nx
 from sentence_transformers import SentenceTransformer
-import nltk
-from nltk.corpus import stopwords
 from sklearn.metrics.pairwise import cosine_similarity
 import spacy
 import asyncio
@@ -34,46 +32,6 @@ try:
 except ImportError:
     SPACY_AVAILABLE = False
     logging.warning("spaCy not available - syntactic analysis will be disabled")
-
-try:
-    import nltk
-    # Download required NLTK data
-    nltk.download('stopwords', quiet=True)
-    NLTK_AVAILABLE = True
-except ImportError:
-    NLTK_AVAILABLE = False
-    logging.warning("NLTK not available - using basic stopword list")
-
-# Complete __init__ method for ContextAwareReasoningCore
-
-from collections import defaultdict
-from concurrent.futures import ThreadPoolExecutor
-import logging
-import asyncio
-
-# Import at the top of the file
-try:
-    from sentence_transformers import SentenceTransformer
-    SENTENCE_TRANSFORMERS_AVAILABLE = True
-except ImportError:
-    SENTENCE_TRANSFORMERS_AVAILABLE = False
-    logging.warning("sentence-transformers not available - semantic similarity will use fallback methods")
-
-try:
-    import spacy
-    SPACY_AVAILABLE = True
-except ImportError:
-    SPACY_AVAILABLE = False
-    logging.warning("spaCy not available - syntactic analysis will be disabled")
-
-try:
-    import nltk
-    # Download required NLTK data
-    nltk.download('stopwords', quiet=True)
-    NLTK_AVAILABLE = True
-except ImportError:
-    NLTK_AVAILABLE = False
-    logging.warning("NLTK not available - using basic stopword list")
 
 class ContextAwareReasoningCore(ContextAwareModule):
     """
@@ -2204,13 +2162,13 @@ class ContextAwareReasoningCore(ContextAwareModule):
                 similarity_scores.append(similarity)
         
         return sum(similarity_scores) / len(similarity_scores) if similarity_scores else 0.0
-
+        
     def _calculate_token_similarity(self, text1: str, text2: str) -> float:
         """Calculate token-based similarity with TF-IDF-like weighting"""
-        # Get stop words
-        try:
-            stop_words = set(stopwords.words('english'))
-        except:
+        # Get stop words using spaCy
+        if self.nlp:
+            stop_words = self.nlp.Defaults.stop_words
+        else:
             stop_words = {"the", "is", "at", "which", "on", "a", "an", "and", "or", "but",
                          "in", "with", "to", "for", "of", "as", "by", "that", "this", "it"}
         
