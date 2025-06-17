@@ -31,6 +31,11 @@ logger = logging.getLogger(__name__)
 
 # =============== Pydantic Models for Structured Output ===============
 
+class GoalCheckResultDTO(BaseModel):
+    goal_met: bool
+    conditions_met_json: str            # JSON-encoded dict
+    model_config = {"extra": "forbid"}  # ← strict
+
 class SimulationStateDTO(BaseModel):
     """
     Strict DTO used by predict_simulation_step.
@@ -545,52 +550,63 @@ async def apply_counterfactual_condition(
 
         # ---------- return strict DTO ------------------------------------
         return SimulationStateDTO(state_json=json.dumps(updated_state, separators=(",", ":")))
+        
 @function_tool
 async def check_goal_condition(
     ctx: RunContextWrapper[SimulationContext],
-    current_state: Dict[str, Any],
-    goal_condition: Dict[str, Any]
-) -> Dict[str, bool]:
+    current_state_json: str,
+    goal_condition_json: str,
+) -> GoalCheckResultDTO:
     """
-    Check if the current state satisfies the goal condition.
-    
+    Determine whether the goal condition is satisfied by the current
+    simulation state.
+
     Args:
-        current_state: Current simulation state
-        goal_condition: Goal condition to check
-        
-    Returns:
-        Whether the goal condition is met
+        current_state_json:  JSON string of the current state
+        goal_condition_json: JSON string of the goal condition
     """
     with custom_span("check_goal_condition"):
-        # Get state variables
-        state_vars = current_state.get("state_variables", {})
-        
-        # Check each goal condition
-        all_conditions_met = True
-        conditions_met = {}
-        
-        for var_name, target_value in goal_condition.items():
-            if var_name not in state_vars:
-                all_conditions_met = False
-                conditions_met[var_name] = False
+        # ---------- parse -------------------------------------------------
+        try:
+            current_state = json.loads(current_state_json)
+        except Exception as e:
+            logger.error(f"Bad current_state JSON: {e}")
+            current_state = {}
+
+        try:
+            goal_condition = json.loads(goal_condition_json)
+        except Exception as e:
+            logger.error(f"Bad goal_condition JSON: {e}")
+            goal_condition = {}
+
+        state_vars = current_state.get("state_variables", {}) or {}
+
+        # ---------- evaluate ---------------------------------------------
+        all_met = True
+        conditions: Dict[str, bool] = {}
+
+        for var, target in goal_condition.items():
+            current_val = state_vars.get(var, None)
+
+            if current_val is None:              # variable missing
+                conditions[var] = False
+                all_met = False
                 continue
-                
-            current_value = state_vars[var_name]
-            
-            # Handle numeric comparisons with tolerance
-            if isinstance(target_value, (int, float)) and isinstance(current_value, (int, float)):
-                is_met = abs(current_value - target_value) <= 0.1  # 10% tolerance
+
+            if isinstance(target, (int, float)) and isinstance(current_val, (int, float)):
+                met = abs(current_val - target) <= 0.1  # 10 % tolerance
             else:
-                is_met = current_value == target_value
-                
-            conditions_met[var_name] = is_met
-            if not is_met:
-                all_conditions_met = False
-        
-        return {
-            "goal_met": all_conditions_met,
-            "conditions_met": conditions_met
-        }
+                met = current_val == target
+
+            conditions[var] = met
+            if not met:
+                all_met = False
+
+        # ---------- return DTO -------------------------------------------
+        return GoalCheckResultDTO(
+            goal_met=all_met,
+            conditions_met_json=json.dumps(conditions, separators=(",", ":")),
+        )
 
 @function_tool
 async def evaluate_simulation_stability(
