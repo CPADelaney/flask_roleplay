@@ -31,6 +31,18 @@ logger = logging.getLogger(__name__)
 
 # =============== Pydantic Models for Structured Output ===============
 
+class SimulationAbstractionDTO(BaseModel):
+    abstraction_text: str
+    pattern_type: str
+    confidence: float
+    supporting_evidence: List[str] = Field(default_factory=list)
+
+    # optional enrichments that ReflectionEngine might add
+    entity_focus: Optional[Any] = None
+    neurochemical_insight: Optional[Any] = None
+
+    model_config = {"extra": "forbid"}      # <- strict!
+
 class SimulationReflectionDTO(BaseModel):
     reflection: str
     confidence: float
@@ -970,159 +982,126 @@ async def generate_simulation_reflection(
 @function_tool
 async def generate_abstraction_from_simulation(
     ctx: RunContextWrapper[SimulationContext],
-    simulation_result: Dict[str, Any],
-    pattern_type: str = "causal"
-) -> Dict[str, Any]:
+    simulation_result_json: str,
+    pattern_type: str = "causal",
+) -> SimulationAbstractionDTO:
     """
-    Generate an abstraction from the simulation using the reflection engine.
-    
+    Strict version of generate_abstraction_from_simulation.
+
     Args:
-        simulation_result: Simulation result
-        pattern_type: Type of pattern to look for
-        
-    Returns:
-        Abstraction from simulation
+        simulation_result_json: JSON-encoded SimulationResult dict
+        pattern_type:           pattern family to look for (“causal”, “temporal”, …)
     """
+
     with custom_span("generate_abstraction_from_simulation"):
-        # Default response
-        result = {
+
+        # -------- parse inputs safely ---------------------------------
+        try:
+            sim = json.loads(simulation_result_json)
+        except Exception as e:
+            logger.error(f"Bad simulation_result JSON: {e}")
+            sim = {}
+
+        result: Dict[str, Any] = {
             "abstraction_text": "",
             "pattern_type": pattern_type,
             "confidence": 0.0,
-            "supporting_evidence": []
+            "supporting_evidence": [],
         }
-        
-        # Check if reflection engine is available
+
+        # -------- use ReflectionEngine if we can ----------------------
         if ctx.context.reflection_engine and hasattr(ctx.context.reflection_engine, "create_abstraction"):
             try:
-                # Convert simulation result to memories format for abstraction
-                memories = []
-                
-                # Create memories from the trajectory
-                trajectory = simulation_result.get("trajectory", [])
-                for i, state in enumerate(trajectory):
-                    memory = {
-                        "id": f"sim_state_{simulation_result['simulation_id']}_{i}",
-                        "memory_text": f"Step {i} of simulation: {json.dumps(state.get('state_variables', {}))}",
+                traj = sim.get("trajectory", [])
+                memories: List[Dict[str, Any]] = [
+                    {
+                        "id": f"sim_state_{sim.get('simulation_id','?')}_{i}",
+                        "memory_text": f"Step {i} of simulation: {json.dumps(s.get('state_variables', {}))}",
                         "memory_type": "simulation",
-                        "significance": 7.0,  # High significance
+                        "significance": 7.0,
                         "metadata": {
-                            "emotional_context": state.get("emotional_state", {}),
+                            "emotional_context": s.get("emotional_state", {}),
                             "simulation_step": i,
-                            "simulation_id": simulation_result["simulation_id"],
-                            "last_action": state.get("last_action", "")
-                        }
+                            "simulation_id": sim.get("simulation_id"),
+                            "last_action": s.get("last_action", ""),
+                        },
                     }
-                    memories.append(memory)
-                
-                # Get neurochemical state
-                neurochemical_state = None
-                if ctx.context.emotional_core and hasattr(ctx.context.emotional_core, "_get_neurochemical_state"):
-                    neurochemical_state = {c: d["value"] for c, d in ctx.context.emotional_core.neurochemicals.items()}
-                
-                # Generate abstraction
-                abstraction_text, abstraction_data = await ctx.context.reflection_engine.create_abstraction(
+                    for i, s in enumerate(traj)
+                ]
+
+                neuro = None
+                if ctx.context.emotional_core and hasattr(ctx.context.emotional_core, "neurochemicals"):
+                    neuro = {c: d["value"] for c, d in ctx.context.emotional_core.neurochemicals.items()}
+
+                abs_text, abs_data = await ctx.context.reflection_engine.create_abstraction(
                     memories=memories,
                     pattern_type=pattern_type,
-                    neurochemical_state=neurochemical_state
+                    neurochemical_state=neuro,
                 )
-                
-                # Update result
-                result["abstraction_text"] = abstraction_text
-                result["confidence"] = abstraction_data.get("confidence", 0.5)
-                
-                # Add additional data if available
-                if "pattern_type" in abstraction_data:
-                    result["pattern_type"] = abstraction_data["pattern_type"]
-                if "entity_focus" in abstraction_data:
-                    result["entity_focus"] = abstraction_data["entity_focus"]
-                if "supporting_evidence" in abstraction_data:
-                    result["supporting_evidence"] = abstraction_data["supporting_evidence"]
-                if "neurochemical_insight" in abstraction_data:
-                    result["neurochemical_insight"] = abstraction_data["neurochemical_insight"]
+
+                result["abstraction_text"] = abs_text
+                result["confidence"] = abs_data.get("confidence", 0.5)
+                # copy optional keys if present
+                for k in ("pattern_type", "entity_focus", "supporting_evidence", "neurochemical_insight"):
+                    if k in abs_data:
+                        result[k] = abs_data[k]
+
             except Exception as e:
-                logger.error(f"Error generating abstraction: {str(e)}")
-                result["abstraction_text"] = f"I tried to generate an abstraction but encountered difficulties: {str(e)}"
+                logger.error(f"ReflectionEngine abstraction error: {e}")
+                result["abstraction_text"] = f"I tried to generate an abstraction but encountered difficulties: {e}"
                 result["confidence"] = 0.2
-        else:
-            # Generate basic abstraction without reflection engine
-            trajectory = simulation_result.get("trajectory", [])
-            
-            # Look for patterns in state changes
-            if len(trajectory) >= 3:
-                # Track changes in key variables
-                var_trends = {}
-                
-                # Get state variables from trajectory
-                for i in range(1, len(trajectory)):
-                    prev_state = trajectory[i-1].get("state_variables", {})
-                    curr_state = trajectory[i].get("state_variables", {})
-                    
-                    # Track changes
-                    for var_name, curr_value in curr_state.items():
-                        if var_name in prev_state and isinstance(curr_value, (int, float)) and isinstance(prev_state[var_name], (int, float)):
-                            change = curr_value - prev_state[var_name]
-                            
-                            if var_name not in var_trends:
-                                var_trends[var_name] = []
-                            
-                            var_trends[var_name].append(change)
-                
-                # Analyze trends
-                trend_patterns = {}
-                for var_name, changes in var_trends.items():
-                    if len(changes) >= 2:
-                        # Check for consistent direction
-                        consistent_direction = all(change > 0 for change in changes) or all(change < 0 for change in changes)
-                        
-                        # Check for acceleration/deceleration
-                        if len(changes) >= 3:
-                            differences = [abs(changes[i]) - abs(changes[i-1]) for i in range(1, len(changes))]
-                            accelerating = all(diff > 0 for diff in differences)
-                            decelerating = all(diff < 0 for diff in differences)
-                        else:
-                            accelerating = False
-                            decelerating = False
-                        
-                        # Check for oscillation
-                        oscillating = any(changes[i] * changes[i-1] < 0 for i in range(1, len(changes)))
-                        
-                        # Record pattern
-                        if consistent_direction:
-                            direction = "increasing" if changes[0] > 0 else "decreasing"
-                            speed = "accelerating" if accelerating else "decelerating" if decelerating else "constant"
-                            trend_patterns[var_name] = f"{direction} at {speed} rate"
-                        elif oscillating:
-                            trend_patterns[var_name] = "oscillating"
-                        else:
-                            trend_patterns[var_name] = "variable"
-                
-                # Generate abstraction text
+
+        # -------- fallback basic heuristic abstraction ----------------
+        if not result["abstraction_text"]:
+            traj = sim.get("trajectory", [])
+            if len(traj) >= 3:
+                var_trends: Dict[str, List[float]] = {}
+                for i in range(1, len(traj)):
+                    prev = traj[i - 1].get("state_variables", {})
+                    cur = traj[i].get("state_variables", {})
+                    for v, cur_val in cur.items():
+                        if v in prev and all(isinstance(x, (int, float)) for x in (cur_val, prev[v])):
+                            var_trends.setdefault(v, []).append(cur_val - prev[v])
+
+                trend_patterns: Dict[str, str] = {}
+                for v, deltas in var_trends.items():
+                    if len(deltas) >= 2:
+                        same_sign = all(d > 0 for d in deltas) or all(d < 0 for d in deltas)
+                        accel = (
+                            len(deltas) >= 3
+                            and all(abs(deltas[i]) > abs(deltas[i - 1]) for i in range(1, len(deltas)))
+                        )
+                        decel = (
+                            len(deltas) >= 3
+                            and all(abs(deltas[i]) < abs(deltas[i - 1]) for i in range(1, len(deltas)))
+                        )
+                        osc = any(deltas[i] * deltas[i - 1] < 0 for i in range(1, len(deltas)))
+
+                        if same_sign:
+                            direction = "increasing" if deltas[0] > 0 else "decreasing"
+                            speed = "accelerating" if accel else "decelerating" if decel else "constant"
+                            trend_patterns[v] = f"{direction} at {speed} rate"
+                        elif osc:
+                            trend_patterns[v] = "oscillating"
+
                 if trend_patterns:
-                    pattern_desc = ", ".join([f"{var_name} ({pattern})" for var_name, pattern in list(trend_patterns.items())[:3]])
-                    abstraction_text = f"In this simulation, I notice a pattern where {pattern_desc}. This suggests a {pattern_type} relationship where certain variables follow predictable trajectories under these conditions."
-                    
-                    # Add causal insights if available
-                    final_state = simulation_result.get("final_state", {})
-                    if final_state and "emotional_state" in final_state:
-                        emotion = final_state["emotional_state"].get("primary_emotion")
-                        emotion_name = emotion.get("name") if isinstance(emotion, dict) else emotion
-                        if emotion_name:
-                            abstraction_text += f" The emotional outcome tends toward {emotion_name}, which appears connected to these variable changes."
-                    
-                    # Set result
-                    result["abstraction_text"] = abstraction_text
+                    desc = ", ".join(f"{k} ({p})" for k, p in list(trend_patterns.items())[:3])
+                    result["abstraction_text"] = (
+                        f"In this simulation I observe that {desc}. "
+                        f"This suggests a {pattern_type} relationship under similar conditions."
+                    )
                     result["confidence"] = 0.6
-                    result["supporting_evidence"] = [f"Trend in {var}: {pattern}" for var, pattern in trend_patterns.items()]
+                    result["supporting_evidence"] = [f"Trend in {k}: {p}" for k, p in trend_patterns.items()]
                 else:
                     result["abstraction_text"] = "I don't see a clear pattern in this simulation data."
                     result["confidence"] = 0.3
             else:
                 result["abstraction_text"] = "This simulation is too short to extract meaningful patterns."
                 result["confidence"] = 0.2
-        
-        return result
 
+        # -------- return strict DTO ----------------------------------
+        return SimulationAbstractionDTO(**result)
+        
 # =============== Main Imagination Simulator Class ===============
 
 class ImaginationSimulator:
