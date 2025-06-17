@@ -366,95 +366,85 @@ async def predict_simulation_step(
 @function_tool
 async def apply_hypothetical_event(
     ctx: RunContextWrapper[SimulationContext],
-    initial_state: Dict[str, Any],
-    event: Dict[str, Any],
-    causal_model: Dict[str, Any]
-) -> Dict[str, Any]:
+    initial_state_json: str,          # <<< JSON strings instead of dicts
+    event_json: str,                  # <<<
+    causal_model_json: str | None = None,
+) -> SimulationStateDTO:              # <<< strict DTO output
     """
-    Apply a hypothetical event to the initial state.
-    
+    Apply a hypothetical event to the simulation state.
+
     Args:
-        initial_state: Initial simulation state
-        event: Hypothetical event to apply
-        causal_model: Causal model for simulation
-        
+        initial_state_json: JSON string of the starting state.
+        event_json:         JSON string describing the event.
+        causal_model_json:  (Unused here but kept for parity).
+
     Returns:
-        Updated state after applying event
+        SimulationStateDTO whose `state_json` contains the updated state.
     """
     with custom_span("apply_hypothetical_event"):
-        # Start with a copy of the initial state
-        updated_state = initial_state.copy()
+        # ---- Parse inputs -------------------------------------------------
+        try:
+            updated_state: Dict[str, Any] = json.loads(initial_state_json)
+        except Exception as e:
+            logger.error(f"Bad initial_state JSON: {e}")
+            updated_state = {}
+
+        try:
+            event: Dict[str, Any] = json.loads(event_json)
+        except Exception as e:
+            logger.error(f"Bad event JSON: {e}")
+            event = {}
+
+        # causal_model not needed here but parse if supplied
+        if causal_model_json:
+            try:
+                _ = json.loads(causal_model_json)
+            except Exception:
+                pass
+
+        # ---- Local helpers ------------------------------------------------
+        def bump(var: str, delta: float, clamp_lo=0.0, clamp_hi=1.0):
+            if var in state_vars and isinstance(state_vars[var], (int, float)):
+                state_vars[var] = max(clamp_lo, min(clamp_hi, state_vars[var] + delta))
+
+        # ---- Apply event --------------------------------------------------
         state_vars = updated_state.get("state_variables", {}).copy()
-        
-        # Extract event information
         action = event.get("action", "")
         description = event.get("description", "")
-        parameters = event.get("parameters", {})
-        
-        # Apply event effects based on action type
-        if "apologize" in action.lower() or "apologize" in description.lower():
-            # Apologizing typically increases trust and decreases negative emotions
-            if "user_trust" in state_vars:
-                state_vars["user_trust"] = min(1.0, state_vars["user_trust"] + 0.15)
-            if "user_anger" in state_vars:
-                state_vars["user_anger"] = max(0.0, state_vars["user_anger"] - 0.2)
-            if "relationship_tension" in state_vars:
-                state_vars["relationship_tension"] = max(0.0, state_vars["relationship_tension"] - 0.15)
-        
-        elif "explain" in action.lower() or "explain" in description.lower():
-            # Explaining typically increases comprehension
-            if "user_comprehension" in state_vars:
-                state_vars["user_comprehension"] = min(1.0, state_vars["user_comprehension"] + 0.2)
-            if "communication_quality" in state_vars:
-                state_vars["communication_quality"] = min(1.0, state_vars["communication_quality"] + 0.1)
-        
-        elif "share" in action.lower() or "share" in description.lower():
-            # Sharing typically increases intimacy and trust
-            if "intimacy" in state_vars:
-                state_vars["intimacy"] = min(1.0, state_vars["intimacy"] + 0.15)
-            if "user_trust" in state_vars:
-                state_vars["user_trust"] = min(1.0, state_vars["user_trust"] + 0.1)
-            if "relationship_depth" in state_vars:
-                state_vars["relationship_depth"] = min(1.0, state_vars["relationship_depth"] + 0.1)
-        
-        elif "disagree" in action.lower() or "disagree" in description.lower():
-            # Disagreeing can increase tension but also respect if done well
-            if "relationship_tension" in state_vars:
-                state_vars["relationship_tension"] = min(1.0, state_vars["relationship_tension"] + 0.15)
-            if "intellectual_engagement" in state_vars:
-                state_vars["intellectual_engagement"] = min(1.0, state_vars["intellectual_engagement"] + 0.2)
-        
+        text = f"{action} {description}".lower()
+
+        if "apologize" in text:
+            bump("user_trust", 0.15)
+            bump("user_anger", -0.20)
+            bump("relationship_tension", -0.15)
+
+        elif "explain" in text:
+            bump("user_comprehension", 0.20)
+            bump("communication_quality", 0.10)
+
+        elif "share" in text:
+            bump("intimacy", 0.15)
+            bump("user_trust", 0.10)
+            bump("relationship_depth", 0.10)
+
+        elif "disagree" in text:
+            bump("relationship_tension", 0.15)
+            bump("intellectual_engagement", 0.20)
+
         else:
-            # Generic event based on description
-            # Extract key words from description
-            description_lower = description.lower()
-            
-            # Apply effects based on sentiment
-            positive_words = ["help", "improve", "increase", "better", "good", "positive", "success"]
-            negative_words = ["harm", "worsen", "decrease", "bad", "negative", "failure"]
-            
-            # Count positive and negative words
-            positive_count = sum(1 for word in positive_words if word in description_lower)
-            negative_count = sum(1 for word in negative_words if word in description_lower)
-            
-            # Determine overall sentiment
-            sentiment = positive_count - negative_count
-            
-            # Apply generic effects based on sentiment
-            for var_name in state_vars.keys():
-                if isinstance(state_vars[var_name], (int, float)):
-                    if "trust" in var_name or "satisfaction" in var_name or "quality" in var_name:
-                        # Adjust positively or negatively based on sentiment
-                        if sentiment > 0:
-                            state_vars[var_name] = min(1.0, state_vars[var_name] + 0.1 * sentiment)
-                        elif sentiment < 0:
-                            state_vars[var_name] = max(0.0, state_vars[var_name] + 0.1 * sentiment)
-        
-        # Update the state variables
+            # Sentiment heuristic
+            pos = sum(w in text for w in ["help", "improve", "increase", "better", "good", "positive", "success"])
+            neg = sum(w in text for w in ["harm", "worsen", "decrease", "bad", "negative", "failure"])
+            sentiment = pos - neg
+            for var in list(state_vars):
+                if any(k in var for k in ["trust", "satisfaction", "quality"]) and isinstance(state_vars[var], (int, float)):
+                    bump(var, 0.10 * sentiment)
+
         updated_state["state_variables"] = state_vars
         updated_state["last_action"] = action or description
-        
-        return updated_state
+
+        # ---- Return strict DTO -------------------------------------------
+        return SimulationStateDTO(state_json=json.dumps(updated_state, separators=(",", ":")))
 
 @function_tool
 async def apply_counterfactual_condition(
