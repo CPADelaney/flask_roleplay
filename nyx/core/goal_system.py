@@ -37,6 +37,15 @@ SCHEMA_VERSION = "1.0.0"
 
 JsonScalar = Union[str, int, float, bool, None]
 
+
+class MergedGoalDescription(BaseModel):
+    merged_goal_data_json: str          # full dict, JSON-encoded
+    original_goal1: str
+    original_goal2: str
+    merged_description: str
+
+    model_config = {"extra": "forbid"}
+
 class ModificationImpactSummary(BaseModel):
     goal_id: str
     modification_impacts_json: str
@@ -3120,58 +3129,77 @@ class GoalManager:
 
     @staticmethod
     @function_tool
-    async def _generate_merged_goal_description(ctx: RunContextWrapper, goal_id1: str, goal_id2: str, 
-                                             common_elements: Dict[str, Any]) -> Dict[str, Any]:
+    async def _generate_merged_goal_description(            # noqa: N802
+        ctx: RunContextWrapper,
+        goal_id1: str,
+        goal_id2: str,
+        common_elements_json: str,                          # ← plain STRING
+    ) -> MergedGoalDescription:                             # ← closed model
         """
-        Generate a description for a merged goal
-        
-        Args:
-            goal_id1: First goal ID
-            goal_id2: Second goal ID
-            common_elements: Common elements analysis
-            
-        Returns:
-            Merged goal description
+        Produce a merged-goal description from *JSON-encoded* common elements.
         """
-        goal1 = await self._get_goal_with_reader_lock(goal_id1)
-        goal2 = await self._get_goal_with_reader_lock(goal_id2)
-        
-        if not goal1 or not goal2:
-            return {"error": "One or both goals not found"}
-        
-        # Extract key elements from descriptions
-        description1 = goal1.description
-        description2 = goal2.description
-        
-        # Create a merged description that combines both goals
-        merged_description = f"Accomplish both: {description1} and {description2}"
-        
-        # Create merged goal data
-        merged_goal_data = {
-            "description": merged_description,
-            "priority": common_elements["merged_priority"],
-            "time_horizon": common_elements["merged_time_horizon"],
-            "associated_need": common_elements.get("common_need"),
+        gm = ctx.context
+        logger = logging.getLogger(__name__)
+    
+        # 1️⃣ decode input ------------------------------------------------------
+        try:
+            ce = json.loads(common_elements_json or "{}")
+            if not isinstance(ce, dict):
+                raise TypeError
+        except Exception as exc:
+            logger.error("Bad common_elements_json: %s", exc)
+            return MergedGoalDescription(
+                merged_goal_data_json=json.dumps(
+                    {"error": f"Bad JSON: {exc}"}, separators=(",", ":")
+                ),
+                original_goal1="",
+                original_goal2="",
+                merged_description="",
+            )
+    
+        # 2️⃣ fetch goals -------------------------------------------------------
+        g1 = await gm._get_goal_with_reader_lock(goal_id1)
+        g2 = await gm._get_goal_with_reader_lock(goal_id2)
+        if not g1 or not g2:
+            return MergedGoalDescription(
+                merged_goal_data_json=json.dumps(
+                    {"error": "One or both goals not found"}, separators=(",", ":")
+                ),
+                original_goal1=g1.description if g1 else "",
+                original_goal2=g2.description if g2 else "",
+                merged_description="",
+            )
+    
+        desc1 = g1.description
+        desc2 = g2.description
+        merged_desc = f"Accomplish both: {desc1} and {desc2}"
+    
+        merged_goal = {
+            "description": merged_desc,
+            "priority": ce.get("merged_priority", max(g1.priority, g2.priority)),
+            "time_horizon": ce.get("merged_time_horizon", str(g1.time_horizon)),
+            "associated_need": ce.get("common_need"),
             "source": "goal_merger",
-            "parent_goals": [goal_id1, goal_id2]
+            "parent_goals": [goal_id1, goal_id2],
         }
-        
-        # Create emotional motivation if available
-        if common_elements.get("combined_motivation"):
-            cm = common_elements["combined_motivation"]
-            merged_goal_data["emotional_motivation"] = {
-                "primary_need": cm["primary_need"],
-                "intensity": cm["intensity"],
-                "expected_satisfaction": cm["expected_satisfaction"],
-                "description": f"Combined motivation from goals {goal_id1} and {goal_id2}"
+    
+        if ce.get("combined_motivation"):
+            cm = ce["combined_motivation"]
+            merged_goal["emotional_motivation"] = {
+                "primary_need": cm.get("primary_need"),
+                "intensity": cm.get("intensity"),
+                "expected_satisfaction": cm.get("expected_satisfaction"),
+                "description": (
+                    f"Combined motivation from goals {goal_id1} and {goal_id2}"
+                ),
             }
-        
-        return {
-            "merged_goal_data": merged_goal_data,
-            "original_goal1": goal1.description,
-            "original_goal2": goal2.description,
-            "merged_description": merged_description
-        }
+    
+        return MergedGoalDescription(
+            merged_goal_data_json=json.dumps(merged_goal, separators=(",", ":")),
+            original_goal1=desc1,
+            original_goal2=desc2,
+            merged_description=merged_desc,
+        )
 
     @staticmethod
     @function_tool
