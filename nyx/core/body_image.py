@@ -226,6 +226,7 @@ class BodyImage:
         # State helpers
         self._update_body_image_state             = self._create_update_body_image_state_tool()
         self._get_body_image_state_tool           = self._create_get_body_image_state_tool()
+        self._get_body_image_state = self._create_get_body_image_state_tool() 
 
         # 2️⃣  FEATURE-LEVEL AGENTS ──────────────────────────────────
         self.visual_features_agent                = self._create_visual_features_agent()
