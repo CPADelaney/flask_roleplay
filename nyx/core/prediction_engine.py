@@ -14,6 +14,20 @@ from pydantic import BaseModel, Field
 logger = logging.getLogger(__name__)
 
 # Pydantic models for structured I/O
+
+class ConversationHistoryParams(BaseModel, extra="forbid"):
+    """A single JSON string containing the entire history list."""
+    history_json: str
+
+
+class ConversationPatternAnalysis(BaseModel, extra="forbid"):
+    """Strict output of the conversation-pattern analyser."""
+    avg_message_length: float
+    avg_response_time: Optional[float]           # seconds – may be None
+    topic_transitions: List[Dict[str, str]]      # {"from": str, "to": str}
+    message_count: int
+    patterns: Dict[str, float]
+    
 class PredictionInput(BaseModel):
     context: Dict[str, Any] = Field(..., description="Current context data")
     history: List[Dict[str, Any]] = Field(..., description="Recent interaction history")
@@ -216,54 +230,94 @@ class PredictionEngine:
     
         return _estimate_context_stability
     
-    def _create_analyze_conversation_patterns_tool(self):
-        """Create the analyze conversation patterns tool with proper access to self"""
+    def _create_analyze_conversation_patterns_tool(self):         # noqa: N802
+        """Return a strict analyse-conversation-patterns tool."""
+    
         @function_tool
-        async def _analyze_conversation_patterns(ctx: RunContextWrapper, history: List[Dict[str, Any]]) -> Dict[str, Any]:
-            """Analyze patterns in conversation history"""
+        async def _analyze_conversation_patterns(                  # noqa: N802
+            ctx: RunContextWrapper,
+            params: ConversationHistoryParams,                     # ← strict wrapper
+        ) -> ConversationPatternAnalysis:
+    
+            import json, datetime
+            from nyx.telemetry import custom_span
+    
             with custom_span("analyze_conversation_patterns"):
-                # Extract patterns from history
+                # ①  decode history
+                try:
+                    history: List[Dict[str, Any]] = json.loads(params.history_json or "[]")
+                    if not isinstance(history, list):
+                        raise TypeError
+                except Exception:
+                    # empty—but valid—result if decoding fails
+                    return ConversationPatternAnalysis(
+                        avg_message_length=0.0,
+                        avg_response_time=None,
+                        topic_transitions=[],
+                        message_count=0,
+                        patterns={},
+                    )
+    
                 if not history:
-                    return {
-                        "patterns": {},
-                        "message": "Insufficient history for pattern analysis"
-                    }
-                
-                # Analyze message lengths
-                message_lengths = [len(msg.get("text", "")) for msg in history]
-                avg_length = sum(message_lengths) / len(message_lengths) if message_lengths else 0
-                
-                # Analyze response times if available
-                response_times = []
+                    return ConversationPatternAnalysis(
+                        avg_message_length=0.0,
+                        avg_response_time=None,
+                        topic_transitions=[],
+                        message_count=0,
+                        patterns={},
+                    )
+    
+                # ②  compute metrics ------------------------------------------------
+                msg_lengths = [len(msg.get("text", "")) for msg in history]
+                avg_len = sum(msg_lengths) / len(msg_lengths)
+    
+                # response times
+                resp_times: List[float] = []
                 for i in range(1, len(history)):
-                    if "timestamp" in history[i] and "timestamp" in history[i-1]:
+                    t_prev = history[i - 1].get("timestamp")
+                    t_curr = history[i].get("timestamp")
+                    if t_prev and t_curr:
                         try:
-                            t1 = datetime.datetime.fromisoformat(history[i-1]["timestamp"].replace("Z", "+00:00"))
-                            t2 = datetime.datetime.fromisoformat(history[i]["timestamp"].replace("Z", "+00:00"))
-                            response_times.append((t2 - t1).total_seconds())
-                        except (ValueError, TypeError):
+                            dt_prev = datetime.datetime.fromisoformat(t_prev.replace("Z", "+00:00"))
+                            dt_curr = datetime.datetime.fromisoformat(t_curr.replace("Z", "+00:00"))
+                            resp_times.append((dt_curr - dt_prev).total_seconds())
+                        except Exception:
                             pass
-                
-                avg_response_time = sum(response_times) / len(response_times) if response_times else None
-                
-                # Extract topic transitions
-                topics = [msg.get("topic", "") for msg in history if "topic" in msg]
-                topic_transitions = []
-                for i in range(1, len(topics)):
-                    if topics[i] != topics[i-1]:
-                        topic_transitions.append((topics[i-1], topics[i]))
-                
-                return {
-                    "avg_message_length": avg_length,
-                    "avg_response_time": avg_response_time,
-                    "topic_transitions": topic_transitions,
-                    "message_count": len(history),
-                    "patterns": {
-                        "consistent_length": max(0, 1 - (sum(abs(l - avg_length) for l in message_lengths) / (avg_length * len(message_lengths)) if avg_length > 0 else 1)),
-                        "predictable_timing": max(0, 1 - (sum(abs(t - avg_response_time) for t in response_times) / (avg_response_time * len(response_times)) if avg_response_time and response_times else 1))
-                    }
+                avg_resp = sum(resp_times) / len(resp_times) if resp_times else None
+    
+                # topic transitions
+                topics = [m.get("topic", "") for m in history]
+                transitions = [
+                    {"from": topics[i - 1], "to": topics[i]}
+                    for i in range(1, len(topics))
+                    if topics[i] != topics[i - 1]
+                ]
+    
+                # pattern scores
+                def _consistency(vals, avg):
+                    if not vals or avg == 0:
+                        return 0.0
+                    return max(
+                        0.0,
+                        1.0 - sum(abs(v - avg) for v in vals) / (avg * len(vals)),
+                    )
+    
+                patterns = {
+                    "consistent_length": _consistency(msg_lengths, avg_len),
+                    "predictable_timing": _consistency(resp_times, avg_resp)
+                    if avg_resp is not None
+                    else 0.0,
                 }
-        
+    
+                # ③  return strict model ------------------------------------------
+                return ConversationPatternAnalysis(
+                    avg_message_length=avg_len,
+                    avg_response_time=avg_resp,
+                    topic_transitions=transitions,
+                    message_count=len(history),
+                    patterns=patterns,
+                )
+    
         return _analyze_conversation_patterns
     
     def _create_analyze_response_patterns_tool(self):
