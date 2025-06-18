@@ -41,6 +41,18 @@ class ContextAnalysisOutput(BaseModel):
     recommended_horizon: str = Field(..., description="Recommended prediction horizon")
     confidence_modifier: float = Field(..., description="Confidence modifier based on context (-0.3 to 0.3)")
 
+class ContextStabilityParams(BaseModel, extra="forbid"):
+    """JSON string holding the full context object."""
+    context_json: str
+
+
+class ContextStabilityResult(BaseModel, extra="forbid"):
+    """Strict return type for the stability-estimation tool."""
+    stability_score: float
+    stability_factors: Dict[str, float]
+    volatility_factors: Dict[str, float]
+    analysis_time: str
+
 class PredictionEngine:
     """
     Engine for generating predictions about future inputs, optimal responses,
@@ -127,68 +139,81 @@ class PredictionEngine:
             model_settings=ModelSettings(temperature=0.5)
         )
     
-    def _create_estimate_context_stability_tool(self):
-        """Create the estimate context stability tool with proper access to self"""
+    def _create_estimate_context_stability_tool(self):          # noqa: N802
+        """Create the strict estimate-context-stability tool."""
+    
         @function_tool
-        async def _estimate_context_stability(ctx: RunContextWrapper, context: Dict[str, Any]) -> Dict[str, Any]:
-            """Estimate the stability of the current context"""
+        async def _estimate_context_stability(                   # noqa: N802
+            ctx: RunContextWrapper,
+            params: ContextStabilityParams,                      # ← strict wrapper
+        ) -> ContextStabilityResult:
+    
+            import json, datetime
+            from nyx.telemetry import custom_span               # if you had that import elsewhere
+    
             with custom_span("estimate_context_stability"):
-                # Extract key elements for stability estimation
-                stability_factors = {}
-                
-                # Topic consistency
-                if "topic" in context and context["topic"]:
+                # ① decode the inbound JSON safely
+                try:
+                    context: Dict[str, Any] = json.loads(params.context_json or "{}")
+                    if not isinstance(context, dict):
+                        raise TypeError("context_json must decode to an object")
+                except Exception as exc:
+                    # “Empty” but valid result so the agent gets something usable
+                    return ContextStabilityResult(
+                        stability_score=0.0,
+                        stability_factors={},
+                        volatility_factors={},
+                        analysis_time=datetime.datetime.now().isoformat(),
+                    )
+    
+                # ② calculate stability
+                stability_factors: Dict[str, float] = {}
+                volatility_factors: Dict[str, float] = {}
+    
+                # -- topic consistency ------------------------------------------
+                if context.get("topic"):
                     stability_factors["topic_defined"] = 0.2
-                
-                # History length
-                history_length = len(context.get("history", []))
-                if history_length > 10:
+    
+                # -- history length ---------------------------------------------
+                hist_len = len(context.get("history", []))
+                if hist_len > 10:
                     stability_factors["substantial_history"] = 0.2
-                elif history_length > 5:
+                elif hist_len > 5:
                     stability_factors["moderate_history"] = 0.1
-                
-                # Emotional state clarity
-                if "emotional_state" in context and context["emotional_state"]:
-                    emotional_state = context["emotional_state"]
-                    if "primary_emotion" in emotional_state and emotional_state["primary_emotion"]:
-                        primary_intensity = emotional_state.get("primary_intensity", 0.5)
-                        stability_factors["clear_emotion"] = primary_intensity * 0.2
-                
-                # Scenario type defined
-                if "scenario_type" in context and context["scenario_type"]:
+    
+                # -- emotional clarity ------------------------------------------
+                emo = context.get("emotional_state") or {}
+                if emo.get("primary_emotion"):
+                    primary_intensity = emo.get("primary_intensity", 0.5)
+                    stability_factors["clear_emotion"] = primary_intensity * 0.2
+    
+                # -- scenario type ----------------------------------------------
+                if context.get("scenario_type"):
                     stability_factors["scenario_defined"] = 0.15
-                
-                # Calculate base stability
+    
                 base_stability = sum(stability_factors.values())
-                
-                # Calculate volatility factors (lower stability)
-                volatility_factors = {}
-                
-                # Recent context changes
-                if context.get("recent_context_change", False):
+    
+                # -------- volatility pieces ------------------------------------
+                if context.get("recent_context_change"):
                     volatility_factors["recent_change"] = -0.2
-                
-                # Inconsistent history
-                if context.get("inconsistent_history", False):
+                if context.get("inconsistent_history"):
                     volatility_factors["inconsistency"] = -0.15
-                
-                # High emotional intensity
                 if context.get("emotional_intensity", 0) > 0.8:
                     volatility_factors["high_emotions"] = -0.1
-                
-                # Apply volatility
+    
                 volatility = sum(volatility_factors.values())
-                
-                # Calculate final stability (0-1 range)
+    
+                # -- final score in [0,1] ---------------------------------------
                 stability = max(0.0, min(1.0, 0.5 + base_stability + volatility))
-                
-                return {
-                    "stability_score": stability,
-                    "stability_factors": stability_factors,
-                    "volatility_factors": volatility_factors,
-                    "analysis_time": datetime.datetime.now().isoformat()
-                }
-        
+    
+                # ③ return strict model
+                return ContextStabilityResult(
+                    stability_score=stability,
+                    stability_factors=stability_factors,
+                    volatility_factors=volatility_factors,
+                    analysis_time=datetime.datetime.now().isoformat(),
+                )
+    
         return _estimate_context_stability
     
     def _create_analyze_conversation_patterns_tool(self):
