@@ -84,40 +84,69 @@ class NarrativeValidationOutput(BaseModel):
     coherence_score: float = Field(..., description="Narrative coherence score (0-1)")
     continuity_rating: float = Field(..., description="Continuity with existing narrative (0-1)")
 
+# Fixed parameter models - all use single JSON string fields
 class IdentifyMemoryThemesParams(BaseModel, extra="forbid"):
     """Parameters for memory theme identification"""
-    memories: List[Dict[str, Any]]
+    memories_json: str
 
 class CalculateMemorySignificanceParams(BaseModel, extra="forbid"):
     """Parameters for memory significance calculation"""
-    memories: List[Dict[str, Any]]
+    memories_json: str
 
 class AnalyzeIdentityShiftsParams(BaseModel, extra="forbid"):
     """Parameters for identity shift analysis"""
-    identity_state: Dict[str, Any]
+    identity_state_json: str
 
 class ExtractCoreValuesParams(BaseModel, extra="forbid"):
     """Parameters for core values extraction"""
-    identity_state: Dict[str, Any]
+    identity_state_json: str
 
 class CalculateIdentityStabilityParams(BaseModel, extra="forbid"):
     """Parameters for identity stability calculation"""
-    identity_state: Dict[str, Any]
+    identity_state_json: str
 
 class CheckNarrativeCoherenceParams(BaseModel, extra="forbid"):
     """Parameters for narrative coherence check"""
-    narrative: Dict[str, Any]
-    existing_segments: List[Dict[str, Any]]
+    payload_json: str  # Contains both narrative and existing_segments
 
 class VerifyContinuityParams(BaseModel, extra="forbid"):
     """Parameters for continuity verification"""
-    narrative: Dict[str, Any]
-    existing_segments: List[Dict[str, Any]]
+    payload_json: str  # Contains both narrative and existing_segments
 
 class ValidateEmotionalAuthenticityParams(BaseModel, extra="forbid"):
     """Parameters for emotional authenticity validation"""
-    narrative: Dict[str, Any]
-    memories: List[Dict[str, Any]]
+    payload_json: str  # Contains both narrative and memories
+
+# Result models that use _JSONModel wrapper for flexibility
+class IdentifyMemoryThemesResult(_JSONModel):
+    pass
+
+class CalculateMemorySignificanceResult(_JSONModel):
+    pass
+
+class AnalyzeIdentityShiftsResult(_JSONModel):
+    pass
+
+class ExtractCoreValuesResult(_JSONModel):
+    pass
+
+class CalculateIdentityStabilityResult(_JSONModel):
+    pass
+
+class CheckNarrativeCoherenceResult(_JSONModel):
+    pass
+
+class VerifyContinuityResult(_JSONModel):
+    pass
+
+class ValidateEmotionalAuthenticityResult(_JSONModel):
+    pass
+
+class RetrieveSignificantMemoriesResult(_JSONModel):
+    pass
+
+class GetIdentitySnapshotResult(_JSONModel):
+    pass
 
 class AutobiographicalNarrative:
     """Constructs and maintains Nyx's coherent life story."""
@@ -352,7 +381,7 @@ class AutobiographicalNarrative:
     
             # -------- original logic (unchanged) ---------------------------
             emotion_counts: Dict[str, int] = {}
-            emotion_intensities: Dict[str, List[float]] = []
+            emotion_intensities: Dict[str, List[float]] = {}  # Fixed: was []
             emotional_arcs: List[str] = []
     
             for mem in memories:
@@ -394,7 +423,7 @@ class AutobiographicalNarrative:
         """Factory method to create the identify memory themes tool"""
         @function_tool
         async def _identify_memory_themes(ctx: RunContextWrapper[NarrativeContext], 
-                                       params: IdentifyMemoryThemesParams) -> List[str]:
+                                       params: IdentifyMemoryThemesParams) -> IdentifyMemoryThemesResult:
             """
             Identify common themes across memories
             
@@ -404,7 +433,8 @@ class AutobiographicalNarrative:
             Returns:
                 Common themes found in memories
             """
-            memories = params.memories
+            memories = json.loads(params.memories_json)
+            
             # Extract tags from memories
             all_tags = []
             for memory in memories:
@@ -420,7 +450,9 @@ class AutobiographicalNarrative:
             top_themes = [tag for tag, count in tag_counts.items() if count >= 2]
             
             # Return themes or default values if none found
-            return top_themes or ["growth", "experience", "development"]
+            themes = top_themes or ["growth", "experience", "development"]
+            
+            return IdentifyMemoryThemesResult(json=json.dumps(themes))
         
         return _identify_memory_themes
 
@@ -428,7 +460,7 @@ class AutobiographicalNarrative:
         """Factory method to create the calculate memory significance tool"""
         @function_tool
         async def _calculate_memory_significance(ctx: RunContextWrapper[NarrativeContext],
-                                             params: CalculateMemorySignificanceParams) -> List[Dict[str, Any]]:
+                                             params: CalculateMemorySignificanceParams) -> CalculateMemorySignificanceResult:
             """
             Calculate relative significance of memories for narrative
             
@@ -438,7 +470,7 @@ class AutobiographicalNarrative:
             Returns:
                 Memories with calculated narrative significance
             """
-            memories = params.memories
+            memories = json.loads(params.memories_json)
             result = []
             
             for memory in memories:
@@ -476,7 +508,7 @@ class AutobiographicalNarrative:
             # Sort by significance
             result.sort(key=lambda x: x["narrative_significance"], reverse=True)
             
-            return result
+            return CalculateMemorySignificanceResult(json=json.dumps(result))
         
         return _calculate_memory_significance
 
@@ -484,7 +516,7 @@ class AutobiographicalNarrative:
         """Factory method to create the analyze identity shifts tool"""
         @function_tool
         async def _analyze_identity_shifts(ctx: RunContextWrapper[NarrativeContext],
-                                        params: AnalyzeIdentityShiftsParams) -> List[Dict[str, Any]]:
+                                        params: AnalyzeIdentityShiftsParams) -> AnalyzeIdentityShiftsResult:
             """
             Analyze shifts in identity based on identity state
             
@@ -494,7 +526,7 @@ class AutobiographicalNarrative:
             Returns:
                 List of detected identity shifts
             """
-            identity_state = params.identity_state
+            identity_state = json.loads(params.identity_state_json)
             shifts = []
             
             # Extract recent changes if available
@@ -514,7 +546,7 @@ class AutobiographicalNarrative:
                                 "timestamp": change.get("timestamp", "recent")
                             })
             
-            return shifts
+            return AnalyzeIdentityShiftsResult(json=json.dumps(shifts))
         
         return _analyze_identity_shifts
 
@@ -522,7 +554,7 @@ class AutobiographicalNarrative:
         """Factory method to create the extract core values tool"""
         @function_tool
         async def _extract_core_values(ctx: RunContextWrapper[NarrativeContext],
-                                   params: ExtractCoreValuesParams) -> List[str]:
+                                   params: ExtractCoreValuesParams) -> ExtractCoreValuesResult:
             """
             Extract core values from identity state
             
@@ -532,7 +564,7 @@ class AutobiographicalNarrative:
             Returns:
                 List of core values
             """
-            identity_state = params.identity_state
+            identity_state = json.loads(params.identity_state_json)
             core_values = []
             
             # Extract from top traits if available
@@ -545,7 +577,7 @@ class AutobiographicalNarrative:
                     sorted_traits = sorted(traits.items(), key=lambda x: x[1], reverse=True)
                     core_values = [trait for trait, _ in sorted_traits[:5]]
             
-            return core_values
+            return ExtractCoreValuesResult(json=json.dumps(core_values))
         
         return _extract_core_values
 
@@ -553,7 +585,7 @@ class AutobiographicalNarrative:
         """Factory method to create the calculate identity stability tool"""
         @function_tool
         async def _calculate_identity_stability(ctx: RunContextWrapper[NarrativeContext],
-                                            params: CalculateIdentityStabilityParams) -> float:
+                                            params: CalculateIdentityStabilityParams) -> CalculateIdentityStabilityResult:
             """
             Calculate stability of current identity
             
@@ -563,7 +595,7 @@ class AutobiographicalNarrative:
             Returns:
                 Stability score (0-1, higher = more stable)
             """
-            identity_state = params.identity_state
+            identity_state = json.loads(params.identity_state_json)
             # Default moderate stability
             stability = 0.5
             
@@ -600,7 +632,9 @@ class AutobiographicalNarrative:
                         stability += 0.2  # Older identity = more stable
             
             # Ensure result is in valid range
-            return max(0.0, min(1.0, stability))
+            final_stability = max(0.0, min(1.0, stability))
+            
+            return CalculateIdentityStabilityResult(json=json.dumps(final_stability))
         
         return _calculate_identity_stability
 
@@ -608,7 +642,7 @@ class AutobiographicalNarrative:
         """Factory method to create the check narrative coherence tool"""
         @function_tool
         async def _check_narrative_coherence(ctx: RunContextWrapper[NarrativeContext],
-                                         params: CheckNarrativeCoherenceParams) -> float:
+                                         params: CheckNarrativeCoherenceParams) -> CheckNarrativeCoherenceResult:
             """
             Check internal coherence of a narrative segment
             
@@ -618,8 +652,9 @@ class AutobiographicalNarrative:
             Returns:
                 Coherence score (0-1)
             """
-            narrative = params.narrative
-            existing_segments = params.existing_segments
+            payload = json.loads(params.payload_json)
+            narrative = payload["narrative"]
+            existing_segments = payload["existing_segments"]
             
             # Default moderate coherence
             coherence = 0.5
@@ -653,7 +688,9 @@ class AutobiographicalNarrative:
                     coherence += 0.1
                     
             # Ensure result is in valid range
-            return max(0.0, min(1.0, coherence))
+            final_coherence = max(0.0, min(1.0, coherence))
+            
+            return CheckNarrativeCoherenceResult(json=json.dumps(final_coherence))
         
         return _check_narrative_coherence
 
@@ -661,7 +698,7 @@ class AutobiographicalNarrative:
         """Factory method to create the verify continuity tool"""
         @function_tool
         async def _verify_continuity(ctx: RunContextWrapper[NarrativeContext],
-                                 params: VerifyContinuityParams) -> Dict[str, Any]:
+                                 params: VerifyContinuityParams) -> VerifyContinuityResult:
             """
             Verify continuity with existing narrative
             
@@ -671,15 +708,17 @@ class AutobiographicalNarrative:
             Returns:
                 Continuity assessment
             """
-            narrative = params.narrative
-            existing_segments = params.existing_segments
+            payload = json.loads(params.payload_json)
+            narrative = payload["narrative"]
+            existing_segments = payload["existing_segments"]
             
             if not existing_segments:
-                return {
+                result = {
                     "has_continuity": True,
                     "continuity_score": 1.0,
                     "issues": []
                 }
+                return VerifyContinuityResult(json=json.dumps(result))
                 
             # Find most recent segment
             most_recent = existing_segments[-1]
@@ -718,11 +757,13 @@ class AutobiographicalNarrative:
                     issues.append("Emotional discontinuity with previous segment")
                     continuity_score -= 0.1
                     
-            return {
+            result = {
                 "has_continuity": continuity_score >= 0.6,
                 "continuity_score": max(0.0, min(1.0, continuity_score)),
                 "issues": issues
             }
+            
+            return VerifyContinuityResult(json=json.dumps(result))
         
         return _verify_continuity
 
@@ -730,7 +771,7 @@ class AutobiographicalNarrative:
         """Factory method to create the validate emotional authenticity tool"""
         @function_tool
         async def _validate_emotional_authenticity(ctx: RunContextWrapper[NarrativeContext],
-                                              params: ValidateEmotionalAuthenticityParams) -> Dict[str, Any]:
+                                              params: ValidateEmotionalAuthenticityParams) -> ValidateEmotionalAuthenticityResult:
             """
             Validate emotional authenticity of narrative against source memories
             
@@ -740,8 +781,9 @@ class AutobiographicalNarrative:
             Returns:
                 Emotional authenticity assessment
             """
-            narrative = params.narrative
-            memories = params.memories
+            payload = json.loads(params.payload_json)
+            narrative = payload["narrative"]
+            memories = payload["memories"]
             
             authenticity_score = 0.5  # Default moderate authenticity
             issues = []
@@ -779,11 +821,13 @@ class AutobiographicalNarrative:
                     issues.append("Summary doesn't reflect emotional arc")
                     authenticity_score -= 0.1
                     
-            return {
+            result = {
                 "authenticity_score": max(0.0, min(1.0, authenticity_score)),
                 "is_authentic": authenticity_score >= 0.6,
                 "issues": issues
             }
+            
+            return ValidateEmotionalAuthenticityResult(json=json.dumps(result))
         
         return _validate_emotional_authenticity
 
@@ -792,7 +836,7 @@ class AutobiographicalNarrative:
     async def retrieve_significant_memories(ctx: RunContextWrapper[NarrativeContext], 
                                         start_time: str, 
                                         end_time: str, 
-                                        min_significance: int = 6) -> List[Dict]:
+                                        min_significance: int = 6) -> RetrieveSignificantMemoriesResult:
         """
         Retrieves significant memories within a time period.
         
@@ -802,10 +846,10 @@ class AutobiographicalNarrative:
             min_significance: Minimum significance threshold (1-10)
             
         Returns:
-            List of significant memories
+            List of significant memories wrapped in JSON result
         """
         if not ctx.context.memory_orchestrator:
-            return []
+            return RetrieveSignificantMemoriesResult(json=json.dumps([]))
         
         try:
             memories = await ctx.context.memory_orchestrator.retrieve_memories(
@@ -814,15 +858,15 @@ class AutobiographicalNarrative:
                 limit=20,
                 min_significance=min_significance
             )
-            return memories
+            return RetrieveSignificantMemoriesResult(json=json.dumps(memories))
         except Exception as e:
             logger.error(f"Error retrieving memories: {e}")
-            return []
+            return RetrieveSignificantMemoriesResult(json=json.dumps([]))
 
     @staticmethod
     @function_tool
     async def get_identity_snapshot(ctx: RunContextWrapper[NarrativeContext], 
-                                 timestamp: str) -> Dict[str, Any]:
+                                 timestamp: str) -> GetIdentitySnapshotResult:
         """
         Gets a snapshot of Nyx's identity at a specific time.
         
@@ -830,20 +874,23 @@ class AutobiographicalNarrative:
             timestamp: Point in time for identity snapshot (ISO format)
             
         Returns:
-            Identity state at specified time
+            Identity state at specified time wrapped in JSON result
         """
         if not ctx.context.identity_evolution:
-            return {"status": "unavailable", "reason": "No identity evolution system available"}
+            result = {"status": "unavailable", "reason": "No identity evolution system available"}
+            return GetIdentitySnapshotResult(json=json.dumps(result))
         
         try:
             state = await ctx.context.identity_evolution.get_identity_state(timestamp)
-            return {
+            result = {
                 "top_traits": state.get("top_traits", {}),
                 "recent_changes": state.get("identity_evolution", {}).get("recent_significant_changes", {})
             }
+            return GetIdentitySnapshotResult(json=json.dumps(result))
         except Exception as e:
             logger.error(f"Error retrieving identity snapshot: {e}")
-            return {"status": "error", "reason": str(e)}
+            result = {"status": "error", "reason": str(e)}
+            return GetIdentitySnapshotResult(json=json.dumps(result))
 
     async def update_narrative(self, force_update: bool = False) -> Optional[NarrativeSegment]:
         """Periodically reviews recent history and updates the narrative."""
@@ -865,11 +912,12 @@ class AutobiographicalNarrative:
                 end_time = now
 
                 # Retrieve key memories 
-                key_memories = await self.retrieve_significant_memories(
+                memories_result = await self.retrieve_significant_memories(
                     RunContextWrapper(context=self.narrative_context),
                     start_time=start_time.isoformat(),
                     end_time=end_time.isoformat()
                 )
+                key_memories = json.loads(memories_result.json)
 
                 if len(key_memories) < 3:  # Need enough memories to make a segment
                     logger.info("Not enough significant memories found to create new narrative segment")
@@ -883,10 +931,11 @@ class AutobiographicalNarrative:
                 actual_end_time = datetime.datetime.fromisoformat(key_memories[-1].get('metadata', {}).get('timestamp', end_time.isoformat()))
 
                 # Get identity context
-                identity_state = await self.get_identity_snapshot(
+                identity_result = await self.get_identity_snapshot(
                     RunContextWrapper(context=self.narrative_context),
                     actual_end_time.isoformat()
                 )
+                identity_state = json.loads(identity_result.json)
 
                 # Prepare memory snippets
                 memory_snippets = [f"({m.get('memory_type', '')[:4]}): {m.get('memory_text', '')[:100]}..." for m in key_memories]
