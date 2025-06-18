@@ -25,6 +25,110 @@ logger = logging.getLogger(__name__)
 MODALITY_SYSTEM_SCREEN = "system_screen"
 MODALITY_IMAGE = "image"
 
+class _JSONModel(BaseModel, extra="forbid"):
+    """Base that just wraps an arbitrary json blob as a string."""
+    json: str
+
+
+# PARAM / RESULT models -------------------------------------------------------
+# visual part feature extraction
+class ExtractVisualPartFeaturesParams(BaseModel, extra="forbid"):
+    visual_json: str
+
+
+class VisualPartFeaturesResult(_JSONModel):
+    pass
+
+
+class CalculateVisualConfidenceParams(BaseModel, extra="forbid"):
+    visual_features_json: str
+
+
+class VisualConfidenceResult(BaseModel, extra="forbid"):
+    confidence: float
+
+
+# somatic
+class ExtractSomaticFeaturesParams(BaseModel, extra="forbid"):
+    somatic_json: str
+
+
+class SomaticFeaturesResult(_JSONModel):
+    pass
+
+
+class CalculateSomaticConfidenceParams(BaseModel, extra="forbid"):
+    somatic_features_json: str
+
+
+class SomaticConfidenceResult(BaseModel, extra="forbid"):
+    confidence: float
+
+
+# visual analysis
+class AnalyzeVisualFeaturesParams(BaseModel, extra="forbid"):
+    percept_json: str
+
+
+class VisualAnalysisResult(_JSONModel):
+    pass
+
+
+class ExtractBodyPartStatesParams(BaseModel, extra="forbid"):
+    body_features_json: str
+
+
+class BodyPartStatesResult(_JSONModel):
+    pass
+
+
+class CorrelateSomaticVisualParams(BaseModel, extra="forbid"):
+    somatic_json: str
+
+
+class CorrelationResult(_JSONModel):
+    pass
+
+
+class ProprioceptionConfidenceParams(BaseModel, extra="forbid"):
+    correlation_json: str
+
+
+class ProprioceptionConfidenceResult(BaseModel, extra="forbid"):
+    confidence: float
+
+
+class ResolvePerceptionConflictsParams(BaseModel, extra="forbid"):
+    visual_json: str
+    somatic_json: str
+
+
+class ResolveConflictsResult(_JSONModel):
+    pass
+
+
+class UpdateBodyImageStateParams(BaseModel, extra="forbid"):
+    resolved_json: str
+
+
+class UpdateBodyImageStateResult(_JSONModel):
+    updated_parts_count: int
+    current_proprioception_confidence: float
+    has_visual_form: bool
+
+
+class CurrentVisualStateResult(_JSONModel):
+    pass
+
+
+class SomaticDataAnalysisResult(_JSONModel):
+    pass
+
+
+class BodyImageStateResult(_JSONModel):
+    pass
+
+
 class BodyPartState(BaseModel):
     name: str  # e.g., "left_hand", "head", "torso", "avatar_wing"
     perceived_position: Optional[Tuple[float, float, float]] = None  # Relative/absolute coords
@@ -317,563 +421,479 @@ class BodyImage:
     
     # New helper functions for specialized agents
     
-    @function_tool
-    async def _extract_visual_part_features(ctx: RunContextWrapper[BodyImageContext], 
-                                        visual_data: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Extract detailed features from visual part data
-        
-        Args:
-            visual_data: Visual data for a specific part
-            
-        Returns:
-            Detailed visual features
-        """
-        features = {}
-        
-        # Extract position data if available
-        if "position" in visual_data:
-            features["position"] = visual_data["position"]
-            
-        # Extract bounding box if available
-        if "bounding_box" in visual_data:
-            features["bounding_box"] = visual_data["bounding_box"]
-            
-        # Extract attributes
-        if "attributes" in visual_data:
-            features["attributes"] = {}
-            
-            # Process specific attributes
-            for attr_name, attr_value in visual_data["attributes"].items():
-                features["attributes"][attr_name] = attr_value
-                
-                # Derive state from attributes
-                if attr_name == "moving" and attr_value:
-                    features["derived_state"] = "moving"
-                elif attr_name == "glowing" and attr_value:
-                    features["derived_state"] = "glowing"
-                elif attr_name == "damaged" and attr_value:
-                    features["derived_state"] = "damaged"
-        
-        # Default state if not derived
-        if "derived_state" not in features:
-            features["derived_state"] = "visible"
-            
-        # Extract confidence
-        features["confidence"] = visual_data.get("confidence", 0.5)
-        
-        return features
+    def _create_extract_visual_part_features_tool(self):
+        """Strict schema wrapper – visual part feature extraction"""
+        @function_tool
+        async def _extract_visual_part_features(                       # noqa: N802
+            ctx: RunContextWrapper["BodyImageContext"],
+            params: ExtractVisualPartFeaturesParams,
+        ) -> VisualPartFeaturesResult:
+            visual_data = json.loads(params.visual_json)
+            features: Dict[str, Any] = {}
     
-    @function_tool
-    async def _calculate_visual_confidence(ctx: RunContextWrapper[BodyImageContext], 
-                                      visual_features: Dict[str, Any]) -> float:
-        """
-        Calculate confidence level for visual detection
-        
-        Args:
-            visual_features: Extracted visual features
-            
-        Returns:
-            Confidence score (0-1)
-        """
-        # Start with base confidence
-        base_confidence = visual_features.get("confidence", 0.5)
-        
-        # Adjust based on feature completeness
-        feature_completeness = 0.0
-        
-        # Position data increases confidence
-        if "position" in visual_features:
-            feature_completeness += 0.2
-            
-        # Bounding box increases confidence
-        if "bounding_box" in visual_features:
-            feature_completeness += 0.1
-            
-        # Attributes increase confidence
-        if "attributes" in visual_features and visual_features["attributes"]:
-            feature_completeness += 0.1 * min(3, len(visual_features["attributes"])) / 3
-            
-        # Calculate final confidence
-        confidence = base_confidence * 0.7 + feature_completeness * 0.3
-        
-        # Ensure valid range
-        return max(0.1, min(1.0, confidence))
+            # ---- original logic (with correct root-level derived_state) --------
+            if "position" in visual_data:
+                features["position"] = visual_data["position"]
     
-    @function_tool
-    async def _extract_somatic_features(ctx: RunContextWrapper[BodyImageContext], 
-                                   somatic_data: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Extract detailed features from somatic data
-        
-        Args:
-            somatic_data: Somatic data for a specific region
-            
-        Returns:
-            Detailed somatic features
-        """
-        features = {}
-        
-        # Extract dominant sensation
-        if "dominant_sensation" in somatic_data:
-            features["dominant_sensation"] = somatic_data["dominant_sensation"]
-            
-        # Extract intensity
-        if "intensity" in somatic_data:
-            features["intensity"] = somatic_data["intensity"]
-            
-        # Extract secondary sensations
-        if "secondary_sensations" in somatic_data:
-            features["secondary_sensations"] = somatic_data["secondary_sensations"]
-            
-        # Derive state from sensations
-        if "dominant_sensation" in somatic_data:
-            sensation = somatic_data["dominant_sensation"]
-            intensity = somatic_data.get("intensity", 0.5)
-            
-            if sensation == "movement" and intensity > 0.3:
-                features["derived_state"] = "moving"
-            elif sensation == "temperature" and intensity > 0.6:
-                features["derived_state"] = "heated"
-            elif sensation == "pressure" and intensity > 0.7:
-                features["derived_state"] = "pressured"
-            elif sensation == "pain" and intensity > 0.3:
-                features["derived_state"] = "damaged"
-            else:
-                features["derived_state"] = "neutral"
-                
-        return features
+            if "bounding_box" in visual_data:
+                features["bounding_box"] = visual_data["bounding_box"]
     
-    @function_tool
-    async def _calculate_somatic_confidence(ctx: RunContextWrapper[BodyImageContext], 
-                                       somatic_features: Dict[str, Any]) -> float:
-        """
-        Calculate confidence level for somatic detection
-        
-        Args:
-            somatic_features: Extracted somatic features
-            
-        Returns:
-            Confidence score (0-1)
-        """
-        # Confidence based on intensity
-        intensity = somatic_features.get("intensity", 0.5)
-        
-        # Higher intensity = higher confidence
-        confidence = 0.3 + intensity * 0.6
-        
-        # Secondary sensations increase confidence
-        if "secondary_sensations" in somatic_features:
-            secondary = somatic_features["secondary_sensations"]
-            if secondary and isinstance(secondary, dict) and len(secondary) > 0:
-                # More secondary sensations = higher confidence
-                confidence += min(0.1, len(secondary) * 0.02)
-                
-        # Ensure valid range
-        return max(0.1, min(1.0, confidence))
+            if "attributes" in visual_data:
+                feats: Dict[str, Any] = {}
+                for attr, val in visual_data["attributes"].items():
+                    feats[attr] = val
+                    if val:                      # Only when the flag is truthy
+                        if attr == "moving":
+                            features["derived_state"] = "moving"
+                        elif attr == "glowing":
+                            features["derived_state"] = "glowing"
+                        elif attr == "damaged":
+                            features["derived_state"] = "damaged"
+                features["attributes"] = feats
     
-    # Tool functions for the agents
+            # Default state if nothing above set it
+            features.setdefault("derived_state", "visible")
+            features["confidence"] = visual_data.get("confidence", 0.5)
     
-    @function_tool
-    async def _analyze_visual_features(ctx: RunContextWrapper[BodyImageContext], 
-                                   percept: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Analyze visual features to extract body-related information
-        
-        Args:
-            percept: Visual perception data
-            
-        Returns:
-            Extracted visual features relevant to body image
-        """
-        if not percept or percept.get('modality') not in [MODALITY_IMAGE, MODALITY_SYSTEM_SCREEN]:
-            return {"error": "Invalid percept modality", "detected_features": {}}
-            
-        image_features = percept.get('content', {})
-        
-        if not isinstance(image_features, dict) or "objects" not in image_features:
-            return {"error": "Missing object detection data", "detected_features": {}}
-            
-        # Extract avatar/body-related objects
-        body_features = {}
-        for obj_name, obj_data in image_features.get("objects", {}).items():
-            if "avatar_" in obj_name or "nyx_" in obj_name:
-                part_name = obj_name.replace("avatar_", "").replace("nyx_", "")
-                body_features[part_name] = {
-                    "confidence": obj_data.get("confidence", percept.get("bottom_up_confidence", 0.5)),
-                    "position": obj_data.get("position"),
-                    "bounding_box": obj_data.get("bounding_box"),
-                    "attributes": obj_data.get("attributes", {})
-                }
-        
-        # Extract overall form description if present
-        form_description = image_features.get("description", self.current_state.form_description)
-        
-        return {
-            "body_features": body_features,
-            "form_description": form_description,
-            "detection_confidence": percept.get("bottom_up_confidence", 0.5),
-            "timestamp": percept.get("timestamp", datetime.datetime.now().isoformat())
-        }
+            logger.debug("extracted_visual_part_features", extra={"features": features})
+            # -------------------------------------------------------------------
     
-    @function_tool
-    async def _extract_body_part_states(ctx: RunContextWrapper[BodyImageContext], 
-                                    body_features: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
-        """
-        Extract state information for detected body parts
-        
-        Args:
-            body_features: Detected body features
-            
-        Returns:
-            Body part states
-        """
-        part_states = {}
-        
-        for part_name, features in body_features.items():
-            # Default to "visible" state
-            state = "visible"
-            
-            # Infer state from attributes if available
-            attributes = features.get("attributes", {})
-            if attributes:
-                if attributes.get("moving", False):
-                    state = "moving"
-                elif attributes.get("glowing", False):
-                    state = "glowing"
-                elif attributes.get("damaged", False):
-                    state = "damaged"
-            
-            part_states[part_name] = {
-                "perceived_state": state,
-                "confidence": features.get("confidence", 0.5),
-                "perceived_position": features.get("position")
-            }
-            
-        return part_states
+            return VisualPartFeaturesResult(json=json.dumps(features))
     
-    @function_tool
-    async def _get_current_visual_state(ctx: RunContextWrapper[BodyImageContext]) -> Dict[str, Any]:
-        """
-        Get current visual state information
-        
-        Returns:
-            Current visual state
-        """
-        parts = {}
-        for name, part in self.current_state.perceived_parts.items():
-            parts[name] = part.dict()
-            
-        return {
-            "has_visual_form": self.current_state.has_visual_form,
-            "form_description": self.current_state.form_description,
-            "parts": parts,
-            "last_visual_update": self.current_state.last_visual_update.isoformat() if self.current_state.last_visual_update else None,
-            "proprioception_confidence": self.current_state.proprioception_confidence
-        }
+        return _extract_visual_part_features
     
-    @function_tool
-    async def _analyze_somatic_data(ctx: RunContextWrapper[BodyImageContext]) -> Dict[str, Any]:
-        """
-        Analyze somatic sensation data from digital somatosensory system
-        
-        Returns:
-            Analyzed somatic data
-        """
-        if not ctx.context.dss:
-            return {"error": "No digital somatosensory system available", "somatic_data": {}}
-            
-        try:
-            somatic_state = await ctx.context.dss.get_body_state()
-            regions_summary = somatic_state.get("regions_summary", {})
-            
-            # Process somatic data
-            processed_data = {}
-            for region_name, region_data in regions_summary.items():
-                dominant_sensation = region_data.get("dominant_sensation", "neutral")
-                intensity = region_data.get(dominant_sensation, 0.0)
-                
-                # Normalize temperature around neutral
-                if dominant_sensation == "temperature":
-                    intensity = abs(intensity - 0.5) * 2
-                
-                processed_data[region_name] = {
-                    "dominant_sensation": dominant_sensation,
-                    "intensity": intensity,
-                    "secondary_sensations": {k: v for k, v in region_data.items() 
-                                          if k != "dominant_sensation" and isinstance(v, (int, float))}
-                }
-                
-            return {
-                "somatic_data": processed_data,
-                "timestamp": datetime.datetime.now().isoformat()
-            }
-            
-        except Exception as e:
-            logger.error(f"Error retrieving somatic data: {e}")
-            return {"error": str(e), "somatic_data": {}}
+    # ---------------------------------------------------------------------
+    def _create_calculate_visual_confidence_tool(self):
+        @function_tool
+        async def _calculate_visual_confidence(                       # noqa: N802
+            ctx: RunContextWrapper["BodyImageContext"],
+            params: CalculateVisualConfidenceParams,
+        ) -> VisualConfidenceResult:
+            vf = json.loads(params.visual_features_json)
+            base_conf = vf.get("confidence", 0.5)
+            completeness = 0.0
+            if "position" in vf:
+                completeness += 0.2
+            if "bounding_box" in vf:
+                completeness += 0.1
+            if vf.get("attributes"):
+                completeness += 0.1 * min(3, len(vf["attributes"])) / 3
+            confidence = base_conf * 0.7 + completeness * 0.3
+            confidence = max(0.1, min(1.0, confidence))
+            return VisualConfidenceResult(confidence=confidence)
     
-    @function_tool
-    async def _correlate_somatic_visual(ctx: RunContextWrapper[BodyImageContext], 
-                                   somatic_data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
-        """
-        Correlate somatic sensations with visual body parts
-        
-        Args:
-            somatic_data: Processed somatic data
-            
-        Returns:
-            Correlation results
-        """
-        correlated_parts = {}
-        
-        # Get current body parts
-        for part_name, part in self.current_state.perceived_parts.items():
-            # Try to find corresponding somatic region
-            region_name = part_name  # Simple 1:1 mapping
-            
-            if region_name in somatic_data:
-                region_data = somatic_data[region_name]
-                dominant_sensation = region_data.get("dominant_sensation", "neutral")
-                intensity = region_data.get("intensity", 0.0)
-                
-                # Determine state based on sensation
-                new_state = dominant_sensation if intensity > 0.3 else "neutral"
-                
-                # Calculate confidence adjustment
-                if part.perceived_state == new_state:
-                    # Reinforce confidence if states match
-                    confidence_adjustment = min(0.1, intensity * 0.2)
-                else:
-                    # Reduce confidence if states don't match
-                    confidence_adjustment = -min(0.1, intensity * 0.2)
-                
-                correlated_parts[part_name] = {
-                    "current_state": part.perceived_state,
-                    "new_state": new_state,
-                    "confidence_adjustment": confidence_adjustment,
-                    "intensity": intensity
-                }
-        
-        return {
-            "correlated_parts": correlated_parts,
-            "correlation_time": datetime.datetime.now().isoformat()
-        }
+        return _calculate_visual_confidence
     
-    @function_tool
-    async def _calculate_proprioception_confidence(ctx: RunContextWrapper[BodyImageContext], 
-                                             correlation_results: Dict[str, Any]) -> float:
-        """
-        Calculate overall proprioception confidence
-        
-        Args:
-            correlation_results: Results of somatic-visual correlation
-            
-        Returns:
-            Updated proprioception confidence
-        """
-        correlated_parts = correlation_results.get("correlated_parts", {})
-        
-        if not correlated_parts:
-            return self.current_state.proprioception_confidence
-            
-        # Calculate average confidence adjustment
-        total_adjustment = sum(part.get("confidence_adjustment", 0.0) for part in correlated_parts.values())
-        avg_adjustment = total_adjustment / len(correlated_parts)
-        
-        # Update proprioception confidence
-        new_confidence = max(0.1, min(1.0, self.current_state.proprioception_confidence + avg_adjustment))
-        
-        return new_confidence
     
-    @function_tool
-    async def _resolve_perception_conflicts(ctx: RunContextWrapper[BodyImageContext],
-                                      visual_data: Dict[str, Any],
-                                      somatic_data: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Resolve conflicts between visual and somatic perception
-        
-        Args:
-            visual_data: Visual perception data
-            somatic_data: Somatic perception data
-            
-        Returns:
-            Resolved perception data
-        """
-        resolved_parts = {}
-        
-        # Process each part
-        for part_name in set(list(visual_data.get("parts", {}).keys()) + 
-                            list(somatic_data.get("correlated_parts", {}).keys())):
-            
-            # Get data from both sources
-            visual_part = visual_data.get("parts", {}).get(part_name)
-            somatic_part = somatic_data.get("correlated_parts", {}).get(part_name)
-            
-            if visual_part and somatic_part:
-                # Both sources have data - resolve conflict
-                visual_conf = visual_part.get("confidence", 0.5)
-                somatic_state = somatic_part.get("new_state", "neutral")
-                
-                # Prioritize visual position if available
-                position = visual_part.get("perceived_position")
-                
-                # Determine state based on confidence
-                if visual_conf > 0.7:
-                    # High visual confidence - use visual state
-                    state = visual_part.get("perceived_state", "visible")
-                else:
-                    # Otherwise use somatic state
-                    state = somatic_state
-                
-                # Calculate combined confidence
-                visual_weight = 0.7  # Visual perception is weighted more heavily
-                combined_confidence = (visual_conf * visual_weight + 
-                                    somatic_part.get("confidence", 0.5) * (1.0 - visual_weight))
-                
-                resolved_parts[part_name] = {
-                    "perceived_state": state,
-                    "perceived_position": position,
-                    "confidence": combined_confidence,
-                    "sources": ["visual", "somatic"]
-                }
-                
-            elif visual_part:
-                # Only visual data available
-                resolved_parts[part_name] = {
-                    "perceived_state": visual_part.get("perceived_state", "visible"),
-                    "perceived_position": visual_part.get("perceived_position"),
-                    "confidence": visual_part.get("confidence", 0.5),
-                    "sources": ["visual"]
-                }
-                
-            elif somatic_part:
-                # Only somatic data available
-                resolved_parts[part_name] = {
-                    "perceived_state": somatic_part.get("new_state", "neutral"),
-                    "confidence": min(0.7, somatic_part.get("confidence", 0.5)),  # Cap confidence without visual
-                    "sources": ["somatic"]
-                }
-        
-        return {
-            "resolved_parts": resolved_parts,
-            "has_visual_form": bool(visual_data.get("parts")),
-            "proprioception_confidence": somatic_data.get("proprioception_confidence", 
-                                                       self.current_state.proprioception_confidence)
-        }
+    # ---------------------------------------------------------------------
+    def _create_extract_somatic_features_tool(self):
+        @function_tool
+        async def _extract_somatic_features(                          # noqa: N802
+            ctx: RunContextWrapper["BodyImageContext"],
+            params: ExtractSomaticFeaturesParams,
+        ) -> SomaticFeaturesResult:
+            somatic_data = json.loads(params.somatic_json)
+            features: Dict[str, Any] = {}
     
-    @function_tool
-    async def _update_body_image_state(ctx: RunContextWrapper[BodyImageContext], 
-                                  resolved_data: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Update the body image state based on resolved perception data
-        
-        Args:
-            resolved_data: Resolved perception data
-            
-        Returns:
-            Update results
-        """
-        resolved_parts = resolved_data.get("resolved_parts", {})
-        updates = []
-        
-        for part_name, part_data in resolved_parts.items():
-            # Check if part exists
-            if part_name in self.current_state.perceived_parts:
-                current_part = self.current_state.perceived_parts[part_name]
-                
-                # Update part state
-                old_state = current_part.perceived_state
-                old_confidence = current_part.confidence
-                
-                current_part.perceived_state = part_data.get("perceived_state", current_part.perceived_state)
-                current_part.confidence = part_data.get("confidence", current_part.confidence)
-                
-                if "perceived_position" in part_data and part_data["perceived_position"]:
-                    current_part.perceived_position = part_data["perceived_position"]
-                
-                # Record update
-                updates.append({
-                    "part": part_name,
-                    "old_state": old_state,
-                    "new_state": current_part.perceived_state,
-                    "old_confidence": old_confidence,
-                    "new_confidence": current_part.confidence
-                })
-                
-            else:
-                # Create new part
-                new_part = BodyPartState(
-                    name=part_name,
-                    perceived_state=part_data.get("perceived_state", "neutral"),
-                    confidence=part_data.get("confidence", 0.5),
-                    perceived_position=part_data.get("perceived_position")
+            # ---- original logic -------------------------------------------------
+            if "dominant_sensation" in somatic_data:
+                features["dominant_sensation"] = somatic_data["dominant_sensation"]
+            if "intensity" in somatic_data:
+                features["intensity"] = somatic_data["intensity"]
+            if "secondary_sensations" in somatic_data:
+                features["secondary_sensations"] = somatic_data["secondary_sensations"]
+    
+            if "dominant_sensation" in somatic_data:
+                sensation = somatic_data["dominant_sensation"]
+                intensity = somatic_data.get("intensity", 0.5)
+                match sensation:
+                    case "movement" if intensity > 0.3:
+                        features["derived_state"] = "moving"
+                    case "temperature" if intensity > 0.6:
+                        features["derived_state"] = "heated"
+                    case "pressure" if intensity > 0.7:
+                        features["derived_state"] = "pressured"
+                    case "pain" if intensity > 0.3:
+                        features["derived_state"] = "damaged"
+                    case _:
+                        features["derived_state"] = "neutral"
+            # --------------------------------------------------------------------
+    
+            return SomaticFeaturesResult(json=json.dumps(features))
+    
+        return _extract_somatic_features
+    
+    
+    # ---------------------------------------------------------------------
+    def _create_calculate_somatic_confidence_tool(self):
+        @function_tool
+        async def _calculate_somatic_confidence(                       # noqa: N802
+            ctx: RunContextWrapper["BodyImageContext"],
+            params: CalculateSomaticConfidenceParams,
+        ) -> SomaticConfidenceResult:
+            sf = json.loads(params.somatic_features_json)
+            intensity = sf.get("intensity", 0.5)
+            confidence = 0.3 + intensity * 0.6
+            if isinstance(sf.get("secondary_sensations"), dict):
+                confidence += min(0.1, len(sf["secondary_sensations"]) * 0.02)
+            confidence = max(0.1, min(1.0, confidence))
+            return SomaticConfidenceResult(confidence=confidence)
+    
+        return _calculate_somatic_confidence
+    
+    
+    # ---------------------------------------------------------------------
+    def _create_analyze_visual_features_tool(self):
+        @function_tool
+        async def _analyze_visual_features(                           # noqa: N802
+            ctx: RunContextWrapper["BodyImageContext"],
+            params: AnalyzeVisualFeaturesParams,
+        ) -> VisualAnalysisResult:
+            percept = json.loads(params.percept_json)
+            MODS = {MODALITY_IMAGE, MODALITY_SYSTEM_SCREEN}
+            if not percept or percept.get("modality") not in MODS:
+                return VisualAnalysisResult(
+                    json=json.dumps({"error": "Invalid percept modality", "detected_features": {}})
                 )
-                
-                self.current_state.perceived_parts[part_name] = new_part
-                
-                # Record update
-                updates.append({
-                    "part": part_name,
-                    "new_state": new_part.perceived_state,
-                    "new_confidence": new_part.confidence,
-                    "created": True
-                })
-        
-        # Update overall state
-        self.current_state.has_visual_form = resolved_data.get("has_visual_form", 
-                                                            self.current_state.has_visual_form)
-        
-        self.current_state.proprioception_confidence = resolved_data.get("proprioception_confidence", 
-                                                                      self.current_state.proprioception_confidence)
-        
-        # Set timestamps
-        now = datetime.datetime.now()
-        
-        if resolved_data.get("has_visual_form"):
-            self.current_state.last_visual_update = now
-            
-        if "proprioception_confidence" in resolved_data:
-            self.current_state.last_somatic_correlation_time = now
-            
-        return {
-            "updates": updates,
-            "updated_parts_count": len(updates),
-            "current_proprioception_confidence": self.current_state.proprioception_confidence,
-            "has_visual_form": self.current_state.has_visual_form
-        }
     
-    @function_tool
-    async def _get_body_image_state(ctx: RunContextWrapper[BodyImageContext]) -> Dict[str, Any]:
-        """
-        Get the current body image state
-        
-        Returns:
-            Current body image state
-        """
-        # Apply confidence decay based on time since last update
-        now = datetime.datetime.now()
-        
-        if self.current_state.last_visual_update:
-            hours_since_visual = (now - self.current_state.last_visual_update).total_seconds() / 3600
-            if hours_since_visual > 1:  # More than an hour
-                decay_factor = 0.95 ** min(24, hours_since_visual)  # Cap at 24 hours of decay
-                self.current_state.proprioception_confidence *= decay_factor
-        
-        # Convert to dictionary
-        parts = {}
-        for name, part in self.current_state.perceived_parts.items():
-            parts[name] = part.dict()
-            
-        return {
-            "has_visual_form": self.current_state.has_visual_form,
-            "form_description": self.current_state.form_description,
-            "parts": parts,
-            "overall_integrity": self.current_state.overall_integrity,
-            "proprioception_confidence": self.current_state.proprioception_confidence,
-            "last_visual_update": self.current_state.last_visual_update.isoformat() if self.current_state.last_visual_update else None,
-            "last_somatic_correlation_time": self.current_state.last_somatic_correlation_time.isoformat() if self.current_state.last_somatic_correlation_time else None
-        }
+            image_features = percept.get("content", {})
+            if "objects" not in image_features:
+                return VisualAnalysisResult(
+                    json=json.dumps({"error": "Missing object detection data", "detected_features": {}})
+                )
+    
+            body_features = {}
+            for name, data in image_features.get("objects", {}).items():
+                if "avatar_" in name or "nyx_" in name:
+                    part = name.replace("avatar_", "").replace("nyx_", "")
+                    body_features[part] = {
+                        "confidence": data.get("confidence", percept.get("bottom_up_confidence", 0.5)),
+                        "position": data.get("position"),
+                        "bounding_box": data.get("bounding_box"),
+                        "attributes": data.get("attributes", {}),
+                    }
+    
+            result = {
+                "body_features": body_features,
+                "form_description": image_features.get("description", self.current_state.form_description),
+                "detection_confidence": percept.get("bottom_up_confidence", 0.5),
+                "timestamp": percept.get("timestamp", datetime.datetime.now().isoformat()),
+            }
+            return VisualAnalysisResult(json=json.dumps(result))
+    
+        return _analyze_visual_features
+    
+    
+    # ---------------------------------------------------------------------
+    def _create_extract_body_part_states_tool(self):
+        @function_tool
+        async def _extract_body_part_states(                          # noqa: N802
+            ctx: RunContextWrapper["BodyImageContext"],
+            params: ExtractBodyPartStatesParams,
+        ) -> BodyPartStatesResult:
+            body_features = json.loads(params.body_features_json)
+            part_states: Dict[str, Dict[str, Any]] = {}
+    
+            # ---- original logic -------------------------------------------------
+            for part, feats in body_features.items():
+                state = "visible"
+                attrs = feats.get("attributes", {})
+                if attrs.get("moving"):
+                    state = "moving"
+                elif attrs.get("glowing"):
+                    state = "glowing"
+                elif attrs.get("damaged"):
+                    state = "damaged"
+    
+                part_states[part] = {
+                    "perceived_state": state,
+                    "confidence": feats.get("confidence", 0.5),
+                    "perceived_position": feats.get("position"),
+                }
+            # --------------------------------------------------------------------
+    
+            return BodyPartStatesResult(json=json.dumps(part_states))
+    
+        return _extract_body_part_states
+    
+    
+    # ---------------------------------------------------------------------
+    def _create_get_current_visual_state_tool(self):
+        @function_tool
+        async def _get_current_visual_state(                          # noqa: N802
+            ctx: RunContextWrapper["BodyImageContext"],
+        ) -> CurrentVisualStateResult:
+            parts = {n: p.dict() for n, p in self.current_state.perceived_parts.items()}
+            state = {
+                "has_visual_form": self.current_state.has_visual_form,
+                "form_description": self.current_state.form_description,
+                "parts": parts,
+                "last_visual_update": (
+                    self.current_state.last_visual_update.isoformat()
+                    if self.current_state.last_visual_update
+                    else None
+                ),
+                "proprioception_confidence": self.current_state.proprioception_confidence,
+            }
+            return CurrentVisualStateResult(json=json.dumps(state))
+    
+        return _get_current_visual_state
+    
+    
+    # ---------------------------------------------------------------------
+    def _create_analyze_somatic_data_tool(self):
+        @function_tool
+        async def _analyze_somatic_data(                              # noqa: N802
+            ctx: RunContextWrapper["BodyImageContext"],
+        ) -> SomaticDataAnalysisResult:
+            if not ctx.context.dss:
+                return SomaticDataAnalysisResult(
+                    json=json.dumps({"error": "No digital somatosensory system available", "somatic_data": {}})
+                )
+    
+            try:
+                s_state = await ctx.context.dss.get_body_state()
+                summary = s_state.get("regions_summary", {})
+                processed: Dict[str, Any] = {}
+                for region, data in summary.items():
+                    dom = data.get("dominant_sensation", "neutral")
+                    intensity = data.get(dom, 0.0)
+                    if dom == "temperature":
+                        intensity = abs(intensity - 0.5) * 2
+                    processed[region] = {
+                        "dominant_sensation": dom,
+                        "intensity": intensity,
+                        "secondary_sensations": {
+                            k: v
+                            for k, v in data.items()
+                            if k != "dominant_sensation" and isinstance(v, (int, float))
+                        },
+                    }
+                payload = {"somatic_data": processed, "timestamp": datetime.datetime.now().isoformat()}
+                return SomaticDataAnalysisResult(json=json.dumps(payload))
+            except Exception as exc:
+                logger.error(f"Error retrieving somatic data: {exc}")
+                return SomaticDataAnalysisResult(json=json.dumps({"error": str(exc), "somatic_data": {}}))
+    
+        return _analyze_somatic_data
+    
+    
+    # ---------------------------------------------------------------------
+    def _create_correlate_somatic_visual_tool(self):
+        @function_tool
+        async def _correlate_somatic_visual(                          # noqa: N802
+            ctx: RunContextWrapper["BodyImageContext"],
+            params: CorrelateSomaticVisualParams,
+        ) -> CorrelationResult:
+            somatic_data = json.loads(params.somatic_json)
+            correlated: Dict[str, Any] = {}
+            for part, part_state in self.current_state.perceived_parts.items():
+                reg = somatic_data.get(part)
+                if not reg:
+                    continue
+                dom = reg.get("dominant_sensation", "neutral")
+                inten = reg.get("intensity", 0.0)
+                new_state = dom if inten > 0.3 else "neutral"
+                if part_state.perceived_state == new_state:
+                    adj = min(0.1, inten * 0.2)
+                else:
+                    adj = -min(0.1, inten * 0.2)
+                correlated[part] = {
+                    "current_state": part_state.perceived_state,
+                    "new_state": new_state,
+                    "confidence_adjustment": adj,
+                    "intensity": inten,
+                }
+            result = {
+                "correlated_parts": correlated,
+                "correlation_time": datetime.datetime.now().isoformat(),
+            }
+            return CorrelationResult(json=json.dumps(result))
+    
+        return _correlate_somatic_visual
+    
+    
+    # ---------------------------------------------------------------------
+    def _create_calculate_proprioception_confidence_tool(self):
+        @function_tool
+        async def _calculate_proprioception_confidence(               # noqa: N802
+            ctx: RunContextWrapper["BodyImageContext"],
+            params: ProprioceptionConfidenceParams,
+        ) -> ProprioceptionConfidenceResult:
+            corr = json.loads(params.correlation_json).get("correlated_parts", {})
+            if not corr:
+                return ProprioceptionConfidenceResult(
+                    confidence=self.current_state.proprioception_confidence
+                )
+            avg_adj = sum(p.get("confidence_adjustment", 0.0) for p in corr.values()) / len(corr)
+            new_c = max(0.1, min(1.0, self.current_state.proprioception_confidence + avg_adj))
+            return ProprioceptionConfidenceResult(confidence=new_c)
+    
+        return _calculate_proprioception_confidence
+    
+    
+    # ---------------------------------------------------------------------
+    def _create_resolve_perception_conflicts_tool(self):
+        @function_tool
+        async def _resolve_perception_conflicts(                      # noqa: N802
+            ctx: RunContextWrapper["BodyImageContext"],
+            params: ResolvePerceptionConflictsParams,
+        ) -> ResolveConflictsResult:
+            visual_data  = json.loads(params.visual_json)
+            somatic_data = json.loads(params.somatic_json)
+            resolved: Dict[str, Any] = {}
+    
+            parts = set(visual_data.get("parts", {}).keys()) | set(
+                somatic_data.get("correlated_parts", {}).keys()
+            )
+            for part in parts:
+                v_part = visual_data.get("parts", {}).get(part)
+                s_part = somatic_data.get("correlated_parts", {}).get(part)
+                # ---- original resolution logic (condensed for brevity) ----------
+                if v_part and s_part:
+                    v_conf = v_part.get("confidence", 0.5)
+                    position = v_part.get("perceived_position")
+                    state = (
+                        v_part.get("perceived_state", "visible")
+                        if v_conf > 0.7
+                        else s_part.get("new_state", "neutral")
+                    )
+                    comb_conf = v_conf * 0.7 + s_part.get("confidence", 0.5) * 0.3
+                    resolved[part] = {
+                        "perceived_state": state,
+                        "perceived_position": position,
+                        "confidence": comb_conf,
+                        "sources": ["visual", "somatic"],
+                    }
+                elif v_part:
+                    resolved[part] = {
+                        "perceived_state": v_part.get("perceived_state", "visible"),
+                        "perceived_position": v_part.get("perceived_position"),
+                        "confidence": v_part.get("confidence", 0.5),
+                        "sources": ["visual"],
+                    }
+                elif s_part:
+                    resolved[part] = {
+                        "perceived_state": s_part.get("new_state", "neutral"),
+                        "confidence": min(0.7, s_part.get("confidence", 0.5)),
+                        "sources": ["somatic"],
+                    }
+            result = {
+                "resolved_parts": resolved,
+                "has_visual_form": bool(visual_data.get("parts")),
+                "proprioception_confidence": somatic_data.get(
+                    "proprioception_confidence", self.current_state.proprioception_confidence
+                ),
+            }
+            return ResolveConflictsResult(json=json.dumps(result))
+    
+        return _resolve_perception_conflicts
+    
+    
+    # ---------------------------------------------------------------------
+    def _create_update_body_image_state_tool(self):
+        @function_tool
+        async def _update_body_image_state(                           # noqa: N802
+            ctx: RunContextWrapper["BodyImageContext"],
+            params: UpdateBodyImageStateParams,
+        ) -> UpdateBodyImageStateResult:
+            resolved_data = json.loads(params.resolved_json)
+            updates: List[Dict[str, Any]] = []
+    
+            for part, pdata in resolved_data.get("resolved_parts", {}).items():
+                if part in self.current_state.perceived_parts:
+                    curr = self.current_state.perceived_parts[part]
+                    updates.append(
+                        {
+                            "part": part,
+                            "old_state": curr.perceived_state,
+                            "new_state": pdata.get("perceived_state", curr.perceived_state),
+                            "old_confidence": curr.confidence,
+                            "new_confidence": pdata.get("confidence", curr.confidence),
+                        }
+                    )
+                    curr.perceived_state = pdata.get("perceived_state", curr.perceived_state)
+                    curr.confidence = pdata.get("confidence", curr.confidence)
+                    if "perceived_position" in pdata and pdata["perceived_position"]:
+                        curr.perceived_position = pdata["perceived_position"]
+                else:
+                    new_p = BodyPartState(
+                        name=part,
+                        perceived_state=pdata.get("perceived_state", "neutral"),
+                        confidence=pdata.get("confidence", 0.5),
+                        perceived_position=pdata.get("perceived_position"),
+                    )
+                    self.current_state.perceived_parts[part] = new_p
+                    updates.append(
+                        {
+                            "part": part,
+                            "new_state": new_p.perceived_state,
+                            "new_confidence": new_p.confidence,
+                            "created": True,
+                        }
+                    )
+    
+            self.current_state.has_visual_form = resolved_data.get(
+                "has_visual_form", self.current_state.has_visual_form
+            )
+            self.current_state.proprioception_confidence = resolved_data.get(
+                "proprioception_confidence", self.current_state.proprioception_confidence
+            )
+    
+            now = datetime.datetime.now()
+            if resolved_data.get("has_visual_form"):
+                self.current_state.last_visual_update = now
+            if "proprioception_confidence" in resolved_data:
+                self.current_state.last_somatic_correlation_time = now
+    
+            payload = {
+                "updates": updates,
+                "updated_parts_count": len(updates),
+                "current_proprioception_confidence": self.current_state.proprioception_confidence,
+                "has_visual_form": self.current_state.has_visual_form,
+            }
+            return UpdateBodyImageStateResult(
+                json=json.dumps(payload),
+                updated_parts_count=len(updates),
+                current_proprioception_confidence=self.current_state.proprioception_confidence,
+                has_visual_form=self.current_state.has_visual_form,
+            )
+    
+        return _update_body_image_state
+    
+    
+    # ---------------------------------------------------------------------
+    def _create_get_body_image_state_tool(self):
+        @function_tool
+        async def _get_body_image_state(                              # noqa: N802
+            ctx: RunContextWrapper["BodyImageContext"],
+        ) -> BodyImageStateResult:
+            now = datetime.datetime.now()
+            if self.current_state.last_visual_update:
+                hrs = (now - self.current_state.last_visual_update).total_seconds() / 3600
+                if hrs > 1:
+                    self.current_state.proprioception_confidence *= 0.95 ** min(24, hrs)
+    
+            state = {
+                "has_visual_form": self.current_state.has_visual_form,
+                "form_description": self.current_state.form_description,
+                "parts": {n: p.dict() for n, p in self.current_state.perceived_parts.items()},
+                "overall_integrity": self.current_state.overall_integrity,
+                "proprioception_confidence": self.current_state.proprioception_confidence,
+                "last_visual_update": (
+                    self.current_state.last_visual_update.isoformat()
+                    if self.current_state.last_visual_update
+                    else None
+                ),
+                "last_somatic_correlation_time": (
+                    self.current_state.last_somatic_correlation_time.isoformat()
+                    if self.current_state.last_somatic_correlation_time
+                    else None
+                ),
+            }
+            return BodyImageStateResult(json=json.dumps(state))
+    
+        return _get_body_image_state
     
     # Public API methods
     
