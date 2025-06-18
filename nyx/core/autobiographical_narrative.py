@@ -21,6 +21,11 @@ from agents import (
 
 logger = logging.getLogger(__name__)
 
+class MemoryEmotionAnalysisResult(BaseModel, extra="forbid"):
+    dominant_emotions: List[tuple[str, int]]
+    emotion_intensities: Dict[str, float]
+    emotional_arcs: List[str]
+
 class NarrativeSegment(BaseModel):
     """A segment of the autobiographical narrative."""
     segment_id: str = Field(default_factory=lambda: f"seg_{uuid.uuid4().hex[:8]}")
@@ -332,70 +337,55 @@ class AutobiographicalNarrative:
                 tripwire_triggered=True
             )
 
-    # Factory methods for creating bound tools (ISSUE B: Proper indentation)
     def _create_analyze_memory_emotions_tool(self):
-        """Factory method to create the analyze memory emotions tool"""
+        """Factory → FunctionTool that analyses emotions in a memory list"""
         @function_tool
-        async def _analyze_memory_emotions(ctx: RunContextWrapper[NarrativeContext], 
-                                         params: MemoryEmotionAnalysisParams) -> Dict[str, Any]:
-            """
-            Analyze emotional patterns in memories
-            
-            Args:
-                params: Parameters containing memories to analyze
-                
-            Returns:
-                Emotional patterns detected in memories
-            """
-            memories = params.memories
-            emotion_counts = {}
-            emotion_intensities = {}
-            emotional_arcs = []
-            
-            # Check for emotional metadata in memories
-            for memory in memories:
-                if "emotional_context" in memory:
-                    emotion_data = memory["emotional_context"]
-                    
-                    # Count primary emotions
-                    if "primary_emotion" in emotion_data:
-                        emotion = emotion_data["primary_emotion"]
-                        emotion_counts[emotion] = emotion_counts.get(emotion, 0) + 1
-                        
-                        # Track intensity
-                        if "primary_intensity" in emotion_data:
-                            if emotion not in emotion_intensities:
-                                emotion_intensities[emotion] = []
-                            emotion_intensities[emotion].append(emotion_data["primary_intensity"])
-            
-            # Calculate average intensities
-            avg_intensities = {}
-            for emotion, intensities in emotion_intensities.items():
-                avg_intensities[emotion] = sum(intensities) / len(intensities)
-                
-            # Detect emotional arcs (simplified)
-            if len(memories) >= 3:
-                # Sort memories chronologically
-                sorted_memories = sorted(memories, key=lambda m: m.get("metadata", {}).get("timestamp", ""))
-                
-                # Check for emotional shifts
-                prev_emotion = None
-                for memory in sorted_memories:
-                    if "emotional_context" in memory and "primary_emotion" in memory["emotional_context"]:
-                        current_emotion = memory["emotional_context"]["primary_emotion"]
-                        
-                        if prev_emotion and current_emotion != prev_emotion:
-                            emotional_arcs.append(f"{prev_emotion} to {current_emotion}")
-                            
-                        prev_emotion = current_emotion
-            
-            return {
-                "dominant_emotions": sorted(emotion_counts.items(), key=lambda x: x[1], reverse=True),
-                "emotion_intensities": avg_intensities,
-                "emotional_arcs": emotional_arcs
+        async def _analyze_memory_emotions(                # noqa: N802
+            ctx: RunContextWrapper[NarrativeContext],
+            memories: List[Dict[str, Any]],                # <-- direct arg
+        ) -> MemoryEmotionAnalysisResult:                  # <-- typed result
+            # ---------- logic unchanged ------------------
+            emotion_counts: Dict[str, int] = {}
+            emotion_intensities: Dict[str, List[float]] = {}
+            emotional_arcs: List[str] = []
+    
+            for mem in memories:
+                emo_ctx = mem.get("emotional_context")
+                if not emo_ctx:
+                    continue
+    
+                emo = emo_ctx.get("primary_emotion")
+                if emo:
+                    emotion_counts[emo] = emotion_counts.get(emo, 0) + 1
+    
+                    inten = emo_ctx.get("primary_intensity")
+                    if inten is not None:
+                        emotion_intensities.setdefault(emo, []).append(float(inten))
+    
+            avg_inten = {
+                e: sum(lst) / len(lst) for e, lst in emotion_intensities.items()
             }
-        
-        return _analyze_memory_emotions  # ISSUE B: Correct indentation - inside factory!
+    
+            if len(memories) >= 3:
+                sorted_mems = sorted(
+                    memories, key=lambda m: m.get("metadata", {}).get("timestamp", "")
+                )
+                prev = None
+                for mem in sorted_mems:
+                    curr = mem.get("emotional_context", {}).get("primary_emotion")
+                    if prev and curr and curr != prev:
+                        emotional_arcs.append(f"{prev} → {curr}")
+                    if curr:
+                        prev = curr
+            # ---------------------------------------------
+    
+            return MemoryEmotionAnalysisResult(
+                dominant_emotions=sorted(emotion_counts.items(), key=lambda x: x[1], reverse=True),
+                emotion_intensities=avg_inten,
+                emotional_arcs=emotional_arcs,
+            )
+    
+        return _analyze_memory_emotions
 
     def _create_identify_memory_themes_tool(self):
         """Factory method to create the identify memory themes tool"""
