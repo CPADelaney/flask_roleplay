@@ -31,6 +31,73 @@ logger = logging.getLogger(__name__)
 
 # ── helper models ────────────────────────────────────────────────
 
+class _Insight(BaseModel, extra="forbid"):
+    type: str
+    description: str
+    confidence: float
+    system: Optional[str] = None
+    priority: Optional[str] = None
+
+
+class _ImprovementArea(BaseModel, extra="forbid"):
+    system: str
+    priority: int
+    metrics_to_improve: List[str] = Field(default_factory=list)
+    current_metrics: Dict[str, Any] = Field(default_factory=dict)
+    current_status: Optional[str] = None
+    description: Optional[str] = None
+    details: List[str] = Field(default_factory=list)
+
+
+# ---------- Params / Results for each tool -----------------------------------
+class GenerateCognitiveInsightsParams(BaseModel, extra="forbid"):
+    performance_json: str
+
+
+class CognitiveInsightsResult(BaseModel, extra="forbid"):
+    insights: List[_Insight]
+
+
+class IdentifyImprovementAreasParams(BaseModel, extra="forbid"):
+    performance_json: str
+    insights_json: str
+
+
+class ImprovementAreasResult(BaseModel, extra="forbid"):
+    improvement_areas: List[_ImprovementArea]
+
+
+class CreateImprovementPlanParams(BaseModel, extra="forbid"):
+    improvement_areas_json: str
+    strategies_json: str
+
+
+class ImprovementPlanResult(BaseModel, extra="forbid"):
+    plan_json: str
+
+
+class UpdateSystemParametersParams(BaseModel, extra="forbid"):
+    bottlenecks_json: str
+    strategy_analysis_json: str
+
+
+class UpdateSystemParametersResult(BaseModel, extra="forbid"):
+    updates_json: str
+
+
+class MetaParametersUpdateResult(BaseModel, extra="forbid"):
+    original_values_json: str
+    updated_values_json: str
+    cycle: int
+
+
+class GenerateCognitiveStrategiesParams(BaseModel, extra="forbid"):
+    improvement_areas_json: str
+
+
+class CognitiveStrategiesResult(BaseModel, extra="forbid"):
+    strategies_json: str
+
 class SelectStrategyParams(BaseModel, extra="forbid"):
     """Strict wrapper around the raw (JSON) inputs."""
     context_json: str
@@ -1640,395 +1707,433 @@ class MetaCore:
         return _analyze_recent_performance
     
     def _create_generate_cognitive_insights_tool(self):
-        """Create the generate cognitive insights tool with proper access to self"""
+        """Return strict generate-insights tool"""
+    
         @function_tool
-        async def _generate_cognitive_insights(ctx: RunContextWrapper, performance_analysis: Dict[str, Any]) -> List[Dict[str, Any]]:
-            """
-            Generate insights about cognitive patterns and performance
-            
-            Args:
-                performance_analysis: Analysis of performance data
-                
-            Returns:
-                List of cognitive insights
-            """
-            insights = []
-            
-            # Check for systems with excellent performance
-            excellent_systems = [sys for sys, data in performance_analysis.items() 
-                               if data.get("status") == "excellent"]
-            
-            if excellent_systems:
-                insights.append({
-                    "type": "strength",
-                    "description": f"Systems showing excellent performance: {', '.join(excellent_systems)}",
-                    "confidence": 0.9
-                })
-            
-            # Check for systems with critical performance
-            critical_systems = [sys for sys, data in performance_analysis.items() 
-                              if data.get("status") == "critical"]
-            
-            if critical_systems:
-                insights.append({
-                    "type": "weakness",
-                    "description": f"Systems showing critical performance issues: {', '.join(critical_systems)}",
-                    "confidence": 0.9,
-                    "priority": "high"
-                })
-                
-                # Add specific insights for each critical system
-                for system in critical_systems:
-                    trends = performance_analysis[system].get("trends", {})
-                    metrics = performance_analysis[system].get("current_metrics", {})
-                    
-                    # Identify problematic metrics
+        async def _generate_cognitive_insights(          # noqa: N802
+            ctx: RunContextWrapper,
+            params: GenerateCognitiveInsightsParams,
+        ) -> CognitiveInsightsResult:
+            performance_analysis = json.loads(params.performance_json)
+            insights: List[Dict[str, Any]] = []
+    
+            # --- original logic --------------------------------------------------
+            excellent = [
+                sys for sys, data in performance_analysis.items()
+                if data.get("status") == "excellent"
+            ]
+            if excellent:
+                insights.append(
+                    {
+                        "type": "strength",
+                        "description": (
+                            f"Systems showing excellent performance: {', '.join(excellent)}"
+                        ),
+                        "confidence": 0.9,
+                    }
+                )
+    
+            critical = [
+                sys for sys, data in performance_analysis.items()
+                if data.get("status") == "critical"
+            ]
+            if critical:
+                insights.append(
+                    {
+                        "type": "weakness",
+                        "description": (
+                            f"Systems showing critical performance issues: {', '.join(critical)}"
+                        ),
+                        "confidence": 0.9,
+                        "priority": "high",
+                    }
+                )
+                # details per critical system
+                for system in critical:
+                    trends   = performance_analysis[system].get("trends", {})
+                    metrics  = performance_analysis[system].get("current_metrics", {})
                     if metrics.get("error_rate", 0) > 0.3:
-                        insights.append({
-                            "type": "weakness",
-                            "system": system,
-                            "description": f"High error rate in {system} system: {metrics['error_rate']:.2f}",
-                            "confidence": 0.9,
-                            "priority": "high"
-                        })
-                    
+                        insights.append(
+                            {
+                                "type": "weakness",
+                                "system": system,
+                                "description": (
+                                    f"High error rate in {system} system: "
+                                    f"{metrics['error_rate']:.2f}"
+                                ),
+                                "confidence": 0.9,
+                                "priority": "high",
+                            }
+                        )
                     if metrics.get("response_time", 0) > 2.0:
-                        insights.append({
-                            "type": "weakness",
-                            "system": system,
-                            "description": f"Slow response time in {system} system: {metrics['response_time']:.2f}s",
-                            "confidence": 0.9,
-                            "priority": "high"
-                        })
-                    
+                        insights.append(
+                            {
+                                "type": "weakness",
+                                "system": system,
+                                "description": (
+                                    f"Slow response time in {system} system: "
+                                    f"{metrics['response_time']:.2f}s"
+                                ),
+                                "confidence": 0.9,
+                                "priority": "high",
+                            }
+                        )
                     if metrics.get("success_rate", 1.0) < 0.5:
-                        insights.append({
-                            "type": "weakness",
-                            "system": system,
-                            "description": f"Low success rate in {system} system: {metrics['success_rate']:.2f}",
-                            "confidence": 0.9,
-                            "priority": "high"
-                        })
-            
-            # Check cross-system patterns
-            all_statuses = [data.get("status") for data in performance_analysis.values() 
-                          if "status" in data and data["status"] != "insufficient_data"]
-            
-            if all_statuses and all(status in ["excellent", "good"] for status in all_statuses):
-                insights.append({
-                    "type": "synergy",
-                    "description": "All systems are performing well, indicating good synergy",
-                    "confidence": 0.8
-                })
-            
-            return insights
-        
+                        insights.append(
+                            {
+                                "type": "weakness",
+                                "system": system,
+                                "description": (
+                                    f"Low success rate in {system} system: "
+                                    f"{metrics['success_rate']:.2f}"
+                                ),
+                                "confidence": 0.9,
+                                "priority": "high",
+                            }
+                        )
+    
+            all_statuses = [
+                data.get("status")
+                for data in performance_analysis.values()
+                if "status" in data and data["status"] != "insufficient_data"
+            ]
+            if all_statuses and all(s in ("excellent", "good") for s in all_statuses):
+                insights.append(
+                    {
+                        "type": "synergy",
+                        "description": (
+                            "All systems are performing well, indicating good synergy"
+                        ),
+                        "confidence": 0.8,
+                    }
+                )
+            # ---------------------------------------------------------------------
+    
+            return CognitiveInsightsResult(
+                insights=[_Insight(**i) for i in insights],
+            )
+    
         return _generate_cognitive_insights
     
     def _create_identify_improvement_areas_tool(self):
-        """Create the identify improvement areas tool with proper access to self"""
+        """Return strict identify-improvement-areas tool"""
+    
         @function_tool
-        async def _identify_improvement_areas(ctx: RunContextWrapper, 
-                                          performance_analysis: Dict[str, Any], 
-                                          insights: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-            """
-            Identify specific areas for cognitive improvement
-            
-            Args:
-                performance_analysis: Analysis of performance
-                insights: Generated insights
-                
-            Returns:
-                List of improvement areas
-            """
-            improvement_areas = []
-            
-            # Identify systems needing improvement
-            critical_systems = [sys for sys, data in performance_analysis.items() 
-                              if data.get("status") in ["critical", "concerning"]]
-            
+        async def _identify_improvement_areas(          # noqa: N802
+            ctx: RunContextWrapper,
+            params: IdentifyImprovementAreasParams,
+        ) -> ImprovementAreasResult:
+            performance_analysis = json.loads(params.performance_json)
+            insights             = json.loads(params.insights_json)
+    
+            improvement_areas: List[Dict[str, Any]] = []
+    
+            # --- original logic --------------------------------------------------
+            critical_systems = [
+                sys for sys, data in performance_analysis.items()
+                if data.get("status") in ("critical", "concerning")
+            ]
             for system_name in critical_systems:
                 analysis = performance_analysis[system_name]
-                
-                # Identify problematic metrics
-                problematic_metrics = []
-                for metric, trend in analysis.get("trends", {}).items():
-                    if trend.get("direction") == "declining" and trend.get("magnitude", 0) > 0.1:
-                        problematic_metrics.append(metric)
-                
-                # Current metrics for reference
-                current_metrics = analysis.get("current_metrics", {})
-                
-                # Determine priority
-                priority = 1 if analysis.get("status") == "critical" else 2
-                
-                improvement_areas.append({
-                    "system": system_name,
-                    "priority": priority,
-                    "metrics_to_improve": problematic_metrics,
-                    "current_metrics": current_metrics,
-                    "current_status": analysis.get("status")
-                })
-            
-            # Check for resource allocation improvements
-            resource_insights = [i for i in insights if i["type"] in ["efficiency", "inefficiency"]]
-            
+                problematic = [
+                    metric
+                    for metric, trend in analysis.get("trends", {}).items()
+                    if trend.get("direction") == "declining" and trend.get("magnitude", 0) > 0.1
+                ]
+                improvement_areas.append(
+                    {
+                        "system": system_name,
+                        "priority": 1 if analysis.get("status") == "critical" else 2,
+                        "metrics_to_improve": problematic,
+                        "current_metrics": analysis.get("current_metrics", {}),
+                        "current_status": analysis.get("status"),
+                    }
+                )
+    
+            resource_insights = [
+                i for i in insights if i.get("type") in ("efficiency", "inefficiency")
+            ]
             if resource_insights:
-                improvement_areas.append({
-                    "system": "resource_allocation",
-                    "priority": 3,  # Lower priority than system-specific issues
-                    "description": "Resource allocation needs optimization",
-                    "details": [i["description"] for i in resource_insights],
-                    "current_status": "inefficient"
-                })
-            
-            # Sort by priority
+                improvement_areas.append(
+                    {
+                        "system": "resource_allocation",
+                        "priority": 3,
+                        "description": "Resource allocation needs optimization",
+                        "details": [i["description"] for i in resource_insights],
+                        "current_status": "inefficient",
+                        "metrics_to_improve": [],
+                        "current_metrics": {},
+                    }
+                )
+    
             improvement_areas.sort(key=lambda x: x["priority"])
-            
-            return improvement_areas
-        
+            # ---------------------------------------------------------------------
+    
+            return ImprovementAreasResult(
+                improvement_areas=[_ImprovementArea(**ia) for ia in improvement_areas]
+            )
+    
         return _identify_improvement_areas
+
     
     def _create_create_improvement_plan_tool(self):
-        """Create the create improvement plan tool with proper access to self"""
+        """Return strict create-improvement-plan tool"""
+    
         @function_tool
-        async def _create_improvement_plan(ctx: RunContextWrapper,
-                                       improvement_areas: List[Dict[str, Any]], 
-                                       strategies: List[Dict[str, Any]]) -> Dict[str, Any]:
-            """
-            Create a comprehensive improvement plan
-            
-            Args:
-                improvement_areas: Areas needing improvement
-                strategies: Available strategies
-                
-            Returns:
-                Comprehensive improvement plan
-            """
-            # Map strategies to improvement areas
-            area_strategies = {}
-            for area in improvement_areas:
-                system = area.get("system")
-                area_strategies[system] = [s for s in strategies if s.get("system") == system]
-            
-            # Create plan with phases
+        async def _create_improvement_plan(             # noqa: N802
+            ctx: RunContextWrapper,
+            params: CreateImprovementPlanParams,
+        ) -> ImprovementPlanResult:
+            improvement_areas = json.loads(params.improvement_areas_json)
+            strategies        = json.loads(params.strategies_json)
+    
+            # --- original logic (unchanged) -------------------------------------
             plan = {
                 "timestamp": datetime.datetime.now().isoformat(),
                 "cycle": self.context.cognitive_cycle_count,
-                "priority_areas": [area["system"] for area in improvement_areas if area.get("priority", 3) == 1],
+                "priority_areas": [
+                    area["system"]
+                    for area in improvement_areas
+                    if area.get("priority", 3) == 1
+                ],
                 "phases": [
                     {
                         "name": "Critical Improvements",
-                        "duration": 5,  # cycles
-                        "targets": [area["system"] for area in improvement_areas if area.get("priority", 3) == 1],
-                        "strategies": [s for s in strategies if s.get("system") in 
-                                    [area["system"] for area in improvement_areas if area.get("priority", 3) == 1]]
+                        "duration": 5,
+                        "targets": [
+                            area["system"]
+                            for area in improvement_areas
+                            if area.get("priority", 3) == 1
+                        ],
+                        "strategies": [
+                            s for s in strategies
+                            if s.get("system") in [
+                                area["system"]
+                                for area in improvement_areas
+                                if area.get("priority", 3) == 1
+                            ]
+                        ],
                     },
                     {
                         "name": "Secondary Enhancements",
-                        "duration": 10,  # cycles
-                        "targets": [area["system"] for area in improvement_areas if area.get("priority", 3) == 2],
-                        "strategies": [s for s in strategies if s.get("system") in 
-                                    [area["system"] for area in improvement_areas if area.get("priority", 3) == 2]]
+                        "duration": 10,
+                        "targets": [
+                            area["system"]
+                            for area in improvement_areas
+                            if area.get("priority", 3) == 2
+                        ],
+                        "strategies": [
+                            s for s in strategies
+                            if s.get("system") in [
+                                area["system"]
+                                for area in improvement_areas
+                                if area.get("priority", 3) == 2
+                            ]
+                        ],
                     },
                     {
                         "name": "Optimization",
-                        "duration": 15,  # cycles
-                        "targets": [area["system"] for area in improvement_areas if area.get("priority", 3) == 3],
-                        "strategies": [s for s in strategies if s.get("system") in 
-                                    [area["system"] for area in improvement_areas if area.get("priority", 3) == 3]]
-                    }
+                        "duration": 15,
+                        "targets": [
+                            area["system"]
+                            for area in improvement_areas
+                            if area.get("priority", 3) == 3
+                        ],
+                        "strategies": [
+                            s for s in strategies
+                            if s.get("system") in [
+                                area["system"]
+                                for area in improvement_areas
+                                if area.get("priority", 3) == 3
+                            ]
+                        ],
+                    },
                 ],
                 "expected_outcomes": {
                     "performance_improvement": 0.3,
                     "bottleneck_reduction": 0.5,
-                    "efficiency_gain": 0.2
+                    "efficiency_gain": 0.2,
                 },
-                "status": "created"
+                "status": "created",
             }
-            
-            return plan
-        
+            # ---------------------------------------------------------------------
+    
+            return ImprovementPlanResult(plan_json=json.dumps(plan))
+    
         return _create_improvement_plan
     
     def _create_update_system_parameters_tool(self):
-        """Create the update system parameters tool with proper access to self"""
+        """Return strict update-system-parameters tool"""
+    
         @function_tool
-        async def _update_system_parameters(ctx: RunContextWrapper, bottlenecks: List[Dict[str, Any]], 
-                                         strategy_analysis: Dict[str, Any]) -> Dict[str, Any]:
-            """
-            Update parameters in other core systems based on evaluation
-            
-            Args:
-                bottlenecks: Identified bottlenecks
-                strategy_analysis: Strategy analysis
-                
-            Returns:
-                Updates made to system parameters
-            """
-            updates_made = {}
-            
-            # Process critical bottlenecks
+        async def _update_system_parameters(            # noqa: N802
+            ctx: RunContextWrapper,
+            params: UpdateSystemParametersParams,
+        ) -> UpdateSystemParametersResult:
+            bottlenecks       = json.loads(params.bottlenecks_json)
+            strategy_analysis = json.loads(params.strategy_analysis_json)
+            updates_made: Dict[str, Any] = {}
+    
+            # --- original logic --------------------------------------------------
             critical_bottlenecks = [b for b in bottlenecks if b["severity"] >= 0.7]
-            
             for bottleneck in critical_bottlenecks:
                 system_name = bottleneck["process_type"]
-                
                 if system_name in self.context.system_references:
                     system = self.context.system_references[system_name]
-                    
-                    # Create parameter adjustments based on bottleneck type
-                    param_adjustments = {}
-                    
-                    if bottleneck["type"] == "high_error_rate":
-                        param_adjustments = {
-                            "error_correction_level": "high",
-                            "validation_threshold": 0.8
-                        }
-                    elif bottleneck["type"] == "slow_response":
-                        param_adjustments = {
-                            "caching_enabled": True,
-                            "optimization_level": "aggressive"
-                        }
-                    elif bottleneck["type"] == "resource_utilization":
-                        param_adjustments = {
-                            "resource_efficiency_mode": "enabled",
-                            "batch_processing": True
-                        }
-                    
-                    # Apply parameter adjustments if system supports it
-                    if param_adjustments and hasattr(system, "set_parameters"):
+                    adjustments = {}
+                    match bottleneck["type"]:
+                        case "high_error_rate":
+                            adjustments = {
+                                "error_correction_level": "high",
+                                "validation_threshold": 0.8,
+                            }
+                        case "slow_response":
+                            adjustments = {
+                                "caching_enabled": True,
+                                "optimization_level": "aggressive",
+                            }
+                        case "resource_utilization":
+                            adjustments = {
+                                "resource_efficiency_mode": "enabled",
+                                "batch_processing": True,
+                            }
+                    if adjustments and hasattr(system, "set_parameters"):
                         try:
-                            await system.set_parameters(param_adjustments)
-                            logger.info(f"Updated parameters for {system_name} system: {param_adjustments}")
-                            updates_made[system_name] = param_adjustments
-                        except Exception as e:
-                            logger.error(f"Error updating parameters for {system_name}: {str(e)}")
-            
-            # Apply strategy improvements
+                            await system.set_parameters(adjustments)
+                            updates_made[system_name] = adjustments
+                        except Exception as exc:
+                            logger.error(
+                                f"Error updating parameters for {system_name}: {exc}"
+                            )
+    
             if "recommended_changes" in strategy_analysis:
-                for recommendation in strategy_analysis["recommended_changes"]:
-                    system_name = recommendation.get("system")
-                    
+                for rec in strategy_analysis["recommended_changes"]:
+                    system_name = rec.get("system")
                     if system_name in self.context.system_references:
                         system = self.context.system_references[system_name]
-                        
-                        # Create strategy adjustments
-                        strategy_adjustments = {
+                        strat_adj = {
                             "strategy_improvement": True,
-                            "effectiveness_target": recommendation.get("current_effectiveness", 0.5) + 0.2
+                            "effectiveness_target": rec.get("current_effectiveness", 0.5)
+                            + 0.2,
                         }
-                        
-                        # Apply strategy adjustments if system supports it
                         if hasattr(system, "set_strategy"):
                             try:
-                                await system.set_strategy(strategy_adjustments)
-                                logger.info(f"Updated strategy for {system_name} system")
-                                updates_made[f"{system_name}_strategy"] = strategy_adjustments
-                            except Exception as e:
-                                logger.error(f"Error updating strategy for {system_name}: {str(e)}")
-            
-            return updates_made
-        
+                                await system.set_strategy(strat_adj)
+                                updates_made[f"{system_name}_strategy"] = strat_adj
+                            except Exception as exc:
+                                logger.error(
+                                    f"Error updating strategy for {system_name}: {exc}"
+                                )
+            # ---------------------------------------------------------------------
+    
+            return UpdateSystemParametersResult(
+                updates_json=json.dumps(updates_made)
+            )
+    
         return _update_system_parameters
     
     def _create_improve_meta_parameters_tool(self):
-        """Create the improve meta parameters tool with proper access to self"""
+        """Return strict improve-meta-parameters tool"""
+    
         @function_tool
-        async def _improve_meta_parameters(ctx: RunContextWrapper) -> Dict[str, Any]:
-            """
-            Improve the meta-parameters themselves
-            
-            Returns:
-                Updated meta-parameters
-            """
-            # Analyze which parameters should be adjusted
-            parameter_changes = {}
-            
-            # Get overall effectiveness
+        async def _improve_meta_parameters(             # noqa: N802
+            ctx: RunContextWrapper,
+        ) -> MetaParametersUpdateResult:
+            parameter_changes: Dict[str, float] = {}
             overall_effectiveness = self._calculate_overall_effectiveness()
-            
-            # Adjust parameters based on effectiveness
+    
+            # --- original logic --------------------------------------------------
             if overall_effectiveness < 0.4:
-                # Poor performance - increase flexibility and exploration
-                parameter_changes["exploration_rate"] = min(0.8, self.context.meta_parameters["exploration_rate"] * 1.5)
-                parameter_changes["resource_flexibility"] = min(0.8, self.context.meta_parameters["resource_flexibility"] * 1.3)
-                parameter_changes["evaluation_interval"] = max(2, int(self.context.meta_parameters["evaluation_interval"] * 0.7))
-                parameter_changes["parameter_adjustment_factor"] = min(0.5, self.context.meta_parameters["parameter_adjustment_factor"] * 1.3)
+                parameter_changes["exploration_rate"] = min(
+                    0.8, self.context.meta_parameters["exploration_rate"] * 1.5
+                )
+                parameter_changes["resource_flexibility"] = min(
+                    0.8, self.context.meta_parameters["resource_flexibility"] * 1.3
+                )
+                parameter_changes["evaluation_interval"] = max(
+                    2, int(self.context.meta_parameters["evaluation_interval"] * 0.7)
+                )
+                parameter_changes["parameter_adjustment_factor"] = min(
+                    0.5,
+                    self.context.meta_parameters["parameter_adjustment_factor"] * 1.3,
+                )
             elif overall_effectiveness > 0.8:
-                # Good performance - may be able to reduce some parameters
-                parameter_changes["exploration_rate"] = max(0.05, self.context.meta_parameters["exploration_rate"] * 0.8)
-                parameter_changes["evaluation_interval"] = min(10, int(self.context.meta_parameters["evaluation_interval"] * 1.2))
-            
-            # Adjust reflection frequency based on cycle count
+                parameter_changes["exploration_rate"] = max(
+                    0.05, self.context.meta_parameters["exploration_rate"] * 0.8
+                )
+                parameter_changes["evaluation_interval"] = min(
+                    10, int(self.context.meta_parameters["evaluation_interval"] * 1.2)
+                )
+    
             if self.context.cognitive_cycle_count > 50:
-                # After many cycles, we can reflect less frequently
-                parameter_changes["reflection_frequency"] = min(20, int(self.context.meta_parameters["reflection_frequency"] * 1.2))
-            
-            # Track original values
-            original_values = {k: self.context.meta_parameters[k] for k in parameter_changes.keys()}
-            
-            # Apply changes
-            for param, value in parameter_changes.items():
-                self.context.meta_parameters[param] = value
-            
-            # Return changes
-            return {
-                "original_values": original_values,
-                "updated_values": parameter_changes,
-                "cycle": self.context.cognitive_cycle_count
+                parameter_changes["reflection_frequency"] = min(
+                    20, int(self.context.meta_parameters["reflection_frequency"] * 1.2)
+                )
+    
+            original_values = {
+                k: self.context.meta_parameters[k] for k in parameter_changes.keys()
             }
-        
+            for k, v in parameter_changes.items():
+                self.context.meta_parameters[k] = v
+            # ---------------------------------------------------------------------
+    
+            return MetaParametersUpdateResult(
+                original_values_json=json.dumps(original_values),
+                updated_values_json=json.dumps(parameter_changes),
+                cycle=self.context.cognitive_cycle_count,
+            )
+    
         return _improve_meta_parameters
     
+    
+    # ---------------------------------------------------------------------
     def _create_generate_cognitive_strategies_tool(self):
-        """Create the generate cognitive strategies tool with proper access to self"""
+        """Return strict generate-strategies tool"""
+    
         @function_tool
-        async def _generate_cognitive_strategies(ctx: RunContextWrapper, improvement_areas: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-            """
-            Generate new cognitive strategies for improvement areas
-            
-            Args:
-                improvement_areas: Areas needing improvement
-                
-            Returns:
-                List of cognitive strategies
-            """
-            strategies = []
-            
+        async def _generate_cognitive_strategies(       # noqa: N802
+            ctx: RunContextWrapper,
+            params: GenerateCognitiveStrategiesParams,
+        ) -> CognitiveStrategiesResult:
+            improvement_areas = json.loads(params.improvement_areas_json)
+            strategies: List[Dict[str, Any]] = []
+    
+            # --- original logic --------------------------------------------------
             for area in improvement_areas:
                 system = area.get("system")
-                
-                # Generate system-specific strategies
-                if system in self.context.system_references:
-                    system_ref = self.context.system_references[system]
-                    
-                    # Try to get strategies from the system itself if it has the capability
-                    system_strategies = []
-                    if hasattr(system_ref, "generate_improvement_strategies"):
-                        try:
-                            system_strategies = await system_ref.generate_improvement_strategies()
-                        except Exception as e:
-                            logger.error(f"Error generating strategies from {system}: {str(e)}")
-                    
-                    if system_strategies:
-                        for strategy in system_strategies:
-                            strategies.append({
-                                "name": strategy.get("name", f"Strategy for {system}"),
+                if system not in self.context.system_references:
+                    continue
+    
+                sys_ref = self.context.system_references[system]
+                system_strats: List[Dict[str, Any]] = []
+                if hasattr(sys_ref, "generate_improvement_strategies"):
+                    try:
+                        system_strats = await sys_ref.generate_improvement_strategies()
+                    except Exception as exc:
+                        logger.error(f"Error generating strategies from {system}: {exc}")
+    
+                if system_strats:
+                    for s in system_strats:
+                        strategies.append(
+                            {
+                                "name": s.get("name", f"Strategy for {system}"),
                                 "system": system,
-                                "description": strategy.get("description", ""),
-                                "implementation": strategy.get("implementation", {}),
-                                "expected_impact": strategy.get("expected_impact", {}),
-                                "source": "system_generated"
-                            })
-                    else:
-                        # Generate generic strategies if the system doesn't provide them
-                        generic_strategy = self._generate_generic_strategy(system, area)
-                        if generic_strategy:
-                            strategies.append(generic_strategy)
-            
-            return strategies
-        
+                                "description": s.get("description", ""),
+                                "implementation": s.get("implementation", {}),
+                                "expected_impact": s.get("expected_impact", {}),
+                                "source": "system_generated",
+                            }
+                        )
+                else:
+                    generic = self._generate_generic_strategy(system, area)
+                    if generic:
+                        strategies.append(generic)
+            # ---------------------------------------------------------------------
+    
+            return CognitiveStrategiesResult(
+                strategies_json=json.dumps(strategies)
+            )
+    
         return _generate_cognitive_strategies
     
     # Helper functions
