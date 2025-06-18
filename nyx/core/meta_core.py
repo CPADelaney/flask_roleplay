@@ -30,6 +30,29 @@ logger = logging.getLogger(__name__)
 # Pydantic models for structured I/O
 
 # ── helper models ────────────────────────────────────────────────
+
+class SelectStrategyParams(BaseModel, extra="forbid"):
+    """Strict wrapper around the raw (JSON) inputs."""
+    context_json: str
+    performance_json: str
+
+
+class StrategyParameters(BaseModel, extra="forbid"):
+    exploration_rate: float
+    adaptation_rate: float
+    risk_tolerance: float
+    innovation_level: float
+    precision_focus: float
+
+
+class StrategyResult(BaseModel, extra="forbid"):
+    """Final, strict output of the tool."""
+    name: str
+    description: str
+    parameters: StrategyParameters          # full numeric set
+    expected_impact: Dict[str, float]       # e.g. {"performance": .2}
+    confidence: float                       # 0 – 1
+    
 class ReallocateResourcesParams(BaseModel, extra="forbid"):
     """Wrapper for raw inputs (JSON strings keep schema closed)."""
     bottlenecks_json: str
@@ -1328,113 +1351,114 @@ class MetaCore:
         
         return _identify_inefficient_dependencies
     
-    def _create_select_strategy_tool(self):
-        """Create the select strategy tool with proper access to self"""
+    def _create_select_strategy_tool(self):                       # noqa: N802
+        """Return a strict select-strategy tool."""
+    
         @function_tool
-        async def _select_strategy(ctx: RunContextWrapper, 
-                                  context: Dict[str, Any],
-                                  performance: Dict[str, Any]) -> StrategyResult:
-            """
-            Select the optimal strategy for the current context
-            
-            Args:
-                context: Current context information
-                performance: Current performance metrics
-                
-            Returns:
-                Selected strategy
-            """
-            # Extract context features
-            context_features = self._extract_context_features(context)
-            
-            # Calculate context complexity
-            complexity = self._calculate_context_complexity(context)
-            
-            # Calculate volatility
-            volatility = self._calculate_context_volatility()
-            
-            # Default strategies
-            strategies = {
+        async def _select_strategy(                               # noqa: N802
+            ctx: RunContextWrapper,
+            params: SelectStrategyParams,                         # ← strict input
+        ) -> StrategyResult:                                      # ← strict output
+            import json
+    
+            # ── decode JSON inputs ------------------------------------------------
+            try:
+                context: Dict[str, Any]     = json.loads(params.context_json)
+                performance: Dict[str, Any] = json.loads(params.performance_json)
+            except Exception:                                       # bad JSON
+                # fall back to safest strategy
+                return StrategyResult(
+                    name="Balanced Approach",
+                    description="Fallback balanced strategy",
+                    parameters=StrategyParameters(
+                        exploration_rate=0.2,
+                        adaptation_rate=0.15,
+                        risk_tolerance=0.5,
+                        innovation_level=0.5,
+                        precision_focus=0.5,
+                    ),
+                    expected_impact={"performance": 0.0},
+                    confidence=0.0,
+                )
+    
+            # ── context / environment metrics ------------------------------------
+            ctx_features = self._extract_context_features(context)
+            complexity   = self._calculate_context_complexity(context)
+            volatility   = self._calculate_context_volatility()
+    
+            # ── candidate strategy catalogue -------------------------------------
+            catalogue: Dict[str, Dict[str, Any]] = {
                 "balanced": {
                     "name": "Balanced Approach",
-                    "description": "A balanced approach with moderate exploration and adaptation",
                     "parameters": {
                         "exploration_rate": 0.2,
                         "adaptation_rate": 0.15,
                         "risk_tolerance": 0.5,
                         "innovation_level": 0.5,
-                        "precision_focus": 0.5
-                    }
+                        "precision_focus": 0.5,
+                    },
+                    "description": "Moderate exploration and adaptation.",
                 },
                 "exploratory": {
                     "name": "Exploratory Strategy",
-                    "description": "High exploration rate with focus on discovering new patterns",
                     "parameters": {
                         "exploration_rate": 0.4,
                         "adaptation_rate": 0.2,
                         "risk_tolerance": 0.7,
                         "innovation_level": 0.8,
-                        "precision_focus": 0.3
-                    }
+                        "precision_focus": 0.3,
+                    },
+                    "description": "High exploration to discover new patterns.",
                 },
                 "conservative": {
                     "name": "Conservative Strategy",
-                    "description": "Low risk with high precision focus",
                     "parameters": {
                         "exploration_rate": 0.1,
                         "adaptation_rate": 0.1,
                         "risk_tolerance": 0.2,
                         "innovation_level": 0.3,
-                        "precision_focus": 0.8
-                    }
+                        "precision_focus": 0.8,
+                    },
+                    "description": "Low risk with strong precision focus.",
                 },
                 "adaptive": {
                     "name": "Highly Adaptive Strategy",
-                    "description": "Focuses on quick adaptation to changes",
                     "parameters": {
                         "exploration_rate": 0.3,
                         "adaptation_rate": 0.3,
                         "risk_tolerance": 0.6,
                         "innovation_level": 0.6,
-                        "precision_focus": 0.4
-                    }
-                }
+                        "precision_focus": 0.4,
+                    },
+                    "description": "Prioritises quick adaptation to change.",
+                },
             }
-            
-            # Calculate strategy scores
-            strategy_scores = {}
-            for strategy_id, strategy in strategies.items():
-                strategy_scores[strategy_id] = self._calculate_strategy_score(
-                    strategy, context_features, performance, complexity, volatility
+    
+            # ── score each strategy ---------------------------------------------
+            scores: Dict[str, float] = {}
+            for sid, strat in catalogue.items():
+                scores[sid] = self._calculate_strategy_score(
+                    strat, ctx_features, performance, complexity, volatility
                 )
-            
-            # Select best strategy
-            if not strategy_scores:
-                # If no strategies, return balanced
-                selected_id = "balanced"
-            else:
-                selected_id = max(strategy_scores.items(), key=lambda x: x[1])[0]
-            
-            # Get the selected strategy
-            selected_strategy = strategies[selected_id]
-            
-            # Calculate confidence based on score difference
-            scores = list(strategy_scores.values())
+    
+            # ── best strategy & confidence ---------------------------------------
+            best_id = max(scores.keys(), key=scores.get, default="balanced")
+            best    = catalogue[best_id]
+    
             if len(scores) > 1:
-                scores.sort(reverse=True)
-                score_diff = (scores[0] - scores[1]) / scores[0] if scores[0] > 0 else 0
-                confidence = 0.5 + score_diff * 0.5  # Higher difference = higher confidence
+                top, second = sorted(scores.values(), reverse=True)[:2]
+                confidence  = 0.5 + 0.5 * ((top - second) / max(top, 1e-6))
             else:
                 confidence = 0.5
-            
+    
             return StrategyResult(
-                name=selected_strategy["name"],
-                description=selected_strategy["description"],
-                parameters=selected_strategy["parameters"],
-                expected_impact={"performance": 0.2, "adaptability": 0.3},  # Placeholder
-                confidence=confidence
+                name=best["name"],
+                description=best["description"],
+                parameters=StrategyParameters(**best["parameters"]),
+                expected_impact={"performance": 0.2, "adaptability": 0.3},  # TODO refine
+                confidence=round(min(max(confidence, 0.0), 1.0), 3),
             )
-        
+    
         return _select_strategy
     
     def _create_calculate_resource_trend_tool(self):
