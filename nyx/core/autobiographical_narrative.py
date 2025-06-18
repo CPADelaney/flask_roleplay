@@ -340,24 +340,22 @@ class AutobiographicalNarrative:
     def _create_analyze_memory_emotions_tool(self):
         """Factory → FunctionTool that analyses emotions in a memory list"""
         @function_tool
-        async def _analyze_memory_emotions(                # noqa: N802
+        async def _analyze_memory_emotions(                 # noqa: N802
             ctx: RunContextWrapper[NarrativeContext],
-            memories: List[Dict[str, Any]],                # <-- direct arg
-        ) -> MemoryEmotionAnalysisResult:                  # <-- typed result
-            # ---------- logic unchanged ------------------
+            params: MemoryEmotionAnalysisParams,            # <- Pydantic wrapper
+        ) -> MemoryEmotionAnalysisResult:
+            memories = params.memories                      # unwrap
+    
+            # ---------- original logic ---------------------
             emotion_counts: Dict[str, int] = {}
             emotion_intensities: Dict[str, List[float]] = {}
             emotional_arcs: List[str] = []
     
             for mem in memories:
-                emo_ctx = mem.get("emotional_context")
-                if not emo_ctx:
-                    continue
-    
+                emo_ctx = mem.get("emotional_context") or {}
                 emo = emo_ctx.get("primary_emotion")
                 if emo:
                     emotion_counts[emo] = emotion_counts.get(emo, 0) + 1
-    
                     inten = emo_ctx.get("primary_intensity")
                     if inten is not None:
                         emotion_intensities.setdefault(emo, []).append(float(inten))
@@ -367,20 +365,20 @@ class AutobiographicalNarrative:
             }
     
             if len(memories) >= 3:
-                sorted_mems = sorted(
-                    memories, key=lambda m: m.get("metadata", {}).get("timestamp", "")
-                )
-                prev = None
-                for mem in sorted_mems:
-                    curr = mem.get("emotional_context", {}).get("primary_emotion")
-                    if prev and curr and curr != prev:
-                        emotional_arcs.append(f"{prev} → {curr}")
-                    if curr:
-                        prev = curr
-            # ---------------------------------------------
+                for prev, curr in zip(
+                    memories[:-1],
+                    memories[1:],
+                ):
+                    p = prev.get("emotional_context", {}).get("primary_emotion")
+                    c = curr.get("emotional_context", {}).get("primary_emotion")
+                    if p and c and p != c:
+                        emotional_arcs.append(f"{p} → {c}")
+            # -----------------------------------------------
     
             return MemoryEmotionAnalysisResult(
-                dominant_emotions=sorted(emotion_counts.items(), key=lambda x: x[1], reverse=True),
+                dominant_emotions=sorted(
+                    emotion_counts.items(), key=lambda x: x[1], reverse=True
+                ),
                 emotion_intensities=avg_inten,
                 emotional_arcs=emotional_arcs,
             )
