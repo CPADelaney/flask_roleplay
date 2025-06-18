@@ -4,7 +4,7 @@ import logging
 import datetime
 import json
 import uuid
-from typing import Dict, List, Any, Optional, Union
+from typing import Dict, List, Any, Optional
 from pydantic import BaseModel, Field
 
 from agents import (
@@ -71,6 +71,46 @@ class NarrativeValidationOutput(BaseModel):
     coherence_score: float = Field(..., description="Narrative coherence score (0-1)")
     continuity_rating: float = Field(..., description="Continuity with existing narrative (0-1)")
 
+# Param models for strict schema compliance (Issue E)
+class MemoryEmotionAnalysisParams(BaseModel, extra="forbid"):
+    """Parameters for memory emotion analysis"""
+    memories: List[Dict[str, Any]]
+
+class IdentifyMemoryThemesParams(BaseModel, extra="forbid"):
+    """Parameters for memory theme identification"""
+    memories: List[Dict[str, Any]]
+
+class CalculateMemorySignificanceParams(BaseModel, extra="forbid"):
+    """Parameters for memory significance calculation"""
+    memories: List[Dict[str, Any]]
+
+class AnalyzeIdentityShiftsParams(BaseModel, extra="forbid"):
+    """Parameters for identity shift analysis"""
+    identity_state: Dict[str, Any]
+
+class ExtractCoreValuesParams(BaseModel, extra="forbid"):
+    """Parameters for core values extraction"""
+    identity_state: Dict[str, Any]
+
+class CalculateIdentityStabilityParams(BaseModel, extra="forbid"):
+    """Parameters for identity stability calculation"""
+    identity_state: Dict[str, Any]
+
+class CheckNarrativeCoherenceParams(BaseModel, extra="forbid"):
+    """Parameters for narrative coherence check"""
+    narrative: Dict[str, Any]
+    existing_segments: List[Dict[str, Any]]
+
+class VerifyContinuityParams(BaseModel, extra="forbid"):
+    """Parameters for continuity verification"""
+    narrative: Dict[str, Any]
+    existing_segments: List[Dict[str, Any]]
+
+class ValidateEmotionalAuthenticityParams(BaseModel, extra="forbid"):
+    """Parameters for emotional authenticity validation"""
+    narrative: Dict[str, Any]
+    memories: List[Dict[str, Any]]
+
 class AutobiographicalNarrative:
     """Constructs and maintains Nyx's coherent life story."""
 
@@ -100,15 +140,24 @@ class AutobiographicalNarrative:
 
     def _initialize_agents(self):
         """Initialize all agents needed for the narrative system"""
-        # Create specialized agents
+        # ISSUE A: Create/bind helper tools BEFORE building agents
+        # 1️⃣ Bind helper tools first
+        self._analyze_memory_emotions = self._create_analyze_memory_emotions_tool()
+        self._identify_memory_themes = self._create_identify_memory_themes_tool()
+        self._calculate_memory_significance = self._create_calculate_memory_significance_tool()
+        self._analyze_identity_shifts = self._create_analyze_identity_shifts_tool()
+        self._extract_core_values = self._create_extract_core_values_tool()
+        self._calculate_identity_stability = self._create_calculate_identity_stability_tool()
+        self._check_narrative_coherence = self._create_check_narrative_coherence_tool()
+        self._verify_continuity = self._create_verify_continuity_tool()
+        self._validate_emotional_authenticity = self._create_validate_emotional_authenticity_tool()
+        
+        # 2️⃣ Now build agents (they can reference the tools)
         self.memory_analyzer_agent = self._create_memory_analyzer_agent()
         self.identity_analyzer_agent = self._create_identity_analyzer_agent()
         self.narrative_validator_agent = self._create_narrative_validator_agent()
-        
-        # Create main narrative synthesis agent with handoffs to specialized agents
         self.narrative_agent = self._create_narrative_agent()
         
-
     def _create_narrative_agent(self) -> Optional[Agent[NarrativeContext]]:
         """Creates main agent for synthesizing narrative segments."""
         try:
@@ -135,8 +184,8 @@ class AutobiographicalNarrative:
                 title, summary, themes, emotional_arc, and identity_impact.
                 """,
                 tools=[
-                    function_tool(self.retrieve_significant_memories),
-                    function_tool(self.get_identity_snapshot)
+                    self.retrieve_significant_memories,
+                    self.get_identity_snapshot
                 ],
                 handoffs=[
                     handoff(self.memory_analyzer_agent, 
@@ -180,9 +229,9 @@ class AutobiographicalNarrative:
             Provide insights that help create a meaningful and coherent life story.
             """,
             tools=[
-                function_tool(self._analyze_memory_emotions),
-                function_tool(self._identify_memory_themes),
-                function_tool(self._calculate_memory_significance)
+                self._analyze_memory_emotions,
+                self._identify_memory_themes,
+                self._calculate_memory_significance
             ],
             model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.4),
@@ -205,9 +254,9 @@ class AutobiographicalNarrative:
             Help create a narrative that authentically captures Nyx's sense of self and evolution.
             """,
             tools=[
-                function_tool(self._analyze_identity_shifts),
-                function_tool(self._extract_core_values),
-                function_tool(self._calculate_identity_stability)
+                self._analyze_identity_shifts,
+                self._extract_core_values,
+                self._calculate_identity_stability
             ],
             model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.3),
@@ -230,9 +279,9 @@ class AutobiographicalNarrative:
             Provide feedback to ensure Nyx's life story is coherent, authentic, and meaningful.
             """,
             tools=[
-                function_tool(self._check_narrative_coherence),
-                function_tool(self._verify_continuity),
-                function_tool(self._validate_emotional_authenticity)
+                self._check_narrative_coherence,
+                self._verify_continuity,
+                self._validate_emotional_authenticity
             ],
             model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.2),
@@ -283,431 +332,467 @@ class AutobiographicalNarrative:
                 tripwire_triggered=True
             )
 
-    # Additional tool functions for specialized agents
-    @staticmethod
-    @function_tool
-    async def _analyze_memory_emotions(ctx: RunContextWrapper[NarrativeContext], 
-                                    memories: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """
-        Analyze emotional patterns in memories
-        
-        Args:
-            memories: List of memories to analyze
+    # Factory methods for creating bound tools (ISSUE B: Proper indentation)
+    def _create_analyze_memory_emotions_tool(self):
+        """Factory method to create the analyze memory emotions tool"""
+        @function_tool
+        async def _analyze_memory_emotions(ctx: RunContextWrapper[NarrativeContext], 
+                                         params: MemoryEmotionAnalysisParams) -> Dict[str, Any]:
+            """
+            Analyze emotional patterns in memories
             
-        Returns:
-            Emotional patterns detected in memories
-        """
-        emotion_counts = {}
-        emotion_intensities = {}
-        emotional_arcs = []
-        
-        # Check for emotional metadata in memories
-        for memory in memories:
-            if "emotional_context" in memory:
-                emotion_data = memory["emotional_context"]
+            Args:
+                params: Parameters containing memories to analyze
                 
-                # Count primary emotions
-                if "primary_emotion" in emotion_data:
-                    emotion = emotion_data["primary_emotion"]
-                    emotion_counts[emotion] = emotion_counts.get(emotion, 0) + 1
-                    
-                    # Track intensity
-                    if "primary_intensity" in emotion_data:
-                        if emotion not in emotion_intensities:
-                            emotion_intensities[emotion] = []
-                        emotion_intensities[emotion].append(emotion_data["primary_intensity"])
-        
-        # Calculate average intensities
-        avg_intensities = {}
-        for emotion, intensities in emotion_intensities.items():
-            avg_intensities[emotion] = sum(intensities) / len(intensities)
+            Returns:
+                Emotional patterns detected in memories
+            """
+            memories = params.memories
+            emotion_counts = {}
+            emotion_intensities = {}
+            emotional_arcs = []
             
-        # Detect emotional arcs (simplified)
-        if len(memories) >= 3:
-            # Sort memories chronologically
-            sorted_memories = sorted(memories, key=lambda m: m.get("metadata", {}).get("timestamp", ""))
-            
-            # Check for emotional shifts
-            prev_emotion = None
-            for memory in sorted_memories:
-                if "emotional_context" in memory and "primary_emotion" in memory["emotional_context"]:
-                    current_emotion = memory["emotional_context"]["primary_emotion"]
+            # Check for emotional metadata in memories
+            for memory in memories:
+                if "emotional_context" in memory:
+                    emotion_data = memory["emotional_context"]
                     
-                    if prev_emotion and current_emotion != prev_emotion:
-                        emotional_arcs.append(f"{prev_emotion} to {current_emotion}")
+                    # Count primary emotions
+                    if "primary_emotion" in emotion_data:
+                        emotion = emotion_data["primary_emotion"]
+                        emotion_counts[emotion] = emotion_counts.get(emotion, 0) + 1
                         
-                    prev_emotion = current_emotion
-        
-        return {
-            "dominant_emotions": sorted(emotion_counts.items(), key=lambda x: x[1], reverse=True),
-            "emotion_intensities": avg_intensities,
-            "emotional_arcs": emotional_arcs
-        }
-
-    @staticmethod
-    @function_tool
-    async def _identify_memory_themes(ctx: RunContextWrapper[NarrativeContext], 
-                                   memories: List[Dict[str, Any]]) -> List[str]:
-        """
-        Identify common themes across memories
-        
-        Args:
-            memories: List of memories to analyze
+                        # Track intensity
+                        if "primary_intensity" in emotion_data:
+                            if emotion not in emotion_intensities:
+                                emotion_intensities[emotion] = []
+                            emotion_intensities[emotion].append(emotion_data["primary_intensity"])
             
-        Returns:
-            Common themes found in memories
-        """
-        # Extract tags from memories
-        all_tags = []
-        for memory in memories:
-            if "tags" in memory:
-                all_tags.extend(memory["tags"])
+            # Calculate average intensities
+            avg_intensities = {}
+            for emotion, intensities in emotion_intensities.items():
+                avg_intensities[emotion] = sum(intensities) / len(intensities)
                 
-        # Count tag frequencies
-        tag_counts = {}
-        for tag in all_tags:
-            tag_counts[tag] = tag_counts.get(tag, 0) + 1
-            
-        # Get top themes (tags that appear multiple times)
-        top_themes = [tag for tag, count in tag_counts.items() if count >= 2]
-        
-        # Return themes or default values if none found
-        return top_themes or ["growth", "experience", "development"]
-
-    @staticmethod
-    @function_tool
-    async def _calculate_memory_significance(ctx: RunContextWrapper[NarrativeContext],
-                                         memories: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """
-        Calculate relative significance of memories for narrative
-        
-        Args:
-            memories: List of memories to analyze
-            
-        Returns:
-            Memories with calculated narrative significance
-        """
-        result = []
-        
-        for memory in memories:
-            # Start with base significance from memory
-            base_significance = memory.get("significance", 5) / 10  # Convert to 0-1 scale
-            
-            # Adjust based on other factors
-            adjustments = 0.0
-            
-            # Emotional memories are more significant
-            if "emotional_context" in memory and "primary_intensity" in memory["emotional_context"]:
-                intensity = memory["emotional_context"]["primary_intensity"]
-                adjustments += intensity * 0.2
+            # Detect emotional arcs (simplified)
+            if len(memories) >= 3:
+                # Sort memories chronologically
+                sorted_memories = sorted(memories, key=lambda m: m.get("metadata", {}).get("timestamp", ""))
                 
-            # Identity-related memories are more significant
-            if "identity_impact" in memory and memory["identity_impact"]:
-                adjustments += 0.2
-                
-            # More recent memories slightly more significant (recency bias)
-            if "metadata" in memory and "timestamp" in memory["metadata"]:
-                # Simple recency heuristic
-                # This would ideally be more sophisticated with actual date parsing
-                adjustments += 0.1
-                
-            # Calculate final significance
-            narrative_significance = min(1.0, base_significance + adjustments)
+                # Check for emotional shifts
+                prev_emotion = None
+                for memory in sorted_memories:
+                    if "emotional_context" in memory and "primary_emotion" in memory["emotional_context"]:
+                        current_emotion = memory["emotional_context"]["primary_emotion"]
+                        
+                        if prev_emotion and current_emotion != prev_emotion:
+                            emotional_arcs.append(f"{prev_emotion} to {current_emotion}")
+                            
+                        prev_emotion = current_emotion
             
-            result.append({
-                "id": memory.get("id", "unknown"),
-                "narrative_significance": narrative_significance,
-                "memory_text": memory.get("memory_text", ""),
-                "type": memory.get("memory_type", "experience")
-            })
-            
-        # Sort by significance
-        result.sort(key=lambda x: x["narrative_significance"], reverse=True)
-        
-        return result
-
-    @staticmethod
-    @function_tool
-    async def _analyze_identity_shifts(ctx: RunContextWrapper[NarrativeContext],
-                                    identity_state: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """
-        Analyze shifts in identity based on identity state
-        
-        Args:
-            identity_state: Current identity state with history
-            
-        Returns:
-            List of detected identity shifts
-        """
-        shifts = []
-        
-        # Extract recent changes if available
-        if "identity_evolution" in identity_state:
-            evolution_data = identity_state["identity_evolution"]
-            
-            if "recent_significant_changes" in evolution_data:
-                changes = evolution_data["recent_significant_changes"]
-                
-                for aspect, change in changes.items():
-                    if isinstance(change, dict):
-                        shifts.append({
-                            "aspect": aspect,
-                            "from": change.get("from", "unknown"),
-                            "to": change.get("to", "unknown"),
-                            "magnitude": change.get("magnitude", 0.5),
-                            "timestamp": change.get("timestamp", "recent")
-                        })
-        
-        return shifts
-
-    @staticmethod
-    @function_tool
-    async def _extract_core_values(ctx: RunContextWrapper[NarrativeContext],
-                               identity_state: Dict[str, Any]) -> List[str]:
-        """
-        Extract core values from identity state
-        
-        Args:
-            identity_state: Current identity state
-            
-        Returns:
-            List of core values
-        """
-        core_values = []
-        
-        # Extract from top traits if available
-        if "top_traits" in identity_state:
-            traits = identity_state["top_traits"]
-            
-            # Convert to list of values
-            if isinstance(traits, dict):
-                # Sort by value (trait strength)
-                sorted_traits = sorted(traits.items(), key=lambda x: x[1], reverse=True)
-                core_values = [trait for trait, _ in sorted_traits[:5]]
-        
-        return core_values
-
-    @staticmethod
-    @function_tool
-    async def _calculate_identity_stability(ctx: RunContextWrapper[NarrativeContext],
-                                        identity_state: Dict[str, Any]) -> float:
-        """
-        Calculate stability of current identity
-        
-        Args:
-            identity_state: Current identity state
-            
-        Returns:
-            Stability score (0-1, higher = more stable)
-        """
-        # Default moderate stability
-        stability = 0.5
-        
-        # Calculate from change metrics if available
-        if "identity_evolution" in identity_state:
-            evolution_data = identity_state["identity_evolution"]
-            
-            # More changes = less stability
-            if "recent_significant_changes" in evolution_data:
-                changes = evolution_data["recent_significant_changes"]
-                change_count = len(changes)
-                
-                # Adjust stability based on change count
-                if change_count > 5:
-                    stability -= 0.3  # Many changes = low stability
-                elif change_count > 2:
-                    stability -= 0.1  # Moderate changes
-                elif change_count <= 1:
-                    stability += 0.1  # Few changes = high stability
-            
-            # Total updates affect stability
-            if "total_updates" in evolution_data:
-                total_updates = evolution_data["total_updates"]
-                
-                # Adjust based on total update count
-                if total_updates > 50:
-                    stability += 0.1  # Many updates over time = more stable identity
-                
-            # Age of identity affects stability
-            if "identity_age_days" in evolution_data:
-                age_days = evolution_data["identity_age_days"]
-                
-                if age_days > 30:
-                    stability += 0.2  # Older identity = more stable
-        
-        # Ensure result is in valid range
-        return max(0.0, min(1.0, stability))
-
-    @staticmethod
-    @function_tool
-    async def _check_narrative_coherence(ctx: RunContextWrapper[NarrativeContext],
-                                     narrative: Dict[str, Any],
-                                     existing_segments: List[Dict[str, Any]]) -> float:
-        """
-        Check internal coherence of a narrative segment
-        
-        Args:
-            narrative: Narrative segment to check
-            existing_segments: Existing narrative segments
-            
-        Returns:
-            Coherence score (0-1)
-        """
-        # Default moderate coherence
-        coherence = 0.5
-        
-        # Check for required elements
-        required_elements = ["title", "summary", "themes"]
-        has_all_required = all(elem in narrative for elem in required_elements)
-        
-        if has_all_required:
-            coherence += 0.2
-        else:
-            coherence -= 0.3
-            
-        # Check themes align with summary
-        if "themes" in narrative and "summary" in narrative:
-            themes = narrative["themes"]
-            summary = narrative["summary"]
-            
-            # Simple check - ensure themes are mentioned in summary
-            themes_in_summary = sum(1 for theme in themes if theme.lower() in summary.lower())
-            theme_ratio = themes_in_summary / max(1, len(themes))
-            
-            coherence += theme_ratio * 0.2
-            
-        # Check emotional arc matches summary
-        if "emotional_arc" in narrative and "summary" in narrative:
-            emotional_arc = narrative["emotional_arc"]
-            summary = narrative["summary"]
-            
-            if emotional_arc and emotional_arc.lower() in summary.lower():
-                coherence += 0.1
-                
-        # Ensure result is in valid range
-        return max(0.0, min(1.0, coherence))
-
-    @staticmethod
-    @function_tool
-    async def _verify_continuity(ctx: RunContextWrapper[NarrativeContext],
-                             narrative: Dict[str, Any],
-                             existing_segments: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """
-        Verify continuity with existing narrative
-        
-        Args:
-            narrative: New narrative segment
-            existing_segments: Existing narrative segments
-            
-        Returns:
-            Continuity assessment
-        """
-        if not existing_segments:
             return {
-                "has_continuity": True,
-                "continuity_score": 1.0,
-                "issues": []
+                "dominant_emotions": sorted(emotion_counts.items(), key=lambda x: x[1], reverse=True),
+                "emotion_intensities": avg_intensities,
+                "emotional_arcs": emotional_arcs
             }
-            
-        # Find most recent segment
-        most_recent = existing_segments[-1]
         
-        issues = []
-        continuity_score = 0.8  # Start with good continuity assumption
-        
-        # Check time continuity
-        if ("start_time" in narrative and "end_time" in most_recent and 
-            narrative["start_time"] < most_recent["end_time"]):
-            issues.append("Time overlap with previous segment")
-            continuity_score -= 0.2
-            
-        # Check thematic continuity
-        if "themes" in narrative and "themes" in most_recent:
-            new_themes = set(narrative["themes"])
-            old_themes = set(most_recent["themes"])
-            
-            # Count shared themes
-            shared_themes = new_themes.intersection(old_themes)
-            
-            # Some theme continuity is good
-            if shared_themes:
-                continuity_score += 0.1
-            else:
-                issues.append("No thematic continuity with previous segment")
-                continuity_score -= 0.1
-                
-        # Check emotional continuity
-        if "emotional_arc" in narrative and "emotional_arc" in most_recent:
-            new_arc = narrative["emotional_arc"]
-            old_arc = most_recent["emotional_arc"]
-            
-            # Complete emotional discontinuity is jarring
-            if new_arc and old_arc and not any(word in new_arc for word in old_arc.split()):
-                issues.append("Emotional discontinuity with previous segment")
-                continuity_score -= 0.1
-                
-        return {
-            "has_continuity": continuity_score >= 0.6,
-            "continuity_score": max(0.0, min(1.0, continuity_score)),
-            "issues": issues
-        }
+        return _analyze_memory_emotions  # ISSUE B: Correct indentation - inside factory!
 
-    @staticmethod
-    @function_tool
-    async def _validate_emotional_authenticity(ctx: RunContextWrapper[NarrativeContext],
-                                          narrative: Dict[str, Any],
-                                          memories: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """
-        Validate emotional authenticity of narrative against source memories
-        
-        Args:
-            narrative: Narrative segment to validate
-            memories: Source memories used to create narrative
+    def _create_identify_memory_themes_tool(self):
+        """Factory method to create the identify memory themes tool"""
+        @function_tool
+        async def _identify_memory_themes(ctx: RunContextWrapper[NarrativeContext], 
+                                       params: IdentifyMemoryThemesParams) -> List[str]:
+            """
+            Identify common themes across memories
             
-        Returns:
-            Emotional authenticity assessment
-        """
-        authenticity_score = 0.5  # Default moderate authenticity
-        issues = []
-        
-        # Extract emotions from memories
-        memory_emotions = set()
-        for memory in memories:
-            if "emotional_context" in memory and "primary_emotion" in memory["emotional_context"]:
-                memory_emotions.add(memory["emotional_context"]["primary_emotion"].lower())
+            Args:
+                params: Parameters containing memories to analyze
                 
-        # Check narrative captures emotions from memories
-        if "emotional_arc" in narrative and narrative["emotional_arc"]:
-            emotional_arc = narrative["emotional_arc"].lower()
-            
-            # Count emotions from memories that appear in emotional arc
-            emotions_captured = sum(1 for emotion in memory_emotions 
-                                   if emotion in emotional_arc)
-            
-            emotion_ratio = emotions_captured / max(1, len(memory_emotions))
-            
-            authenticity_score += emotion_ratio * 0.3
-            
-            if emotion_ratio < 0.3:
-                issues.append("Narrative doesn't reflect emotions in source memories")
+            Returns:
+                Common themes found in memories
+            """
+            memories = params.memories
+            # Extract tags from memories
+            all_tags = []
+            for memory in memories:
+                if "tags" in memory:
+                    all_tags.extend(memory["tags"])
+                    
+            # Count tag frequencies
+            tag_counts = {}
+            for tag in all_tags:
+                tag_counts[tag] = tag_counts.get(tag, 0) + 1
                 
-        # Check summary reflects emotional content
-        if "summary" in narrative and "emotional_arc" in narrative:
-            summary = narrative["summary"].lower()
-            emotional_arc = narrative["emotional_arc"].lower()
+            # Get top themes (tags that appear multiple times)
+            top_themes = [tag for tag, count in tag_counts.items() if count >= 2]
             
-            # Simple check if emotional arc is reflected in summary
-            if any(emotion in summary for emotion in emotional_arc.split()):
-                authenticity_score += 0.2
+            # Return themes or default values if none found
+            return top_themes or ["growth", "experience", "development"]
+        
+        return _identify_memory_themes
+
+    def _create_calculate_memory_significance_tool(self):
+        """Factory method to create the calculate memory significance tool"""
+        @function_tool
+        async def _calculate_memory_significance(ctx: RunContextWrapper[NarrativeContext],
+                                             params: CalculateMemorySignificanceParams) -> List[Dict[str, Any]]:
+            """
+            Calculate relative significance of memories for narrative
+            
+            Args:
+                params: Parameters containing memories to analyze
+                
+            Returns:
+                Memories with calculated narrative significance
+            """
+            memories = params.memories
+            result = []
+            
+            for memory in memories:
+                # Start with base significance from memory
+                base_significance = memory.get("significance", 5) / 10  # Convert to 0-1 scale
+                
+                # Adjust based on other factors
+                adjustments = 0.0
+                
+                # Emotional memories are more significant
+                if "emotional_context" in memory and "primary_intensity" in memory["emotional_context"]:
+                    intensity = memory["emotional_context"]["primary_intensity"]
+                    adjustments += intensity * 0.2
+                    
+                # Identity-related memories are more significant
+                if "identity_impact" in memory and memory["identity_impact"]:
+                    adjustments += 0.2
+                    
+                # More recent memories slightly more significant (recency bias)
+                if "metadata" in memory and "timestamp" in memory["metadata"]:
+                    # Simple recency heuristic
+                    # This would ideally be more sophisticated with actual date parsing
+                    adjustments += 0.1
+                    
+                # Calculate final significance
+                narrative_significance = min(1.0, base_significance + adjustments)
+                
+                result.append({
+                    "id": memory.get("id", "unknown"),
+                    "narrative_significance": narrative_significance,
+                    "memory_text": memory.get("memory_text", ""),
+                    "type": memory.get("memory_type", "experience")
+                })
+                
+            # Sort by significance
+            result.sort(key=lambda x: x["narrative_significance"], reverse=True)
+            
+            return result
+        
+        return _calculate_memory_significance
+
+    def _create_analyze_identity_shifts_tool(self):
+        """Factory method to create the analyze identity shifts tool"""
+        @function_tool
+        async def _analyze_identity_shifts(ctx: RunContextWrapper[NarrativeContext],
+                                        params: AnalyzeIdentityShiftsParams) -> List[Dict[str, Any]]:
+            """
+            Analyze shifts in identity based on identity state
+            
+            Args:
+                params: Parameters containing identity state
+                
+            Returns:
+                List of detected identity shifts
+            """
+            identity_state = params.identity_state
+            shifts = []
+            
+            # Extract recent changes if available
+            if "identity_evolution" in identity_state:
+                evolution_data = identity_state["identity_evolution"]
+                
+                if "recent_significant_changes" in evolution_data:
+                    changes = evolution_data["recent_significant_changes"]
+                    
+                    for aspect, change in changes.items():
+                        if isinstance(change, dict):
+                            shifts.append({
+                                "aspect": aspect,
+                                "from": change.get("from", "unknown"),
+                                "to": change.get("to", "unknown"),
+                                "magnitude": change.get("magnitude", 0.5),
+                                "timestamp": change.get("timestamp", "recent")
+                            })
+            
+            return shifts
+        
+        return _analyze_identity_shifts
+
+    def _create_extract_core_values_tool(self):
+        """Factory method to create the extract core values tool"""
+        @function_tool
+        async def _extract_core_values(ctx: RunContextWrapper[NarrativeContext],
+                                   params: ExtractCoreValuesParams) -> List[str]:
+            """
+            Extract core values from identity state
+            
+            Args:
+                params: Parameters containing identity state
+                
+            Returns:
+                List of core values
+            """
+            identity_state = params.identity_state
+            core_values = []
+            
+            # Extract from top traits if available
+            if "top_traits" in identity_state:
+                traits = identity_state["top_traits"]
+                
+                # Convert to list of values
+                if isinstance(traits, dict):
+                    # Sort by value (trait strength)
+                    sorted_traits = sorted(traits.items(), key=lambda x: x[1], reverse=True)
+                    core_values = [trait for trait, _ in sorted_traits[:5]]
+            
+            return core_values
+        
+        return _extract_core_values
+
+    def _create_calculate_identity_stability_tool(self):
+        """Factory method to create the calculate identity stability tool"""
+        @function_tool
+        async def _calculate_identity_stability(ctx: RunContextWrapper[NarrativeContext],
+                                            params: CalculateIdentityStabilityParams) -> float:
+            """
+            Calculate stability of current identity
+            
+            Args:
+                params: Parameters containing identity state
+                
+            Returns:
+                Stability score (0-1, higher = more stable)
+            """
+            identity_state = params.identity_state
+            # Default moderate stability
+            stability = 0.5
+            
+            # Calculate from change metrics if available
+            if "identity_evolution" in identity_state:
+                evolution_data = identity_state["identity_evolution"]
+                
+                # More changes = less stability
+                if "recent_significant_changes" in evolution_data:
+                    changes = evolution_data["recent_significant_changes"]
+                    change_count = len(changes)
+                    
+                    # Adjust stability based on change count
+                    if change_count > 5:
+                        stability -= 0.3  # Many changes = low stability
+                    elif change_count > 2:
+                        stability -= 0.1  # Moderate changes
+                    elif change_count <= 1:
+                        stability += 0.1  # Few changes = high stability
+                
+                # Total updates affect stability
+                if "total_updates" in evolution_data:
+                    total_updates = evolution_data["total_updates"]
+                    
+                    # Adjust based on total update count
+                    if total_updates > 50:
+                        stability += 0.1  # Many updates over time = more stable identity
+                    
+                # Age of identity affects stability
+                if "identity_age_days" in evolution_data:
+                    age_days = evolution_data["identity_age_days"]
+                    
+                    if age_days > 30:
+                        stability += 0.2  # Older identity = more stable
+            
+            # Ensure result is in valid range
+            return max(0.0, min(1.0, stability))
+        
+        return _calculate_identity_stability
+
+    def _create_check_narrative_coherence_tool(self):
+        """Factory method to create the check narrative coherence tool"""
+        @function_tool
+        async def _check_narrative_coherence(ctx: RunContextWrapper[NarrativeContext],
+                                         params: CheckNarrativeCoherenceParams) -> float:
+            """
+            Check internal coherence of a narrative segment
+            
+            Args:
+                params: Parameters containing narrative and existing segments
+                
+            Returns:
+                Coherence score (0-1)
+            """
+            narrative = params.narrative
+            existing_segments = params.existing_segments
+            
+            # Default moderate coherence
+            coherence = 0.5
+            
+            # Check for required elements
+            required_elements = ["title", "summary", "themes"]
+            has_all_required = all(elem in narrative for elem in required_elements)
+            
+            if has_all_required:
+                coherence += 0.2
             else:
-                issues.append("Summary doesn't reflect emotional arc")
-                authenticity_score -= 0.1
+                coherence -= 0.3
                 
-        return {
-            "authenticity_score": max(0.0, min(1.0, authenticity_score)),
-            "is_authentic": authenticity_score >= 0.6,
-            "issues": issues
-        }
+            # Check themes align with summary
+            if "themes" in narrative and "summary" in narrative:
+                themes = narrative["themes"]
+                summary = narrative["summary"]
+                
+                # Simple check - ensure themes are mentioned in summary
+                themes_in_summary = sum(1 for theme in themes if theme.lower() in summary.lower())
+                theme_ratio = themes_in_summary / max(1, len(themes))
+                
+                coherence += theme_ratio * 0.2
+                
+            # Check emotional arc matches summary
+            if "emotional_arc" in narrative and "summary" in narrative:
+                emotional_arc = narrative["emotional_arc"]
+                summary = narrative["summary"]
+                
+                if emotional_arc and emotional_arc.lower() in summary.lower():
+                    coherence += 0.1
+                    
+            # Ensure result is in valid range
+            return max(0.0, min(1.0, coherence))
+        
+        return _check_narrative_coherence
+
+    def _create_verify_continuity_tool(self):
+        """Factory method to create the verify continuity tool"""
+        @function_tool
+        async def _verify_continuity(ctx: RunContextWrapper[NarrativeContext],
+                                 params: VerifyContinuityParams) -> Dict[str, Any]:
+            """
+            Verify continuity with existing narrative
+            
+            Args:
+                params: Parameters containing narrative and existing segments
+                
+            Returns:
+                Continuity assessment
+            """
+            narrative = params.narrative
+            existing_segments = params.existing_segments
+            
+            if not existing_segments:
+                return {
+                    "has_continuity": True,
+                    "continuity_score": 1.0,
+                    "issues": []
+                }
+                
+            # Find most recent segment
+            most_recent = existing_segments[-1]
+            
+            issues = []
+            continuity_score = 0.8  # Start with good continuity assumption
+            
+            # Check time continuity
+            if ("start_time" in narrative and "end_time" in most_recent and 
+                narrative["start_time"] < most_recent["end_time"]):
+                issues.append("Time overlap with previous segment")
+                continuity_score -= 0.2
+                
+            # Check thematic continuity
+            if "themes" in narrative and "themes" in most_recent:
+                new_themes = set(narrative["themes"])
+                old_themes = set(most_recent["themes"])
+                
+                # Count shared themes
+                shared_themes = new_themes.intersection(old_themes)
+                
+                # Some theme continuity is good
+                if shared_themes:
+                    continuity_score += 0.1
+                else:
+                    issues.append("No thematic continuity with previous segment")
+                    continuity_score -= 0.1
+                    
+            # Check emotional continuity
+            if "emotional_arc" in narrative and "emotional_arc" in most_recent:
+                new_arc = narrative["emotional_arc"]
+                old_arc = most_recent["emotional_arc"]
+                
+                # Complete emotional discontinuity is jarring
+                if new_arc and old_arc and not any(word in new_arc for word in old_arc.split()):
+                    issues.append("Emotional discontinuity with previous segment")
+                    continuity_score -= 0.1
+                    
+            return {
+                "has_continuity": continuity_score >= 0.6,
+                "continuity_score": max(0.0, min(1.0, continuity_score)),
+                "issues": issues
+            }
+        
+        return _verify_continuity
+
+    def _create_validate_emotional_authenticity_tool(self):
+        """Factory method to create the validate emotional authenticity tool"""
+        @function_tool
+        async def _validate_emotional_authenticity(ctx: RunContextWrapper[NarrativeContext],
+                                              params: ValidateEmotionalAuthenticityParams) -> Dict[str, Any]:
+            """
+            Validate emotional authenticity of narrative against source memories
+            
+            Args:
+                params: Parameters containing narrative and memories
+                
+            Returns:
+                Emotional authenticity assessment
+            """
+            narrative = params.narrative
+            memories = params.memories
+            
+            authenticity_score = 0.5  # Default moderate authenticity
+            issues = []
+            
+            # Extract emotions from memories
+            memory_emotions = set()
+            for memory in memories:
+                if "emotional_context" in memory and "primary_emotion" in memory["emotional_context"]:
+                    memory_emotions.add(memory["emotional_context"]["primary_emotion"].lower())
+                    
+            # Check narrative captures emotions from memories
+            if "emotional_arc" in narrative and narrative["emotional_arc"]:
+                emotional_arc = narrative["emotional_arc"].lower()
+                
+                # Count emotions from memories that appear in emotional arc
+                emotions_captured = sum(1 for emotion in memory_emotions 
+                                       if emotion in emotional_arc)
+                
+                emotion_ratio = emotions_captured / max(1, len(memory_emotions))
+                
+                authenticity_score += emotion_ratio * 0.3
+                
+                if emotion_ratio < 0.3:
+                    issues.append("Narrative doesn't reflect emotions in source memories")
+                    
+            # Check summary reflects emotional content
+            if "summary" in narrative and "emotional_arc" in narrative:
+                summary = narrative["summary"].lower()
+                emotional_arc = narrative["emotional_arc"].lower()
+                
+                # Simple check if emotional arc is reflected in summary
+                if any(emotion in summary for emotion in emotional_arc.split()):
+                    authenticity_score += 0.2
+                else:
+                    issues.append("Summary doesn't reflect emotional arc")
+                    authenticity_score -= 0.1
+                    
+            return {
+                "authenticity_score": max(0.0, min(1.0, authenticity_score)),
+                "is_authentic": authenticity_score >= 0.6,
+                "issues": issues
+            }
+        
+        return _validate_emotional_authenticity
 
     @staticmethod
     @function_tool
