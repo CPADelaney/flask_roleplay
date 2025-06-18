@@ -13,6 +13,10 @@ logger = logging.getLogger(__name__)
 
 # Maintenance-specific tools
 
+class RecordHistoryParams(BaseModel, extra="forbid"):
+    """JSON string with a full maintenance-record object"""
+    maintenance_record_json: str
+
 class TraitStat(BaseModel, extra="forbid"):
     name: str
     count: int
@@ -240,31 +244,38 @@ async def get_maintenance_status(
     )
 
 @function_tool
-async def record_maintenance_history(
+async def record_maintenance_history(                    # noqa: N802
     ctx: RunContextWrapper,
-    maintenance_record: Dict[str, Any],
+    params: RecordHistoryParams,                         # ← strict wrapper
 ) -> RecordHistoryResult:
-    """Strict recorder."""
+    """Strict recorder – accepts JSON string."""
+    import json, datetime
+
+    # ① decode
     try:
-        if "timestamp" not in maintenance_record:
-            maintenance_record["timestamp"] = datetime.datetime.now().isoformat()
-
-        ctx.context.maintenance_history.append(maintenance_record)
-        if len(ctx.context.maintenance_history) > ctx.context.max_history_entries:
-            ctx.context.maintenance_history = ctx.context.maintenance_history[
-                -ctx.context.max_history_entries :
-            ]
-
-        return RecordHistoryResult(
-            success=True, history_count=len(ctx.context.maintenance_history)
-        )
+        rec: dict[str, Any] = json.loads(params.maintenance_record_json or "{}")
+        if not isinstance(rec, dict):
+            raise TypeError("maintenance_record_json must decode to an object")
     except Exception as exc:
         return RecordHistoryResult(
             success=False,
             history_count=len(ctx.context.maintenance_history),
-            error=str(exc),
+            error=f"Bad JSON: {exc}",
         )
 
+    # ② augment & store
+    rec.setdefault("timestamp", datetime.datetime.now().isoformat())
+
+    ctx.context.maintenance_history.append(rec)
+    if len(ctx.context.maintenance_history) > ctx.context.max_history_entries:
+        ctx.context.maintenance_history = ctx.context.maintenance_history[
+            -ctx.context.max_history_entries :
+        ]
+
+    # ③ done
+    return RecordHistoryResult(
+        success=True, history_count=len(ctx.context.maintenance_history)
+    )
 class ConditioningMaintenanceSystem:
     """Handles periodic maintenance tasks for the conditioning system"""
     
