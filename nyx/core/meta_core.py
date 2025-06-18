@@ -29,6 +29,24 @@ logger = logging.getLogger(__name__)
 
 # Pydantic models for structured I/O
 
+# ── helper models ────────────────────────────────────────────────
+class ReallocateResourcesParams(BaseModel, extra="forbid"):
+    """Wrapper for raw inputs (JSON strings keep schema closed)."""
+    bottlenecks_json: str
+    strategy_analysis_json: str
+
+
+class ResourceDelta(BaseModel, extra="forbid"):
+    system: str
+    delta: float
+
+
+class ReallocateResourcesResult(BaseModel, extra="forbid"):
+    """Final output – list of significant changes + new allocation map."""
+    changes: List[ResourceDelta]
+    new_allocations_json: str
+
+
 class PerformanceDataParams(BaseModel, extra="forbid"):
     """Wrapper that carries the raw performance-data mapping as JSON."""
     performance_json: str
@@ -1132,87 +1150,78 @@ class MetaCore:
         
         return _analyze_cognitive_strategies
     
-    def _create_reallocate_resources_tool(self):
-        """Create the reallocate resources tool with proper access to self"""
+    def _create_reallocate_resources_tool(self):                 # noqa: N802
+        """Return a strict re-allocate-resources tool."""
+    
         @function_tool
-        async def _reallocate_resources(ctx: RunContextWrapper, bottlenecks: List[Dict[str, Any]], 
-                                        strategy_analysis: Dict[str, Any]) -> Dict[str, float]:
-            """
-            Reallocate resources based on bottlenecks and strategy analysis
-            
-            Args:
-                bottlenecks: Identified bottlenecks
-                strategy_analysis: Strategy effectiveness analysis
-                
-            Returns:
-                Resource allocation changes
-            """
-            # Initialize with current allocations
-            new_allocations = self.context.resource_allocation.copy()
-            
-            # Handle critical bottlenecks first
-            critical_bottlenecks = [b for b in bottlenecks 
-                                  if b["severity"] >= self.context.meta_parameters["bottleneck_severity_threshold"]]
-            
-            for bottleneck in critical_bottlenecks:
-                process_type = bottleneck["process_type"]
-                if process_type in new_allocations:
-                    current = new_allocations[process_type]
-                    
-                    # Increase allocation for resource bottlenecks
-                    if bottleneck["type"] in ["resource_utilization", "slow_response", "process_bottleneck"]:
-                        new_allocations[process_type] = min(0.4, current * 1.5)
-            
-            # Adjust based on strategy effectiveness
-            if "system_evaluations" in strategy_analysis:
-                for system_name, eval_data in strategy_analysis["system_evaluations"].items():
-                    effectiveness = eval_data["effectiveness"]
-                    
-                    if system_name in new_allocations:
-                        current = new_allocations[system_name]
-                        
-                        # Adjust based on effectiveness
-                        if effectiveness < 0.3:
-                            # Low effectiveness - increase resources
-                            new_allocations[system_name] = min(0.4, current * 1.3)
-                        elif effectiveness > 0.8:
-                            # High effectiveness - may be able to reduce resources
-                            new_allocations[system_name] = max(0.1, current * 0.9)
-            
-            # Normalize allocations to sum to 1.0
-            total_allocation = sum(new_allocations.values())
-            
-            if total_allocation > 0:
-                for system_name in new_allocations:
-                    new_allocations[system_name] /= total_allocation
-            
-            # Calculate changes from current allocation
-            changes = {}
-            resource_flexibility = self.context.meta_parameters["resource_flexibility"]
-            
-            for system_name, new_allocation in new_allocations.items():
-                current = self.context.resource_allocation.get(system_name, 0)
-                change = new_allocation - current
-                
-                # Only record and apply significant changes
-                if abs(change) >= 0.02:  # 2% threshold for significance
-                    changes[system_name] = change
-                    
-                    # Apply change (constrained by flexibility)
-                    max_change = current * resource_flexibility
-                    applied_change = max(min(change, max_change), -max_change)
-                    
-                    # Update resource allocation
-                    self.context.resource_allocation[system_name] = current + applied_change
-            
-            # Ensure allocations still sum to 1.0 after applying changes
-            total = sum(self.context.resource_allocation.values())
-            if total > 0 and abs(total - 1.0) > 0.001:  # If not very close to 1.0
-                for system_name in self.context.resource_allocation:
-                    self.context.resource_allocation[system_name] /= total
-            
-            return changes
-        
+        async def _reallocate_resources(                          # noqa: N802
+            ctx: RunContextWrapper,
+            params: ReallocateResourcesParams,                    # ← strict input
+        ) -> ReallocateResourcesResult:                           # ← strict output
+            import json, copy
+    
+            # ── decode input JSON ------------------------------------------------
+            try:
+                bottlenecks: List[Dict[str, Any]] = json.loads(params.bottlenecks_json)
+                strategy_analysis: Dict[str, Any] = json.loads(params.strategy_analysis_json)
+            except Exception:
+                # On bad JSON return empty-change result
+                return ReallocateResourcesResult(changes=[], new_allocations_json="{}")
+    
+            # ── current state ----------------------------------------------------
+            new_alloc = copy.deepcopy(ctx.context.resource_allocation)
+            meta      = ctx.context.meta_parameters
+            sev_thres = meta.get("bottleneck_severity_threshold", 0.7)
+            flexibility = meta.get("resource_flexibility", 0.2)
+    
+            # ── 1. handle critical bottlenecks ----------------------------------
+            crit = [b for b in bottlenecks if b.get("severity", 0) >= sev_thres]
+            for b in crit:
+                ptype = b.get("process_type")
+                if ptype in new_alloc and b.get("type") in {
+                    "resource_utilization", "slow_response", "process_bottleneck"
+                }:
+                    new_alloc[ptype] = min(0.4, new_alloc[ptype] * 1.5)
+    
+            # ── 2. strategy effectiveness adjustments ---------------------------
+            for sys_name, ev in strategy_analysis.get("system_evaluations", {}).items():
+                if sys_name not in new_alloc:
+                    continue
+                eff = ev.get("effectiveness", 0.5)
+                if eff < 0.3:
+                    new_alloc[sys_name] = min(0.4, new_alloc[sys_name] * 1.3)
+                elif eff > 0.8:
+                    new_alloc[sys_name] = max(0.1, new_alloc[sys_name] * 0.9)
+    
+            # ── 3. normalise to 1.0 ---------------------------------------------
+            total = sum(new_alloc.values()) or 1.0
+            for k in new_alloc:
+                new_alloc[k] /= total
+    
+            # ── 4. compute and apply bounded changes ----------------------------
+            changes: list[ResourceDelta] = []
+            for sys_name, target in new_alloc.items():
+                current = ctx.context.resource_allocation.get(sys_name, 0.0)
+                delta   = target - current
+                if abs(delta) < 0.02:          # 2 % threshold
+                    continue
+    
+                max_change = abs(current) * flexibility
+                bounded    = max(-max_change, min(delta, max_change))
+                ctx.context.resource_allocation[sys_name] = current + bounded
+    
+                changes.append(ResourceDelta(system=sys_name, delta=bounded))
+    
+            # ── 5. final normalisation (guard) -----------------------------------
+            tot_final = sum(ctx.context.resource_allocation.values()) or 1.0
+            for k in ctx.context.resource_allocation:
+                ctx.context.resource_allocation[k] /= tot_final
+    
+            return ReallocateResourcesResult(
+                changes=changes,
+                new_allocations_json=json.dumps(ctx.context.resource_allocation, separators=(",", ":")),
+            )
+    
         return _reallocate_resources
     
     def _create_identify_inefficient_dependencies_tool(self):
