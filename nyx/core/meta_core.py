@@ -28,6 +28,23 @@ from nyx.core.prediction_engine import PredictionEngine, PredictionInput
 logger = logging.getLogger(__name__)
 
 # Pydantic models for structured I/O
+
+class AttentionContextParams(BaseModel, extra="forbid"):
+    """Conversation or system context encoded as JSON."""
+    context_json: str
+
+
+class AttentionCheckResult(BaseModel, extra="forbid"):
+    """
+    Result of the attention-focus check.
+
+    `details_json` is a JSON-encoded object whose structure depends on the
+    action taken; this keeps the outer schema fixed.
+    """
+    focus_changed: bool
+    action: Optional[str] = None          # e.g. "set_focus", "shift_focus", "clear_focus"
+    details_json: Optional[str] = None
+    
 class PerformanceMetrics(BaseModel):
     success_rate: float = 0.5
     error_rate: float = 0.0
@@ -759,59 +776,79 @@ class MetaCore:
         
         return _collect_performance_metrics
     
-    def _create_check_attention_focus_tool(self):
-        """Create the check attention focus tool with proper access to self"""
+    def _create_check_attention_focus_tool(self):             # noqa: N802
+        """Return a strict check-attention-focus tool."""
+    
         @function_tool
-        async def _check_attention_focus(ctx: RunContextWrapper, context: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-            """
-            Check if attention focus needs to shift based on context
-            
-            Args:
-                context: Current context data
-                
-            Returns:
-                Attention shift information if focus changed
-            """
-            # Determine if any system or process needs priority attention
-            priority = self._determine_attention_priority(context)
-            
-            if priority:
-                # Check if we should shift attention
-                if ctx.context.attention_focus is None:
-                    # No current focus, set new focus
-                    await self._set_attention_focus(priority)
-                    return {
-                        "action": "set_focus",
-                        "target": priority["target"],
-                        "priority": priority["priority"],
-                        "reason": priority["reason"]
-                    }
-                elif priority["priority"] > ctx.context.attention_focus.get("priority", 0):
-                    # Higher priority found, shift focus
-                    old_focus = ctx.context.attention_focus["target"]
-                    await self._set_attention_focus(priority)
-                    return {
-                        "action": "shift_focus",
-                        "from": old_focus,
-                        "to": priority["target"],
-                        "priority": priority["priority"],
-                        "reason": priority["reason"]
-                    }
-            
-            # Check if current focus has expired
-            if ctx.context.attention_focus:
-                expiration = ctx.context.attention_focus.get("expiration", 0)
-                if ctx.context.cognitive_cycle_count >= expiration:
-                    old_focus = ctx.context.attention_focus["target"]
+        async def _check_attention_focus(                     # noqa: N802
+            ctx: RunContextWrapper,
+            params: AttentionContextParams,                   # ← strict input
+        ) -> AttentionCheckResult:                            # ← strict output
+            import json, datetime
+            from nyx.telemetry import custom_span
+    
+            with custom_span("check_attention_focus"):
+                # ① decode context safely
+                try:
+                    context: Dict[str, Any] = json.loads(params.context_json or "{}")
+                    if not isinstance(context, dict):
+                        raise TypeError
+                except Exception:
+                    # Bad JSON ⇒ do nothing
+                    return AttentionCheckResult(focus_changed=False)
+    
+                # ② ask owner object (self) to evaluate priority
+                priority = self._determine_attention_priority(context)
+    
+                # local helpers --------------------------------------------------
+                async def _set_focus(pri: Dict[str, Any]):
+                    await self._set_attention_focus(pri)
+                    ctx.context.attention_focus = pri
+    
+                async def _clear_focus():
                     await self._clear_attention_focus()
-                    return {
-                        "action": "clear_focus",
-                        "from": old_focus,
-                        "reason": "Focus expired"
-                    }
-            
-            return None
-        
+                    ctx.context.attention_focus = None
+    
+                # ③ decide & act -------------------------------------------------
+                if priority:
+                    cur = ctx.context.attention_focus
+                    if cur is None:
+                        await _set_focus(priority)
+                        return AttentionCheckResult(
+                            focus_changed=True,
+                            action="set_focus",
+                            details_json=json.dumps(priority, separators=(",", ":")),
+                        )
+                    if priority["priority"] > cur.get("priority", 0):
+                        details = {
+                            "from": cur["target"],
+                            "to": priority["target"],
+                            "priority": priority["priority"],
+                            "reason": priority["reason"],
+                        }
+                        await _set_focus(priority)
+                        return AttentionCheckResult(
+                            focus_changed=True,
+                            action="shift_focus",
+                            details_json=json.dumps(details, separators=(",", ":")),
+                        )
+    
+                # ④ maybe clear expired focus -----------------------------------
+                cur = ctx.context.attention_focus
+                if cur:
+                    expiration = cur.get("expiration", 0)
+                    if ctx.context.cognitive_cycle_count >= expiration:
+                        details = {"from": cur["target"], "reason": "Focus expired"}
+                        await _clear_focus()
+                        return AttentionCheckResult(
+                            focus_changed=True,
+                            action="clear_focus",
+                            details_json=json.dumps(details, separators=(",", ":")),
+                        )
+    
+                # ⑤ nothing changed ---------------------------------------------
+                return AttentionCheckResult(focus_changed=False)
+    
         return _check_attention_focus
     
     def _create_detect_performance_drop_tool(self):
