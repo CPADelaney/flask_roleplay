@@ -12,6 +12,25 @@ from nyx.core.conditioning_tools import check_trait_balance
 
 logger = logging.getLogger(__name__)
 
+class TraitPatch(BaseModel, extra="forbid"):
+    name: str
+    value: float
+
+class PreferencePatch(BaseModel, extra="forbid"):
+    stimulus: str
+    pref_type: str   # e.g. "like" / "dislike"
+    value: float
+
+class EmotionTriggerPatch(BaseModel, extra="forbid"):
+    stimulus: str
+    emotion: str
+    intensity: float
+
+class BehaviorPatch(BaseModel, extra="forbid"):
+    category: str             # e.g. "coping", "learning"
+    items: List[str]
+
+
 # Pydantic models for function parameters and returns
 class ParametersResult(BaseModel, extra="forbid"):
     """Result of getting parameters"""
@@ -65,36 +84,43 @@ class ResetResult(BaseModel, extra="forbid"):
     personality_profile: 'PersonalityProfileResult'
     error: Optional[str] = None
 
-class PersonalityProfileResult(BaseModel, extra="forbid"):
-    """Result of getting personality profile"""
-    traits: Dict[str, float] = Field(default_factory=dict)
-    preferences: Dict[str, 'PreferenceDetailResult'] = Field(default_factory=dict)
-    emotion_triggers: Dict[str, 'EmotionTriggerDetailResult'] = Field(default_factory=dict)
-    behaviors: Dict[str, List[str]] = Field(default_factory=dict)
+class UpdatePersonalityProfileParams(BaseModel, extra="forbid"):
+    """Parameters for updating personality profile (STRICT)."""
+    traits: Optional[List[TraitPatch]] = None
+    preferences: Optional[List[PreferencePatch]] = None
+    emotion_triggers: Optional[List[EmotionTriggerPatch]] = None
+    behaviors: Optional[List[BehaviorPatch]] = None
+
+class PersonalityTrait(BaseModel, extra="forbid"):
+    name: str
+    value: float
 
 class PreferenceDetailResult(BaseModel, extra="forbid"):
-    """Preference detail result"""
-    type: str
+    stimulus: str
+    pref_type: str
     value: float
 
 class EmotionTriggerDetailResult(BaseModel, extra="forbid"):
-    """Emotion trigger detail result"""
+    stimulus: str
     emotion: str
     intensity: float
 
-class UpdatePersonalityProfileParams(BaseModel, extra="forbid"):
-    """Parameters for updating personality profile"""
-    traits: Optional[Dict[str, float]] = None
-    preferences: Optional[Dict[str, PreferenceDetail]] = None
-    emotion_triggers: Optional[Dict[str, EmotionTriggerDetail]] = None
-    behaviors: Optional[Dict[str, List[str]]] = None
+class BehaviorEntry(BaseModel, extra="forbid"):
+    category: str
+    items: List[str]
+
+class PersonalityProfileResult(BaseModel, extra="forbid"):
+    traits: List[PersonalityTrait] = Field(default_factory=list)
+    preferences: List[PreferenceDetailResult] = Field(default_factory=list)
+    emotion_triggers: List[EmotionTriggerDetailResult] = Field(default_factory=list)
+    behaviors: List[BehaviorEntry] = Field(default_factory=list)
 
 class UpdatePersonalityResult(BaseModel, extra="forbid"):
-    """Result of updating personality profile"""
     success: bool
     updated_keys: List[str] = Field(default_factory=list)
     message: Optional[str] = None
     error: Optional[str] = None
+
 
 class AdjustTraitParams(BaseModel, extra="forbid"):
     """Parameters for adjusting a trait"""
@@ -122,6 +148,36 @@ class AdjustPreferenceResult(BaseModel, extra="forbid"):
     preference_type: str
     value: float
     error: Optional[str] = None
+
+def _profile_to_result(profile: PersonalityProfile) -> PersonalityProfileResult:
+    """Convert the mutable in-memory profile → strict list-based result."""
+    return PersonalityProfileResult(
+        traits=[
+            PersonalityTrait(name=name, value=val)
+            for name, val in profile.traits.items()
+        ],
+        preferences=[
+            PreferenceDetailResult(
+                stimulus=stim,
+                pref_type=det.type,
+                value=det.value,
+            )
+            for stim, det in profile.preferences.items()
+        ],
+        emotion_triggers=[
+            EmotionTriggerDetailResult(
+                stimulus=stim,
+                emotion=det.emotion,
+                intensity=det.intensity,
+            )
+            for stim, det in profile.emotion_triggers.items()
+        ],
+        behaviors=[
+            BehaviorEntry(category=cat, items=items)
+            for cat, items in profile.behaviors.items()
+        ],
+    )
+
 
 # Configuration-specific tools
 
@@ -197,83 +253,98 @@ async def validate_parameters(ctx: RunContextWrapper, parameters: ParametersResu
 
 @function_tool
 async def reset_to_defaults(ctx: RunContextWrapper) -> ResetResult:
-    """Reset all parameters and profile to defaults"""
+    """Reset parameters **and** profile; emit strict models."""
     try:
+        # fresh objects
         ctx.context.parameters = ConditioningParameters()
         ctx.context.personality_profile = PersonalityProfile(
             traits={"dominance": 0.7, "playfulness": 0.6, "strictness": 0.5},
             preferences={},
             emotion_triggers={},
-            behaviors={}
+            behaviors={},
         )
-        
-        # Save both
+
+        # persist to disk
         await save_parameters(ctx)
         await save_personality_profile(ctx)
-        
-        # Convert to result models
-        params_result = ParametersResult(**ctx.context.parameters.model_dump())
-        profile_result = PersonalityProfileResult(
-            traits=ctx.context.personality_profile.traits,
-            preferences={k: PreferenceDetailResult(type=v.type, value=v.value) 
-                        for k, v in ctx.context.personality_profile.preferences.items()},
-            emotion_triggers={k: EmotionTriggerDetailResult(emotion=v.emotion, intensity=v.intensity)
-                            for k, v in ctx.context.personality_profile.emotion_triggers.items()},
-            behaviors=ctx.context.personality_profile.behaviors
-        )
-        
+
         return ResetResult(
             success=True,
             message="Reset to defaults",
-            parameters=params_result,
-            personality_profile=profile_result
+            parameters=ParametersResult(**ctx.context.parameters.model_dump()),
+            personality_profile=_profile_to_result(
+                ctx.context.personality_profile
+            ),
         )
-    except Exception as e:
+    except Exception as exc:
         return ResetResult(
             success=False,
             message="",
             parameters=ParametersResult(),
             personality_profile=PersonalityProfileResult(),
-            error=str(e)
+            error=str(exc),
         )
 
 @function_tool
-async def get_personality_profile(ctx: RunContextWrapper) -> PersonalityProfileResult:
-    """Get current personality profile"""
-    if ctx.context.personality_profile:
-        profile = ctx.context.personality_profile
-        return PersonalityProfileResult(
-            traits=profile.traits,
-            preferences={k: PreferenceDetailResult(type=v.type, value=v.value) 
-                        for k, v in profile.preferences.items()},
-            emotion_triggers={k: EmotionTriggerDetailResult(emotion=v.emotion, intensity=v.intensity)
-                            for k, v in profile.emotion_triggers.items()},
-            behaviors=profile.behaviors
-        )
-    return PersonalityProfileResult()
+async def get_personality_profile(
+    ctx: RunContextWrapper,
+) -> PersonalityProfileResult:
+    """Return the current profile in STRICT format."""
+    prof = ctx.context.personality_profile
+    return _profile_to_result(prof) if prof else PersonalityProfileResult()
 
 @function_tool
-async def update_personality_profile(ctx: RunContextWrapper, params: UpdatePersonalityProfileParams) -> UpdatePersonalityResult:
-    """Update personality profile"""
-    if not ctx.context.personality_profile:
+async def update_personality_profile(
+    ctx: RunContextWrapper,
+    params: UpdatePersonalityProfileParams,
+) -> UpdatePersonalityResult:
+    """Apply patch lists from the strict model to the in-memory profile."""
+    prof = ctx.context.personality_profile
+    if not prof:
         return UpdatePersonalityResult(success=False, message="Profile not loaded")
-    
-    result = UpdatePersonalityResult(success=True)
-    
+
+    updated: list[str] = []
+
     try:
-        current_dict = ctx.context.personality_profile.model_dump()
-        update_dict = params.model_dump(exclude_unset=True)
-        
-        # Update the current dict with new values
-        for key, value in update_dict.items():
-            if value is not None:
-                current_dict[key] = value
-                result.updated_keys.append(key)
-        
-        ctx.context.personality_profile = PersonalityProfile(**current_dict)
-        return result
-    except Exception as e:
-        return UpdatePersonalityResult(success=False, error=str(e))
+        # ── traits ────────────────────────────────────────────────────────────
+        if params.traits:
+            for patch in params.traits:
+                prof.traits[patch.name] = max(0.0, min(1.0, patch.value))
+                updated.append(f"trait:{patch.name}")
+
+        # ── preferences ───────────────────────────────────────────────────────
+        if params.preferences:
+            for patch in params.preferences:
+                prof.preferences[patch.stimulus] = PreferenceDetail(
+                    type=patch.pref_type,
+                    value=patch.value,
+                )
+                updated.append(f"preference:{patch.stimulus}")
+
+        # ── emotion triggers ─────────────────────────────────────────────────
+        if params.emotion_triggers:
+            for patch in params.emotion_triggers:
+                prof.emotion_triggers[patch.stimulus] = EmotionTriggerDetail(
+                    emotion=patch.emotion,
+                    intensity=patch.intensity,
+                )
+                updated.append(f"emotion_trigger:{patch.stimulus}")
+
+        # ── behaviours ───────────────────────────────────────────────────────
+        if params.behaviors:
+            for patch in params.behaviors:
+                prof.behaviors[patch.category] = patch.items
+                updated.append(f"behavior:{patch.category}")
+
+        return UpdatePersonalityResult(
+            success=True,
+            updated_keys=updated,
+            message="Profile updated",
+        )
+
+    except Exception as exc:
+        return UpdatePersonalityResult(success=False, error=str(exc))
+
 
 @function_tool
 async def adjust_trait(ctx: RunContextWrapper, params: AdjustTraitParams) -> AdjustTraitResult:
