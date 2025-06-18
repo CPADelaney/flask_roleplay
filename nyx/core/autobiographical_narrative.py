@@ -21,10 +21,18 @@ from agents import (
 
 logger = logging.getLogger(__name__)
 
-class MemoryEmotionAnalysisResult(BaseModel, extra="forbid"):
-    dominant_emotions: List[tuple[str, int]]
-    emotion_intensities: Dict[str, float]
-    emotional_arcs: List[str]
+class _JSONModel(BaseModel, extra="forbid"):
+    json: str                              # nothing else → always strict
+# --------------------------------------------------------------------
+
+
+class MemoryEmotionAnalysisParams(BaseModel, extra="forbid"):
+    memories_json: str                     # single STRING field
+
+
+class MemoryEmotionAnalysisResult(_JSONModel):
+    """Tool returns a JSON blob stringified in `json`."""
+    pass
 
 class NarrativeSegment(BaseModel):
     """A segment of the autobiographical narrative."""
@@ -75,11 +83,6 @@ class NarrativeValidationOutput(BaseModel):
     issues: List[str] = Field(default_factory=list, description="Issues found in the narrative")
     coherence_score: float = Field(..., description="Narrative coherence score (0-1)")
     continuity_rating: float = Field(..., description="Continuity with existing narrative (0-1)")
-
-# Param models for strict schema compliance (Issue E)
-class MemoryEmotionAnalysisParams(BaseModel, extra="forbid"):
-    """Parameters for memory emotion analysis"""
-    memories: List[Dict[str, Any]]
 
 class IdentifyMemoryThemesParams(BaseModel, extra="forbid"):
     """Parameters for memory theme identification"""
@@ -340,15 +343,16 @@ class AutobiographicalNarrative:
     def _create_analyze_memory_emotions_tool(self):
         """Factory → FunctionTool that analyses emotions in a memory list"""
         @function_tool
-        async def _analyze_memory_emotions(                 # noqa: N802
+        async def _analyze_memory_emotions(                       # noqa: N802
             ctx: RunContextWrapper[NarrativeContext],
-            params: MemoryEmotionAnalysisParams,            # <- Pydantic wrapper
-        ) -> MemoryEmotionAnalysisResult:
-            memories = params.memories                      # unwrap
+            params: MemoryEmotionAnalysisParams,                  # 👈 wrapper
+        ) -> MemoryEmotionAnalysisResult:                         # 👈 wrapper
+            # -- unwrap JSON ------------------------------------------------
+            memories: List[Dict[str, Any]] = json.loads(params.memories_json)
     
-            # ---------- original logic ---------------------
+            # -------- original logic (unchanged) ---------------------------
             emotion_counts: Dict[str, int] = {}
-            emotion_intensities: Dict[str, List[float]] = {}
+            emotion_intensities: Dict[str, List[float]] = []
             emotional_arcs: List[str] = []
     
             for mem in memories:
@@ -360,31 +364,32 @@ class AutobiographicalNarrative:
                     if inten is not None:
                         emotion_intensities.setdefault(emo, []).append(float(inten))
     
-            avg_inten = {
-                e: sum(lst) / len(lst) for e, lst in emotion_intensities.items()
-            }
+            avg_inten = {e: sum(lst) / len(lst) for e, lst in emotion_intensities.items()}
     
             if len(memories) >= 3:
-                for prev, curr in zip(
-                    memories[:-1],
-                    memories[1:],
-                ):
-                    p = prev.get("emotional_context", {}).get("primary_emotion")
-                    c = curr.get("emotional_context", {}).get("primary_emotion")
-                    if p and c and p != c:
-                        emotional_arcs.append(f"{p} → {c}")
-            # -----------------------------------------------
+                sorted_mems = sorted(
+                    memories, key=lambda m: m.get("metadata", {}).get("timestamp", "")
+                )
+                prev = None
+                for mem in sorted_mems:
+                    curr = mem.get("emotional_context", {}).get("primary_emotion")
+                    if prev and curr and curr != prev:
+                        emotional_arcs.append(f"{prev} → {curr}")
+                    if curr:
+                        prev = curr
+            # ----------------------------------------------------------------
     
-            return MemoryEmotionAnalysisResult(
-                dominant_emotions=sorted(
+            payload = {
+                "dominant_emotions": sorted(
                     emotion_counts.items(), key=lambda x: x[1], reverse=True
                 ),
-                emotion_intensities=avg_inten,
-                emotional_arcs=emotional_arcs,
-            )
+                "emotion_intensities": avg_inten,
+                "emotional_arcs": emotional_arcs,
+            }
+            return MemoryEmotionAnalysisResult(json=json.dumps(payload))
     
         return _analyze_memory_emotions
-
+    
     def _create_identify_memory_themes_tool(self):
         """Factory method to create the identify memory themes tool"""
         @function_tool
