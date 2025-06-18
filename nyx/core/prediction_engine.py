@@ -15,6 +15,17 @@ logger = logging.getLogger(__name__)
 
 # Pydantic models for structured I/O
 
+class ResponseHistoryParams(BaseModel, extra="forbid"):
+    """The full history list encoded as a JSON string."""
+    history_json: str
+
+
+class ResponsePatternAnalysis(BaseModel, extra="forbid"):
+    """Strict output for the response-pattern analyser."""
+    input_response_pairs: int
+    analysis_time: str          # ISO-8601
+
+
 class ConversationHistoryParams(BaseModel, extra="forbid"):
     """A single JSON string containing the entire history list."""
     history_json: str
@@ -320,29 +331,45 @@ class PredictionEngine:
     
         return _analyze_conversation_patterns
     
-    def _create_analyze_response_patterns_tool(self):
-        """Create the analyze response patterns tool with proper access to self"""
+    def _create_analyze_response_patterns_tool(self):           # noqa: N802
+        """Return a strict analyse-response-patterns tool."""
+    
         @function_tool
-        async def _analyze_response_patterns(ctx: RunContextWrapper, history: List[Dict[str, Any]]) -> Dict[str, Any]:
-            """Analyze patterns in responses"""
+        async def _analyze_response_patterns(                    # noqa: N802
+            ctx: RunContextWrapper,
+            params: ResponseHistoryParams,                       # ← strict input
+        ) -> ResponsePatternAnalysis:                            # ← strict output
+    
+            import json, datetime
+            from nyx.telemetry import custom_span
+    
             with custom_span("analyze_response_patterns"):
-                if len(history) < 2:
-                    return {
-                        "patterns": {},
-                        "message": "Insufficient history for response pattern analysis"
-                    }
-                
-                # Extract pairs of user input and system response
-                pairs = []
-                for i in range(1, len(history)):
-                    if history[i-1].get("role") == "user" and history[i].get("role") == "assistant":
-                        pairs.append((history[i-1].get("text", ""), history[i].get("text", "")))
-                
-                return {
-                    "input_response_pairs": len(pairs),
-                    "analysis_time": datetime.datetime.now().isoformat()
-                }
-        
+                # ① decode history safely
+                try:
+                    history: List[Dict[str, Any]] = json.loads(params.history_json or "[]")
+                    if not isinstance(history, list):
+                        raise TypeError
+                except Exception:
+                    # decoding failed → empty result (but still valid)
+                    return ResponsePatternAnalysis(
+                        input_response_pairs=0,
+                        analysis_time=datetime.datetime.now().isoformat(),
+                    )
+    
+                # ② count user→assistant pairs
+                pairs = sum(
+                    1
+                    for i in range(1, len(history))
+                    if history[i - 1].get("role") == "user"
+                    and history[i].get("role") == "assistant"
+                )
+    
+                # ③ return strict model
+                return ResponsePatternAnalysis(
+                    input_response_pairs=pairs,
+                    analysis_time=datetime.datetime.now().isoformat(),
+                )
+    
         return _analyze_response_patterns
     
     def _create_analyze_emotional_patterns_predict_tool(self):
