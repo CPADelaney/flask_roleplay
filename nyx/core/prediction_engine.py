@@ -15,6 +15,23 @@ logger = logging.getLogger(__name__)
 
 # Pydantic models for structured I/O
 
+class EmotionalHistoryParams(BaseModel, extra="forbid"):
+    """Conversation history encoded as JSON."""
+    history_json: str
+
+
+class EmotionalPatternAnalysis(BaseModel, extra="forbid"):
+    """
+    Strict output model.
+
+    `patterns_json` is a JSON-encoded mapping  
+    {emotion → {trend, volatility, …}} to avoid dynamic keys.
+    """
+    patterns_json: str           # JSON string
+    emotions_tracked: int
+    analysis_time: str           # ISO-8601 timestamp
+
+
 class ResponseHistoryParams(BaseModel, extra="forbid"):
     """The full history list encoded as a JSON string."""
     history_json: str
@@ -372,71 +389,81 @@ class PredictionEngine:
     
         return _analyze_response_patterns
     
-    def _create_analyze_emotional_patterns_predict_tool(self):
-        """Create the analyze emotional patterns predict tool with proper access to self"""
+    def _create_analyze_emotional_patterns_predict_tool(self):        # noqa: N802
+        """Return a strict analyze-emotional-patterns tool."""
+    
         @function_tool
-        async def _analyze_emotional_patterns_predict(ctx: RunContextWrapper, history: List[Dict[str, Any]]) -> Dict[str, Any]:
-            """Analyze patterns in emotional states"""
+        async def _analyze_emotional_patterns_predict(                # noqa: N802
+            ctx: RunContextWrapper,
+            params: EmotionalHistoryParams,                           # ← strict input
+        ) -> EmotionalPatternAnalysis:                                # ← strict output
+            import json, datetime
+            from nyx.telemetry import custom_span
+    
             with custom_span("analyze_emotional_patterns_predict"):
-                # Extract emotional states from history
-                emotional_states = []
+                # ① decode history safely
+                try:
+                    history: List[Dict[str, Any]] = json.loads(params.history_json or "[]")
+                    if not isinstance(history, list):
+                        raise TypeError
+                except Exception:
+                    # decoding failure → empty result
+                    return EmotionalPatternAnalysis(
+                        patterns_json="{}",
+                        emotions_tracked=0,
+                        analysis_time=datetime.datetime.now().isoformat(),
+                    )
+    
+                # ② harvest emotional states
+                emotion_trends: Dict[str, List[float]] = {}
                 for entry in history:
-                    if "emotional_state" in entry:
-                        emotional_states.append(entry["emotional_state"])
-                
-                if not emotional_states:
-                    return {
-                        "patterns": {},
-                        "message": "No emotional data in history"
+                    state = entry.get("emotional_state")
+                    if not state:
+                        continue
+                    prim = state.get("primary_emotion") or {}
+                    name = prim.get("name", "Neutral")
+                    intensity = prim.get("intensity", 0.5)
+                    emotion_trends.setdefault(name, []).append(float(intensity))
+    
+                if not emotion_trends:
+                    return EmotionalPatternAnalysis(
+                        patterns_json="{}",
+                        emotions_tracked=0,
+                        analysis_time=datetime.datetime.now().isoformat(),
+                    )
+    
+                # ③ analyse trends
+                patterns: Dict[str, Dict[str, Any]] = {}
+                for emo, vals in emotion_trends.items():
+                    if len(vals) < 2:
+                        continue
+                    start, end = vals[0], vals[-1]
+                    change = end - start
+                    trend = (
+                        "stable" if abs(change) < 0.1 else
+                        "increasing" if change > 0 else
+                        "decreasing"
+                    )
+                    volatility = (
+                        sum(abs(vals[i] - vals[i - 1]) for i in range(1, len(vals)))
+                        / (len(vals) - 1)
+                    )
+                    patterns[emo] = {
+                        "trend": trend,
+                        "volatility": round(volatility, 4),
+                        "start_intensity": start,
+                        "current_intensity": end,
+                        "change": round(change, 4),
+                        "occurrences": len(vals),
                     }
-                
-                # Track emotion changes over time
-                emotion_trends = {}
-                for state in emotional_states:
-                    if "primary_emotion" in state:
-                        emotion_name = state["primary_emotion"].get("name", "Neutral")
-                        intensity = state["primary_emotion"].get("intensity", 0.5)
-                        
-                        if emotion_name not in emotion_trends:
-                            emotion_trends[emotion_name] = []
-                        
-                        emotion_trends[emotion_name].append(intensity)
-                
-                # Analyze trends for each emotion
-                patterns = {}
-                for emotion, intensities in emotion_trends.items():
-                    if len(intensities) > 1:
-                        # Calculate trend
-                        start = intensities[0]
-                        end = intensities[-1]
-                        change = end - start
-                        
-                        if abs(change) < 0.1:
-                            trend = "stable"
-                        elif change > 0:
-                            trend = "increasing"
-                        else:
-                            trend = "decreasing"
-                        
-                        # Calculate volatility
-                        volatility = sum(abs(intensities[i] - intensities[i-1]) 
-                                        for i in range(1, len(intensities))) / (len(intensities) - 1)
-                        
-                        patterns[emotion] = {
-                            "trend": trend,
-                            "volatility": volatility,
-                            "start_intensity": start,
-                            "current_intensity": end,
-                            "change": change,
-                            "occurrences": len(intensities)
-                        }
-                
-                return {
-                    "patterns": patterns,
-                    "emotions_tracked": len(emotion_trends),
-                    "analysis_time": datetime.datetime.now().isoformat()
-                }
-        
+    
+                # ④ return strict model (encode patterns)
+                return EmotionalPatternAnalysis(
+                    patterns_json=json.dumps(patterns, separators=(",", ":")),
+                    emotions_tracked=len(emotion_trends),
+                    analysis_time=datetime.datetime.now().isoformat(),
+                )
+    
         return _analyze_emotional_patterns_predict
     
     async def generate_prediction(self, context: Dict[str, Any], 
