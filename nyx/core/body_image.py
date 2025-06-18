@@ -203,50 +203,71 @@ class BodyImage:
         logger.info("BodyImage initialized with enhanced Agent SDK integration")
 
     def _initialize_agents(self) -> None:
-        """
-        Instantiate every tool exactly once and wire them — in dependency
-        order — into all helper agents that power the Body-Image subsystem.
-        """
+        """Instantiate all tools once, then build agents in dependency order."""
 
-        # 1️⃣  TOOL CALLABLES  ─────────────────────────────────────────
+        # 1️⃣  TOOL INSTANCES ────────────────────────────────────────
         # Visual
-        self._extract_visual_part_features   = self._create_extract_visual_part_features_tool()
-        self._calculate_visual_confidence    = self._create_calculate_visual_confidence_tool()
-        self._analyze_visual_features        = self._create_analyze_visual_features_tool()
-        self._extract_body_part_states       = self._create_extract_body_part_states_tool()
-        self._get_current_visual_state       = self._create_get_current_visual_state_tool()
+        self._extract_visual_part_features        = self._create_extract_visual_part_features_tool()
+        self._calculate_visual_confidence         = self._create_calculate_visual_confidence_tool()
+        self._analyze_visual_features             = self._create_analyze_visual_features_tool()
+        self._extract_body_part_states            = self._create_extract_body_part_states_tool()
+        self._get_current_visual_state            = self._create_get_current_visual_state_tool()
 
         # Somatic
-        self._extract_somatic_features       = self._create_extract_somatic_features_tool()
-        self._calculate_somatic_confidence   = self._create_calculate_somatic_confidence_tool()
-        self._analyze_somatic_data           = self._create_analyze_somatic_data_tool()
+        self._extract_somatic_features            = self._create_extract_somatic_features_tool()
+        self._calculate_somatic_confidence        = self._create_calculate_somatic_confidence_tool()
+        self._analyze_somatic_data                = self._create_analyze_somatic_data_tool()
 
         # Multimodal
-        self._correlate_somatic_visual       = self._create_correlate_somatic_visual_tool()
-        self._calculate_proprioception_confidence = (
-            self._create_calculate_proprioception_confidence_tool()
-        )
-        self._resolve_perception_conflicts   = self._create_resolve_perception_conflicts_tool()
+        self._correlate_somatic_visual            = self._create_correlate_somatic_visual_tool()
+        self._calculate_proprioception_confidence = self._create_calculate_proprioception_confidence_tool()
+        self._resolve_perception_conflicts        = self._create_resolve_perception_conflicts_tool()
 
         # State helpers
-        self._update_body_image_state        = self._create_update_body_image_state_tool()
-        self._get_body_image_state_tool      = self._create_get_body_image_state_tool()  # renamed var to avoid clash
+        self._update_body_image_state             = self._create_update_body_image_state_tool()
+        self._get_body_image_state_tool           = self._create_get_body_image_state_tool()
 
-        # 2️⃣  LOW-LEVEL FEATURE AGENTS  ───────────────────────────────
-        self.visual_features_agent           = self._create_visual_features_agent()
-        self.somatic_features_agent          = self._create_somatic_features_agent()
+        # 2️⃣  FEATURE-LEVEL AGENTS ──────────────────────────────────
+        self.visual_features_agent                = self._create_visual_features_agent()
+        self.somatic_features_agent               = self._create_somatic_features_agent()
 
-        # 3️⃣  MID-LEVEL PERCEPTION AGENTS  ────────────────────────────
-        self.visual_perception_agent         = self._create_visual_perception_agent()
-        self.somatic_correlation_agent       = self._create_somatic_correlation_agent()
+        # 3️⃣  PERCEPTION AGENTS ─────────────────────────────────────
+        self.visual_perception_agent              = self._create_visual_perception_agent()
+        self.somatic_correlation_agent            = self._create_somatic_correlation_agent()
 
-        # 4️⃣  STATE-UPDATE / ACCESS AGENT  ────────────────────────────
-        self.body_state_updater_agent        = self._create_body_state_updater_agent()
+        # 4️⃣  STATE-UPDATE AGENT ────────────────────────────────────
+        self.body_state_updater_agent             = self._create_body_state_updater_agent()
 
-        # 5️⃣  TOP-LEVEL INTEGRATION AGENT  ────────────────────────────
-        self.body_integration_agent          = self._create_body_integration_agent()
+        # 5️⃣  INTEGRATION AGENT ─────────────────────────────────────
+        self.body_integration_agent               = self._create_body_integration_agent()
 
         logger.info("Body-image agents & tools initialised successfully")
+
+# ────────────────────────────────────────────────────────────────────
+#   ADD THIS METHOD SOMEWHERE NEAR THE OTHER _create_*_agent METHODS
+# ────────────────────────────────────────────────────────────────────
+    def _create_body_state_updater_agent(self) -> Agent["BodyImageContext"]:
+        """Central agent that receives resolved perception data and
+        applies it to the persistent BodyImageState object."""
+        return Agent["BodyImageContext"](
+            name="Body_State_Updater",
+            instructions="""
+            You receive already-resolved perception data (visual + somatic) and
+            must write it into Nyx’s persistent body-image store.  Use the tools:
+            • update_body_image_state — apply part/state/confidence changes
+            • get_body_image_state   — read the current state for context
+
+            Always call **update_body_image_state** first, then read back the
+            new state with **get_body_image_state** to confirm the update.
+            """,
+            tools=[
+                self._update_body_image_state,
+                self._get_body_image_state_tool,   # read-only helper
+            ],
+            model="gpt-4.1-nano",
+            model_settings=ModelSettings(temperature=0.1),
+        )
+
 
     def _create_visual_perception_agent(self) -> Agent[BodyImageContext]:
         """Create agent for processing visual perception of Nyx's form"""
