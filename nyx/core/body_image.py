@@ -202,18 +202,51 @@ class BodyImage:
         
         logger.info("BodyImage initialized with enhanced Agent SDK integration")
 
-    def _initialize_agents(self):
-        """Initialize the agent system"""
-        # Create feature agents first (they are referenced by other agents)
-        self.visual_features_agent = self._create_visual_features_agent()
-        self.somatic_features_agent = self._create_somatic_features_agent()
-        
-        # Create specialized agents that use the feature agents
-        self.visual_perception_agent = self._create_visual_perception_agent()
-        self.somatic_correlation_agent = self._create_somatic_correlation_agent()
-        
-        # Create main integration agent with handoffs
-        self.body_integration_agent = self._create_body_integration_agent()
+    def _initialize_agents(self) -> None:
+        """
+        Instantiate every tool exactly once and wire them — in dependency
+        order — into all helper agents that power the Body-Image subsystem.
+        """
+
+        # 1️⃣  TOOL CALLABLES  ─────────────────────────────────────────
+        # Visual
+        self._extract_visual_part_features   = self._create_extract_visual_part_features_tool()
+        self._calculate_visual_confidence    = self._create_calculate_visual_confidence_tool()
+        self._analyze_visual_features        = self._create_analyze_visual_features_tool()
+        self._extract_body_part_states       = self._create_extract_body_part_states_tool()
+        self._get_current_visual_state       = self._create_get_current_visual_state_tool()
+
+        # Somatic
+        self._extract_somatic_features       = self._create_extract_somatic_features_tool()
+        self._calculate_somatic_confidence   = self._create_calculate_somatic_confidence_tool()
+        self._analyze_somatic_data           = self._create_analyze_somatic_data_tool()
+
+        # Multimodal
+        self._correlate_somatic_visual       = self._create_correlate_somatic_visual_tool()
+        self._calculate_proprioception_confidence = (
+            self._create_calculate_proprioception_confidence_tool()
+        )
+        self._resolve_perception_conflicts   = self._create_resolve_perception_conflicts_tool()
+
+        # State helpers
+        self._update_body_image_state        = self._create_update_body_image_state_tool()
+        self._get_body_image_state_tool      = self._create_get_body_image_state_tool()  # renamed var to avoid clash
+
+        # 2️⃣  LOW-LEVEL FEATURE AGENTS  ───────────────────────────────
+        self.visual_features_agent           = self._create_visual_features_agent()
+        self.somatic_features_agent          = self._create_somatic_features_agent()
+
+        # 3️⃣  MID-LEVEL PERCEPTION AGENTS  ────────────────────────────
+        self.visual_perception_agent         = self._create_visual_perception_agent()
+        self.somatic_correlation_agent       = self._create_somatic_correlation_agent()
+
+        # 4️⃣  STATE-UPDATE / ACCESS AGENT  ────────────────────────────
+        self.body_state_updater_agent        = self._create_body_state_updater_agent()
+
+        # 5️⃣  TOP-LEVEL INTEGRATION AGENT  ────────────────────────────
+        self.body_integration_agent          = self._create_body_integration_agent()
+
+        logger.info("Body-image agents & tools initialised successfully")
 
     def _create_visual_perception_agent(self) -> Agent[BodyImageContext]:
         """Create agent for processing visual perception of Nyx's form"""
@@ -231,9 +264,9 @@ class BodyImage:
             different visual representations Nyx might have in various contexts.
             """,
             tools=[
-                function_tool(self._analyze_visual_features),
-                function_tool(self._extract_body_part_states),
-                function_tool(self._get_current_visual_state)
+                self._analyze_visual_features,
+                self._extract_body_part_states,
+                self._get_current_visual_state
             ],
             handoffs=[
                 handoff(self.visual_features_agent, 
@@ -265,9 +298,9 @@ class BodyImage:
             being responsive to new sensory information.
             """,
             tools=[
-                function_tool(self._analyze_somatic_data),
-                function_tool(self._correlate_somatic_visual),
-                function_tool(self._calculate_proprioception_confidence)
+                self._analyze_somatic_data,
+                self._correlate_somatic_visual,
+                self._calculate_proprioception_confidence
             ],
             handoffs=[
                 handoff(self.somatic_features_agent,
@@ -280,28 +313,28 @@ class BodyImage:
             )
         )
     
-    def _create_visual_features_agent(self) -> Agent[BodyImageContext]:
-        """Create specialized agent for detailed visual feature analysis"""
-        return Agent[BodyImageContext](
+    def _create_visual_features_agent(self) -> Agent:
+        """
+        Analyse raw visual perception and extract structured body-part
+        features with confidence scores.
+        """
+        return Agent(
             name="Visual_Features_Analyzer",
-            instructions="""
-            You specialize in analyzing detailed visual features in perception data.
-            Your task is to:
-            1. Extract detailed visual characteristics from perception data
-            2. Identify specific visual patterns associated with body parts
-            3. Detect spatial relationships between perceived parts
-            4. Calculate confidence levels for visual detections
-            
-            Provide precise and detailed analysis of visual features to inform
-            body part detection and state analysis.
-            """,
+            instructions=(
+                "You receive raw visual perception objects and must return "
+                "structured body-part features (position, bounding boxes, "
+                "attributes) plus confidence estimates."
+            ),
             tools=[
-                function_tool(self._extract_visual_part_features),
-                function_tool(self._calculate_visual_confidence)
+                self._extract_visual_part_features,
+                self._calculate_visual_confidence,
+                self._analyze_visual_features,
+                self._extract_body_part_states,
             ],
             model="gpt-4.1-nano",
-            model_settings=ModelSettings(temperature=0.1)
+            model_settings=ModelSettings(temperature=0.20),
         )
+
     
     def _create_somatic_features_agent(self) -> Agent[BodyImageContext]:
         """Create specialized agent for detailed somatic feature analysis"""
@@ -319,8 +352,8 @@ class BodyImage:
             body state analysis and correlation with visual perception.
             """,
             tools=[
-                function_tool(self._extract_somatic_features),
-                function_tool(self._calculate_somatic_confidence)
+                self._extract_somatic_features,
+                self._calculate_somatic_confidence
             ],
             model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.1)
@@ -351,9 +384,9 @@ class BodyImage:
             combine their outputs into a unified body image representation.
             """,
             tools=[
-                function_tool(self._resolve_perception_conflicts),
-                function_tool(self._update_body_image_state),
-                function_tool(self._get_body_image_state)
+                self._resolve_perception_conflicts,
+                self._update_body_image_state,
+                self._get_body_image_state
             ],
             model_settings=ModelSettings(temperature=0.3)
         )
