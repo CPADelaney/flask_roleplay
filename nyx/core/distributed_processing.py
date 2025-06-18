@@ -5,7 +5,7 @@ import datetime
 import json
 import logging
 import time
-from typing import Dict, List, Any, Optional, Callable, Coroutine, Tuple, Union
+from typing import Dict, List, Any, Optional, Coroutine
 from pydantic import BaseModel, Field
 
 from agents import (
@@ -14,6 +14,18 @@ from agents import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Reusable JSON result wrapper for all tools
+class JSONResult(BaseModel, extra="forbid"):
+    json: str
+
+# Input parameter wrappers for strict schema compliance
+class ValidateResourceReqParams(BaseModel, extra="forbid"):
+    task_id: str
+    resource_requirements: Dict[str, float]
+
+class CalcExecLevelsParams(BaseModel, extra="forbid"):
+    dependencies: Dict[str, List[str]]
 
 class SubsystemTask(BaseModel):
     """Represents a parallel task for a subsystem"""
@@ -156,11 +168,12 @@ class DistributedProcessingManager:
             Reject tasks that would cause system issues, and suggest fixes when possible.
             """,
             tools=[
-                function_tool(self._check_dependency_existence),
-                function_tool(self._check_circular_dependencies),
-                function_tool(self._validate_resource_requirements)
+                self._check_dependency_existence,
+                self._check_circular_dependencies,
+                self._validate_resource_requirements
             ],
-            output_type=TaskValidationResult
+            output_type=TaskValidationResult,
+            model="gpt-4.1-nano"
         )
     
     def _create_resource_allocator(self) -> Agent:
@@ -180,11 +193,12 @@ class DistributedProcessingManager:
             Produce an optimal resource allocation plan that maximizes throughput.
             """,
             tools=[
-                function_tool(self._get_available_resources),
-                function_tool(self._calculate_task_resource_needs),
-                function_tool(self._get_system_load)
+                self._get_available_resources,
+                self._calculate_task_resource_needs,
+                self._get_system_load
             ],
-            output_type=ResourceAllocationResult
+            output_type=ResourceAllocationResult,
+            model="gpt-4.1-nano"
         )
     
     def _create_dependency_analyzer(self) -> Agent:
@@ -204,11 +218,12 @@ class DistributedProcessingManager:
             Produce a detailed analysis that enables optimal execution planning.
             """,
             tools=[
-                function_tool(self._get_task_dependencies),
-                function_tool(self._calculate_execution_levels),
-                function_tool(self._identify_bottlenecks)
+                self._get_task_dependencies,
+                self._calculate_execution_levels,
+                self._identify_bottlenecks
             ],
-            output_type=DependencyAnalysisResult
+            output_type=DependencyAnalysisResult,
+            model="gpt-4.1-nano"
         )
     
     def _create_performance_monitor(self) -> Agent:
@@ -228,10 +243,11 @@ class DistributedProcessingManager:
             Focus on actionable insights that can improve system performance.
             """,
             tools=[
-                function_tool(self._get_performance_metrics),
-                function_tool(self._analyze_execution_trends),
-                function_tool(self._identify_performance_bottlenecks)
-            ]
+                self._get_performance_metrics,
+                self._analyze_execution_trends,
+                self._identify_performance_bottlenecks
+            ],
+            model="gpt-4.1-nano"
         )
     
     def _create_task_orchestrator(self) -> Agent:
@@ -269,17 +285,17 @@ class DistributedProcessingManager:
                        tool_description_override="Monitor execution performance and track metrics")
             ],
             tools=[
-                function_tool(self._get_registered_tasks),
-                function_tool(self._schedule_task),
-                function_tool(self._execute_single_task),
-                function_tool(self._handle_task_failure)
+                self._get_registered_tasks,
+                self._schedule_task,
+                self._execute_single_task,
+                self._handle_task_failure
             ],
-            output_type=TaskExecutionPlan
+            output_type=TaskExecutionPlan,
+            model="gpt-4.1-nano"
         )
 
-    @staticmethod
     @function_tool
-    async def _check_dependency_existence(ctx: RunContextWrapper, dependencies: List[str]) -> Dict[str, Any]:
+    async def _check_dependency_existence(self, ctx: RunContextWrapper, dependencies: List[str]) -> JSONResult:
         """
         Check if all dependencies exist in the task registry
         
@@ -294,16 +310,16 @@ class DistributedProcessingManager:
             if dep_id not in self.task_registry:
                 missing_dependencies.append(dep_id)
         
-        return {
+        payload = {
             "all_exist": len(missing_dependencies) == 0,
             "missing_dependencies": missing_dependencies,
             "total_dependencies": len(dependencies),
             "existing_dependencies": len(dependencies) - len(missing_dependencies)
         }
+        return JSONResult(json=json.dumps(payload))
 
-    @staticmethod
     @function_tool
-    async def _check_circular_dependencies(ctx: RunContextWrapper, task_id: str, dependencies: List[str]) -> Dict[str, Any]:
+    async def _check_circular_dependencies(self, ctx: RunContextWrapper, task_id: str, dependencies: List[str]) -> JSONResult:
         """
         Check for circular dependencies in the task graph
         
@@ -345,25 +361,27 @@ class DistributedProcessingManager:
         
         has_cycle = dfs(task_id)
         
-        return {
+        payload = {
             "has_circular_dependency": has_cycle,
             "circular_path": circular_path[::-1] if has_cycle else [],
             "task_id": task_id
         }
+        return JSONResult(json=json.dumps(payload))
 
-    @staticmethod
     @function_tool
-    async def _validate_resource_requirements(ctx: RunContextWrapper, task_id: str, resource_requirements: Dict[str, float]) -> Dict[str, Any]:
+    async def _validate_resource_requirements(self, ctx: RunContextWrapper, params: ValidateResourceReqParams) -> JSONResult:
         """
         Validate that resource requirements are within system constraints
         
         Args:
-            task_id: The ID of the task being checked
-            resource_requirements: Dictionary of resource requirements
+            params: Parameters containing task_id and resource_requirements
             
         Returns:
             Dictionary with validation results
         """
+        task_id = params.task_id
+        resource_requirements = params.resource_requirements
+        
         # Get system resource limits
         system_resources = {
             "cpu": 1.0,
@@ -385,16 +403,16 @@ class DistributedProcessingManager:
         # Calculate total resource load
         total_load = sum(resource_requirements.values()) / len(resource_requirements) if resource_requirements else 0
         
-        return {
+        payload = {
             "is_valid": valid,
             "issues": issues,
             "total_resource_load": total_load,
             "resource_requirements": resource_requirements
         }
+        return JSONResult(json=json.dumps(payload))
 
-    @staticmethod
     @function_tool
-    async def _get_available_resources(ctx: RunContextWrapper) -> Dict[str, Any]:
+    async def _get_available_resources(self, ctx: RunContextWrapper) -> JSONResult:
         """
         Get information about available system resources
         
@@ -408,7 +426,7 @@ class DistributedProcessingManager:
         active_task_count = len(self.active_tasks)
         active_task_load = min(1.0, active_task_count / max(1, self.max_parallel_tasks))
         
-        return {
+        payload = {
             "max_parallel_tasks": self.max_parallel_tasks,
             "current_active_tasks": active_task_count,
             "resource_allocation": self.resource_allocation,
@@ -416,10 +434,10 @@ class DistributedProcessingManager:
             "system_load": active_task_load,
             "available_capacity": max(0, 1.0 - active_task_load)
         }
+        return JSONResult(json=json.dumps(payload))
 
-    @staticmethod
     @function_tool
-    async def _calculate_task_resource_needs(ctx: RunContextWrapper, task_ids: List[str]) -> Dict[str, float]:
+    async def _calculate_task_resource_needs(self, ctx: RunContextWrapper, task_ids: List[str]) -> JSONResult:
         """
         Calculate resource needs for a set of tasks
         
@@ -453,11 +471,10 @@ class DistributedProcessingManager:
                 
                 resource_needs[task_id] = min(1.0, adjusted_need)  # Cap at 1.0
         
-        return resource_needs
+        return JSONResult(json=json.dumps(resource_needs))
 
-    @staticmethod
     @function_tool
-    async def _get_system_load(ctx: RunContextWrapper) -> Dict[str, Any]:
+    async def _get_system_load(self, ctx: RunContextWrapper) -> JSONResult:
         """
         Get current system load metrics
         
@@ -474,17 +491,17 @@ class DistributedProcessingManager:
                 subsystem = task.subsystem_name
                 subsystem_load[subsystem] = subsystem_load.get(subsystem, 0) + 1
         
-        return {
+        payload = {
             "active_tasks": active_task_count,
             "pending_tasks": pending_task_count,
             "system_capacity": self.max_parallel_tasks,
             "load_percentage": (active_task_count / self.max_parallel_tasks) * 100 if self.max_parallel_tasks > 0 else 0,
             "subsystem_load": subsystem_load
         }
+        return JSONResult(json=json.dumps(payload))
 
-    @staticmethod
     @function_tool
-    async def _get_task_dependencies(ctx: RunContextWrapper) -> Dict[str, List[str]]:
+    async def _get_task_dependencies(self, ctx: RunContextWrapper) -> JSONResult:
         """
         Get dependencies for all registered tasks
         
@@ -496,20 +513,21 @@ class DistributedProcessingManager:
         for task_id, task in self.task_registry.items():
             dependencies[task_id] = task.dependencies
         
-        return dependencies
+        return JSONResult(json=json.dumps(dependencies))
 
-    @staticmethod
     @function_tool
-    async def _calculate_execution_levels(ctx: RunContextWrapper, dependencies: Dict[str, List[str]]) -> List[List[str]]:
+    async def _calculate_execution_levels(self, ctx: RunContextWrapper, params: CalcExecLevelsParams) -> JSONResult:
         """
         Calculate execution levels based on task dependencies
         
         Args:
-            dependencies: Dictionary mapping task IDs to their dependencies
+            params: Parameters containing the dependencies dictionary
             
         Returns:
             List of task groups by execution level
         """
+        dependencies = params.dependencies
+        
         # Initialize tracking variables
         all_tasks = set(dependencies.keys())
         completed_tasks = set()
@@ -539,11 +557,10 @@ class DistributedProcessingManager:
             # Update completed tasks
             completed_tasks.update(current_level)
         
-        return execution_levels
+        return JSONResult(json=json.dumps(execution_levels))
 
-    @staticmethod
     @function_tool
-    async def _identify_bottlenecks(ctx: RunContextWrapper, execution_levels: List[List[str]]) -> Dict[str, Any]:
+    async def _identify_bottlenecks(self, ctx: RunContextWrapper, execution_levels: List[List[str]]) -> JSONResult:
         """
         Identify bottleneck tasks in execution levels
         
@@ -583,11 +600,10 @@ class DistributedProcessingManager:
                     "dependents": deps
                 })
         
-        return bottlenecks
+        return JSONResult(json=json.dumps(bottlenecks))
 
-    @staticmethod
     @function_tool
-    async def _get_performance_metrics(ctx: RunContextWrapper) -> Dict[str, Any]:
+    async def _get_performance_metrics(self, ctx: RunContextWrapper) -> JSONResult:
         """
         Get current performance metrics
         
@@ -627,7 +643,7 @@ class DistributedProcessingManager:
             if metrics["task_count"] > 0:
                 metrics["avg_duration"] = metrics["total_duration"] / metrics["task_count"]
         
-        return {
+        payload = {
             "tasks_processed": self.performance_metrics["tasks_processed"],
             "tasks_completed": self.performance_metrics["tasks_completed"],
             "avg_task_duration": avg_duration,
@@ -635,10 +651,10 @@ class DistributedProcessingManager:
             "subsystem_metrics": subsystem_metrics,
             "bottlenecks": self.performance_metrics.get("bottlenecks", {})
         }
+        return JSONResult(json=json.dumps(payload))
 
-    @staticmethod
     @function_tool
-    async def _analyze_execution_trends(ctx: RunContextWrapper) -> Dict[str, Any]:
+    async def _analyze_execution_trends(self, ctx: RunContextWrapper) -> JSONResult:
         """
         Analyze trends in task execution
         
@@ -679,16 +695,16 @@ class DistributedProcessingManager:
             elif recent_avg > oldest_avg * 1.2:
                 efficiency_trend = "degrading"
         
-        return {
+        payload = {
             "total_analyzed": len(sorted_tasks),
             "running_duration_averages": running_durations[-10:] if len(running_durations) > 10 else running_durations,
             "efficiency_trend": efficiency_trend,
             "has_sufficient_data": len(sorted_tasks) >= 5
         }
+        return JSONResult(json=json.dumps(payload))
 
-    @staticmethod
     @function_tool
-    async def _identify_performance_bottlenecks(ctx: RunContextWrapper) -> Dict[str, Any]:
+    async def _identify_performance_bottlenecks(self, ctx: RunContextWrapper) -> JSONResult:
         """
         Identify performance bottlenecks in the system
         
@@ -702,10 +718,11 @@ class DistributedProcessingManager:
         ]
         
         if not completed_tasks:
-            return {
+            payload = {
                 "has_bottlenecks": False,
                 "message": "Insufficient data - no completed tasks"
             }
+            return JSONResult(json=json.dumps(payload))
         
         # Calculate average duration
         durations = [(t.end_time - t.start_time).total_seconds() for t in completed_tasks]
@@ -743,17 +760,17 @@ class DistributedProcessingManager:
             if count >= 2  # At least 2 slow tasks
         ]
         
-        return {
+        payload = {
             "has_bottlenecks": len(slow_tasks) > 0,
             "average_duration": avg_duration,
             "slow_tasks": slow_tasks[:5],  # Top 5 slowest
             "bottleneck_subsystems": bottleneck_subsystems,
             "recommendation": "Investigate subsystem performance" if bottleneck_subsystems else "No clear bottlenecks"
         }
+        return JSONResult(json=json.dumps(payload))
 
-    @staticmethod
     @function_tool
-    async def _get_registered_tasks(ctx: RunContextWrapper) -> Dict[str, Any]:
+    async def _get_registered_tasks(self, ctx: RunContextWrapper) -> JSONResult:
         """
         Get information about all registered tasks
         
@@ -774,16 +791,16 @@ class DistributedProcessingManager:
                 "end_time": task.end_time.isoformat() if task.end_time else None
             }
         
-        return {
+        payload = {
             "tasks": task_info,
             "total_count": len(task_info),
             "started_count": sum(1 for t in self.task_registry.values() if t.started),
             "completed_count": sum(1 for t in self.task_registry.values() if t.completed)
         }
+        return JSONResult(json=json.dumps(payload))
 
-    @staticmethod
     @function_tool
-    async def _schedule_task(ctx: RunContextWrapper, task_id: str, execution_time: int) -> Dict[str, Any]:
+    async def _schedule_task(self, ctx: RunContextWrapper, task_id: str, execution_time: int) -> JSONResult:
         """
         Schedule a task for execution at a specific time
         
@@ -795,29 +812,31 @@ class DistributedProcessingManager:
             Scheduling result
         """
         if task_id not in self.task_registry:
-            return {
+            payload = {
                 "success": False,
                 "error": f"Task {task_id} not found in registry"
             }
+            return JSONResult(json=json.dumps(payload))
         
         # Create a delayed execution task
         async def delayed_execution():
             await asyncio.sleep(execution_time / 1000.0)  # Convert ms to seconds
-            await self._execute_single_task(ctx, task_id)
+            result = await self._execute_single_task(ctx, task_id)
+            return json.loads(result.json)
         
         # Schedule the task
         self.active_tasks[task_id] = asyncio.create_task(delayed_execution())
         
-        return {
+        payload = {
             "success": True,
             "task_id": task_id,
             "scheduled_time": datetime.datetime.now().isoformat(),
             "execution_delay_ms": execution_time
         }
+        return JSONResult(json=json.dumps(payload))
 
-    @staticmethod
     @function_tool
-    async def _execute_single_task(ctx: RunContextWrapper, task_id: str) -> Dict[str, Any]:
+    async def _execute_single_task(self, ctx: RunContextWrapper, task_id: str) -> JSONResult:
         """
         Execute a single task directly
         
@@ -828,10 +847,11 @@ class DistributedProcessingManager:
             Task execution result
         """
         if task_id not in self.task_registry:
-            return {
+            payload = {
                 "success": False,
                 "error": f"Task {task_id} not found in registry"
             }
+            return JSONResult(json=json.dumps(payload))
         
         task = self.task_registry[task_id]
         
@@ -855,12 +875,13 @@ class DistributedProcessingManager:
             self.performance_metrics["tasks_completed"] += 1
             
             duration = (task.end_time - task.start_time).total_seconds()
-            return {
+            payload = {
                 "success": True,
                 "task_id": task_id,
                 "result": result,
                 "duration": duration
             }
+            return JSONResult(json=json.dumps(payload))
         except Exception as e:
             logger.error(f"Error executing task {task_id}: {e}")
             
@@ -868,16 +889,16 @@ class DistributedProcessingManager:
             task.error = str(e)
             task.end_time = datetime.datetime.now()
             
-            return {
+            payload = {
                 "success": False,
                 "task_id": task_id,
                 "error": str(e),
                 "duration": (task.end_time - task.start_time).total_seconds() if task.start_time else None
             }
+            return JSONResult(json=json.dumps(payload))
 
-    @staticmethod
     @function_tool
-    async def _handle_task_failure(ctx: RunContextWrapper, task_id: str, error: str, retry: bool = False) -> Dict[str, Any]:
+    async def _handle_task_failure(self, ctx: RunContextWrapper, task_id: str, error: str, retry: bool = False) -> JSONResult:
         """
         Handle a task failure
         
@@ -890,10 +911,11 @@ class DistributedProcessingManager:
             Handling result
         """
         if task_id not in self.task_registry:
-            return {
+            payload = {
                 "success": False,
                 "error": f"Task {task_id} not found in registry"
             }
+            return JSONResult(json=json.dumps(payload))
         
         task = self.task_registry[task_id]
         task.error = error
@@ -907,20 +929,23 @@ class DistributedProcessingManager:
         if retry:
             # Create a new execution task
             result = await self._execute_single_task(ctx, task_id)
-            return {
-                "success": result.get("success", False),
+            retry_result = json.loads(result.json)
+            payload = {
+                "success": retry_result.get("success", False),
                 "task_id": task_id,
                 "action": "retry",
-                "retry_result": result
+                "retry_result": retry_result
             }
+            return JSONResult(json=json.dumps(payload))
         else:
             # Just record the failure
-            return {
+            payload = {
                 "success": True,
                 "task_id": task_id,
                 "action": "recorded_failure",
                 "error": error
             }
+            return JSONResult(json=json.dumps(payload))
     
     async def register_task(self, 
                           task_id: str,
@@ -1058,12 +1083,18 @@ class DistributedProcessingManager:
                     # Record results
                     for i, task_id in enumerate(task_group):
                         if i < len(group_results):
-                            results[task_id] = group_results[i]
-                            
-                            # Update metrics
-                            if isinstance(group_results[i], dict) and group_results[i].get("success", False):
-                                execution_metrics["completed_tasks"] += 1
+                            if isinstance(group_results[i], JSONResult):
+                                result_data = json.loads(group_results[i].json)
+                                results[task_id] = result_data
+                                
+                                # Update metrics
+                                if result_data.get("success", False):
+                                    execution_metrics["completed_tasks"] += 1
+                                else:
+                                    execution_metrics["failed_tasks"] += 1
                             else:
+                                # Handle exception case
+                                results[task_id] = {"success": False, "error": str(group_results[i])}
                                 execution_metrics["failed_tasks"] += 1
                 
                 group_end_time = datetime.datetime.now()
