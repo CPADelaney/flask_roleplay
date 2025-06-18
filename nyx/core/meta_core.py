@@ -29,6 +29,26 @@ logger = logging.getLogger(__name__)
 
 # Pydantic models for structured I/O
 
+class PerformanceDataParams(BaseModel, extra="forbid"):
+    """Wrapper that carries the raw performance-data mapping as JSON."""
+    performance_json: str
+
+
+class BottleneckInfo(BaseModel, extra="forbid"):
+    process_id: str
+    process_name: str
+    process_type: str
+    kind: str                     # «renamed from “type” (reserved word)
+    severity: float               # 0‒1
+    description: str
+    metrics_json: Optional[str] = None
+    resource_type: Optional[str] = None
+
+
+class BottleneckAnalysisResult(BaseModel, extra="forbid"):
+    bottlenecks: List[BottleneckInfo]
+    total_count: int
+
 class AttentionContextParams(BaseModel, extra="forbid"):
     """Conversation or system context encoded as JSON."""
     context_json: str
@@ -890,103 +910,99 @@ class MetaCore:
         
         return _detect_performance_drop
     
-    def _create_identify_bottlenecks_tool(self):
-        """Create the identify bottlenecks tool with proper access to self"""
+    def _create_identify_bottlenecks_tool(self):              # noqa: N802
+        """Return a strict identify-bottlenecks tool."""
+    
         @function_tool
-        async def _identify_bottlenecks(ctx: RunContextWrapper, performance_data: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
-            """
-            Identify bottlenecks and underperforming processes
-            
-            Args:
-                performance_data: Performance metrics by process
-                
-            Returns:
-                List of identified bottlenecks
-            """
-            bottlenecks = []
-            
-            for process_id, data in performance_data.items():
-                process = data["process"]
-                metrics = data["metrics"]
-                
-                # Check for high resource utilization
+        async def _identify_bottlenecks(                      # noqa: N802
+            ctx: RunContextWrapper,
+            params: PerformanceDataParams,                    # ← strict input
+        ) -> BottleneckAnalysisResult:                        # ← strict output
+            import json
+    
+            try:
+                perf: Dict[str, Dict[str, Any]] = json.loads(params.performance_json)
+                if not isinstance(perf, dict):
+                    raise TypeError
+            except Exception:
+                # Bad JSON ⇒ return empty result
+                return BottleneckAnalysisResult(bottlenecks=[], total_count=0)
+    
+            bns: list[BottleneckInfo] = []
+    
+            for p_id, data in perf.items():
+                process: Dict[str, Any] = data.get("process", {})
+                metrics: Dict[str, Any] = data.get("metrics", {})
+    
+                name = process.get("name", "Unknown")
+                ptype = process.get("type", "unknown")
+    
+                def _append(kind: str, severity: float, descr: str, extra_metrics: Dict[str, Any]):
+                    bns.append(
+                        BottleneckInfo(
+                            process_id=p_id,
+                            process_name=name,
+                            process_type=ptype,
+                            kind=kind,
+                            severity=severity,
+                            description=descr,
+                            metrics_json=json.dumps(extra_metrics, separators=(",", ":")),
+                        )
+                    )
+    
+                # 1. high resource utilisation
                 if metrics.get("resource_utilization", 0) > 0.9:
-                    bottlenecks.append({
-                        "process_id": process_id,
-                        "process_name": process.get("name", "Unknown"),
-                        "process_type": process.get("type", "unknown"),
-                        "type": "resource_utilization",
-                        "severity": 0.8,
-                        "description": f"Process {process.get('name', 'Unknown')} has high resource utilization",
-                        "metrics": {
-                            "resource_utilization": metrics.get("resource_utilization", 0)
-                        }
-                    })
-                
-                # Check for low efficiency
-                if metrics.get("efficiency", 0) < 0.3:
-                    bottlenecks.append({
-                        "process_id": process_id,
-                        "process_name": process.get("name", "Unknown"),
-                        "process_type": process.get("type", "unknown"),
-                        "type": "low_efficiency",
-                        "severity": 0.7,
-                        "description": f"Process {process.get('name', 'Unknown')} has low efficiency",
-                        "metrics": {
-                            "efficiency": metrics.get("efficiency", 0)
-                        }
-                    })
-                
-                # Check for high error rates
+                    _append(
+                        "resource_utilization",
+                        0.8,
+                        f"Process {name} is using >90 % resources",
+                        {"resource_utilization": metrics["resource_utilization"]},
+                    )
+    
+                # 2. low efficiency
+                if metrics.get("efficiency", 1) < 0.3:
+                    _append(
+                        "low_efficiency",
+                        0.7,
+                        f"Process {name} has efficiency <30 %",
+                        {"efficiency": metrics["efficiency"]},
+                    )
+    
+                # 3. high error rate
                 if metrics.get("error_rate", 0) > 0.3:
-                    bottlenecks.append({
-                        "process_id": process_id,
-                        "process_name": process.get("name", "Unknown"),
-                        "process_type": process.get("type", "unknown"),
-                        "type": "high_error_rate",
-                        "severity": 0.8,
-                        "description": f"Process {process.get('name', 'Unknown')} has high error rate",
-                        "metrics": {
-                            "error_rate": metrics.get("error_rate", 0)
-                        }
-                    })
-                
-                # Check for slow response time
+                    _append(
+                        "high_error_rate",
+                        0.8,
+                        f"Process {name} has error-rate >30 %",
+                        {"error_rate": metrics["error_rate"]},
+                    )
+    
+                # 4. slow response
                 if metrics.get("response_time", 0) > 2.0:
-                    bottlenecks.append({
-                        "process_id": process_id,
-                        "process_name": process.get("name", "Unknown"),
-                        "process_type": process.get("type", "unknown"),
-                        "type": "slow_response",
-                        "severity": 0.6,
-                        "description": f"Process {process.get('name', 'Unknown')} has slow response time",
-                        "metrics": {
-                            "response_time": metrics.get("response_time", 0)
-                        }
-                    })
-                
-                # Check for process-specific bottlenecks
-                process_bottlenecks = process.get("bottlenecks", [])
-                if process_bottlenecks:
-                    # Get most recent bottleneck
-                    recent_bottleneck = process_bottlenecks[-1] if isinstance(process_bottlenecks, list) else process_bottlenecks
-                    
-                    bottlenecks.append({
-                        "process_id": process_id,
-                        "process_name": process.get("name", "Unknown"),
-                        "process_type": process.get("type", "unknown"),
-                        "type": "process_bottleneck",
-                        "severity": recent_bottleneck.get("severity", 0.5),
-                        "description": recent_bottleneck.get("description", "Unknown bottleneck"),
-                        "resource_type": recent_bottleneck.get("resource_type", "general")
-                    })
-            
-            # Sort bottlenecks by severity
-            bottlenecks.sort(key=lambda x: x["severity"], reverse=True)
-            
-            return bottlenecks
-        
+                    _append(
+                        "slow_response",
+                        0.6,
+                        f"Process {name} response time >2 s",
+                        {"response_time": metrics["response_time"]},
+                    )
+    
+                # 5. process-specific bottlenecks
+                for pb in process.get("bottlenecks", []) or []:
+                    _append(
+                        "process_bottleneck",
+                        float(pb.get("severity", 0.5)),
+                        pb.get("description", "Unspecified bottleneck"),
+                        {},
+                    )
+                    bns[-1].resource_type = pb.get("resource_type")
+    
+            # Sort by severity descending
+            bns.sort(key=lambda b: b.severity, reverse=True)
+    
+            return BottleneckAnalysisResult(bottlenecks=bns, total_count=len(bns))
+    
         return _identify_bottlenecks
+
     
     def _create_analyze_cognitive_strategies_tool(self):
         """Create the analyze cognitive strategies tool with proper access to self"""
