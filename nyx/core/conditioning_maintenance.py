@@ -13,135 +13,257 @@ logger = logging.getLogger(__name__)
 
 # Maintenance-specific tools
 
+class TraitStat(BaseModel, extra="forbid"):
+    name: str
+    count: int
+    average_strength: float
+
+class TraitDistributionResult(BaseModel, extra="forbid"):
+    traits: List[TraitStat]
+    total_traits: int
+
+class ExtinctionCandidate(BaseModel, extra="forbid"):
+    association_key: str
+    association_type: Literal["classical", "operant"]
+    strength: float
+    reason: str
+
+class ExtinctionCandidatesResult(BaseModel, extra="forbid"):
+    candidates: List[ExtinctionCandidate]
+    total: int
+
+class ApplyExtinctionResult(BaseModel, extra="forbid"):
+    success: bool
+    association_key: str
+    association_type: Literal["classical", "operant"]
+    old_strength: Optional[float] = None
+    new_strength: Optional[float] = None
+    error: Optional[str] = None
+    message: Optional[str] = None
+
+class ReinforceTraitResult(BaseModel, extra="forbid"):
+    success: bool
+    trait: str
+    adjustment: float
+    new_value: Optional[float] = None
+    error: Optional[str] = None
+
+class MaintenanceStatusResult(BaseModel, extra="forbid"):
+    last_maintenance_time: Optional[str] = None
+    hours_since_last_maintenance: Optional[float] = None
+    hours_until_next: Optional[float] = None
+    maintenance_due: bool
+    consolidation_due: bool
+    maintenance_interval_hours: float
+
+class RecordHistoryResult(BaseModel, extra="forbid"):
+    success: bool
+    history_count: int
+    error: Optional[str] = None
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+#  Helper – convert dynamic dicts → strict lists
+# ──────────────────────────────────────────────────────────────────────────────
+def _stats_from_maps(counts: Dict[str, int],
+                     avgs: Dict[str, float]) -> List[TraitStat]:
+    """Combine the two loose maps into a list of TraitStat models."""
+    out: list[TraitStat] = []
+    for name, cnt in counts.items():
+        out.append(
+            TraitStat(
+                name=name,
+                count=cnt,
+                average_strength=avgs.get(name, 0.0),
+            )
+        )
+    return out
+
+
+
 @function_tool
-async def analyze_trait_distribution(ctx: RunContextWrapper) -> Dict[str, Any]:
-    """Analyze the distribution of personality traits"""
-    trait_counts = {}
-    trait_strengths = {}
-    
-    # Count trait references in associations
-    all_associations = list(ctx.context.conditioning_system.classical_associations.values()) + \
-                      list(ctx.context.conditioning_system.operant_associations.values())
-    
-    trait_names = ["dominance", "playfulness", "strictness", "creativity", "intensity", "patience"]
-    
+async def analyze_trait_distribution(
+    ctx: RunContextWrapper,
+) -> TraitDistributionResult:
+    """Strict version – analyse trait distribution."""
+    trait_counts: Dict[str, int] = {}
+    trait_strengths: Dict[str, list[float]] = {}
+
+    all_associations = (
+        list(ctx.context.conditioning_system.classical_associations.values())
+        + list(ctx.context.conditioning_system.operant_associations.values())
+    )
+
+    trait_names = [
+        "dominance",
+        "playfulness",
+        "strictness",
+        "creativity",
+        "intensity",
+        "patience",
+    ]
     for assoc in all_associations:
-        for trait in trait_names:
-            if trait in assoc.stimulus.lower() or trait in assoc.response.lower():
-                if trait not in trait_counts:
-                    trait_counts[trait] = 0
-                    trait_strengths[trait] = []
-                trait_counts[trait] += 1
-                trait_strengths[trait].append(assoc.association_strength)
-    
-    # Calculate averages
-    average_strengths = {}
-    for trait, strengths in trait_strengths.items():
-        average_strengths[trait] = sum(strengths) / len(strengths) if strengths else 0.0
-    
-    return {
-        "trait_counts": trait_counts,
-        "average_strengths": average_strengths,
-        "total_traits": len(trait_counts)
+        for tr in trait_names:
+            if tr in assoc.stimulus.lower() or tr in assoc.response.lower():
+                trait_counts.setdefault(tr, 0)
+                trait_strengths.setdefault(tr, [])
+                trait_counts[tr] += 1
+                trait_strengths[tr].append(assoc.association_strength)
+
+    average_strengths = {
+        tr: (sum(vals) / len(vals) if vals else 0.0)
+        for tr, vals in trait_strengths.items()
     }
 
+    return TraitDistributionResult(
+        traits=_stats_from_maps(trait_counts, average_strengths),
+        total_traits=len(trait_counts),
+    )
+
 @function_tool
-async def identify_extinction_candidates(ctx: RunContextWrapper) -> List[Dict[str, Any]]:
-    """Identify associations that are candidates for extinction"""
-    candidates = []
+async def identify_extinction_candidates(
+    ctx: RunContextWrapper,
+) -> ExtinctionCandidatesResult:
+    """Strict version – list extinction candidates."""
     threshold = ctx.context.extinction_threshold
-    
-    # Check both association types
-    for assoc_type, associations in [
+    cand: list[ExtinctionCandidate] = []
+
+    for assoc_type, mapping in [
         ("classical", ctx.context.conditioning_system.classical_associations),
-        ("operant", ctx.context.conditioning_system.operant_associations)
+        ("operant", ctx.context.conditioning_system.operant_associations),
     ]:
-        for key, assoc in associations.items():
+        for key, assoc in mapping.items():
             if assoc.association_strength < threshold:
-                candidates.append({
-                    "association_key": key,
-                    "association_type": assoc_type,
-                    "strength": assoc.association_strength,
-                    "reason": "strength_below_threshold"
-                })
-    
-    return candidates
+                cand.append(
+                    ExtinctionCandidate(
+                        association_key=key,
+                        association_type=assoc_type,  # type: ignore[arg-type]
+                        strength=assoc.association_strength,
+                        reason="strength_below_threshold",
+                    )
+                )
+
+    return ExtinctionCandidatesResult(candidates=cand, total=len(cand))
 
 @function_tool
-async def apply_extinction_to_association(ctx: RunContextWrapper, association_key: str, association_type: str) -> Dict[str, Any]:
-    """Apply extinction to a specific association"""
+async def apply_extinction_to_association(                # noqa: N802
+    ctx: RunContextWrapper,
+    association_key: str,
+    association_type: Literal["classical", "operant"],
+) -> ApplyExtinctionResult:
+    """Strict wrapper around conditioning_system.apply_extinction()."""
     try:
-        result = await ctx.context.conditioning_system.apply_extinction(association_key, association_type)
-        return result
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+        res = await ctx.context.conditioning_system.apply_extinction(
+            association_key, association_type
+        )
+        return ApplyExtinctionResult(
+            success=res.get("success", False),
+            association_key=association_key,
+            association_type=association_type,
+            old_strength=res.get("old_strength"),
+            new_strength=res.get("new_strength"),
+            message=res.get("message"),
+        )
+    except Exception as exc:
+        return ApplyExtinctionResult(
+            success=False,
+            association_key=association_key,
+            association_type=association_type,
+            error=str(exc),
+        )
+
 
 @function_tool
-async def reinforce_core_trait(ctx: RunContextWrapper, trait: str, adjustment: float) -> Dict[str, Any]:
-    """Reinforce a core personality trait"""
+async def reinforce_core_trait(
+    ctx: RunContextWrapper,
+    trait: str,
+    adjustment: float,
+) -> ReinforceTraitResult:
+    """Strict wrapper for trait reinforcement."""
     try:
-        result = await ctx.context.conditioning_system.condition_personality_trait(
+        res = await ctx.context.conditioning_system.condition_personality_trait(
             trait=trait,
             target_value=adjustment,
-            context={"source": "maintenance_reinforcement"}
+            context={"source": "maintenance_reinforcement"},
         )
-        return {
-            "success": True,
-            "trait": trait,
-            "adjustment": adjustment,
-            "result": result
-        }
-    except Exception as e:
-        return {"success": False, "trait": trait, "error": str(e)}
+        return ReinforceTraitResult(
+            success=True,
+            trait=trait,
+            adjustment=adjustment,
+            new_value=res.get("new_value") if isinstance(res, dict) else None,
+        )
+    except Exception as exc:
+        return ReinforceTraitResult(
+            success=False,
+            trait=trait,
+            adjustment=adjustment,
+            error=str(exc),
+        )
 
 @function_tool
-async def get_maintenance_status(ctx: RunContextWrapper) -> Dict[str, Any]:
-    """Get the current status of maintenance"""
+async def get_maintenance_status(
+    ctx: RunContextWrapper,
+) -> MaintenanceStatusResult:
+    """Strict maintenance status."""
     now = datetime.datetime.now()
-    
+
     if ctx.context.last_maintenance_time:
         delta = now - ctx.context.last_maintenance_time
         hours_since_last = delta.total_seconds() / 3600
-        days_since_last = hours_since_last / 24
-        next_maintenance = ctx.context.last_maintenance_time + \
-                          datetime.timedelta(hours=ctx.context.maintenance_interval_hours)
-        hours_until_next = max(0, (next_maintenance - now).total_seconds() / 3600)
+        next_maintenance = ctx.context.last_maintenance_time + datetime.timedelta(
+            hours=ctx.context.maintenance_interval_hours
+        )
+        hours_until_next = max(
+            0.0, (next_maintenance - now).total_seconds() / 3600
+        )
     else:
         hours_since_last = None
-        days_since_last = None
-        hours_until_next = 0
-    
+        hours_until_next = 0.0
+
     maintenance_due = hours_until_next <= 0 or ctx.context.last_maintenance_time is None
-    consolidation_due = (days_since_last is not None and 
-                        days_since_last >= ctx.context.consolidation_interval_days) or \
-                       ctx.context.last_maintenance_time is None
-    
-    return {
-        "last_maintenance_time": ctx.context.last_maintenance_time.isoformat() if ctx.context.last_maintenance_time else None,
-        "hours_since_last_maintenance": hours_since_last,
-        "maintenance_due": maintenance_due,
-        "consolidation_due": consolidation_due,
-        "maintenance_interval_hours": ctx.context.maintenance_interval_hours
-    }
+    consolidation_due = (
+        hours_since_last is not None
+        and hours_since_last / 24 >= ctx.context.consolidation_interval_days
+    ) or ctx.context.last_maintenance_time is None
+
+    return MaintenanceStatusResult(
+        last_maintenance_time=(
+            ctx.context.last_maintenance_time.isoformat()
+            if ctx.context.last_maintenance_time
+            else None
+        ),
+        hours_since_last_maintenance=hours_since_last,
+        hours_until_next=hours_until_next,
+        maintenance_due=maintenance_due,
+        consolidation_due=consolidation_due,
+        maintenance_interval_hours=ctx.context.maintenance_interval_hours,
+    )
 
 @function_tool
-async def record_maintenance_history(ctx: RunContextWrapper, maintenance_record: Dict[str, Any]) -> Dict[str, Any]:
-    """Record maintenance history"""
+async def record_maintenance_history(
+    ctx: RunContextWrapper,
+    maintenance_record: Dict[str, Any],
+) -> RecordHistoryResult:
+    """Strict recorder."""
     try:
         if "timestamp" not in maintenance_record:
             maintenance_record["timestamp"] = datetime.datetime.now().isoformat()
-        
+
         ctx.context.maintenance_history.append(maintenance_record)
-        
         if len(ctx.context.maintenance_history) > ctx.context.max_history_entries:
-            ctx.context.maintenance_history = ctx.context.maintenance_history[-ctx.context.max_history_entries:]
-        
-        return {
-            "success": True,
-            "history_count": len(ctx.context.maintenance_history)
-        }
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+            ctx.context.maintenance_history = ctx.context.maintenance_history[
+                -ctx.context.max_history_entries :
+            ]
+
+        return RecordHistoryResult(
+            success=True, history_count=len(ctx.context.maintenance_history)
+        )
+    except Exception as exc:
+        return RecordHistoryResult(
+            success=False,
+            history_count=len(ctx.context.maintenance_history),
+            error=str(exc),
+        )
 
 class ConditioningMaintenanceSystem:
     """Handles periodic maintenance tasks for the conditioning system"""
