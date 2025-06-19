@@ -23,6 +23,20 @@ class SelectMindGameParams(BaseModel, extra="forbid"):
     intensity: float = Field(..., ge=0.0, le=1.0)
     user_state_json: str               # ← JSON-encoded user state
 
+class SubspaceDetectionResult(BaseModel, extra="forbid"):
+    subspace_detected: bool
+    depth: float = Field(0.0, ge=0.0, le=1.0)
+    indicators: List[str] = []
+    in_subspace_since: Optional[str] = None          # ISO 8601 or whatever you use
+
+
+class AnalyzeSubspaceDepthResult(BaseModel, extra="forbid"):
+    depth_analysis: str
+    depth_category: Optional[str] = None             # "shallow" | "moderate" | "deep"
+    depth_value: Optional[float] = None
+    characteristics: List[str]
+    indicators: List[str]
+    in_subspace_since: Optional[str] = None
 
 class SelectMindGameResult(BaseModel, extra="forbid"):
     # always present
@@ -972,67 +986,75 @@ Use the available tools to maintain accurate psychological state tracking.
     async def _detect_subspace(self, user_id: str, recent_messages: List[str]) -> Dict[str, Any]:
         """Analyze messages for signs of psychological subspace."""
         return await self.subspace_detection.detect_subspace(user_id, recent_messages)
-    
+        
     @function_tool
-    async def _analyze_subspace_depth(self, detection_result: Dict[str, Any]) -> Dict[str, Any]:
-        """Analyze the depth and characteristics of subspace based on detection results."""
-        if not detection_result.get("subspace_detected", False):
-            return {
-                "depth_analysis": "No subspace detected",
-                "characteristics": []
-            }
-        
-        depth = detection_result.get("depth", 0.0)
-        indicators = detection_result.get("indicators", [])
-        
-        # Categorize depth
-        if depth < 0.3:
-            depth_category = "shallow"
-            characteristics = [
+    async def analyze_subspace_depth(
+        ctx: RunContextWrapper,
+        params: SubspaceDetectionResult,
+    ) -> AnalyzeSubspaceDepthResult:
+        """
+        Turn raw detection numbers into a human-readable depth analysis.
+        """
+        if not params.subspace_detected:
+            return AnalyzeSubspaceDepthResult(
+                depth_analysis="No subspace detected",
+                characteristics=[],
+                indicators=params.indicators,
+            )
+    
+        depth          = params.depth
+        indicators     = params.indicators
+        in_since       = params.in_subspace_since
+    
+        # ── depth categorisation ──────────────────────────────────────────────
+        if depth < 0.30:
+            depth_cat = "shallow"
+            chars = [
                 "Beginning to enter alternative mindset",
                 "Still fully aware and present",
                 "Minor changes in communication style",
-                "Slightly increased suggestibility"
+                "Slightly increased suggestibility",
             ]
-        elif depth < 0.6:
-            depth_category = "moderate"
-            characteristics = [
+        elif depth < 0.60:
+            depth_cat = "moderate"
+            chars = [
                 "Noticeably altered cognitive state",
                 "Increased suggestibility and compliance",
                 "Simplified language and thought patterns",
-                "Reduced critical thinking"
+                "Reduced critical thinking",
             ]
         else:
-            depth_category = "deep"
-            characteristics = [
+            depth_cat = "deep"
+            chars = [
                 "Significantly altered cognitive state",
                 "High suggestibility and compliance",
                 "Simplified communication patterns",
                 "Limited critical thinking",
-                "Possible disorientation or time distortion"
+                "Possible disorientation or time distortion",
             ]
-        
-        # Add indicator-specific characteristics
-        indicator_characteristics = {
-            "language simplification": "Using simplified vocabulary and sentence structure",
-            "increased compliance": "Showing heightened agreement and acquiescence",
-            "response time changes": "Altered patterns in response timing",
-            "repetitive affirmations": "Repeating affirmative phrases without elaboration",
-            "decreased resistance": "Absence of questioning or challenging"
+    
+        # ── indicator extras ─────────────────────────────────────────────────
+        indicator_map = {
+            "language simplification":   "Using simplified vocabulary and sentence structure",
+            "increased compliance":      "Showing heightened agreement and acquiescence",
+            "response time changes":     "Altered patterns in response timing",
+            "repetitive affirmations":   "Repeating affirmative phrases without elaboration",
+            "decreased resistance":      "Absence of questioning or challenging",
         }
-        
-        for indicator in indicators:
-            if indicator in indicator_characteristics:
-                characteristics.append(indicator_characteristics[indicator])
-        
-        return {
-            "depth_analysis": f"Subspace detected at {depth_category} level ({depth:.2f})",
-            "depth_category": depth_category,
-            "depth_value": depth,
-            "characteristics": characteristics,
-            "indicators": indicators,
-            "in_subspace_since": detection_result.get("in_subspace_since")
-        }
+        for ind in indicators:
+            extra = indicator_map.get(ind)
+            if extra:
+                chars.append(extra)
+    
+        return AnalyzeSubspaceDepthResult(
+            depth_analysis=f"Subspace detected at {depth_cat} level ({depth:.2f})",
+            depth_category=depth_cat,
+            depth_value=depth,
+            characteristics=chars,
+            indicators=indicators,
+            in_subspace_since=in_since,
+        )
+
     
     @function_tool
     async def _generate_subspace_guidance(self, detection_result: Dict[str, Any]) -> Dict[str, Any]:
