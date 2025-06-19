@@ -55,6 +55,11 @@ def _jr(data: Any, safe_mode: bool = True) -> JSONResult:
     else:
         return JSONResult(payload=json.dumps(data, default=str))
 
+class KeyValue(BaseModel, extra="forbid"):
+    """Key–value pair used instead of an open-ended Dict for strict schemas."""
+    key: str
+    value: str
+
 # ─────────── input models ───────────
 class _User(BaseModel, extra="forbid"):
     user_id: str
@@ -75,7 +80,8 @@ class AssignPositionParams(BaseModel, extra="forbid"):
     user_id: str
     position_id: str
     duration_minutes: float = Field(10.0, ge=0.0)
-    variations: Optional[Dict[str, str]] = None  # Simplified - removed VariationMap
+    # variations is now a *list* of KeyValue objects (strict-schema friendly)
+    variations: Optional[List[KeyValue]] = None
 
 class AssignPositionResult(BaseModel, extra="forbid"):
     success: bool
@@ -88,7 +94,8 @@ class AssignPositionResult(BaseModel, extra="forbid"):
     difficulty: Optional[float] = None
     humiliation_factor: Optional[float] = None
     endurance_factor: Optional[float] = None
-    applied_variations: Optional[Dict[str, str]] = None
+    # same trick for the output
+    applied_variations: Optional[List[KeyValue]] = None
     instructions: Optional[List[str]] = None
 
 class PositionCompletionData(BaseModel, extra="forbid"):
@@ -1060,27 +1067,25 @@ def _generate_task_feedback(
 @function_tool
 async def assign_position(
     ctx: RunContextWrapper,
-    params: AssignPositionParams
+    params: AssignPositionParams,
 ) -> AssignPositionResult:
     """
     Assign a specific position for a user to maintain.
-    
-    Returns:
-        AssignPositionResult with position details  # FIX #7: Updated docstring
+    Returns an AssignPositionResult with detailed instructions.
     """
+    # ── unpack & setup ───────────────────────────────────────────────────────
     user_id = params.user_id
     position_id = params.position_id
     duration_minutes = params.duration_minutes
-    variations = params.variations  # Now directly a dict
     context = ctx.context
 
     with custom_span("assign_position", data={"user_id": user_id, "position_id": position_id}):
-        # existence checks
+        # ── look-ups & guards ────────────────────────────────────────────────
         if position_id not in context.service_positions:
             return AssignPositionResult(
                 success=False,
                 message=f"Position '{position_id}' not found",
-                available_positions=list(context.service_positions.keys())
+                available_positions=list(context.service_positions.keys()),
             )
 
         position = context.service_positions[position_id]
@@ -1090,71 +1095,78 @@ async def assign_position(
             return AssignPositionResult(
                 success=False,
                 message=f"User already has active task: {user_training.current_task}",
-                active_task=user_training.current_task
+                active_task=user_training.current_task,
             )
 
-        # apply variations
-        applied_variations = {}
-        instruction_customizations = []
-        if variations:
-            for k, v in variations.items():
-                if k in position.variation_options and v in position.variation_options[k]:
-                    applied_variations[k] = v
-                    instruction_customizations.append(f"- {k}: {v}")
+        # ── variations validation ────────────────────────────────────────────
+        applied_variations: dict[str, str] = {}
+        instruction_customisations: list[str] = []
 
-        # state update & history
+        if params.variations:
+            for kv in params.variations:
+                if (
+                    kv.key in position.variation_options
+                    and kv.value in position.variation_options[kv.key]
+                ):
+                    applied_variations[kv.key] = kv.value
+                    instruction_customisations.append(f"- {kv.key}: {kv.value}")
+
+        # ── state update & history  ──────────────────────────────────────────
         user_training.current_position = position_id
         user_training.current_task = None
         user_training.last_updated = datetime.datetime.now()
 
-        assignment = {
-            "id": f"pos_{uuid.uuid4()}",
-            "position_id": position_id,
-            "position_name": position.name,
-            "assigned_at": datetime.datetime.now().isoformat(),
-            "duration_minutes": duration_minutes,
-            "variations": applied_variations,
-            "status": "assigned",
-            "completed": False
-        }
-        user_training.task_history.append(assignment)
+        user_training.task_history.append(
+            {
+                "id": f"pos_{uuid.uuid4()}",
+                "position_id": position_id,
+                "position_name": position.name,
+                "assigned_at": datetime.datetime.now().isoformat(),
+                "duration_minutes": duration_minutes,
+                "variations": applied_variations,
+                "status": "assigned",
+                "completed": False,
+            }
+        )
         if len(user_training.task_history) > 50:
             user_training.task_history = user_training.task_history[-50:]
 
-        # build instructions list
+        # ── build instructions ───────────────────────────────────────────────
         instructions = [
             f"POSITION: {position.name}",
             f"Duration: {duration_minutes} minutes",
             f"Difficulty: {position.difficulty * 10:.1f}/10",
             "Position instructions:",
-            *[f"- {i}" for i in position.instructions]
+            *[f"- {line}" for line in position.instructions],
         ]
-        if instruction_customizations:
-            instructions += ["", "Variations:", *instruction_customizations]
+        if instruction_customisations:
+            instructions += ["", "Variations:", *instruction_customisations]
 
-        # memory (optional)
+        # ── optional memory core record ──────────────────────────────────────
         if context.memory_core:
             try:
                 await context.memory_core.add_memory(
                     memory_type="experience",
                     content=f"Assigned '{position.name}' position for {duration_minutes} minutes",
                     tags=["body_service", "position_assignment"],
-                    significance=0.3 + (position.difficulty * 0.2)
+                    significance=0.3 + position.difficulty * 0.2,
                 )
             except Exception as e:
                 logger.error("Error recording memory: %s", e)
 
+        # ── return strict result ─────────────────────────────────────────────
         return AssignPositionResult(
             success=True,
-            message=f"Successfully assigned '{position.name}' position",  # Added success message for consistency
+            message=f"Successfully assigned '{position.name}' position",
             position_id=position_id,
             position_name=position.name,
             duration_minutes=duration_minutes,
             difficulty=position.difficulty,
             humiliation_factor=position.humiliation_factor,
             endurance_factor=position.endurance_factor,
-            applied_variations=applied_variations,
-            instructions=instructions
+            applied_variations=[KeyValue(key=k, value=v) for k, v in applied_variations.items()]
+            or None,
+            instructions=instructions,
         )
 
 @function_tool
