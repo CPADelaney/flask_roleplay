@@ -13,25 +13,27 @@ from agents.run import RunConfig
 
 logger = logging.getLogger(__name__)
 
+class CooldownInfo(BaseModel, extra="forbid"):
+    game_id: str
+    cooldown_end: str                  # ISO-8601 string
+
+
 class SelectMindGameParams(BaseModel, extra="forbid"):
     user_id: str
     intensity: float = Field(..., ge=0.0, le=1.0)
-    # arbitrary user-state blob – fine to keep it as Dict
-    user_state: Dict[str, Any]
+    user_state_json: str               # ← JSON-encoded user state
 
 
 class SelectMindGameResult(BaseModel, extra="forbid"):
-    # core
+    # always present
     success: bool
     message: Optional[str] = None
 
-    # on “too many active” failure
+    # failure variants
     active_count: Optional[int] = None
+    cooldowns: Optional[List[CooldownInfo]] = None
 
-    # on “all in cooldown” failure
-    cooldowns: Optional[Dict[str, str]] = None
-
-    # on success
+    # success data
     game_id: Optional[str] = None
     game_name: Optional[str] = None
     intensity: Optional[float] = None
@@ -370,78 +372,88 @@ Use the available tools to maintain accurate psychological state tracking.
         )
     
     @function_tool
-    async def _select_mind_game(self, user_id: str, user_state: Dict[str, Any], intensity: float) -> Dict[str, Any]:
-        """Select an appropriate mind game for a user based on state and intensity."""
-        async with self._lock:
-            # Get user psychological state
-            psych_state = self.context.get_user_state(user_id)
-            
-            # Check active mind games count
+    async def select_mind_game(
+        ctx: RunContextWrapper,
+        params: SelectMindGameParams,
+    ) -> SelectMindGameResult:
+        """
+        Choose the best-matching mind-game for a user.
+        The caller must pass `user_state_json` – a JSON string describing the user’s
+        current situation (it can contain any keys you like).
+        """
+        context     = ctx.context
+        user_id     = params.user_id
+        intensity   = params.intensity
+    
+        # try to parse the JSON blob safely
+        try:
+            user_state: Dict[str, Any] = json.loads(params.user_state_json) or {}
+        except Exception:
+            user_state = {}
+    
+        async with _select_mind_game_lock:
+            psych_state = context.get_user_state(user_id)
+    
+            # ── guard: active mind-game limit ──────────────────────────────────
             if len(psych_state.active_mind_games) >= 2:
-                return {
-                    "success": False,
-                    "message": "Too many active mind games (max: 2)",
-                    "active_count": len(psych_state.active_mind_games)
-                }
-            
-            # Calculate available mind games (not in cooldown)
-            now = datetime.datetime.now()
-            available_games = {}
-            
-            for game_id, game in self.context.mind_games.items():
-                # Skip if in cooldown
-                if game_id in psych_state.mind_game_cooldowns:
-                    cooldown_end = psych_state.mind_game_cooldowns[game_id]
-                    if now < cooldown_end:
-                        continue
-                
-                # Calculate match score based on intensity match
+                return SelectMindGameResult(
+                    success=False,
+                    message="Too many active mind games (max: 2)",
+                    active_count=len(psych_state.active_mind_games),
+                )
+    
+            # ── build candidate list (respect cooldowns) ──────────────────────
+            now         = datetime.datetime.now()
+            candidates: Dict[str, Any] = {}
+    
+            for gid, game in context.mind_games.items():
+                cd_end = psych_state.mind_game_cooldowns.get(gid)
+                if cd_end and now < cd_end:
+                    continue  # still in cooldown
+    
                 intensity_match = 1.0 - abs(game.intensity - intensity)
-                trigger_match = 0.0
-                
-                # Check if any triggers match
-                triggers_in_state = []
-                for trigger in game.triggers:
-                    trigger_lower = trigger.lower()
-                    # Look for triggers in user_state description fields
-                    if any(trigger_lower in str(v).lower() for v in user_state.values() if isinstance(v, str)):
-                        triggers_in_state.append(trigger)
-                        trigger_match += 0.2  # 0.2 points per matching trigger
-                
-                # Higher score = better match
-                match_score = (intensity_match * 0.6) + (trigger_match * 0.4)
-                
-                available_games[game_id] = {
-                    "game": game,
-                    "match_score": match_score,
-                    "matching_triggers": triggers_in_state
-                }
-            
-            # No available games
-            if not available_games:
-                return {
-                    "success": False,
-                    "message": "No suitable mind games available (all in cooldown)",
-                    "cooldowns": {g: t.isoformat() for g, t in psych_state.mind_game_cooldowns.items()}
-                }
-            
-            # Select best matching game (highest score)
-            selected_id = max(available_games.keys(), key=lambda k: available_games[k]["match_score"])
-            selected_info = available_games[selected_id]
-            selected_game = selected_info["game"]
-            
-            return {
-                "success": True,
-                "game_id": selected_id,
-                "game_name": selected_game.name,
-                "intensity": selected_game.intensity,
-                "description": selected_game.description,
-                "matching_triggers": selected_info["matching_triggers"],
-                "match_score": selected_info["match_score"],
-                "techniques": selected_game.techniques,
-                "expected_reactions": selected_game.expected_reactions,
-                "duration_hours": selected_game.duration_hours
-            }
+    
+                trig_hits: List[str] = []
+                trig_bonus = 0.0
+                for trig in game.triggers:
+                    tl = trig.lower()
+                    if any(tl in str(v).lower() for v in user_state.values() if isinstance(v, str)):
+                        trig_hits.append(trig)
+                        trig_bonus += 0.2
+    
+                score = intensity_match * 0.6 + trig_bonus * 0.4
+                candidates[gid] = {"game": game, "score": score, "trig_hits": trig_hits}
+    
+            if not candidates:
+                cooldown_list = [
+                    CooldownInfo(game_id=g, cooldown_end=t.isoformat())
+                    for g, t in psych_state.mind_game_cooldowns.items()
+                ]
+                return SelectMindGameResult(
+                    success=False,
+                    message="No suitable mind games available (all in cooldown)",
+                    cooldowns=cooldown_list,
+                )
+    
+            # ── pick best candidate ───────────────────────────────────────────
+            best_id = max(candidates, key=lambda k: candidates[k]["score"])
+            best    = candidates[best_id]
+    
+            game    = best["game"]
+    
+            return SelectMindGameResult(
+                success=True,
+                game_id=best_id,
+                game_name=game.name,
+                intensity=game.intensity,
+                description=game.description,
+                matching_triggers=best["trig_hits"],
+                match_score=best["score"],
+                techniques=game.techniques,
+                expected_reactions=game.expected_reactions,
+                duration_hours=game.duration_hours,
+            )
+
     
     @function_tool
     async def _generate_mind_game_instructions(self, game_id: str, matching_triggers: List[str] = None) -> Dict[str, Any]:
