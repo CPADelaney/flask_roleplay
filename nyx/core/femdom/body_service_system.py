@@ -97,7 +97,29 @@ class NewPositionParams(BaseModel, extra="forbid"):
     tags: List[str] | None = None
     variation_options: Dict[str, List[str]] | None = None
 
+class VariationOption(BaseModel, extra="forbid"):
+    name: str                     # e.g. "hand_position"
+    options: List[str]            # e.g. ["on thighs", "behind back"]
 
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 1.  Strict input model for a new position  (no additionalProperties!)
+# ──────────────────────────────────────────────────────────────────────────────
+class NewPositionParams(BaseModel, extra="forbid"):
+    # — required —
+    id: str
+    name: str
+    description: str
+    instructions: List[str]
+
+    # — optional & bounded numerics —
+    difficulty: float = Field(0.5, ge=0.0, le=1.0)
+    humiliation_factor: float = Field(0.3, ge=0.0, le=1.0)
+    endurance_factor: float = Field(0.3, ge=0.0, le=1.0)
+
+    # — optional collections —
+    tags: Optional[List[str]] = None
+    variation_options: Optional[List[VariationOption]] = None
 class AssignPositionResult(BaseModel, extra="forbid"):
     success: bool
     message: Optional[str] = None
@@ -1520,22 +1542,26 @@ async def get_user_service_record(
 @function_tool
 async def create_custom_position(
     ctx: RunContextWrapper,
-    params: NewPositionParams,          # ← uses the strict model above
+    params: NewPositionParams,
 ) -> JSONResult:
     """
-    Create (and register) a custom service position.
-    Returns a JSONResult payload with success / failure info.
+    Register a custom service position supplied by the user.
+    Returns a JSONResult whose `.payload` is a JSON-encoded dict.
     """
     context = ctx.context
     data = params.dict()
 
     pid = data["id"]
-
-    # ── collisions ──────────────────────────────────────────────────────────
     if pid in context.service_positions:
         return _jr({"success": False, "message": f"Position ID '{pid}' already exists"})
 
-    # ── build & register the ServicePosition ───────────────────────────────
+    # --- convert list[VariationOption] → dict[str, list[str]] for internal use
+    variations_dict: dict[str, list[str]] = {}
+    if data.get("variation_options"):
+        for vo in data["variation_options"]:
+            variations_dict[vo["name"]] = vo["options"]
+
+    # --- build ServicePosition ------------------------------------------------
     pos = ServicePosition(
         id=pid,
         name=data["name"],
@@ -1544,24 +1570,24 @@ async def create_custom_position(
         difficulty=data["difficulty"],
         humiliation_factor=data["humiliation_factor"],
         endurance_factor=data["endurance_factor"],
-        tags=data.get("tags", []),
-        variation_options=data.get("variation_options", {}) or {},
+        tags=data.get("tags", []) or [],
+        variation_options=variations_dict,
     )
     context.service_positions[pid] = pos
 
-    # ── optional memory core record ────────────────────────────────────────
+    # --- optional memory log --------------------------------------------------
     if context.memory_core:
         try:
             await context.memory_core.add_memory(
                 memory_type="knowledge",
-                content=f"User added a new custom position '{pos.name}'",
-                tags=["body_service", "new_position"],
-                significance=0.2 + pos.difficulty * 0.2,
+                content=f"User added a custom position '{pos.name}'",
+                tags=["body_service", "custom_position"],
+                significance=0.25 + pos.difficulty * 0.2,
             )
         except Exception as e:
             logger.error("Error recording memory: %s", e)
 
-    # ── success payload ────────────────────────────────────────────────────
+    # --- success --------------------------------------------------------------
     return _jr(
         {
             "success": True,
