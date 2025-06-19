@@ -101,6 +101,22 @@ class VariationOption(BaseModel, extra="forbid"):
     name: str                     # e.g. "hand_position"
     options: List[str]            # e.g. ["on thighs", "behind back"]
 
+class NewTaskParams(BaseModel, extra="forbid"):
+    # — required —
+    id: str
+    name: str
+    description: str
+    category: str               # e.g. "service", "verbal", …
+    instructions: List[str]
+    evaluation_criteria: List[str]
+
+    # — optional, bounded numerics —
+    difficulty: float = Field(0.5, ge=0.0, le=1.0)
+    duration_minutes: float = Field(5.0, ge=0.0)
+
+    # — optional collection —
+    position_requirements: Optional[List[str]] = None
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 1.  Strict input model for a new position  (no additionalProperties!)
@@ -1599,42 +1615,53 @@ async def create_custom_position(
 @function_tool
 async def create_custom_task(
     ctx: RunContextWrapper,
-    params: _TaskData
+    params: NewTaskParams,
 ) -> JSONResult:
-    """Create a new custom task."""
-    data = params.task_data
+    """
+    Register a custom service task supplied by the user.
+    Returns a JSONResult with `.payload` containing success / error info.
+    """
     context = ctx.context
-    try:
-        req = ["id", "name", "description", "category", "instructions", "evaluation_criteria"]
-        for f in req:
-            if f not in data:
-                return _jr({"success": False, "message": f"Missing required field: {f}"})
+    data = params.dict()
 
-        tid = data["id"]
-        if tid in context.service_tasks:
-            return _jr({"success": False, "message": f"Task ID '{tid}' already exists"})
+    tid = data["id"]
+    if tid in context.service_tasks:
+        return _jr({"success": False, "message": f"Task ID '{tid}' already exists"})
 
-        task = ServiceTask(
-            id=tid,
-            name=data["name"],
-            description=data["description"],
-            category=data["category"],
-            instructions=data["instructions"],
-            evaluation_criteria=data["evaluation_criteria"],
-            difficulty=data.get("difficulty", 0.5),
-            duration_minutes=data.get("duration_minutes", 5.0),
-            position_requirements=data.get("position_requirements", [])
-        )
-        context.service_tasks[tid] = task
+    # --- build ServiceTask ---------------------------------------------------
+    task = ServiceTask(
+        id=tid,
+        name=data["name"],
+        description=data["description"],
+        category=data["category"],
+        instructions=data["instructions"],
+        evaluation_criteria=data["evaluation_criteria"],
+        difficulty=data["difficulty"],
+        duration_minutes=data["duration_minutes"],
+        position_requirements=data.get("position_requirements") or [],
+    )
+    context.service_tasks[tid] = task
 
-        return _jr({
+    # --- optional memory log --------------------------------------------------
+    if context.memory_core:
+        try:
+            await context.memory_core.add_memory(
+                memory_type="knowledge",
+                content=f"User added a custom task '{task.name}'",
+                tags=["body_service", "custom_task"],
+                significance=0.25 + task.difficulty * 0.2,
+            )
+        except Exception as e:
+            logger.error("Error recording memory: %s", e)
+
+    # --- success payload ------------------------------------------------------
+    return _jr(
+        {
             "success": True,
             "message": f"Created task '{task.name}'",
-            "task": task.dict()
-        })
-    except Exception as e:
-        logger.error("Error creating custom task: %s", e)
-        return _jr({"success": False, "message": f"Error: {e}"})
+            "task": task.dict(),
+        }
+    )
 
 @function_tool
 def get_available_positions(ctx: RunContextWrapper) -> JSONResult:
