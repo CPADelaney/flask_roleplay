@@ -5,6 +5,8 @@ positions, tasks, and user training in a femdom context.
 
 This module uses strict Pydantic schemas for all agent tools to ensure
 compatibility with the agent framework's function_tool decorator.
+
+Compatible with Pydantic v2.x - uses direct dict types instead of __root__ models.
 """
 
 import logging
@@ -69,14 +71,11 @@ class _PositionData(BaseModel, extra="forbid"):
 class _TaskData(BaseModel, extra="forbid"):
     task_data: Dict[str, Any]
 
-class VariationMap(BaseModel, extra="forbid"):
-    __root__: Dict[str, str]
-
 class AssignPositionParams(BaseModel, extra="forbid"):
     user_id: str
     position_id: str
     duration_minutes: float = Field(10.0, ge=0.0)
-    variations: Optional[VariationMap] = None
+    variations: Optional[Dict[str, str]] = None  # Simplified - removed VariationMap
 
 class AssignPositionResult(BaseModel, extra="forbid"):
     success: bool
@@ -1069,7 +1068,7 @@ async def assign_position(
     user_id = params.user_id
     position_id = params.position_id
     duration_minutes = params.duration_minutes
-    variations = params.variations.__root__ if params.variations else None
+    variations = params.variations  # Now directly a dict
     context = ctx.context
 
     with custom_span("assign_position", data={"user_id": user_id, "position_id": position_id}):
@@ -1748,16 +1747,13 @@ class BodyServiceSystem:
                            duration_minutes: float = 10.0,
                            variations: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
         """Backward compatibility method that returns a dict."""
-        # Convert variations dict to VariationMap if needed
-        var_map = VariationMap(__root__=variations) if variations else None
-        
         result = await assign_position(
             RunContextWrapper(context=self.context),
             AssignPositionParams(
                 user_id=user_id,
                 position_id=position_id,
                 duration_minutes=duration_minutes,
-                variations=var_map
+                variations=variations  # Pass dict directly
             )
         )
         return result.dict()
