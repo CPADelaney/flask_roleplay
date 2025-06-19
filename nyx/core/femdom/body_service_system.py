@@ -1,20 +1,117 @@
 # nyx/core/femdom/body_service_system.py
+"""
+Body Service System - Agent-based implementation for managing body service 
+positions, tasks, and user training in a femdom context.
+
+This module uses strict Pydantic schemas for all agent tools to ensure
+compatibility with the agent framework's function_tool decorator.
+"""
 
 import logging
 import asyncio
 import uuid
 import datetime
 import random
-from typing import Dict, List, Any, Optional, Union
+import json  # FIX #1: Added missing json import
+from typing import Dict, List, Any, Optional
 from pydantic import BaseModel, Field
 
 from agents import (
-    Agent, Runner, trace, function_tool, InputGuardrail, 
-    OutputGuardrail, GuardrailFunctionOutput, RunContextWrapper,
-    handoff, custom_span
+    Agent, function_tool, InputGuardrail, 
+    GuardrailFunctionOutput, RunContextWrapper,
+    custom_span
 )
 
 logger = logging.getLogger(__name__)
+
+# FIX #1: Better JSON serialization helper
+def _safe_json_default(obj):
+    """Safely serialize objects for JSON, handling complex types."""
+    if hasattr(obj, '__dict__'):
+        # For objects with __dict__, extract safe attributes
+        return {k: v for k, v in obj.__dict__.items() 
+                if isinstance(v, (str, int, float, bool, list, dict, type(None)))}
+    elif hasattr(obj, 'dict') and callable(obj.dict):
+        # For Pydantic models
+        return obj.dict()
+    else:
+        # Fallback to string representation
+        return str(obj)
+
+class JSONResult(BaseModel, extra="forbid"):
+    payload: str  # FIX #6: Renamed from 'json' to 'payload' for clarity
+
+def _jr(data: Any, safe_mode: bool = True) -> JSONResult:
+    """Create JSONResult with proper serialization.
+    
+    Args:
+        data: Data to serialize
+        safe_mode: If True, use safe serialization for complex objects
+    """
+    if safe_mode:
+        return JSONResult(payload=json.dumps(data, default=_safe_json_default))
+    else:
+        return JSONResult(payload=json.dumps(data, default=str))
+
+# ─────────── input models ───────────
+class _User(BaseModel, extra="forbid"):
+    user_id: str
+
+class _PositionID(BaseModel, extra="forbid"):
+    position_id: str
+
+class _TaskID(BaseModel, extra="forbid"):
+    task_id: str
+
+class _PositionData(BaseModel, extra="forbid"):
+    position_data: Dict[str, Any]
+
+class _TaskData(BaseModel, extra="forbid"):
+    task_data: Dict[str, Any]
+
+class VariationMap(BaseModel, extra="forbid"):
+    __root__: Dict[str, str]
+
+class AssignPositionParams(BaseModel, extra="forbid"):
+    user_id: str
+    position_id: str
+    duration_minutes: float = Field(10.0, ge=0.0)
+    variations: Optional[VariationMap] = None
+
+class AssignPositionResult(BaseModel, extra="forbid"):
+    success: bool
+    message: Optional[str] = None
+    active_task: Optional[str] = None
+    available_positions: Optional[List[str]] = None
+    position_id: Optional[str] = None
+    position_name: Optional[str] = None
+    duration_minutes: Optional[float] = None
+    difficulty: Optional[float] = None
+    humiliation_factor: Optional[float] = None
+    endurance_factor: Optional[float] = None
+    applied_variations: Optional[Dict[str, str]] = None
+    instructions: Optional[List[str]] = None
+
+class PositionCompletionData(BaseModel, extra="forbid"):
+    quality_rating: Optional[float] = Field(0.5, ge=0.0, le=1.0)
+    duration_minutes: Optional[float] = Field(10.0, ge=0.0)  # FIX #5: Default to 10.0 instead of None
+    notes: Optional[str] = ""
+
+class CompletePositionParams(BaseModel, extra="forbid"):
+    user_id: str
+    completion_data: PositionCompletionData
+
+class CompletePositionResult(BaseModel, extra="forbid"):
+    success: bool
+    message: Optional[str] = None
+    active_task: Optional[str] = None
+    position_id: Optional[str] = None
+    position_name: Optional[str] = None
+    quality_rating: Optional[float] = None
+    duration_minutes: Optional[float] = None
+    feedback: Optional[str] = None
+    sadistic_response: Optional[str] = None
+    reward_result: Optional[Dict[str, Any]] = None
 
 class CompletionData(BaseModel, extra="forbid"):
     quality_rating: Optional[float] = Field(0.5, ge=0.0, le=1.0)
@@ -25,7 +122,6 @@ class CompletionData(BaseModel, extra="forbid"):
 class CompleteServiceTaskParams(BaseModel, extra="forbid"):
     user_id: str
     completion_data: CompletionData
-
 
 class TaskCompletionResult(BaseModel, extra="forbid"):
     success: bool
@@ -41,6 +137,27 @@ class TaskCompletionResult(BaseModel, extra="forbid"):
     sadistic_response: Optional[str] = None
     reward_result: Optional[Dict[str, Any]] = None
     message: Optional[str] = None
+
+# FIX #2 & #5: Add strict input/output models for assign_service_task
+class AssignServiceTaskParams(BaseModel, extra="forbid"):
+    user_id: str
+    task_type: Optional[str] = None
+    duration: Optional[float] = None
+
+class AssignServiceTaskResult(BaseModel, extra="forbid"):
+    success: bool
+    message: Optional[str] = None
+    active_task: Optional[str] = None
+    available_tasks: Optional[List[str]] = None
+    task_id: Optional[str] = None
+    task_name: Optional[str] = None
+    category: Optional[str] = None
+    difficulty: Optional[float] = None
+    duration_minutes: Optional[float] = None
+    position_id: Optional[str] = None
+    position_name: Optional[str] = None
+    instructions: Optional[List[str]] = None
+    evaluation_criteria: Optional[List[str]] = None
 
 class ServicePosition(BaseModel):
     """Defines a specific service position."""
@@ -95,18 +212,23 @@ class AgentContext(BaseModel):
     # Track user training progress
     user_training: Dict[str, UserTrainingProgress] = Field(default_factory=dict)
 
-# Input validation guardrail
-async def user_id_validation(ctx: RunContextWrapper[AgentContext], agent: Agent, input_data: str) -> GuardrailFunctionOutput:
+# Input validation guardrail - FIX #2: More robust handling
+async def user_id_validation(ctx: RunContextWrapper[AgentContext], agent: Agent, input_data: Any) -> GuardrailFunctionOutput:
     """Validate that user_id is provided in the input data."""
-    if not input_data or 'user_id' not in input_data:
+    try:
+        # Try to get user_id from either model attribute or dict key
+        uid = (input_data.user_id  # model
+               if hasattr(input_data, "user_id") 
+               else input_data["user_id"])  # dict
+        return GuardrailFunctionOutput(
+            output_info={"validated": True, "user_id": uid},
+            tripwire_triggered=False
+        )
+    except (AttributeError, KeyError, TypeError):
         return GuardrailFunctionOutput(
             output_info={"error": "Missing required user_id"},
             tripwire_triggered=True
         )
-    return GuardrailFunctionOutput(
-        output_info={"validated": True},
-        tripwire_triggered=False
-    )
 
 # Create the main agent for the body service system
 def create_body_service_agent(context: AgentContext) -> Agent[AgentContext]:
@@ -385,24 +507,24 @@ def _get_or_create_user_training(context: AgentContext, user_id: str) -> UserTra
         context.user_training[user_id] = UserTrainingProgress(user_id=user_id)
     return context.user_training[user_id]
 
+# FIX #2 & #5: Updated assign_service_task with strict schemas
 @function_tool
 async def assign_service_task(
     ctx: RunContextWrapper[AgentContext], 
-    user_id: str, 
-    task_type: Optional[str] = None, 
-    duration: Optional[float] = None
-) -> Dict[str, Any]:
+    params: AssignServiceTaskParams  # FIX #2: Use strict params
+) -> AssignServiceTaskResult:  # FIX #5: Return strict result
     """
     Assigns a specific service task to a user.
     
     Args:
-        user_id: The user ID
-        task_type: Specific task ID to assign (or random selection if None)
-        duration: Optional override for task duration in minutes
+        params: Contains user_id, optional task_type, and optional duration
         
     Returns:
-        Assigned task details
+        AssignServiceTaskResult with task details  # FIX #9: Updated docstring
     """
+    user_id = params.user_id
+    task_type = params.task_type
+    duration = params.duration
     context = ctx.context
     
     with custom_span("assign_service_task", data={"user_id": user_id, "task_type": task_type}):
@@ -411,19 +533,19 @@ async def assign_service_task(
         
         # Check if user already has an active task
         if user_training.current_task:
-            return {
-                "success": False,
-                "message": f"User already has active task: {user_training.current_task}",
-                "active_task": user_training.current_task
-            }
+            return AssignServiceTaskResult(
+                success=False,
+                message=f"User already has active task: {user_training.current_task}",
+                active_task=user_training.current_task
+            )
         
         # If specific task requested, check if exists
         if task_type and task_type not in context.service_tasks:
-            return {
-                "success": False,
-                "message": f"Task type '{task_type}' not found",
-                "available_tasks": list(context.service_tasks.keys())
-            }
+            return AssignServiceTaskResult(
+                success=False,
+                message=f"Task type '{task_type}' not found",
+                available_tasks=list(context.service_tasks.keys())
+            )
         
         # Select task
         if task_type:
@@ -432,10 +554,10 @@ async def assign_service_task(
             # Select random task, weighted by user progress and relationship factors
             available_tasks = list(context.service_tasks.values())
             if not available_tasks:
-                return {
-                    "success": False,
-                    "message": "No service tasks available"
-                }
+                return AssignServiceTaskResult(
+                    success=False,
+                    message="No service tasks available"
+                )
             
             # Get user's task progress for weighting
             task_weights = []
@@ -463,7 +585,7 @@ async def assign_service_task(
                 task_weights.append(weight)
             
             # Normalize weights
-            if sum(task_weights) > 0:
+            if sum(task_weights) > 0:  # FIX #8: This prevents div-by-zero
                 task_weights = [w / sum(task_weights) for w in task_weights]
             else:
                 # Equal weights if normalization fails
@@ -533,18 +655,19 @@ async def assign_service_task(
                 logger.error(f"Error recording memory: {e}")
         
         # Return task details
-        return {
-            "success": True,
-            "task_id": selected_task.id,
-            "task_name": selected_task.name,
-            "category": selected_task.category,
-            "difficulty": selected_task.difficulty,
-            "duration_minutes": task_duration,
-            "position_id": position_id,
-            "position_name": initial_position.name if initial_position else None,
-            "instructions": instructions,
-            "evaluation_criteria": selected_task.evaluation_criteria
-        }
+        return AssignServiceTaskResult(
+            success=True,
+            message=f"Successfully assigned '{selected_task.name}' task",  # FIX #3: Added success message
+            task_id=selected_task.id,
+            task_name=selected_task.name,
+            category=selected_task.category,
+            difficulty=selected_task.difficulty,
+            duration_minutes=task_duration,
+            position_id=position_id,
+            position_name=initial_position.name if initial_position else None,
+            instructions=instructions,
+            evaluation_criteria=selected_task.evaluation_criteria
+        )
 
 def _generate_task_instructions(
     task: ServiceTask, 
@@ -582,15 +705,18 @@ def _generate_task_instructions(
 
 @function_tool
 async def complete_service_task(
-    ctx: RunContextWrapper,            # ✓ first param is ctx
-    params: CompleteServiceTaskParams  # ✓ wrapped, no loose dicts
-) -> TaskCompletionResult:             # ✓ strict output
+    ctx: RunContextWrapper,
+    params: CompleteServiceTaskParams
+) -> TaskCompletionResult:
     """
-    Record completion of a service task (strict-schema version).
+    Record completion of a service task.
+    
+    Returns:
+        TaskCompletionResult with evaluation details  # FIX #9: Updated docstring
     """
-    user_id         = params.user_id
+    user_id = params.user_id
     completion_data = params.completion_data
-    context         = ctx.context
+    context = ctx.context
 
     with custom_span("complete_service_task", data={"user_id": user_id}):
         # 1 ▸ basic guards -----------------------------------------------------
@@ -618,17 +744,18 @@ async def complete_service_task(
             )
 
         # 2 ▸ pull objects ----------------------------------------------------
-        task       = context.service_tasks[task_id]
-        position   = None
+        task = context.service_tasks[task_id]
+        position = None
         position_id = user_training.current_position
         if position_id and position_id in context.service_positions:
             position = context.service_positions[position_id]
 
         # 3 ▸ normalise inputs ------------------------------------------------
-        q_rating          = completion_data.quality_rating
-        dur_minutes       = completion_data.duration_minutes or task.duration_minutes
-        position_ok       = completion_data.position_maintained
-        notes             = completion_data.notes or ""
+        # FIX #3: Use consistent variable names throughout
+        quality_rating = completion_data.quality_rating
+        duration_minutes = completion_data.duration_minutes or task.duration_minutes
+        position_maintained = completion_data.position_maintained
+        notes = completion_data.notes or ""
         
         # Update the latest task record
         for record in reversed(user_training.task_history):
@@ -748,6 +875,7 @@ async def complete_service_task(
                 if not position_maintained:
                     reward_value *= 0.8  # Reduce reward for failing to maintain position
                 
+                # Note: reward_result will be safely serialized in JSONResult
                 reward_result = await context.reward_system.process_reward_signal(
                     context.reward_system.RewardSignal(
                         value=reward_value,
@@ -802,14 +930,15 @@ async def complete_service_task(
         # Return evaluation details
         return TaskCompletionResult(
             success=True,
+            message=f"Task '{task.name}' completed successfully",  # Added success message
             task_id=task_id,
             task_name=task.name,
             position_id=position_id,
             position_name=position.name if position else None,
-            quality_rating=q_rating,
+            quality_rating=quality_rating,
             criteria_ratings=evaluation["criteria_ratings"],
-            position_maintained=position_ok,
-            duration_minutes=dur_minutes,
+            position_maintained=position_maintained,
+            duration_minutes=duration_minutes,
             feedback=feedback,
             sadistic_response=sadistic_response,
             reward_result=reward_result
@@ -928,66 +1057,54 @@ def _generate_task_feedback(
 
 @function_tool
 async def assign_position(
-    ctx: RunContextWrapper[AgentContext], 
-    user_id: str, 
-    position_id: str,
-    duration_minutes: float = 10.0,
-    variations: Optional[Dict[str, str]] = None
-) -> Dict[str, Any]:
+    ctx: RunContextWrapper,
+    params: AssignPositionParams
+) -> AssignPositionResult:
     """
     Assign a specific position for a user to maintain.
     
-    Args:
-        user_id: The user ID
-        position_id: Position ID to assign
-        duration_minutes: Duration to maintain position
-        variations: Optional variations on the position
-        
     Returns:
-        Position assignment details
+        AssignPositionResult with position details  # FIX #7: Updated docstring
     """
+    user_id = params.user_id
+    position_id = params.position_id
+    duration_minutes = params.duration_minutes
+    variations = params.variations.__root__ if params.variations else None
     context = ctx.context
-    
+
     with custom_span("assign_position", data={"user_id": user_id, "position_id": position_id}):
-        # Check if position exists
+        # existence checks
         if position_id not in context.service_positions:
-            return {
-                "success": False,
-                "message": f"Position '{position_id}' not found",
-                "available_positions": list(context.service_positions.keys())
-            }
-        
+            return AssignPositionResult(
+                success=False,
+                message=f"Position '{position_id}' not found",
+                available_positions=list(context.service_positions.keys())
+            )
+
         position = context.service_positions[position_id]
-        
-        # Get user training record
         user_training = _get_or_create_user_training(context, user_id)
-        
-        # Check if already has active task
+
         if user_training.current_task:
-            return {
-                "success": False,
-                "message": f"User already has active task: {user_training.current_task}",
-                "active_task": user_training.current_task
-            }
-        
-        # Apply variations if provided
+            return AssignPositionResult(
+                success=False,
+                message=f"User already has active task: {user_training.current_task}",
+                active_task=user_training.current_task
+            )
+
+        # apply variations
         applied_variations = {}
         instruction_customizations = []
-        
         if variations:
-            for var_key, var_value in variations.items():
-                if var_key in position.variation_options:
-                    options = position.variation_options[var_key]
-                    if var_value in options:
-                        applied_variations[var_key] = var_value
-                        instruction_customizations.append(f"- {var_key}: {var_value}")
-        
-        # Set current position
+            for k, v in variations.items():
+                if k in position.variation_options and v in position.variation_options[k]:
+                    applied_variations[k] = v
+                    instruction_customizations.append(f"- {k}: {v}")
+
+        # state update & history
         user_training.current_position = position_id
-        user_training.current_task = None  # No task, just position
+        user_training.current_task = None
         user_training.last_updated = datetime.datetime.now()
-        
-        # Create position assignment record
+
         assignment = {
             "id": f"pos_{uuid.uuid4()}",
             "position_id": position_id,
@@ -998,245 +1115,195 @@ async def assign_position(
             "status": "assigned",
             "completed": False
         }
-        
-        # Create task record entry
         user_training.task_history.append(assignment)
-        
-        # Limit history size
         if len(user_training.task_history) > 50:
             user_training.task_history = user_training.task_history[-50:]
-        
-        # Generate instructions
-        instructions = []
-        instructions.extend([
+
+        # build instructions list
+        instructions = [
             f"POSITION: {position.name}",
             f"Duration: {duration_minutes} minutes",
             f"Difficulty: {position.difficulty * 10:.1f}/10",
-            f"Position instructions:"
-        ])
-        
-        # Add base instructions
-        instructions.extend([f"- {instr}" for instr in position.instructions])
-        
-        # Add variation customizations
+            "Position instructions:",
+            *[f"- {i}" for i in position.instructions]
+        ]
         if instruction_customizations:
-            instructions.extend([
-                "",
-                "Variations:"
-            ])
-            instructions.extend(instruction_customizations)
-        
-        # Record position assignment in memory if available
+            instructions += ["", "Variations:", *instruction_customizations]
+
+        # memory (optional)
         if context.memory_core:
             try:
                 await context.memory_core.add_memory(
                     memory_type="experience",
-                    content=f"Assigned '{position.name}' position to be maintained for {duration_minutes} minutes",
+                    content=f"Assigned '{position.name}' position for {duration_minutes} minutes",
                     tags=["body_service", "position_assignment"],
                     significance=0.3 + (position.difficulty * 0.2)
                 )
             except Exception as e:
-                logger.error(f"Error recording memory: {e}")
-        
-        # Return assignment details
-        return {
-            "success": True,
-            "position_id": position_id,
-            "position_name": position.name,
-            "duration_minutes": duration_minutes,
-            "difficulty": position.difficulty,
-            "humiliation_factor": position.humiliation_factor,
-            "endurance_factor": position.endurance_factor,
-            "applied_variations": applied_variations,
-            "instructions": instructions
-        }
+                logger.error("Error recording memory: %s", e)
+
+        return AssignPositionResult(
+            success=True,
+            message=f"Successfully assigned '{position.name}' position",  # Added success message for consistency
+            position_id=position_id,
+            position_name=position.name,
+            duration_minutes=duration_minutes,
+            difficulty=position.difficulty,
+            humiliation_factor=position.humiliation_factor,
+            endurance_factor=position.endurance_factor,
+            applied_variations=applied_variations,
+            instructions=instructions
+        )
 
 @function_tool
 async def complete_position_maintenance(
-    ctx: RunContextWrapper[AgentContext], 
-    user_id: str,
-    completion_data: Dict[str, Any]
-) -> Dict[str, Any]:
+    ctx: RunContextWrapper,
+    params: CompletePositionParams
+) -> CompletePositionResult:
     """
-    Record completion of a position maintenance.
+    Record completion of a position-maintenance session.
     
-    Args:
-        user_id: The user ID
-        completion_data: Data about the position maintenance
-            - quality_rating: Overall quality rating (0.0-1.0)
-            - duration_minutes: Actual duration in minutes
-            - notes: Optional notes about performance
-            
     Returns:
-        Position evaluation details
+        CompletePositionResult with evaluation details  # FIX #9: Updated docstring
     """
+    # unpack input
+    user_id = params.user_id
+    cd = params.completion_data
+    quality_rating = min(1.0, max(0.0, cd.quality_rating))
+    duration_minutes = max(0.0, cd.duration_minutes or 10.0)
+    notes = cd.notes
     context = ctx.context
-    
+
+    # helper
+    def fail(msg: str, **extra) -> CompletePositionResult:
+        return CompletePositionResult(success=False, message=msg, **extra)
+
     with custom_span("complete_position_maintenance", data={"user_id": user_id}):
-        # Get user training record
+        # guards
         if user_id not in context.user_training:
-            return {
-                "success": False,
-                "message": f"No training record found for user {user_id}"
-            }
-        
-        user_training = context.user_training[user_id]
-        
-        # Check if user has an active position
-        if not user_training.current_position:
-            return {
-                "success": False,
-                "message": "User has no active position to complete"
-            }
-        
-        # Check if also has an active task
-        if user_training.current_task:
-            return {
-                "success": False,
-                "message": "User has an active task - complete that instead",
-                "active_task": user_training.current_task
-            }
-        
-        # Get position details
-        position_id = user_training.current_position
-        if position_id not in context.service_positions:
-            # Reset active position if it's invalid
-            user_training.current_position = None
-            return {
-                "success": False,
-                "message": f"Active position {position_id} not found in service positions"
-            }
-        
-        position = context.service_positions[position_id]
-        
-        # Extract completion data
-        quality_rating = min(1.0, max(0.0, completion_data.get("quality_rating", 0.5)))
-        duration_minutes = max(0.0, completion_data.get("duration_minutes", 10.0))
-        notes = completion_data.get("notes", "")
-        
-        # Update the latest position record
-        for record in reversed(user_training.task_history):
-            if record.get("position_id") == position_id and record.get("status") == "assigned" and not record.get("task_id"):
-                record["status"] = "completed"
-                record["completed"] = True
-                record["completed_at"] = datetime.datetime.now().isoformat()
-                record["quality_rating"] = quality_rating
-                record["duration_minutes"] = duration_minutes
-                record["notes"] = notes
+            return fail(f"No training record found for user {user_id}")
+
+        ut = context.user_training[user_id]
+
+        if not ut.current_position:
+            return fail("User has no active position to complete")
+
+        if ut.current_task:
+            return fail("User has an active task – complete that instead",
+                        active_task=ut.current_task)
+
+        pos_id = ut.current_position
+        if pos_id not in context.service_positions:
+            ut.current_position = None  # reset bad state
+            return fail(f"Active position {pos_id} not found in service positions")
+
+        position = context.service_positions[pos_id]
+
+        # update task-history entry
+        for rec in reversed(ut.task_history):
+            if rec.get("position_id") == pos_id and rec.get("status") == "assigned" and not rec.get("task_id"):
+                rec.update(
+                    status="completed",
+                    completed=True,
+                    completed_at=datetime.datetime.now().isoformat(),
+                    quality_rating=quality_rating,
+                    duration_minutes=duration_minutes,
+                    notes=notes,
+                )
                 break
-        
-        # Update position statistics
-        if position_id not in user_training.positions:
-            user_training.positions[position_id] = {
+
+        # per-position stats
+        if pos_id not in ut.positions:
+            ut.positions[pos_id] = {
                 "usage_count": 0,
                 "total_duration": 0.0,
                 "maintained_rate": 1.0,
-                "last_used": None
+                "last_used": None,
             }
-        
-        pos_stats = user_training.positions[position_id]
-        pos_stats["usage_count"] += 1
-        pos_stats["total_duration"] += duration_minutes
-        
-        # Update maintained rate - position only counts as maintained if quality is good
-        maintained_count = pos_stats.get("maintained_count", 0)
+
+        ps = ut.positions[pos_id]
+        ps["usage_count"] += 1
+        ps["total_duration"] += duration_minutes
+        maintained_cnt = ps.get("maintained_count", 0)
         if quality_rating >= 0.6:
-            maintained_count += 1
-        pos_stats["maintained_count"] = maintained_count
-        pos_stats["maintained_rate"] = maintained_count / pos_stats["usage_count"]
-        
-        # Update last used
-        pos_stats["last_used"] = datetime.datetime.now().isoformat()
-        
-        # Update overall service time
-        user_training.total_service_time += duration_minutes
-        
-        # Clear active position
-        user_training.current_position = None
-        
-        # Update timestamp
-        user_training.last_updated = datetime.datetime.now()
-        
-        # Generate feedback based on performance
-        feedback = _generate_position_feedback(
-            position, quality_rating, duration_minutes
-        )
-        
-        # Create reward signal if available
+            maintained_cnt += 1
+        ps["maintained_count"] = maintained_cnt
+        ps["maintained_rate"] = maintained_cnt / ps["usage_count"]
+        ps["last_used"] = datetime.datetime.now().isoformat()
+
+        # overall time & state clear
+        ut.total_service_time += duration_minutes
+        ut.current_position = None
+        ut.last_updated = datetime.datetime.now()
+
+        # feedback + reward + sadistic response
+        feedback = _generate_position_feedback(position, quality_rating, duration_minutes)
+
         reward_result = None
         if context.reward_system:
             try:
-                # Calculate reward based on position difficulty and performance
-                base_reward = 0.1  # Base reward for position (less than task)
-                difficulty_factor = position.difficulty * 0.3
-                humiliation_factor = position.humiliation_factor * 0.3
-                endurance_factor = position.endurance_factor * duration_minutes / 10.0 * 0.2
-                performance_factor = quality_rating * 0.4
-                
-                reward_value = base_reward + difficulty_factor + humiliation_factor + endurance_factor + performance_factor
-                
+                rv = (0.1  # base
+                      + position.difficulty * 0.3
+                      + position.humiliation_factor * 0.3
+                      + position.endurance_factor * duration_minutes / 10.0 * 0.2
+                      + quality_rating * 0.4)
                 reward_result = await context.reward_system.process_reward_signal(
                     context.reward_system.RewardSignal(
-                        value=reward_value,
+                        value=rv,
                         source="body_service",
                         context={
-                            "position_id": position_id,
+                            "position_id": pos_id,
                             "position_name": position.name,
                             "quality_rating": quality_rating,
-                            "duration_minutes": duration_minutes
-                        }
+                            "duration_minutes": duration_minutes,
+                        },
                     )
                 )
             except Exception as e:
-                logger.error(f"Error processing reward: {e}")
-        
-        # Generate sadistic amusement if quality is low and sadistic responses available
+                logger.error("Error processing reward: %s", e)
+
         sadistic_response = None
         if quality_rating < 0.4 and context.sadistic_responses:
             try:
-                # Higher humiliation for lower quality
-                humiliation_level = 0.5 + ((0.4 - quality_rating) * 1.5)
-                humiliation_level = min(1.0, max(0.0, humiliation_level))
-                
-                sadistic_result = await context.sadistic_responses.generate_sadistic_amusement_response(
+                humiliation_level = min(1.0, max(
+                    0.0, 0.5 + (0.4 - quality_rating) * 1.5))
+                res = await context.sadistic_responses.generate_sadistic_amusement_response(
                     user_id=user_id,
                     humiliation_level=humiliation_level,
-                    category="mockery"  # Use mockery for position failure
+                    category="mockery",
                 )
-                
-                if sadistic_result and "response" in sadistic_result:
-                    sadistic_response = sadistic_result["response"]
+                if res and "response" in res:
+                    sadistic_response = res["response"]
             except Exception as e:
-                logger.error(f"Error generating sadistic response: {e}")
-        
-        # Record position completion in memory if available
+                logger.error("Error generating sadistic response: %s", e)
+
+        # memory record
         if context.memory_core:
             try:
-                memory_content = (
-                    f"User maintained '{position.name}' position with quality rating {quality_rating:.2f}. "
-                    f"Duration: {duration_minutes} minutes."
-                )
-                
                 await context.memory_core.add_memory(
                     memory_type="experience",
-                    content=memory_content,
+                    content=(
+                        f"User maintained '{position.name}' position "
+                        f"for {duration_minutes} min with rating {quality_rating:.2f}"
+                    ),
                     tags=["body_service", "position_maintenance"],
-                    significance=0.2 + (position.difficulty * 0.2) + (quality_rating * 0.2)
+                    significance=0.2 + position.difficulty * 0.2 + quality_rating * 0.2,
                 )
             except Exception as e:
-                logger.error(f"Error recording memory: {e}")
-        
-        # Return evaluation details
-        return {
-            "success": True,
-            "position_id": position_id,
-            "position_name": position.name,
-            "quality_rating": quality_rating,
-            "duration_minutes": duration_minutes,
-            "feedback": feedback,
-            "sadistic_response": sadistic_response,
-            "reward_result": reward_result
-        }
+                logger.error("Error recording memory: %s", e)
+
+        # success result
+        return CompletePositionResult(
+            success=True,
+            message=f"Position '{position.name}' maintenance completed",  # Added success message
+            position_id=pos_id,
+            position_name=position.name,
+            quality_rating=quality_rating,
+            duration_minutes=duration_minutes,
+            feedback=feedback,
+            sadistic_response=sadistic_response,
+            reward_result=reward_result,
+        )
 
 def _generate_position_feedback(
     position: ServicePosition,
@@ -1324,48 +1391,46 @@ def _generate_position_feedback(
 
 @function_tool
 async def get_user_service_record(
-    ctx: RunContextWrapper[AgentContext],
-    user_id: str
-) -> Dict[str, Any]:
-    """Get a user's complete service record."""
+    ctx: RunContextWrapper,
+    params: _User
+) -> JSONResult:
+    """Get user's service record including stats and history."""
+    user_id = params.user_id
     context = ctx.context
-    
+
     with custom_span("get_user_service_record", data={"user_id": user_id}):
         if user_id not in context.user_training:
-            return {
+            return _jr({
                 "success": False,
                 "message": f"No service record found for user {user_id}",
                 "user_id": user_id
-            }
-        
-        user_training = context.user_training[user_id]
-        
-        # Format active task info if any
+            })
+
+        ut = context.user_training[user_id]
+
+        # active task
         active_task = None
-        if user_training.current_task:
-            task_id = user_training.current_task
-            if task_id in context.service_tasks:
-                task = context.service_tasks[task_id]
-                position_id = user_training.current_position
-                position_name = None
-                
-                if position_id and position_id in context.service_positions:
-                    position_name = context.service_positions[position_id].name
-                
-                active_task = {
-                    "task_id": task_id,
-                    "task_name": task.name,
-                    "category": task.category,
-                    "position_id": position_id,
-                    "position_name": position_name
-                }
-        
-        # Format task completion statistics
+        if ut.current_task and ut.current_task in context.service_tasks:
+            task = context.service_tasks[ut.current_task]
+            pos_id = ut.current_position
+            pos_name = (
+                context.service_positions[pos_id].name
+                if pos_id and pos_id in context.service_positions else None
+            )
+            active_task = {
+                "task_id": ut.current_task,
+                "task_name": task.name,
+                "category": task.category,
+                "position_id": pos_id,
+                "position_name": pos_name
+            }
+
+        # per-task stats
         task_stats = {}
-        for task_id, stats in user_training.tasks.items():
-            if task_id in context.service_tasks:
-                task = context.service_tasks[task_id]
-                task_stats[task_id] = {
+        for tid, stats in ut.tasks.items():
+            if tid in context.service_tasks:
+                task = context.service_tasks[tid]
+                task_stats[tid] = {
                     "name": task.name,
                     "category": task.category,
                     "completions": stats["completion_count"],
@@ -1373,266 +1438,252 @@ async def get_user_service_record(
                     "position_maintained_rate": stats.get("position_maintained_rate", 1.0),
                     "last_completed": stats["last_completed"]
                 }
-        
-        # Format position usage statistics
-        position_stats = {}
-        for position_id, stats in user_training.positions.items():
-            if position_id in context.service_positions:
-                position = context.service_positions[position_id]
-                position_stats[position_id] = {
-                    "name": position.name,
+
+        # per-position stats
+        pos_stats = {}
+        for pid, stats in ut.positions.items():
+            if pid in context.service_positions:
+                pos = context.service_positions[pid]
+                pos_stats[pid] = {
+                    "name": pos.name,
                     "usage_count": stats["usage_count"],
                     "total_duration": stats["total_duration"],
                     "maintained_rate": stats.get("maintained_rate", 1.0),
                     "last_used": stats["last_used"]
                 }
-        
-        # Format recent evaluations
-        recent_evaluations = []
-        for eval_data in user_training.evaluation_history[-5:]:
-            recent_evaluations.append({
-                "task_name": eval_data["task_name"],
-                "position_name": eval_data["position_name"],
-                "timestamp": eval_data["timestamp"],
-                "quality_rating": eval_data["quality_rating"],
-                "position_maintained": eval_data["position_maintained"]
-            })
-        
-        # Calculate overall ratings
-        avg_quality = 0.0
-        total_tasks = sum(stats["completion_count"] for stats in user_training.tasks.values())
-        if total_tasks > 0:
-            weighted_sum = sum(
-                stats["average_rating"] * stats["completion_count"]
-                for stats in user_training.tasks.values()
-            )
-            avg_quality = weighted_sum / total_tasks
-        
-        return {
+
+        # recent evaluations
+        recent_evals = [
+            {
+                "task_name": e["task_name"],
+                "position_name": e["position_name"],
+                "timestamp": e["timestamp"],
+                "quality_rating": e["quality_rating"],
+                "position_maintained": e["position_maintained"]
+            }
+            for e in ut.evaluation_history[-5:]
+        ]
+
+        # overall stats
+        total_tasks = sum(s["completion_count"] for s in ut.tasks.values())
+        avg_quality = (
+            sum(s["average_rating"]*s["completion_count"] for s in ut.tasks.values())/total_tasks
+            if total_tasks else 0.0
+        )
+
+        return _jr({
             "success": True,
             "user_id": user_id,
             "active_task": active_task,
             "overall_stats": {
-                "total_service_time": user_training.total_service_time,
+                "total_service_time": ut.total_service_time,
                 "completed_tasks": total_tasks,
                 "average_quality": avg_quality,
-                "distinct_positions": len(position_stats),
+                "distinct_positions": len(pos_stats),
                 "distinct_tasks": len(task_stats)
             },
             "task_statistics": task_stats,
-            "position_statistics": position_stats,
-            "recent_evaluations": recent_evaluations,
-            "last_updated": user_training.last_updated.isoformat()
-        }
+            "position_statistics": pos_stats,
+            "recent_evaluations": recent_evals,
+            "last_updated": ut.last_updated.isoformat()
+        })
 
 @function_tool
 async def create_custom_position(
-    ctx: RunContextWrapper[AgentContext],
-    position_data: Dict[str, Any]
-) -> Dict[str, Any]:
-    """Create a custom service position."""
+    ctx: RunContextWrapper,
+    params: _PositionData
+) -> JSONResult:
+    """Create a new custom position."""
+    data = params.position_data
     context = ctx.context
-    
     try:
-        # Check for required fields
-        required_fields = ["id", "name", "description", "instructions"]
-        for field in required_fields:
-            if field not in position_data:
-                return {"success": False, "message": f"Missing required field: {field}"}
-        
-        position_id = position_data["id"]
-        
-        # Check if position ID already exists
-        if position_id in context.service_positions:
-            return {"success": False, "message": f"Position ID '{position_id}' already exists"}
-        
-        # Create position
-        position = ServicePosition(
-            id=position_id,
-            name=position_data["name"],
-            description=position_data["description"],
-            instructions=position_data["instructions"],
-            difficulty=position_data.get("difficulty", 0.5),
-            humiliation_factor=position_data.get("humiliation_factor", 0.3),
-            endurance_factor=position_data.get("endurance_factor", 0.3),
-            tags=position_data.get("tags", []),
-            variation_options=position_data.get("variation_options", {})
+        req = ["id", "name", "description", "instructions"]
+        for f in req:
+            if f not in data:
+                return _jr({"success": False, "message": f"Missing required field: {f}"})
+
+        pid = data["id"]
+        if pid in context.service_positions:
+            return _jr({"success": False, "message": f"Position ID '{pid}' already exists"})
+
+        pos = ServicePosition(
+            id=pid,
+            name=data["name"],
+            description=data["description"],
+            instructions=data["instructions"],
+            difficulty=data.get("difficulty", 0.5),
+            humiliation_factor=data.get("humiliation_factor", 0.3),
+            endurance_factor=data.get("endurance_factor", 0.3),
+            tags=data.get("tags", []),
+            variation_options=data.get("variation_options", {})
         )
-        
-        # Add to positions
-        context.service_positions[position_id] = position
-        
-        return {
+        context.service_positions[pid] = pos
+
+        return _jr({
             "success": True,
-            "message": f"Created position '{position.name}'",
-            "position": position.dict()
-        }
+            "message": f"Created position '{pos.name}'",
+            "position": pos.dict()
+        })
     except Exception as e:
-        logger.error(f"Error creating custom position: {e}")
-        return {"success": False, "message": f"Error: {str(e)}"}
+        logger.error("Error creating custom position: %s", e)
+        return _jr({"success": False, "message": f"Error: {e}"})
 
 @function_tool
 async def create_custom_task(
-    ctx: RunContextWrapper[AgentContext],
-    task_data: Dict[str, Any]
-) -> Dict[str, Any]:
-    """Create a custom service task."""
+    ctx: RunContextWrapper,
+    params: _TaskData
+) -> JSONResult:
+    """Create a new custom task."""
+    data = params.task_data
     context = ctx.context
-    
     try:
-        # Check for required fields
-        required_fields = ["id", "name", "description", "category", "instructions", "evaluation_criteria"]
-        for field in required_fields:
-            if field not in task_data:
-                return {"success": False, "message": f"Missing required field: {field}"}
-        
-        task_id = task_data["id"]
-        
-        # Check if task ID already exists
-        if task_id in context.service_tasks:
-            return {"success": False, "message": f"Task ID '{task_id}' already exists"}
-        
-        # Create task
+        req = ["id", "name", "description", "category", "instructions", "evaluation_criteria"]
+        for f in req:
+            if f not in data:
+                return _jr({"success": False, "message": f"Missing required field: {f}"})
+
+        tid = data["id"]
+        if tid in context.service_tasks:
+            return _jr({"success": False, "message": f"Task ID '{tid}' already exists"})
+
         task = ServiceTask(
-            id=task_id,
-            name=task_data["name"],
-            description=task_data["description"],
-            category=task_data["category"],
-            instructions=task_data["instructions"],
-            evaluation_criteria=task_data["evaluation_criteria"],
-            difficulty=task_data.get("difficulty", 0.5),
-            duration_minutes=task_data.get("duration_minutes", 5.0),
-            position_requirements=task_data.get("position_requirements", [])
+            id=tid,
+            name=data["name"],
+            description=data["description"],
+            category=data["category"],
+            instructions=data["instructions"],
+            evaluation_criteria=data["evaluation_criteria"],
+            difficulty=data.get("difficulty", 0.5),
+            duration_minutes=data.get("duration_minutes", 5.0),
+            position_requirements=data.get("position_requirements", [])
         )
-        
-        # Add to tasks
-        context.service_tasks[task_id] = task
-        
-        return {
+        context.service_tasks[tid] = task
+
+        return _jr({
             "success": True,
             "message": f"Created task '{task.name}'",
             "task": task.dict()
-        }
+        })
     except Exception as e:
-        logger.error(f"Error creating custom task: {e}")
-        return {"success": False, "message": f"Error: {str(e)}"}
+        logger.error("Error creating custom task: %s", e)
+        return _jr({"success": False, "message": f"Error: {e}"})
 
 @function_tool
-def get_available_positions(ctx: RunContextWrapper[AgentContext]) -> List[Dict[str, Any]]:
-    """Get all available service positions."""
+def get_available_positions(ctx: RunContextWrapper) -> JSONResult:
+    """Get all available positions."""
     context = ctx.context
-    positions = []
-    
-    for position_id, position in context.service_positions.items():
-        positions.append({
-            "id": position_id,
-            "name": position.name,
-            "description": position.description,
-            "difficulty": position.difficulty,
-            "humiliation_factor": position.humiliation_factor,
-            "endurance_factor": position.endurance_factor,
-            "tags": position.tags,
-            "variation_count": len(position.variation_options)
-        })
-    
-    return positions
+    positions = [
+        {
+            "id": pid,
+            "name": pos.name,
+            "description": pos.description,
+            "difficulty": pos.difficulty,
+            "humiliation_factor": pos.humiliation_factor,
+            "endurance_factor": pos.endurance_factor,
+            "tags": pos.tags,
+            "variation_count": len(pos.variation_options)
+        }
+        for pid, pos in context.service_positions.items()
+    ]
+    return _jr(positions)
 
 @function_tool
-def get_available_tasks(ctx: RunContextWrapper[AgentContext]) -> List[Dict[str, Any]]:
-    """Get all available service tasks."""
+def get_available_tasks(ctx: RunContextWrapper) -> JSONResult:
+    """Get all available tasks."""
     context = ctx.context
-    tasks = []
-    
-    for task_id, task in context.service_tasks.items():
-        tasks.append({
-            "id": task_id,
-            "name": task.name,
-            "description": task.description,
-            "category": task.category,
-            "difficulty": task.difficulty,
-            "duration_minutes": task.duration_minutes,
-            "position_requirements": task.position_requirements,
-            "criteria_count": len(task.evaluation_criteria)
-        })
-    
-    return tasks
+    tasks = [
+        {
+            "id": tid,
+            "name": t.name,
+            "description": t.description,
+            "category": t.category,
+            "difficulty": t.difficulty,
+            "duration_minutes": t.duration_minutes,
+            "position_requirements": t.position_requirements,
+            "criteria_count": len(t.evaluation_criteria)
+        }
+        for tid, t in context.service_tasks.items()
+    ]
+    return _jr(tasks)
 
 @function_tool
 async def get_position_details(
-    ctx: RunContextWrapper[AgentContext],
-    position_id: str
-) -> Dict[str, Any]:
+    ctx: RunContextWrapper,
+    params: _PositionID
+) -> JSONResult:
     """Get detailed information about a specific position."""
+    pid = params.position_id
     context = ctx.context
-    
-    if position_id not in context.service_positions:
-        return {
+    if pid not in context.service_positions:
+        return _jr({
             "success": False,
-            "message": f"Position '{position_id}' not found",
+            "message": f"Position '{pid}' not found",
             "available_positions": list(context.service_positions.keys())
-        }
-    
-    position = context.service_positions[position_id]
-    
-    return {
+        })
+
+    pos = context.service_positions[pid]
+    return _jr({
         "success": True,
-        "id": position_id,
-        "name": position.name,
-        "description": position.description,
-        "difficulty": position.difficulty,
-        "humiliation_factor": position.humiliation_factor,
-        "endurance_factor": position.endurance_factor,
-        "tags": position.tags,
-        "instructions": position.instructions,
-        "variation_options": position.variation_options
-    }
+        "id": pid,
+        "name": pos.name,
+        "description": pos.description,
+        "difficulty": pos.difficulty,
+        "humiliation_factor": pos.humiliation_factor,
+        "endurance_factor": pos.endurance_factor,
+        "tags": pos.tags,
+        "instructions": pos.instructions,
+        "variation_options": pos.variation_options
+    })
 
 @function_tool
 async def get_task_details(
-    ctx: RunContextWrapper[AgentContext],
-    task_id: str
-) -> Dict[str, Any]:
+    ctx: RunContextWrapper,
+    params: _TaskID
+) -> JSONResult:
     """Get detailed information about a specific task."""
+    tid = params.task_id
     context = ctx.context
-    
-    if task_id not in context.service_tasks:
-        return {
+    if tid not in context.service_tasks:
+        return _jr({
             "success": False,
-            "message": f"Task '{task_id}' not found",
+            "message": f"Task '{tid}' not found",
             "available_tasks": list(context.service_tasks.keys())
-        }
-    
-    task = context.service_tasks[task_id]
-    
-    # Get position details if required
-    position_details = {}
-    for position_id in task.position_requirements:
-        if position_id in context.service_positions:
-            position = context.service_positions[position_id]
-            position_details[position_id] = {
-                "name": position.name,
-                "difficulty": position.difficulty,
-                "humiliation_factor": position.humiliation_factor,
-                "endurance_factor": position.endurance_factor
+        })
+
+    task = context.service_tasks[tid]
+
+    pos_details = {}
+    for pid in task.position_requirements:
+        if pid in context.service_positions:
+            p = context.service_positions[pid]
+            pos_details[pid] = {
+                "name": p.name,
+                "difficulty": p.difficulty,
+                "humiliation_factor": p.humiliation_factor,
+                "endurance_factor": p.endurance_factor
             }
-    
-    return {
+
+    return _jr({
         "success": True,
-        "id": task_id,
+        "id": tid,
         "name": task.name,
         "description": task.description,
         "category": task.category,
         "difficulty": task.difficulty,
         "duration_minutes": task.duration_minutes,
         "position_requirements": task.position_requirements,
-        "position_details": position_details,
+        "position_details": pos_details,
         "instructions": task.instructions,
         "evaluation_criteria": task.evaluation_criteria
-    }
+    })
 
 # Main class for backwards compatibility
 class BodyServiceSystem:
-    """Legacy wrapper for the new agent-based implementation."""
+    """Legacy wrapper for the new agent-based implementation.
+    
+    Provides backward compatibility by converting between the old dict-based
+    interface and the new Pydantic model-based agent tools.
+    """
     
     def __init__(self, reward_system=None, memory_core=None, relationship_manager=None, 
                  theory_of_mind=None, sadistic_responses=None, psychological_dominance=None):
@@ -1659,97 +1710,127 @@ class BodyServiceSystem:
         
         logger.info("BodyServiceSystem initialized")
     
+    # FIX #4: Update all backward-compat methods to use proper param objects
     async def assign_service_task(self, user_id: str, task_type: Optional[str] = None, 
                                duration: Optional[float] = None) -> Dict[str, Any]:
         """Backward compatibility method."""
-        result = await Runner.run(
-            self.agent,
-            f"Assign service task to user {user_id}" + 
-            (f" with task type {task_type}" if task_type else "") +
-            (f" with duration {duration}" if duration else ""),
-            context=self.context
-        )
-        
-        # Call the tool directly
-        return await assign_service_task(
+        result = await assign_service_task(
             RunContextWrapper(context=self.context),
-            user_id,
-            task_type,
-            duration
+            AssignServiceTaskParams(
+                user_id=user_id,
+                task_type=task_type,
+                duration=duration
+            )
         )
+        # Convert back to dict for backward compatibility
+        return result.dict()
     
     async def complete_service_task(self, user_id: str, completion_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Backward compatibility method."""
-        return await complete_service_task(
-            RunContextWrapper(context=self.context),
-            user_id,
-            completion_data
+        """Backward compatibility method that returns a dict."""
+        # Convert dict to CompletionData
+        comp_data = CompletionData(
+            quality_rating=completion_data.get("quality_rating", 0.5),
+            duration_minutes=completion_data.get("duration_minutes"),
+            position_maintained=completion_data.get("position_maintained", True),
+            notes=completion_data.get("notes", "")
         )
+        
+        result = await complete_service_task(
+            RunContextWrapper(context=self.context),
+            CompleteServiceTaskParams(
+                user_id=user_id,
+                completion_data=comp_data
+            )
+        )
+        return result.dict()
     
     async def assign_position(self, user_id: str, position_id: str,
                            duration_minutes: float = 10.0,
                            variations: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
-        """Backward compatibility method."""
-        return await assign_position(
+        """Backward compatibility method that returns a dict."""
+        # Convert variations dict to VariationMap if needed
+        var_map = VariationMap(__root__=variations) if variations else None
+        
+        result = await assign_position(
             RunContextWrapper(context=self.context),
-            user_id,
-            position_id,
-            duration_minutes,
-            variations
+            AssignPositionParams(
+                user_id=user_id,
+                position_id=position_id,
+                duration_minutes=duration_minutes,
+                variations=var_map
+            )
         )
+        return result.dict()
     
     async def complete_position_maintenance(self, user_id: str,
                                          completion_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Backward compatibility method."""
-        return await complete_position_maintenance(
-            RunContextWrapper(context=self.context),
-            user_id,
-            completion_data
+        """Backward compatibility method that returns a dict."""
+        # Convert dict to PositionCompletionData
+        pos_comp_data = PositionCompletionData(
+            quality_rating=completion_data.get("quality_rating", 0.5),
+            duration_minutes=completion_data.get("duration_minutes"),
+            notes=completion_data.get("notes", "")
         )
+        
+        result = await complete_position_maintenance(
+            RunContextWrapper(context=self.context),
+            CompletePositionParams(
+                user_id=user_id,
+                completion_data=pos_comp_data
+            )
+        )
+        return result.dict()
     
     async def get_user_service_record(self, user_id: str) -> Dict[str, Any]:
-        """Backward compatibility method."""
-        return await get_user_service_record(
+        """Backward compatibility method that returns a dict."""
+        result = await get_user_service_record(
             RunContextWrapper(context=self.context),
-            user_id
+            _User(user_id=user_id)
         )
+        return json.loads(result.payload)  # FIX #1: Use payload field
     
     async def create_custom_position(self, position_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Backward compatibility method."""
-        return await create_custom_position(
+        """Backward compatibility method that returns a dict."""
+        result = await create_custom_position(
             RunContextWrapper(context=self.context),
-            position_data
+            _PositionData(position_data=position_data)
         )
+        return json.loads(result.payload)  # FIX #1: Use payload field
     
     async def create_custom_task(self, task_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Backward compatibility method."""
-        return await create_custom_task(
+        """Backward compatibility method that returns a dict."""
+        result = await create_custom_task(
             RunContextWrapper(context=self.context),
-            task_data
+            _TaskData(task_data=task_data)
         )
+        return json.loads(result.payload)  # FIX #1: Use payload field
     
     def get_available_positions(self) -> List[Dict[str, Any]]:
-        """Backward compatibility method."""
-        return get_available_positions(
+        """Backward compatibility method that returns a list of dicts."""
+        result = get_available_positions(
             RunContextWrapper(context=self.context)
         )
+        return json.loads(result.payload)  # FIX #1: Use payload field
     
     def get_available_tasks(self) -> List[Dict[str, Any]]:
-        """Backward compatibility method."""
-        return get_available_tasks(
+        """Backward compatibility method that returns a list of dicts."""
+        result = get_available_tasks(
             RunContextWrapper(context=self.context)
         )
+        return json.loads(result.payload)  # FIX #1: Use payload field
     
     async def get_position_details(self, position_id: str) -> Dict[str, Any]:
-        """Backward compatibility method."""
-        return await get_position_details(
+        """Backward compatibility method that returns a dict."""
+        result = await get_position_details(
             RunContextWrapper(context=self.context),
-            position_id
+            _PositionID(position_id=position_id)
         )
+        return json.loads(result.payload)  # FIX #1: Use payload field
     
     async def get_task_details(self, task_id: str) -> Dict[str, Any]:
-        """Backward compatibility method."""
-        return await get_task_details(
+        """Backward compatibility method that returns a dict."""
+        result = await get_task_details(
             RunContextWrapper(context=self.context),
-            task_id
+            _TaskID(task_id=task_id)
         )
+        return json.loads(result.payload)  # FIX #1: Use payload field
