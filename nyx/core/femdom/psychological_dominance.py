@@ -17,6 +17,20 @@ class CooldownInfo(BaseModel, extra="forbid"):
     game_id: str
     cooldown_end: str                  # ISO-8601 string
 
+class SubspaceGuidanceRequest(BaseModel, extra="forbid"):
+    """What the guidance engine needs to know about the current reading."""
+    subspace_detected: bool
+    depth: float = Field(0.0, ge=0.0, le=1.0)
+    indicators: List[str] = []
+    in_subspace_since: Optional[str] = None        # ISO-8601 timestamp
+
+class SubspaceGuidanceResult(BaseModel, extra="forbid"):
+    """Structured guidance that will be returned to the calling chain."""
+    success: bool
+    guidance: Optional[List[str]] = None
+    message: Optional[str] = None
+    safety_notes: Optional[str] = None
+    recommended_intensity: Optional[float] = None
 
 class SelectMindGameParams(BaseModel, extra="forbid"):
     user_id: str
@@ -1057,9 +1071,26 @@ Use the available tools to maintain accurate psychological state tracking.
 
     
     @function_tool
-    async def _generate_subspace_guidance(self, detection_result: Dict[str, Any]) -> Dict[str, Any]:
-        """Generate guidance for interacting with a user in subspace."""
-        return await self.subspace_detection.get_subspace_guidance(detection_result)
+    async def generate_subspace_guidance(   # note: no leading underscore
+        self,                               # <-- because it's a method
+        ctx: RunContextWrapper,
+        params: SubspaceGuidanceRequest,
+    ) -> SubspaceGuidanceResult:
+        """
+        Produce safe, structured guidance for handling a user in sub-space.
+        """
+        # grab the detector through `self` (or however you store it)
+        raw = await self.subspace_detection.get_subspace_guidance(params.dict())
+    
+        # Normalise / fill defaults so the schema is always satisfied
+        return SubspaceGuidanceResult(
+            success=raw.get("success", True),
+            guidance=raw.get("guidance", []),
+            message=raw.get("message"),
+            safety_notes=raw.get("safety_notes"),
+            recommended_intensity=raw.get("recommended_intensity"),
+        )
+
     
     @function_tool
     async def _monitor_subspace_exit(self, user_id: str, detection_result: Dict[str, Any]) -> Dict[str, Any]:
