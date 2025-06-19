@@ -83,6 +83,21 @@ class AssignPositionParams(BaseModel, extra="forbid"):
     # variations is now a *list* of KeyValue objects (strict-schema friendly)
     variations: Optional[List[KeyValue]] = None
 
+class NewPositionParams(BaseModel, extra="forbid"):
+    """All fields allowed when a user defines a custom position."""
+    # — required —
+    id: str
+    name: str
+    description: str
+    instructions: List[str]
+    # — optional —
+    difficulty: float = Field(0.5, ge=0.0, le=1.0)
+    humiliation_factor: float = Field(0.3, ge=0.0, le=1.0)
+    endurance_factor: float = Field(0.3, ge=0.0, le=1.0)
+    tags: List[str] | None = None
+    variation_options: Dict[str, List[str]] | None = None
+
+
 class AssignPositionResult(BaseModel, extra="forbid"):
     success: bool
     message: Optional[str] = None
@@ -1505,43 +1520,56 @@ async def get_user_service_record(
 @function_tool
 async def create_custom_position(
     ctx: RunContextWrapper,
-    params: _PositionData
+    params: NewPositionParams,          # ← uses the strict model above
 ) -> JSONResult:
-    """Create a new custom position."""
-    data = params.position_data
+    """
+    Create (and register) a custom service position.
+    Returns a JSONResult payload with success / failure info.
+    """
     context = ctx.context
-    try:
-        req = ["id", "name", "description", "instructions"]
-        for f in req:
-            if f not in data:
-                return _jr({"success": False, "message": f"Missing required field: {f}"})
+    data = params.dict()
 
-        pid = data["id"]
-        if pid in context.service_positions:
-            return _jr({"success": False, "message": f"Position ID '{pid}' already exists"})
+    pid = data["id"]
 
-        pos = ServicePosition(
-            id=pid,
-            name=data["name"],
-            description=data["description"],
-            instructions=data["instructions"],
-            difficulty=data.get("difficulty", 0.5),
-            humiliation_factor=data.get("humiliation_factor", 0.3),
-            endurance_factor=data.get("endurance_factor", 0.3),
-            tags=data.get("tags", []),
-            variation_options=data.get("variation_options", {})
-        )
-        context.service_positions[pid] = pos
+    # ── collisions ──────────────────────────────────────────────────────────
+    if pid in context.service_positions:
+        return _jr({"success": False, "message": f"Position ID '{pid}' already exists"})
 
-        return _jr({
+    # ── build & register the ServicePosition ───────────────────────────────
+    pos = ServicePosition(
+        id=pid,
+        name=data["name"],
+        description=data["description"],
+        instructions=data["instructions"],
+        difficulty=data["difficulty"],
+        humiliation_factor=data["humiliation_factor"],
+        endurance_factor=data["endurance_factor"],
+        tags=data.get("tags", []),
+        variation_options=data.get("variation_options", {}) or {},
+    )
+    context.service_positions[pid] = pos
+
+    # ── optional memory core record ────────────────────────────────────────
+    if context.memory_core:
+        try:
+            await context.memory_core.add_memory(
+                memory_type="knowledge",
+                content=f"User added a new custom position '{pos.name}'",
+                tags=["body_service", "new_position"],
+                significance=0.2 + pos.difficulty * 0.2,
+            )
+        except Exception as e:
+            logger.error("Error recording memory: %s", e)
+
+    # ── success payload ────────────────────────────────────────────────────
+    return _jr(
+        {
             "success": True,
             "message": f"Created position '{pos.name}'",
-            "position": pos.dict()
-        })
-    except Exception as e:
-        logger.error("Error creating custom position: %s", e)
-        return _jr({"success": False, "message": f"Error: {e}"})
-
+            "position": pos.dict(),
+        }
+    )
+    
 @function_tool
 async def create_custom_task(
     ctx: RunContextWrapper,
