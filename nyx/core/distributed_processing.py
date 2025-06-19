@@ -19,10 +19,15 @@ logger = logging.getLogger(__name__)
 class JSONResult(BaseModel, extra="forbid"):
     json: str
 
-# Input parameter wrappers for strict schema compliance
+class ResourceRequirements(BaseModel, extra="forbid"):
+    cpu: Optional[float] = None
+    memory: Optional[float] = None
+    network: Optional[float] = None
+    io: Optional[float] = None
+
 class ValidateResourceReqParams(BaseModel, extra="forbid"):
     task_id: str
-    resource_requirements: Dict[str, float]
+    resource_requirements: ResourceRequirements
 
 class CalcExecLevelsParams(BaseModel, extra="forbid"):
     dependencies: Dict[str, List[str]]
@@ -220,38 +225,44 @@ class DistributedProcessingManager:
             ctx: RunContextWrapper,
             params: ValidateResourceReqParams
         ) -> JSONResult:
+            """
+            Ensure the declared resource needs fit within system limits
+            and conform to a closed JSON schema (no additionalProperties).
+            """
             task_id = params.task_id
-            resource_requirements = params.resource_requirements
-            
-            # Get system resource limits
+            # Convert to plain dict so we can iterate easily
+            req = params.resource_requirements.dict(exclude_none=True)
+    
+            # System caps (tweak as needed)
             system_resources = {
                 "cpu": 1.0,
                 "memory": 1.0,
                 "network": 1.0,
-                "io": 1.0
+                "io": 1.0,
             }
-            
-            # Check requirements against limits
-            issues = []
-            for resource, required in resource_requirements.items():
+    
+            issues: List[str] = []
+            for resource, required in req.items():
                 if resource not in system_resources:
                     issues.append(f"Unknown resource: {resource}")
                 elif required > system_resources[resource]:
-                    issues.append(f"Excessive {resource} requirement: {required} > {system_resources[resource]}")
-            
-            valid = len(issues) == 0
-            
-            # Calculate total resource load
-            total_load = sum(resource_requirements.values()) / len(resource_requirements) if resource_requirements else 0
-            
+                    issues.append(
+                        f"Excessive {resource} requirement: "
+                        f"{required} > {system_resources[resource]}"
+                    )
+    
+            is_valid = len(issues) == 0
+            total_load = sum(req.values()) / len(req) if req else 0.0
+    
             payload = {
-                "is_valid": valid,
+                "task_id": task_id,
+                "is_valid": is_valid,
                 "issues": issues,
                 "total_resource_load": total_load,
-                "resource_requirements": resource_requirements
+                "resource_requirements": req,
             }
             return JSONResult(json=json.dumps(payload))
-        
+    
         return _validate_resource_requirements
 
     def _create_get_available_resources_tool(self):
