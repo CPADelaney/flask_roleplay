@@ -16,6 +16,32 @@ from agents import (
 
 logger = logging.getLogger(__name__)
 
+class CompletionData(BaseModel, extra="forbid"):
+    quality_rating: Optional[float] = Field(0.5, ge=0.0, le=1.0)
+    duration_minutes: Optional[float] = Field(None, ge=0.0)
+    position_maintained: Optional[bool] = True
+    notes: Optional[str] = ""
+
+class CompleteServiceTaskParams(BaseModel, extra="forbid"):
+    user_id: str
+    completion_data: CompletionData
+
+
+class TaskCompletionResult(BaseModel, extra="forbid"):
+    success: bool
+    task_id: Optional[str] = None
+    task_name: Optional[str] = None
+    position_id: Optional[str] = None
+    position_name: Optional[str] = None
+    quality_rating: Optional[float] = None
+    criteria_ratings: Optional[Dict[str, float]] = None
+    position_maintained: Optional[bool] = None
+    duration_minutes: Optional[float] = None
+    feedback: Optional[str] = None
+    sadistic_response: Optional[str] = None
+    reward_result: Optional[Dict[str, Any]] = None
+    message: Optional[str] = None
+
 class ServicePosition(BaseModel):
     """Defines a specific service position."""
     id: str
@@ -556,67 +582,53 @@ def _generate_task_instructions(
 
 @function_tool
 async def complete_service_task(
-    ctx: RunContextWrapper[AgentContext], 
-    user_id: str, 
-    completion_data: Dict[str, Any]
-) -> Dict[str, Any]:
+    ctx: RunContextWrapper,            # ✓ first param is ctx
+    params: CompleteServiceTaskParams  # ✓ wrapped, no loose dicts
+) -> TaskCompletionResult:             # ✓ strict output
     """
-    Record completion of a service task.
-    
-    Args:
-        user_id: The user ID
-        completion_data: Data about the task completion
-            - quality_rating: Overall quality rating (0.0-1.0)
-            - duration_minutes: Actual duration in minutes
-            - position_maintained: Whether position was properly maintained
-            - notes: Optional notes about performance
-            
-    Returns:
-        Task evaluation details
+    Record completion of a service task (strict-schema version).
     """
-    context = ctx.context
-    
+    user_id         = params.user_id
+    completion_data = params.completion_data
+    context         = ctx.context
+
     with custom_span("complete_service_task", data={"user_id": user_id}):
-        # Get user training record
+        # 1 ▸ basic guards -----------------------------------------------------
         if user_id not in context.user_training:
-            return {
-                "success": False,
-                "message": f"No training record found for user {user_id}"
-            }
-        
+            return TaskCompletionResult(
+                success=False,
+                message=f"No training record found for user {user_id}"
+            )
+
         user_training = context.user_training[user_id]
-        
-        # Check if user has an active task
         if not user_training.current_task:
-            return {
-                "success": False,
-                "message": "User has no active task to complete"
-            }
-        
-        # Get task details
+            return TaskCompletionResult(
+                success=False,
+                message="User has no active task to complete"
+            )
+
         task_id = user_training.current_task
         if task_id not in context.service_tasks:
-            # Reset active task if it's invalid
+            # reset bad state
             user_training.current_task = None
             user_training.current_position = None
-            return {
-                "success": False,
-                "message": f"Active task {task_id} not found in service tasks"
-            }
-        
-        task = context.service_tasks[task_id]
-        
-        # Get position if any
-        position = None
+            return TaskCompletionResult(
+                success=False,
+                message=f"Active task {task_id} not found in service tasks"
+            )
+
+        # 2 ▸ pull objects ----------------------------------------------------
+        task       = context.service_tasks[task_id]
+        position   = None
         position_id = user_training.current_position
         if position_id and position_id in context.service_positions:
             position = context.service_positions[position_id]
-        
-        # Extract completion data
-        quality_rating = min(1.0, max(0.0, completion_data.get("quality_rating", 0.5)))
-        duration_minutes = max(0.0, completion_data.get("duration_minutes", task.duration_minutes))
-        position_maintained = completion_data.get("position_maintained", True)
-        notes = completion_data.get("notes", "")
+
+        # 3 ▸ normalise inputs ------------------------------------------------
+        q_rating          = completion_data.quality_rating
+        dur_minutes       = completion_data.duration_minutes or task.duration_minutes
+        position_ok       = completion_data.position_maintained
+        notes             = completion_data.notes or ""
         
         # Update the latest task record
         for record in reversed(user_training.task_history):
@@ -788,20 +800,20 @@ async def complete_service_task(
                 logger.error(f"Error recording memory: {e}")
         
         # Return evaluation details
-        return {
-            "success": True,
-            "task_id": task_id,
-            "task_name": task.name,
-            "position_id": position_id,
-            "position_name": position.name if position else None,
-            "quality_rating": quality_rating,
-            "criteria_ratings": evaluation["criteria_ratings"],
-            "position_maintained": position_maintained,
-            "duration_minutes": duration_minutes,
-            "feedback": feedback,
-            "sadistic_response": sadistic_response,
-            "reward_result": reward_result
-        }
+        return TaskCompletionResult(
+            success=True,
+            task_id=task_id,
+            task_name=task.name,
+            position_id=position_id,
+            position_name=position.name if position else None,
+            quality_rating=q_rating,
+            criteria_ratings=evaluation["criteria_ratings"],
+            position_maintained=position_ok,
+            duration_minutes=dur_minutes,
+            feedback=feedback,
+            sadistic_response=sadistic_response,
+            reward_result=reward_result
+        )
 
 def _generate_criteria_ratings(task: ServiceTask, overall_quality: float) -> Dict[str, float]:
     """Generate individual ratings for evaluation criteria."""
