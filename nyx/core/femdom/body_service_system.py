@@ -247,17 +247,17 @@ def create_body_service_agent(context: AgentContext) -> Agent[AgentContext]:
         As a femdom AI component, you maintain a strict and demanding but fair approach.
         """,
         tools=[
-            function_tool(assign_service_task),
-            function_tool(complete_service_task),
-            function_tool(assign_position),
-            function_tool(complete_position_maintenance),
-            function_tool(get_user_service_record),
-            function_tool(create_custom_position),
-            function_tool(create_custom_task),
-            function_tool(get_available_positions),
-            function_tool(get_available_tasks),
-            function_tool(get_position_details),
-            function_tool(get_task_details),
+            assign_service_task,
+            complete_service_task,
+            assign_position,
+            complete_position_maintenance,
+            get_user_service_record,
+            create_custom_position,
+            create_custom_task,
+            get_available_positions,
+            get_available_tasks,
+            get_position_details,
+            get_task_details,
         ],
 
         # ---- guard-rails -----------------------------------------------
