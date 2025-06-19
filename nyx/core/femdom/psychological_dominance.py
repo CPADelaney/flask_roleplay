@@ -13,6 +13,40 @@ from agents.run import RunConfig
 
 logger = logging.getLogger(__name__)
 
+class SelectMindGameParams(BaseModel, extra="forbid"):
+    user_id: str
+    intensity: float = Field(..., ge=0.0, le=1.0)
+    # arbitrary user-state blob – fine to keep it as Dict
+    user_state: Dict[str, Any]
+
+
+class SelectMindGameResult(BaseModel, extra="forbid"):
+    # core
+    success: bool
+    message: Optional[str] = None
+
+    # on “too many active” failure
+    active_count: Optional[int] = None
+
+    # on “all in cooldown” failure
+    cooldowns: Optional[Dict[str, str]] = None
+
+    # on success
+    game_id: Optional[str] = None
+    game_name: Optional[str] = None
+    intensity: Optional[float] = None
+    description: Optional[str] = None
+    matching_triggers: Optional[List[str]] = None
+    match_score: Optional[float] = None
+    techniques: Optional[List[str]] = None
+    expected_reactions: Optional[List[str]] = None
+    duration_hours: Optional[float] = None
+
+
+# shared lock for concurrency (put near top of the module once)
+_select_mind_game_lock: asyncio.Lock = asyncio.Lock()
+
+
 class MindGameTemplate(BaseModel):
     """A template for psychological mind games."""
     id: str
