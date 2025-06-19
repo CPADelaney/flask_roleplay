@@ -19,6 +19,13 @@ logger = logging.getLogger(__name__)
 class JSONResult(BaseModel, extra="forbid"):
     json: str
 
+class TaskDeps(BaseModel, extra="forbid"):
+    """
+    One entry in the dependency graph.
+    """
+    task_id: str
+    depends_on: List[str]  # may be empty
+
 class ResourceRequirements(BaseModel, extra="forbid"):
     cpu: Optional[float] = None
     memory: Optional[float] = None
@@ -30,7 +37,7 @@ class ValidateResourceReqParams(BaseModel, extra="forbid"):
     resource_requirements: ResourceRequirements
 
 class CalcExecLevelsParams(BaseModel, extra="forbid"):
-    dependencies: Dict[str, List[str]]
+    graph: List[TaskDeps]  # instead of an arbitrary dict
 
 class SubsystemTask(BaseModel):
     """
@@ -363,39 +370,36 @@ class DistributedProcessingManager:
             ctx: RunContextWrapper,
             params: CalcExecLevelsParams
         ) -> JSONResult:
-            dependencies = params.dependencies
-            
-            # Initialize tracking variables
-            all_tasks = set(dependencies.keys())
-            completed_tasks = set()
-            execution_levels = []
-            
-            while len(completed_tasks) < len(all_tasks):
-                # Find tasks with satisfied dependencies
-                current_level = []
-                
-                for task_id in all_tasks:
-                    if task_id in completed_tasks:
-                        continue
-                        
-                    # Check if all dependencies are satisfied
-                    deps = dependencies.get(task_id, [])
-                    if all(dep in completed_tasks for dep in deps):
-                        current_level.append(task_id)
-                
-                # If no tasks can be executed, we have a circular dependency
-                if not current_level:
-                    logger.error("Circular dependency detected")
+            """
+            Build level-by-level execution groups from a *strict* dependency list.
+            Each element in `params.graph` is {task_id, depends_on:[...] }.
+            """
+            # ── transform into a plain mapping we can manipulate easily ──────────
+            dependencies: Dict[str, List[str]] = {
+                entry.task_id: entry.depends_on for entry in params.graph
+            }
+    
+            all_tasks      = set(dependencies)               # every node
+            completed      = set()                            # already scheduled
+            execution_lvls: List[List[str]] = []              # output
+    
+            while len(completed) < len(all_tasks):
+                current = [
+                    tid for tid in all_tasks
+                    if tid not in completed
+                    and all(dep in completed for dep in dependencies.get(tid, []))
+                ]
+    
+                # no progress → we detected a cycle
+                if not current:
+                    logger.error("Circular dependency detected; cannot continue")
                     break
-                
-                # Add current level to execution levels
-                execution_levels.append(current_level)
-                
-                # Update completed tasks
-                completed_tasks.update(current_level)
-            
-            return JSONResult(json=json.dumps(execution_levels))
-        
+    
+                execution_lvls.append(current)
+                completed.update(current)
+    
+            return JSONResult(json=json.dumps(execution_lvls))
+    
         return _calculate_execution_levels
 
     def _create_identify_bottlenecks_tool(self):
