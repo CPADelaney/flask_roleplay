@@ -29,11 +29,132 @@ class ComplianceContextInfo(BaseModel):
     environment: Optional[str] = None
     additional_notes: Optional[str] = None
 
+# Explicit models to replace Dict[str, Any] usage
+class PathRecommendationData(BaseModel):
+    """Model for path recommendation data."""
+    id: str
+    name: str
+    description: str
+    match_score: float
+    difficulty: float
+    focus_areas: List[str]
+
+class MilestoneData(BaseModel):
+    """Model for milestone data."""
+    id: str
+    name: str
+    level: int
+    description: Optional[str] = None
+    completion_date: Optional[str] = None
+    rewards: Optional[List[str]] = None
+    unlocks: Optional[List[str]] = None
+    requirements: Optional[Dict[str, float]] = None
+    overall_progress: Optional[float] = None
+
+class ProgressSummary(BaseModel):
+    """Model for progress summary data."""
+    total_milestones: int
+    completed: int
+    completion_percentage: float
+
+class MetricUpdateData(BaseModel):
+    """Model for metric update information."""
+    old_value: float
+    new_value: float
+    change: float
+
+class SubmissionScoreData(BaseModel):
+    """Model for submission score information."""
+    old: float
+    new: float
+    change: float
+
+class LevelData(BaseModel):
+    """Model for level information."""
+    id: int
+    name: str
+    description: Optional[str] = None
+    privileges: Optional[List[str]] = None
+    restrictions: Optional[List[str]] = None
+    training_focus: Optional[List[str]] = None
+    appropriate: Optional[bool] = None
+    time_at_level_days: Optional[int] = None
+    progress_in_level: Optional[float] = None
+
+class LevelChangeDetails(BaseModel):
+    """Model for level change details."""
+    change_type: Optional[str] = None
+    old_level: Optional[LevelData] = None
+    new_level: Optional[LevelData] = None
+
+class RewardResult(BaseModel):
+    """Model for reward result information."""
+    value: float
+    source: str
+    processed: bool
+
+class MetricData(BaseModel):
+    """Model for individual metric information."""
+    value: float
+    weight: float
+    last_updated: str
+
+class RequirementProgress(BaseModel):
+    """Model for requirement progress tracking."""
+    current: float
+    threshold: float
+    met: bool
+    progress_percentage: float
+
+class ComplianceHistoryData(BaseModel):
+    """Model for compliance history entries."""
+    id: str
+    timestamp: str
+    instruction: str
+    complied: bool
+    difficulty: float
+    defiance_reason: Optional[str] = None
+
+class MetricTrend(BaseModel):
+    """Model for metric trend information."""
+    trend: str
+    change: float
+    recent_avg: float
+    previous_avg: float
+
+class AdvancementRequirement(BaseModel):
+    """Model for advancement requirements."""
+    type: str
+    description: str
+    current: float
+    target: float
+    trait: Optional[str] = None
+
+class NextLevelData(BaseModel):
+    """Model for next level information."""
+    id: int
+    name: str
+    description: str
+
+class ProgressionPathData(BaseModel):
+    """Model for progression path information."""
+    next_level: Optional[NextLevelData] = None
+    requirements_for_advancement: List[AdvancementRequirement]
+    estimated_time_to_next_level: Optional[int] = None
+
+class RecommendationData(BaseModel):
+    """Model for recommendation information."""
+    focus_area: str
+    significance: float
+    current_value: float
+    target_value: float
+    description: str
+
 # Tool output models for strict JSON schema compliance
 class PathRecommendationResult(BaseModel):
     user_id: str
-    primary_recommendation: Optional[Dict[str, Any]] = None
-    all_recommendations: List[Dict[str, Any]]
+    primary_recommendation: Optional[PathRecommendationData] = None
+    all_recommendations: List[PathRecommendationData]
     user_traits_analyzed: List[str]
     analysis_timestamp: str
 
@@ -53,10 +174,10 @@ class MilestoneProgressResult(BaseModel):
     user_id: Optional[str] = None
     path_id: Optional[str] = None
     path_name: Optional[str] = None
-    newly_completed_milestones: List[Dict[str, Any]]
-    upcoming_milestones: List[Dict[str, Any]]
-    already_completed_milestones: List[Dict[str, Any]]
-    progress_summary: Dict[str, Any]
+    newly_completed_milestones: List[MilestoneData]
+    upcoming_milestones: List[MilestoneData]
+    already_completed_milestones: List[MilestoneData]
+    progress_summary: ProgressSummary
     message: Optional[str] = None
     recommendation: Optional[str] = None
 
@@ -64,11 +185,11 @@ class ComplianceRecordResult(BaseModel):
     success: bool
     record_id: Optional[str] = None
     compliance_recorded: Optional[bool] = None
-    metrics_updated: Dict[str, Any]
-    submission_score: Dict[str, Any]
+    metrics_updated: Dict[str, MetricUpdateData]
+    submission_score: SubmissionScoreData
     level_changed: bool
-    level_change_details: Dict[str, Any]
-    reward_result: Optional[Dict[str, Any]] = None
+    level_change_details: LevelChangeDetails
+    reward_result: Optional[RewardResult] = None
 
 class MetricUpdateResult(BaseModel):
     success: bool
@@ -76,31 +197,31 @@ class MetricUpdateResult(BaseModel):
     old_value: Optional[float] = None
     new_value: Optional[float] = None
     change: Optional[float] = None
-    submission_score: Dict[str, Any]
+    submission_score: SubmissionScoreData
     level_changed: bool
-    level_change_details: Dict[str, Any]
+    level_change_details: LevelChangeDetails
     message: Optional[str] = None
 
 class UserSubmissionDataResult(BaseModel):
     user_id: str
-    submission_level: Dict[str, Any]
+    submission_level: LevelData
     submission_score: float
-    metrics: Dict[str, Any]
-    trait_gaps: Dict[str, Any]
+    metrics: Dict[str, MetricData]
+    trait_gaps: Dict[str, MetricUpdateData]
     privileges: List[str]
     restrictions: List[str]
     training_focus: List[str]
     compliance_rate: float
     last_updated: str
-    compliance_history: Optional[List[Dict[str, Any]]] = None
+    compliance_history: Optional[List[ComplianceHistoryData]] = None
 
 class ProgressionReportResult(BaseModel):
     user_id: str
     generation_time: str
-    current_level: Dict[str, Any]
-    submission_metrics: Dict[str, Any]
-    progression_path: Dict[str, Any]
-    recommendations: List[Dict[str, Any]]
+    current_level: LevelData
+    submission_metrics: Dict[str, Any]  # This contains mixed types, keeping as Any for now
+    progression_path: ProgressionPathData
+    recommendations: List[RecommendationData]
 
 # Keep the existing Pydantic models as they are useful for data structures
 class SubmissionLevel(BaseModel):
@@ -486,48 +607,19 @@ class SubmissionContext:
         logger.info(f"Initialized {len(self.dominance_paths)} dominance progression paths")
         return self.dominance_paths
 
-
-# Define output types for various agents
-class PathRecommendationOutput(BaseModel):
-    """Output schema for dominance path recommendations"""
-    primary_recommendation: Dict[str, Any]
-    alternative_recommendations: List[Dict[str, Any]]
-    reasoning: str
-
-class UserSubmissionReport(BaseModel):
-    """Output schema for user submission reports"""
-    user_id: str
-    current_level: Dict[str, Any]
-    metrics_summary: Dict[str, Any]
-    recommendations: List[Dict[str, Any]]
-    
-class ComplianceOutput(BaseModel):
-    """Output schema for recording compliance"""
-    success: bool
-    metrics_updated: Dict[str, Any]
-    submission_score_change: float
-    level_changed: bool
-    level_change_details: Dict[str, Any] = Field(default_factory=dict)
-
-class UserInitResult(BaseModel):
-    """Output schema for user initialization"""
-    user_id: str
-    initialized: bool
-    current_level: Dict[str, Any]
-    metrics: Dict[str, float]
-
-class MilestoneProgress(BaseModel):
-    """Output schema for milestone progress checking"""
-    newly_completed: List[Dict[str, Any]]
-    upcoming: List[Dict[str, Any]]
-    completion_percentage: float
-    recommendations: str
-
 # Define guardrail output types
 class SensitiveContentCheck(BaseModel):
     """Schema for checking if a request contains sensitive content"""
     is_sensitive: bool
     reasoning: str
+
+# User initialization result
+class UserInitResult(BaseModel):
+    """Output schema for user initialization"""
+    user_id: str
+    initialized: bool
+    current_level: LevelData
+    metrics: Dict[str, float]
 
 # Main submission progression agent setup
 class SubmissionProgression:
@@ -597,8 +689,7 @@ class SubmissionProgression:
             
             Provide clear reasoning for your recommendations with a strict, dominant tone.
             """,
-            model_settings=model_settings,
-            output_type=PathRecommendationOutput
+            model_settings=model_settings
         )
         
         # Milestone tracking agent
@@ -613,8 +704,7 @@ class SubmissionProgression:
             
             Be precise in your evaluations and maintain a strict but encouraging tone.
             """,
-            model_settings=model_settings,
-            output_type=MilestoneProgress
+            model_settings=model_settings
         )
         
         # Compliance recording agent
@@ -629,8 +719,7 @@ class SubmissionProgression:
             
             Be exacting in your analysis and maintain a stern tone for defiance.
             """,
-            model_settings=model_settings,
-            output_type=ComplianceOutput
+            model_settings=model_settings
         )
         
         # Submission reporting agent
@@ -646,8 +735,7 @@ class SubmissionProgression:
             
             Your tone should be analytical but with a dominant edge that reinforces power dynamics.
             """,
-            model_settings=model_settings,
-            output_type=UserSubmissionReport
+            model_settings=model_settings
         )
         
         # Set up handoffs between agents
@@ -787,13 +875,13 @@ class SubmissionProgression:
         return UserInitResult(
             user_id=user_id,
             initialized=True,
-            current_level={
-                "id": level.id,
-                "name": level.name,
-                "description": level.description,
-                "privileges": level.privileges,
-                "restrictions": level.restrictions
-            },
+            current_level=LevelData(
+                id=level.id,
+                name=level.name,
+                description=level.description,
+                privileges=level.privileges,
+                restrictions=level.restrictions
+            ),
             metrics=metrics
         )
     
@@ -875,14 +963,14 @@ class SubmissionProgression:
         recommendations = []
         for path_id, score in top_paths:
             path = self.context.dominance_paths[path_id]
-            recommendations.append({
-                "id": path_id,
-                "name": path.name,
-                "description": path.description,
-                "match_score": score,
-                "difficulty": path.difficulty,
-                "focus_areas": path.focus_areas
-            })
+            recommendations.append(PathRecommendationData(
+                id=path_id,
+                name=path.name,
+                description=path.description,
+                match_score=score,
+                difficulty=path.difficulty,
+                focus_areas=path.focus_areas
+            ))
         
         # Return recommendations
         return PathRecommendationResult(
@@ -985,7 +1073,7 @@ class SubmissionProgression:
                 newly_completed_milestones=[],
                 upcoming_milestones=[],
                 already_completed_milestones=[],
-                progress_summary={}
+                progress_summary=ProgressSummary(total_milestones=0, completed=0, completion_percentage=0.0)
             )
             
         user_data = self.context.user_data[user_id]
@@ -999,7 +1087,7 @@ class SubmissionProgression:
                 newly_completed_milestones=[],
                 upcoming_milestones=[],
                 already_completed_milestones=[],
-                progress_summary={}
+                progress_summary=ProgressSummary(total_milestones=0, completed=0, completion_percentage=0.0)
             )
         
         path_id = user_data.assigned_path
@@ -1010,7 +1098,7 @@ class SubmissionProgression:
                 newly_completed_milestones=[],
                 upcoming_milestones=[],
                 already_completed_milestones=[],
-                progress_summary={}
+                progress_summary=ProgressSummary(total_milestones=0, completed=0, completion_percentage=0.0)
             )
             
         path = self.context.dominance_paths[path_id]
@@ -1040,12 +1128,12 @@ class SubmissionProgression:
             
             # Skip if already completed
             if milestone.completed:
-                already_completed.append({
-                    "id": milestone_id,
-                    "name": milestone.name,
-                    "level": milestone.level,
-                    "completion_date": milestone.completion_date.isoformat() if milestone.completion_date else None
-                })
+                already_completed.append(MilestoneData(
+                    id=milestone_id,
+                    name=milestone.name,
+                    level=milestone.level,
+                    completion_date=milestone.completion_date.isoformat() if milestone.completion_date else None
+                ))
                 continue
                 
             # Check requirements
@@ -1083,26 +1171,27 @@ class SubmissionProgression:
                 milestone.completed = True
                 milestone.completion_date = datetime.datetime.now()
                 
-                newly_completed.append({
-                    "id": milestone_id,
-                    "name": milestone.name,
-                    "level": milestone.level,
-                    "rewards": milestone.rewards,
-                    "unlocks": milestone.unlocks
-                })
+                newly_completed.append(MilestoneData(
+                    id=milestone_id,
+                    name=milestone.name,
+                    level=milestone.level,
+                    rewards=milestone.rewards,
+                    unlocks=milestone.unlocks
+                ))
             else:
                 # Add to upcoming
-                upcoming_milestones.append({
-                    "id": milestone_id,
-                    "name": milestone.name,
-                    "level": milestone.level,
-                    "description": milestone.description,
-                    "requirements": requirement_progress,
-                    "overall_progress": sum(r["progress_percentage"] for r in requirement_progress.values()) / len(requirement_progress)
-                })
+                overall_progress = sum(r["progress_percentage"] for r in requirement_progress.values()) / len(requirement_progress)
+                upcoming_milestones.append(MilestoneData(
+                    id=milestone_id,
+                    name=milestone.name,
+                    level=milestone.level,
+                    description=milestone.description,
+                    requirements=milestone.requirements,
+                    overall_progress=overall_progress
+                ))
         
         # Sort upcoming milestones by progress
-        upcoming_milestones.sort(key=lambda m: m["overall_progress"], reverse=True)
+        upcoming_milestones.sort(key=lambda m: m.overall_progress or 0, reverse=True)
         
         # Apply rewards for newly completed milestones
         for milestone in newly_completed:
@@ -1110,16 +1199,16 @@ class SubmissionProgression:
             if self.context.reward_system:
                 try:
                     # Higher reward for higher-level milestones
-                    reward_value = 0.3 + (milestone["level"] * 0.15)  # 0.45 for level 1, 0.6 for level 2, etc.
+                    reward_value = 0.3 + (milestone.level * 0.15)  # 0.45 for level 1, 0.6 for level 2, etc.
                     
                     await self.context.reward_system.process_reward_signal(
                         self.context.reward_system.RewardSignal(
                             value=reward_value,
                             source="dominance_milestone",
                             context={
-                                "milestone_id": milestone["id"],
-                                "milestone_name": milestone["name"],
-                                "level": milestone["level"],
+                                "milestone_id": milestone.id,
+                                "milestone_name": milestone.name,
+                                "level": milestone.level,
                                 "path_id": path_id,
                                 "path_name": path.name
                             }
@@ -1134,7 +1223,7 @@ class SubmissionProgression:
                 await self.context.relationship_manager.update_relationship_attribute(
                     user_id,
                     "completed_milestones",
-                    [m["id"] for m in already_completed + newly_completed]
+                    [m.id for m in already_completed + newly_completed]
                 )
             except Exception as e:
                 logger.error(f"Error updating relationship data: {e}")
@@ -1147,11 +1236,11 @@ class SubmissionProgression:
             newly_completed_milestones=newly_completed,
             upcoming_milestones=upcoming_milestones[:3],  # Top 3 upcoming
             already_completed_milestones=already_completed,
-            progress_summary={
-                "total_milestones": len(path.progression_milestones),
-                "completed": len(already_completed) + len(newly_completed),
-                "completion_percentage": ((len(already_completed) + len(newly_completed)) / len(path.progression_milestones)) * 100
-            }
+            progress_summary=ProgressSummary(
+                total_milestones=len(path.progression_milestones),
+                completed=len(already_completed) + len(newly_completed),
+                completion_percentage=((len(already_completed) + len(newly_completed)) / len(path.progression_milestones)) * 100
+            )
         )
     
     @function_tool
@@ -1230,11 +1319,11 @@ class SubmissionProgression:
                 reason=f"{'Compliance' if complied else 'Defiance'} - {instruction[:30]}..."
             )
             
-            metrics_updates["obedience"] = {
-                "old_value": old_value,
-                "new_value": new_value,
-                "change": obedience_change
-            }
+            metrics_updates["obedience"] = MetricUpdateData(
+                old_value=old_value,
+                new_value=new_value,
+                change=obedience_change
+            )
         
         # Update consistency metric based on recent pattern
         if "consistency" in user_data.obedience_metrics and len(user_data.compliance_history) >= 3:
@@ -1255,11 +1344,11 @@ class SubmissionProgression:
                     reason="Consistent pattern detected"
                 )
                 
-                metrics_updates["consistency"] = {
-                    "old_value": old_value,
-                    "new_value": new_value,
-                    "change": consistency_change
-                }
+                metrics_updates["consistency"] = MetricUpdateData(
+                    old_value=old_value,
+                    new_value=new_value,
+                    change=consistency_change
+                )
         
         # Update receptiveness metric if complied after previous defiance
         if complied and len(user_data.compliance_history) >= 2:
@@ -1277,11 +1366,11 @@ class SubmissionProgression:
                     reason="Returned to compliance after defiance"
                 )
                 
-                metrics_updates["receptiveness"] = {
-                    "old_value": old_value,
-                    "new_value": new_value,
-                    "change": receptiveness_change
-                }
+                metrics_updates["receptiveness"] = MetricUpdateData(
+                    old_value=old_value,
+                    new_value=new_value,
+                    change=receptiveness_change
+                )
         
         # Recalculate overall submission score
         old_score = user_data.total_submission_score
@@ -1316,6 +1405,13 @@ class SubmissionProgression:
                         }
                     )
                 )
+                
+                if reward_result:
+                    reward_result = RewardResult(
+                        value=reward_value,
+                        source="compliance_tracking",
+                        processed=True
+                    )
             except Exception as e:
                 logger.error(f"Error processing reward: {e}")
         
@@ -1343,11 +1439,11 @@ class SubmissionProgression:
             record_id=record.id,
             compliance_recorded=complied,
             metrics_updated=metrics_updates,
-            submission_score={
-                "old": old_score,
-                "new": user_data.total_submission_score,
-                "change": user_data.total_submission_score - old_score
-            },
+            submission_score=SubmissionScoreData(
+                old=old_score,
+                new=user_data.total_submission_score,
+                change=user_data.total_submission_score - old_score
+            ),
             level_changed=level_changed,
             level_change_details=level_change_details,
             reward_result=reward_result
@@ -1383,9 +1479,9 @@ class SubmissionProgression:
             return MetricUpdateResult(
                 success=False,
                 message=f"Metric '{metric_name}' not found for user",
-                submission_score={},
+                submission_score=SubmissionScoreData(old=0.0, new=0.0, change=0.0),
                 level_changed=False,
-                level_change_details={}
+                level_change_details=LevelChangeDetails()
             )
         
         metric = user_data.obedience_metrics[metric_name]
@@ -1414,16 +1510,16 @@ class SubmissionProgression:
             old_value=old_value,
             new_value=metric.value,
             change=metric.value - old_value,
-            submission_score={
-                "old": old_score,
-                "new": user_data.total_submission_score,
-                "change": user_data.total_submission_score - old_score
-            },
+            submission_score=SubmissionScoreData(
+                old=old_score,
+                new=user_data.total_submission_score,
+                change=user_data.total_submission_score - old_score
+            ),
             level_changed=level_changed,
             level_change_details=level_change_details
         )
     
-    async def _check_level_change(self, user_id: str) -> Tuple[bool, Dict[str, Any]]:
+    async def _check_level_change(self, user_id: str) -> Tuple[bool, LevelChangeDetails]:
         """Check if user should change submission levels based on score."""
         user_data = self.context.user_data[user_id]
         current_level = self.context.submission_levels[user_data.current_level_id]
@@ -1484,21 +1580,21 @@ class SubmissionProgression:
             
             logger.info(f"User {user_id} advanced from submission level {old_level_id} to {new_level_id}")
             
-            return True, {
-                "change_type": "level_up",
-                "old_level": {
-                    "id": old_level_id,
-                    "name": old_level.name
-                },
-                "new_level": {
-                    "id": new_level_id,
-                    "name": new_level.name,
-                    "description": new_level.description,
-                    "privileges": new_level.privileges,
-                    "restrictions": new_level.restrictions,
-                    "training_focus": new_level.training_focus
-                }
-            }
+            return True, LevelChangeDetails(
+                change_type="level_up",
+                old_level=LevelData(
+                    id=old_level_id,
+                    name=old_level.name
+                ),
+                new_level=LevelData(
+                    id=new_level_id,
+                    name=new_level.name,
+                    description=new_level.description,
+                    privileges=new_level.privileges,
+                    restrictions=new_level.restrictions,
+                    training_focus=new_level.training_focus
+                )
+            )
             
         elif score < current_level.min_score and user_data.current_level_id > min(self.context.submission_levels.keys()):
             # Level down
@@ -1554,23 +1650,23 @@ class SubmissionProgression:
             
             logger.info(f"User {user_id} fell from submission level {old_level_id} to {new_level_id}")
             
-            return True, {
-                "change_type": "level_down",
-                "old_level": {
-                    "id": old_level_id,
-                    "name": old_level.name
-                },
-                "new_level": {
-                    "id": new_level_id,
-                    "name": new_level.name,
-                    "description": new_level.description,
-                    "privileges": new_level.privileges,
-                    "restrictions": new_level.restrictions,
-                    "training_focus": new_level.training_focus
-                }
-            }
+            return True, LevelChangeDetails(
+                change_type="level_down",
+                old_level=LevelData(
+                    id=old_level_id,
+                    name=old_level.name
+                ),
+                new_level=LevelData(
+                    id=new_level_id,
+                    name=new_level.name,
+                    description=new_level.description,
+                    privileges=new_level.privileges,
+                    restrictions=new_level.restrictions,
+                    training_focus=new_level.training_focus
+                )
+            )
         
-        return False, {}
+        return False, LevelChangeDetails()
     
     @function_tool
     async def get_user_submission_data(self, ctx, user_id: str, include_history: bool = False) -> UserSubmissionDataResult:
@@ -1608,31 +1704,31 @@ class SubmissionProgression:
                 current_value = user_data.obedience_metrics[trait_name].value
                 gap = expected_value - current_value
                 if gap > 0.1:  # Only report significant gaps
-                    trait_gaps[trait_name] = {
-                        "expected": expected_value,
-                        "current": current_value,
-                        "gap": gap
-                    }
+                    trait_gaps[trait_name] = MetricUpdateData(
+                        old_value=expected_value,
+                        new_value=current_value,
+                        change=gap
+                    )
         
         # Format metrics
         metrics = {}
         for name, metric in user_data.obedience_metrics.items():
-            metrics[name] = {
-                "value": metric.value,
-                "weight": metric.weight,
-                "last_updated": metric.last_updated.isoformat()
-            }
+            metrics[name] = MetricData(
+                value=metric.value,
+                weight=metric.weight,
+                last_updated=metric.last_updated.isoformat()
+            )
         
         # Assemble result
         result = UserSubmissionDataResult(
             user_id=user_id,
-            submission_level={
-                "id": level.id,
-                "name": level.name,
-                "description": level.description,
-                "appropriate": level_appropriate,
-                "time_at_level_days": user_data.time_at_current_level
-            },
+            submission_level=LevelData(
+                id=level.id,
+                name=level.name,
+                description=level.description,
+                appropriate=level_appropriate,
+                time_at_level_days=user_data.time_at_current_level
+            ),
             submission_score=user_data.total_submission_score,
             metrics=metrics,
             trait_gaps=trait_gaps,
@@ -1648,14 +1744,14 @@ class SubmissionProgression:
             # Format compliance history
             history = []
             for record in user_data.compliance_history:
-                history.append({
-                    "id": record.id,
-                    "timestamp": record.timestamp.isoformat(),
-                    "instruction": record.instruction,
-                    "complied": record.complied,
-                    "difficulty": record.difficulty,
-                    "defiance_reason": record.defiance_reason
-                })
+                history.append(ComplianceHistoryData(
+                    id=record.id,
+                    timestamp=record.timestamp.isoformat(),
+                    instruction=record.instruction,
+                    complied=record.complied,
+                    difficulty=record.difficulty,
+                    defiance_reason=record.defiance_reason
+                ))
             
             result.compliance_history = history
         
@@ -1737,23 +1833,23 @@ class SubmissionProgression:
                 gap = expected - current
                 
                 if gap > 0.2:
-                    recommendations.append({
-                        "focus_area": trait_name,
-                        "significance": gap,
-                        "current_value": current,
-                        "target_value": expected,
-                        "description": f"Increase {trait_name} through targeted training and practice"
-                    })
+                    recommendations.append(RecommendationData(
+                        focus_area=trait_name,
+                        significance=gap,
+                        current_value=current,
+                        target_value=expected,
+                        description=f"Increase {trait_name} through targeted training and practice"
+                    ))
         
         # Sort recommendations by significance
-        recommendations.sort(key=lambda x: x["significance"], reverse=True)
+        recommendations.sort(key=lambda x: x.significance, reverse=True)
         
         # Format report
-        progression_path_data = {
-            "next_level": None,
-            "requirements_for_advancement": [],
-            "estimated_time_to_next_level": None
-        }
+        progression_path_data = ProgressionPathData(
+            next_level=None,
+            requirements_for_advancement=[],
+            estimated_time_to_next_level=None
+        )
         
         # Add next level info if not at max level
         if user_data.current_level_id < max(self.context.submission_levels.keys()):
@@ -1763,12 +1859,12 @@ class SubmissionProgression:
             requirements = []
             score_gap = next_level.min_score - user_data.total_submission_score
             if score_gap > 0:
-                requirements.append({
-                    "type": "score",
-                    "description": f"Increase overall submission score by {score_gap:.2f}",
-                    "current": user_data.total_submission_score,
-                    "target": next_level.min_score
-                })
+                requirements.append(AdvancementRequirement(
+                    type="score",
+                    description=f"Increase overall submission score by {score_gap:.2f}",
+                    current=user_data.total_submission_score,
+                    target=next_level.min_score
+                ))
             
             # Calculate trait requirements
             for trait_name, expected in next_level.traits.items():
@@ -1777,13 +1873,13 @@ class SubmissionProgression:
                     gap = expected - current
                     
                     if gap > 0.1:
-                        requirements.append({
-                            "type": "trait",
-                            "trait": trait_name,
-                            "description": f"Increase {trait_name} from {current:.2f} to {expected:.2f}",
-                            "current": current,
-                            "target": expected
-                        })
+                        requirements.append(AdvancementRequirement(
+                            type="trait",
+                            trait=trait_name,
+                            description=f"Increase {trait_name} from {current:.2f} to {expected:.2f}",
+                            current=current,
+                            target=expected
+                        ))
             
             # Estimate time to next level based on recent progress rate
             estimated_days = None
@@ -1794,26 +1890,26 @@ class SubmissionProgression:
                     remaining_progress = 1.0 - level_progress
                     estimated_days = math.ceil(remaining_progress / progress_rate_per_day)
             
-            progression_path_data = {
-                "next_level": {
-                    "id": next_level.id,
-                    "name": next_level.name,
-                    "description": next_level.description
-                },
-                "requirements_for_advancement": requirements,
-                "estimated_time_to_next_level": estimated_days
-            }
+            progression_path_data = ProgressionPathData(
+                next_level=NextLevelData(
+                    id=next_level.id,
+                    name=next_level.name,
+                    description=next_level.description
+                ),
+                requirements_for_advancement=requirements,
+                estimated_time_to_next_level=estimated_days
+            )
         
         return ProgressionReportResult(
             user_id=user_id,
             generation_time=datetime.datetime.now().isoformat(),
-            current_level={
-                "id": level.id,
-                "name": level.name,
-                "description": level.description,
-                "progress_in_level": level_progress,
-                "time_at_level_days": user_data.time_at_current_level
-            },
+            current_level=LevelData(
+                id=level.id,
+                name=level.name,
+                description=level.description,
+                progress_in_level=level_progress,
+                time_at_level_days=user_data.time_at_current_level
+            ),
             submission_metrics={
                 "overall_score": user_data.total_submission_score,
                 "compliance_rate": user_data.lifetime_compliance_rate,
