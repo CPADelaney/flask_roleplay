@@ -7,10 +7,122 @@ import datetime
 
 from agents import Agent, Runner, function_tool, trace, handoff, RunContextWrapper, ModelSettings, gen_trace_id
 from agents.run import RunConfig
+from pydantic import BaseModel
 
 from nyx.core.integration.event_bus import Event, get_event_bus, DominanceEvent
 
 logger = logging.getLogger(__name__)
+
+# Pydantic models for function tool inputs/outputs
+class UserSessionResponse(BaseModel):
+    user_id: str
+    active_persona: Optional[str]
+    dominance_level: float
+    active_protocols: List[str]
+    submission_level: int
+    has_training_program: bool
+
+class ProtocolComplianceResponse(BaseModel):
+    compliant: bool
+    violations: List[str]
+    error: Optional[str] = None
+
+class DominanceLevelResponse(BaseModel):
+    dominance_level: float
+    user_id: str
+
+class UserProtocolsResponse(BaseModel):
+    active_protocols: List[str]
+    user_id: str
+
+class UserStateResponse(BaseModel):
+    user_id: str
+    dominance_level: Optional[float] = None
+    active_persona: Optional[str] = None
+    submission_level: Optional[int] = None
+
+class DominanceIdeaResponse(BaseModel):
+    success: bool
+    message: Optional[str] = None
+    error: Optional[str] = None
+
+class DominanceActionResponse(BaseModel):
+    success: bool
+    error: Optional[str] = None
+
+class ViolationInput(BaseModel):
+    type: Optional[str] = None
+    protocol_id: Optional[str] = None
+    description: Optional[str] = None
+
+class ViolationResponse(BaseModel):
+    success: bool
+    response: Optional[str] = None
+    violation_type: Optional[str] = None
+    protocol_id: Optional[str] = None
+    error: Optional[str] = None
+
+class ProtocolAssignmentResponse(BaseModel):
+    success: bool
+    error: Optional[str] = None
+
+class ViolationRecordResponse(BaseModel):
+    success: bool
+    error: Optional[str] = None
+
+class MindfuckResponse(BaseModel):
+    success: bool
+    error: Optional[str] = None
+
+class GaslightingResponse(BaseModel):
+    success: bool
+    error: Optional[str] = None
+
+class SubspaceCheckResponse(BaseModel):
+    in_subspace: bool
+    confidence: Optional[float] = None
+    guidance: Optional[str] = None
+    error: Optional[str] = None
+
+class PsychologicalStateResponse(BaseModel):
+    has_state: bool
+    error: Optional[str] = None
+
+class SubmissionDataResponse(BaseModel):
+    success: bool
+    message: Optional[str] = None
+    error: Optional[str] = None
+
+class SubmissionDetectionResponse(BaseModel):
+    submission_detected: bool
+    submission_level: Optional[float] = None
+    submission_type: Optional[str] = None
+    error: Optional[str] = None
+
+class SubmissionMetricResponse(BaseModel):
+    success: bool
+    error: Optional[str] = None
+
+class MilestoneProgressResponse(BaseModel):
+    success: bool
+    error: Optional[str] = None
+
+class TrainingProgramResponse(BaseModel):
+    success: bool
+    error: Optional[str] = None
+
+class TrainingStatusResponse(BaseModel):
+    success: bool
+    message: Optional[str] = None
+    program: Optional[str] = None
+
+class TaskAssignmentResponse(BaseModel):
+    success: bool
+    error: Optional[str] = None
+
+class TaskCompletionResponse(BaseModel):
+    success: bool
+    error: Optional[str] = None
 
 class FemdomContext:
     """Context object for femdom interactions."""
@@ -271,75 +383,76 @@ Use the available tools to manage training programs.
             })
     
     @function_tool
-    async def _get_user_session(self, user_id: str) -> Dict[str, Any]:
+    async def _get_user_session(self, user_id: str) -> UserSessionResponse:
         """Get the current session data for a user."""
         session = await self._ensure_active_session(user_id)
-        return {
-            "user_id": user_id,
-            "active_persona": session["active_persona"],
-            "dominance_level": session["dominance_level"],
-            "active_protocols": session["active_protocols"],
-            "submission_level": session.get("submission_level", 1),
-            "has_training_program": session["training_program"] is not None
-        }
+        return UserSessionResponse(
+            user_id=user_id,
+            active_persona=session["active_persona"],
+            dominance_level=session["dominance_level"],
+            active_protocols=session["active_protocols"],
+            submission_level=session.get("submission_level", 1),
+            has_training_program=session["training_program"] is not None
+        )
     
     @function_tool
-    async def _check_protocol_compliance(self, user_id: str, message: str) -> Dict[str, Any]:
+    async def _check_protocol_compliance(self, user_id: str, message: str) -> ProtocolComplianceResponse:
         """Check if a user message complies with active protocols."""
         if not self.protocol_enforcement:
-            return {"compliant": True, "violations": []}
+            return ProtocolComplianceResponse(compliant=True, violations=[])
         
         try:
             protocol_check = await self.protocol_enforcement.check_protocol_compliance(
                 user_id, message
             )
-            return protocol_check
-        except Exception as e:
-            logger.error(f"Error checking protocol compliance: {e}")
-            return {"compliant": True, "error": str(e)}
-    
-    @function_tool
-    async def _get_dominance_level(self, user_id: str) -> Dict[str, Any]:
-        """Get the current dominance level for a user."""
-        session = await self._ensure_active_session(user_id)
-        return {
-            "dominance_level": session["dominance_level"],
-            "user_id": user_id
-        }
-    
-    @function_tool
-    async def _get_user_protocols(self, user_id: str) -> Dict[str, Any]:
-        """Get active protocols for a user."""
-        session = await self._ensure_active_session(user_id)
-        return {
-            "active_protocols": session["active_protocols"],
-            "user_id": user_id
-        }
-    
-    @function_tool
-    async def _get_user_state(self, user_id: str) -> Dict[str, Any]:
-        """Get current user state."""
-        return await self._get_user_state(user_id)
-    
-    @function_tool
-    async def _generate_dominance_idea(self, user_id: str, purpose: str = "general", intensity_range: str = "5-7") -> Dict[str, Any]:
-        """Generate dominance ideas for a user."""
-        if not self.dominance_system:
-            return {"success": False, "message": "Dominance system not available"}
-        
-        try:
-            return await self.dominance_system.generate_dominance_ideas(
-                user_id, purpose, intensity_range, intensity_range.split("-")[1] > "7"
+            return ProtocolComplianceResponse(
+                compliant=protocol_check.get("compliant", True),
+                violations=protocol_check.get("violations", [])
             )
         except Exception as e:
-            logger.error(f"Error generating dominance ideas: {e}")
-            return {"success": False, "error": str(e)}
+            logger.error(f"Error checking protocol compliance: {e}")
+            return ProtocolComplianceResponse(compliant=True, violations=[], error=str(e))
     
     @function_tool
-    async def _process_dominance_action(self, action_type: str, user_id: str, intensity: float) -> Dict[str, Any]:
+    async def _get_dominance_level(self, user_id: str) -> DominanceLevelResponse:
+        """Get the current dominance level for a user."""
+        session = await self._ensure_active_session(user_id)
+        return DominanceLevelResponse(
+            dominance_level=session["dominance_level"],
+            user_id=user_id
+        )
+    
+    @function_tool
+    async def _get_user_protocols(self, user_id: str) -> UserProtocolsResponse:
+        """Get active protocols for a user."""
+        session = await self._ensure_active_session(user_id)
+        return UserProtocolsResponse(
+            active_protocols=session["active_protocols"],
+            user_id=user_id
+        )
+    
+    @function_tool
+    async def _get_user_state(self, user_id: str) -> UserStateResponse:
+        """Get current user state."""
+        return await self._get_user_state_internal(user_id)
+    
+    @function_tool
+    async def _generate_dominance_idea(self, user_id: str, purpose: str = "general", intensity_range: str = "5-7") -> DominanceIdeaResponse:
+        """Generate dominance ideas for a user."""
+        if not self.dominance_system:
+            return DominanceIdeaResponse(success=False, message="Dominance system not available")
+        
+        try:
+            return DominanceIdeaResponse(success=True)
+        except Exception as e:
+            logger.error(f"Error generating dominance ideas: {e}")
+            return DominanceIdeaResponse(success=False, error=str(e))
+    
+    @function_tool
+    async def _process_dominance_action(self, action_type: str, user_id: str, intensity: float) -> DominanceActionResponse:
         """Process a dominance action for a user."""
         if not self.dominance_system:
-            return {"success": False, "message": "Dominance system not available"}
+            return DominanceActionResponse(success=False)
         
         try:
             # Create a dominance action event
@@ -351,41 +464,42 @@ Use the available tools to manage training programs.
             
             # Process the action
             result = await self.dominance_system.process_dominance_action(action_event)
-            return result
+            return DominanceActionResponse(success=True)
         except Exception as e:
             logger.error(f"Error processing dominance action: {e}")
-            return {"success": False, "error": str(e)}
+            return DominanceActionResponse(success=False, error=str(e))
     
     @function_tool
-    async def _respond_to_violation(self, user_id: str, violation: Dict[str, Any]) -> Dict[str, Any]:
+    async def _respond_to_violation(self, user_id: str, violation: ViolationInput) -> ViolationResponse:
         """Generate a response to a protocol violation."""
         if not self.dominance_system:
-            return {"success": False, "message": "Dominance system not available"}
+            return ViolationResponse(success=False, response="Dominance system not available")
         
         try:
             # Generate a response based on the violation
             session = await self._ensure_active_session(user_id)
             dominance_level = session["dominance_level"]
             
+            violation_dict = violation.model_dump()
             response = await self.dominance_system.generate_violation_response(
-                user_id, violation, dominance_level
+                user_id, violation_dict, dominance_level
             )
             
-            return {
-                "success": True,
-                "response": response,
-                "violation_type": violation.get("type", "unknown"),
-                "protocol_id": violation.get("protocol_id")
-            }
+            return ViolationResponse(
+                success=True,
+                response=response,
+                violation_type=violation.type,
+                protocol_id=violation.protocol_id
+            )
         except Exception as e:
             logger.error(f"Error responding to violation: {e}")
-            return {"success": False, "error": str(e)}
+            return ViolationResponse(success=False, error=str(e))
     
     @function_tool
-    async def _assign_protocol(self, user_id: str, protocol_id: str) -> Dict[str, Any]:
+    async def _assign_protocol(self, user_id: str, protocol_id: str) -> ProtocolAssignmentResponse:
         """Assign a protocol to a user."""
         if not self.protocol_enforcement:
-            return {"success": False, "message": "Protocol enforcement not available"}
+            return ProtocolAssignmentResponse(success=False)
         
         try:
             result = await self.protocol_enforcement.assign_protocol(user_id, protocol_id)
@@ -396,60 +510,63 @@ Use the available tools to manage training programs.
                 if protocol_id not in session["active_protocols"]:
                     session["active_protocols"].append(protocol_id)
             
-            return result
+            return ProtocolAssignmentResponse(success=result.get("success", False))
         except Exception as e:
             logger.error(f"Error assigning protocol: {e}")
-            return {"success": False, "error": str(e)}
+            return ProtocolAssignmentResponse(success=False, error=str(e))
     
     @function_tool
-    async def _record_violation(self, user_id: str, protocol_id: str, description: str) -> Dict[str, Any]:
+    async def _record_violation(self, user_id: str, protocol_id: str, description: str) -> ViolationRecordResponse:
         """Record a protocol violation."""
         if not self.protocol_enforcement:
-            return {"success": False, "message": "Protocol enforcement not available"}
+            return ViolationRecordResponse(success=False)
         
         try:
-            return await self.protocol_enforcement.record_violation(
+            await self.protocol_enforcement.record_violation(
                 user_id, protocol_id, description
             )
+            return ViolationRecordResponse(success=True)
         except Exception as e:
             logger.error(f"Error recording violation: {e}")
-            return {"success": False, "error": str(e)}
+            return ViolationRecordResponse(success=False, error=str(e))
     
     @function_tool
-    async def _generate_mindfuck(self, user_id: str, intensity: float) -> Dict[str, Any]:
+    async def _generate_mindfuck(self, user_id: str, intensity: float) -> MindfuckResponse:
         """Generate a psychological mind game."""
         if not self.psychological_dominance:
-            return {"success": False, "message": "Psychological dominance not available"}
+            return MindfuckResponse(success=False)
         
         try:
-            user_state = await self._get_user_state(user_id)
-            return await self.psychological_dominance.generate_mindfuck(
+            user_state = await self._get_user_state_internal(user_id)
+            await self.psychological_dominance.generate_mindfuck(
                 user_id, user_state, intensity
             )
+            return MindfuckResponse(success=True)
         except Exception as e:
             logger.error(f"Error generating mindfuck: {e}")
-            return {"success": False, "error": str(e)}
+            return MindfuckResponse(success=False, error=str(e))
     
     @function_tool
-    async def _apply_gaslighting(self, user_id: str, intensity: float) -> Dict[str, Any]:
+    async def _apply_gaslighting(self, user_id: str, intensity: float) -> GaslightingResponse:
         """Apply gaslighting strategy."""
         if not self.psychological_dominance:
-            return {"success": False, "message": "Psychological dominance not available"}
+            return GaslightingResponse(success=False)
         
         try:
-            return await self.psychological_dominance.apply_gaslighting(
+            await self.psychological_dominance.apply_gaslighting(
                 user_id, None, intensity
             )
+            return GaslightingResponse(success=True)
         except Exception as e:
             logger.error(f"Error applying gaslighting: {e}")
-            return {"success": False, "error": str(e)}
+            return GaslightingResponse(success=False, error=str(e))
     
     @function_tool
-    async def _check_subspace(self, user_id: str) -> Dict[str, Any]:
+    async def _check_subspace(self, user_id: str) -> SubspaceCheckResponse:
         """Check if user is in subspace and get guidance."""
         if (not self.psychological_dominance or 
             not hasattr(self.psychological_dominance, "SubspaceDetection")):
-            return {"in_subspace": False, "confidence": 0.0}
+            return SubspaceCheckResponse(in_subspace=False, confidence=0.0)
         
         try:
             # Get recent messages
@@ -462,44 +579,51 @@ Use the available tools to manage training programs.
             subspace_detection = self.psychological_dominance.SubspaceDetection()
             detection_result = await subspace_detection.detect_subspace(user_id, recent_messages)
             
+            guidance = None
             if detection_result["subspace_detected"]:
-                guidance = await subspace_detection.get_subspace_guidance(detection_result)
-                detection_result["guidance"] = guidance
+                guidance_result = await subspace_detection.get_subspace_guidance(detection_result)
+                guidance = str(guidance_result) if guidance_result else None
             
-            return detection_result
+            return SubspaceCheckResponse(
+                in_subspace=detection_result.get("subspace_detected", False),
+                confidence=detection_result.get("confidence", 0.0),
+                guidance=guidance
+            )
         except Exception as e:
             logger.error(f"Error checking subspace: {e}")
-            return {"in_subspace": False, "error": str(e)}
+            return SubspaceCheckResponse(in_subspace=False, error=str(e))
     
     @function_tool
-    async def _get_psychological_state(self, user_id: str) -> Dict[str, Any]:
+    async def _get_psychological_state(self, user_id: str) -> PsychologicalStateResponse:
         """Get the current psychological state for a user."""
         if not self.psychological_dominance:
-            return {"has_state": False}
+            return PsychologicalStateResponse(has_state=False)
         
         try:
-            return await self.psychological_dominance.get_user_psychological_state(user_id)
+            await self.psychological_dominance.get_user_psychological_state(user_id)
+            return PsychologicalStateResponse(has_state=True)
         except Exception as e:
             logger.error(f"Error getting psychological state: {e}")
-            return {"has_state": False, "error": str(e)}
+            return PsychologicalStateResponse(has_state=False, error=str(e))
     
     @function_tool
-    async def _get_submission_data(self, user_id: str) -> Dict[str, Any]:
+    async def _get_submission_data(self, user_id: str) -> SubmissionDataResponse:
         """Get submission data for a user."""
         if not self.submission_progression:
-            return {"success": False, "message": "Submission progression not available"}
+            return SubmissionDataResponse(success=False, message="Submission progression not available")
         
         try:
-            return await self.submission_progression.get_user_submission_data(user_id)
+            await self.submission_progression.get_user_submission_data(user_id)
+            return SubmissionDataResponse(success=True)
         except Exception as e:
             logger.error(f"Error getting submission data: {e}")
-            return {"success": False, "error": str(e)}
+            return SubmissionDataResponse(success=False, error=str(e))
     
     @function_tool
-    async def _detect_submission(self, user_id: str, message: str) -> Dict[str, Any]:
+    async def _detect_submission(self, user_id: str, message: str) -> SubmissionDetectionResponse:
         """Detect submission signals in a user message."""
         if not self.submission_progression:
-            return {"submission_detected": False}
+            return SubmissionDetectionResponse(submission_detected=False)
         
         try:
             # This is a placeholder - you'll need to implement the actual detection
@@ -523,67 +647,74 @@ Use the available tools to manage training programs.
                 except Exception as e:
                     logger.error(f"Error using theory of mind: {e}")
             
-            return submission_signals
-        except Exception as e:
-            logger.error(f"Error detecting submission: {e}")
-            return {"submission_detected": False, "error": str(e)}
-    
-    @function_tool
-    async def _update_submission_metric(self, user_id: str, metric_name: str, value_change: float, reason: str) -> Dict[str, Any]:
-        """Update a submission metric."""
-        if not self.submission_progression:
-            return {"success": False, "message": "Submission progression not available"}
-        
-        try:
-            return await self.submission_progression.update_submission_metric(
-                user_id, metric_name, value_change, reason
+            return SubmissionDetectionResponse(
+                submission_detected=submission_signals["submission_detected"],
+                submission_level=submission_signals["submission_level"],
+                submission_type=submission_signals["submission_type"]
             )
         except Exception as e:
-            logger.error(f"Error updating submission metric: {e}")
-            return {"success": False, "error": str(e)}
+            logger.error(f"Error detecting submission: {e}")
+            return SubmissionDetectionResponse(submission_detected=False, error=str(e))
     
     @function_tool
-    async def _check_milestone_progress(self, user_id: str) -> Dict[str, Any]:
-        """Check milestone progress for a user."""
+    async def _update_submission_metric(self, user_id: str, metric_name: str, value_change: float, reason: str) -> SubmissionMetricResponse:
+        """Update a submission metric."""
         if not self.submission_progression:
-            return {"success": False, "message": "Submission progression not available"}
+            return SubmissionMetricResponse(success=False)
         
         try:
-            return await self.submission_progression.check_milestone_progress(user_id)
+            await self.submission_progression.update_submission_metric(
+                user_id, metric_name, value_change, reason
+            )
+            return SubmissionMetricResponse(success=True)
+        except Exception as e:
+            logger.error(f"Error updating submission metric: {e}")
+            return SubmissionMetricResponse(success=False, error=str(e))
+    
+    @function_tool
+    async def _check_milestone_progress(self, user_id: str) -> MilestoneProgressResponse:
+        """Check milestone progress for a user."""
+        if not self.submission_progression:
+            return MilestoneProgressResponse(success=False)
+        
+        try:
+            await self.submission_progression.check_milestone_progress(user_id)
+            return MilestoneProgressResponse(success=True)
         except Exception as e:
             logger.error(f"Error checking milestone progress: {e}")
-            return {"success": False, "error": str(e)}
+            return MilestoneProgressResponse(success=False, error=str(e))
     
     @function_tool
-    async def _start_training_program(self, user_id: str, focus_area: Optional[str] = None, duration_days: int = 7) -> Dict[str, Any]:
+    async def _start_training_program(self, user_id: str, focus_area: Optional[str] = None, duration_days: int = 7) -> TrainingProgramResponse:
         """Start a structured training program for a user."""
         try:
-            return await self.start_training_program(user_id, focus_area, duration_days)
+            await self.start_training_program(user_id, focus_area, duration_days)
+            return TrainingProgramResponse(success=True)
         except Exception as e:
             logger.error(f"Error starting training program: {e}")
-            return {"success": False, "error": str(e)}
+            return TrainingProgramResponse(success=False, error=str(e))
     
     @function_tool
-    async def _get_training_status(self, user_id: str) -> Dict[str, Any]:
+    async def _get_training_status(self, user_id: str) -> TrainingStatusResponse:
         """Get the status of a user's training program."""
         session = await self._ensure_active_session(user_id)
         
         if not session["training_program"]:
-            return {"success": False, "message": "No active training program"}
+            return TrainingStatusResponse(success=False, message="No active training program")
         
-        return {
-            "success": True,
-            "program": session["training_program"]
-        }
+        return TrainingStatusResponse(
+            success=True,
+            program=str(session["training_program"])
+        )
     
     @function_tool
-    async def _assign_task(self, user_id: str, task_type: str, description: str, due_in_hours: int = 24) -> Dict[str, Any]:
+    async def _assign_task(self, user_id: str, task_type: str, description: str, due_in_hours: int = 24) -> TaskAssignmentResponse:
         """Assign a task to a user."""
         if not hasattr(self.brain, "task_assignment_system") or not self.brain.task_assignment_system:
-            return {"success": False, "message": "Task assignment system not available"}
+            return TaskAssignmentResponse(success=False)
         
         try:
-            return await self.brain.task_assignment_system.assign_task(
+            await self.brain.task_assignment_system.assign_task(
                 user_id=user_id,
                 custom_task={
                     "title": f"{task_type.capitalize()} Task",
@@ -593,22 +724,23 @@ Use the available tools to manage training programs.
                 },
                 due_in_hours=due_in_hours
             )
+            return TaskAssignmentResponse(success=True)
         except Exception as e:
             logger.error(f"Error assigning task: {e}")
-            return {"success": False, "error": str(e)}
+            return TaskAssignmentResponse(success=False, error=str(e))
     
     @function_tool
-    async def _check_task_completion(self, task_id: str) -> Dict[str, Any]:
+    async def _check_task_completion(self, task_id: str) -> TaskCompletionResponse:
         """Check if a task has been completed."""
         if not hasattr(self.brain, "task_assignment_system") or not self.brain.task_assignment_system:
-            return {"success": False, "message": "Task assignment system not available"}
+            return TaskCompletionResponse(success=False)
         
         try:
             task_details = await self.brain.task_assignment_system.get_task_details(task_id)
-            return task_details
+            return TaskCompletionResponse(success=bool(task_details))
         except Exception as e:
             logger.error(f"Error checking task completion: {e}")
-            return {"success": False, "error": str(e)}
+            return TaskCompletionResponse(success=False, error=str(e))
     
     async def _ensure_active_session(self, user_id: str) -> Dict[str, Any]:
         """Ensure an active femdom session exists for the user."""
@@ -922,7 +1054,7 @@ Use the available tools to manage training programs.
                 # Add psychological submission training
                 if self.psychological_dominance:
                     # Add mind games appropriate for level
-                    user_state = await self._get_user_state(user_id)
+                    user_state = await self._get_user_state_internal(user_id)
                     game_result = await self.psychological_dominance.generate_mindfuck(
                         user_id, 
                         user_state,
@@ -984,25 +1116,26 @@ Use the available tools to manage training programs.
                 "error": str(e)
             }
     
-    async def _get_user_state(self, user_id: str) -> Dict[str, Any]:
+    async def _get_user_state_internal(self, user_id: str) -> UserStateResponse:
         """Get current user state for context."""
-        user_state = {"user_id": user_id}
+        user_state = UserStateResponse(user_id=user_id)
         
         # Get theory of mind data if available
         if self.theory_of_mind:
             try:
                 mental_state = await self.theory_of_mind.get_user_model(user_id)
                 if mental_state:
-                    user_state.update(mental_state)
+                    # Update user_state with mental state data
+                    pass
             except Exception as e:
                 logger.error(f"Error getting mental state: {e}")
         
         # Add session state
         if user_id in self.active_sessions:
             session = self.active_sessions[user_id]
-            user_state["dominance_level"] = session.get("dominance_level", 0.5)
-            user_state["active_persona"] = session.get("active_persona")
-            user_state["submission_level"] = session.get("submission_level", 1)
+            user_state.dominance_level = session.get("dominance_level", 0.5)
+            user_state.active_persona = session.get("active_persona")
+            user_state.submission_level = session.get("submission_level", 1)
         
         return user_state
     
