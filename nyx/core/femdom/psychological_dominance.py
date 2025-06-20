@@ -13,35 +13,35 @@ from agents import Agent, Runner, function_tool, trace, handoff, RunContextWrapp
 from agents.run import RunConfig
 
 logger = logging.getLogger(__name__)
-class SubspaceDetectionResult(BaseModel, extra="forbid"):
+class SubspaceDetectionResult(BaseModel):
     subspace_detected: bool
     depth: float = Field(0.0, ge=0.0, le=1.0)
     indicators: List[str] = []
     in_subspace_since: Optional[str] = None
 
 # 2. Then define the classes that use SubspaceDetectionResult
-class MonitorSubspaceExitParams(BaseModel, extra="forbid"):
+class MonitorSubspaceExitParams(BaseModel):
     user_id: str
     detection_result: SubspaceDetectionResult   # Now this works!
 
-class MonitorSubspaceExitResult(BaseModel, extra="forbid"):
+class MonitorSubspaceExitResult(BaseModel):
     monitoring_needed: bool
     drop_risk: Literal["low", "moderate", "high"] | None = None
     recommendations: List[str] | None = None
     message: str | None = None
 
 # 3. Continue with the rest of the classes in any order
-class CooldownInfo(BaseModel, extra="forbid"):
+class CooldownInfo(BaseModel):
     game_id: str
     cooldown_end: str
 
-class SubspaceGuidanceRequest(BaseModel, extra="forbid"):
+class SubspaceGuidanceRequest(BaseModel):
     subspace_detected: bool
     depth: float = Field(0.0, ge=0.0, le=1.0)
     indicators: List[str] = []
     in_subspace_since: Optional[str] = None
 
-class SubspaceGuidanceResult(BaseModel, extra="forbid"):
+class SubspaceGuidanceResult(BaseModel):
     success: bool
     guidance: Optional[List[str]] = None
     message: Optional[str] = None
@@ -49,19 +49,19 @@ class SubspaceGuidanceResult(BaseModel, extra="forbid"):
     recommended_intensity: Optional[float] = None
 
 
-class SelectMindGameParams(BaseModel, extra="forbid"):
+class SelectMindGameParams(BaseModel):
     user_id: str
     intensity: float = Field(..., ge=0.0, le=1.0)
     user_state_json: str               # ← JSON-encoded user state
 
-class SubspaceDetectionResult(BaseModel, extra="forbid"):
+class SubspaceDetectionResult(BaseModel):
     subspace_detected: bool
     depth: float = Field(0.0, ge=0.0, le=1.0)
     indicators: List[str] = []
     in_subspace_since: Optional[str] = None          # ISO 8601 or whatever you use
 
 
-class AnalyzeSubspaceDepthResult(BaseModel, extra="forbid"):
+class AnalyzeSubspaceDepthResult(BaseModel):
     depth_analysis: str
     depth_category: Optional[str] = None             # "shallow" | "moderate" | "deep"
     depth_value: Optional[float] = None
@@ -69,7 +69,7 @@ class AnalyzeSubspaceDepthResult(BaseModel, extra="forbid"):
     indicators: List[str]
     in_subspace_since: Optional[str] = None
 
-class SelectMindGameResult(BaseModel, extra="forbid"):
+class SelectMindGameResult(BaseModel):
     # always present
     success: bool
     message: Optional[str] = None
