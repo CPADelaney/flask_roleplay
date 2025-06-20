@@ -12,6 +12,81 @@ from agents import Agent, ModelSettings, function_tool, Runner, trace, RunContex
 
 logger = logging.getLogger(__name__)
 
+# Tool output models for strict JSON schema compliance
+class UserProfileResult(BaseModel):
+    user_id: str
+    task_preferences: Dict[str, float] = Field(default_factory=dict)
+    preferred_difficulty: str = "moderate"
+    preferred_verification: str = "honor"
+    task_completion_rate: float = 1.0
+    trust_level: Optional[float] = None
+    submission_level: Optional[int] = None
+    inferred_traits: Dict[str, Any] = Field(default_factory=dict)
+    limits: Dict[str, List[str]] = Field(default_factory=dict)
+    submission_metrics: Dict[str, Any] = Field(default_factory=dict)
+    error: Optional[str] = None
+
+class TaskCompletionHistoryResult(BaseModel):
+    user_id: str
+    history: List[Dict[str, Any]]
+    stats: Dict[str, Any]
+    error: Optional[str] = None
+
+class TaskDetailsResult(BaseModel):
+    task_id: Optional[str] = None
+    user_id: Optional[str] = None
+    title: Optional[str] = None
+    description: Optional[str] = None
+    instructions: List[str] = Field(default_factory=list)
+    category: Optional[str] = None
+    difficulty: Optional[str] = None
+    assigned_at: Optional[str] = None
+    due_at: Optional[str] = None
+    completed_at: Optional[str] = None
+    verification_type: Optional[str] = None
+    verification_instructions: Optional[str] = None
+    verification_data: Optional[Dict[str, Any]] = None
+    completed: bool = False
+    failed: bool = False
+    rating: Optional[float] = None
+    reward: Optional[Dict[str, Any]] = None
+    punishment: Optional[Dict[str, Any]] = None
+    notes: Optional[str] = None
+    extension_count: int = 0
+    tags: List[str] = Field(default_factory=list)
+    custom_data: Optional[Dict[str, Any]] = None
+    error: Optional[str] = None
+
+class TemplatesResult(BaseModel):
+    templates: List[Dict[str, Any]]
+    count: int
+    category_filter: Optional[str] = None
+    error: Optional[str] = None
+
+class TaskStatisticsResult(BaseModel):
+    success: bool
+    user_id: Optional[str] = None
+    statistics: Dict[str, Any] = Field(default_factory=dict)
+    category_breakdown: Dict[str, Any] = Field(default_factory=dict)
+    difficulty_breakdown: Dict[str, Any] = Field(default_factory=dict)
+    preferred_categories: List[List[Any]] = Field(default_factory=list)
+    error: Optional[str] = None
+
+class ActiveTasksResult(BaseModel):
+    success: bool
+    user_id: Optional[str] = None
+    active_tasks: List[Dict[str, Any]]
+    count: int
+    max_concurrent: Optional[int] = None
+    error: Optional[str] = None
+
+class ExpiredTaskResult(BaseModel):
+    task_id: str
+    user_id: str
+    title: str
+    due_at: str
+    overdue_hours: float
+
 class TaskCategory(str):
     """Task categories with descriptions for varied task types."""
     SERVICE = "service"
@@ -495,34 +570,28 @@ Output your recommendations and task management decisions as a JSON object.
 
     # Convert methods to function tools that agents can use
     @function_tool
-    async def get_user_profile_for_task_design(self, user_id: str) -> Dict[str, Any]:
+    async def get_user_profile_for_task_design(self, user_id: str) -> UserProfileResult:
         """Retrieves user profile data for task customization."""
         try:
-            user_profile = {"user_id": user_id}
+            user_profile = UserProfileResult(user_id=user_id)
             
             # Get user settings if available
             if user_id in self.user_settings:
                 settings = self.user_settings[user_id]
-                user_profile["task_preferences"] = settings.task_preferences
-                user_profile["preferred_difficulty"] = settings.preferred_difficulty
-                user_profile["preferred_verification"] = settings.preferred_verification
-                user_profile["task_completion_rate"] = settings.task_completion_rate
-            else:
-                # Default values if not set
-                user_profile["task_preferences"] = {}
-                user_profile["preferred_difficulty"] = "moderate"
-                user_profile["preferred_verification"] = "honor"
-                user_profile["task_completion_rate"] = 1.0
+                user_profile.task_preferences = settings.task_preferences
+                user_profile.preferred_difficulty = settings.preferred_difficulty
+                user_profile.preferred_verification = settings.preferred_verification
+                user_profile.task_completion_rate = settings.task_completion_rate
             
             # Get relationship data if available
             if self.relationship_manager:
                 try:
                     relationship = await self.relationship_manager.get_relationship_state(user_id)
                     if relationship:
-                        user_profile["trust_level"] = getattr(relationship, "trust", 0.5)
-                        user_profile["submission_level"] = getattr(relationship, "submission_level", 1)
-                        user_profile["inferred_traits"] = getattr(relationship, "inferred_user_traits", {})
-                        user_profile["limits"] = {
+                        user_profile.trust_level = getattr(relationship, "trust", 0.5)
+                        user_profile.submission_level = getattr(relationship, "submission_level", 1)
+                        user_profile.inferred_traits = getattr(relationship, "inferred_user_traits", {})
+                        user_profile.limits = {
                             "hard": getattr(relationship, "hard_limits", []),
                             "soft": getattr(relationship, "soft_limits", [])
                         }
@@ -534,8 +603,8 @@ Output your recommendations and task management decisions as a JSON object.
                 try:
                     submission_data = await self.submission_progression.get_user_submission_data(user_id)
                     if submission_data:
-                        user_profile["submission_level"] = submission_data.get("submission_level", {}).get("id", 1)
-                        user_profile["submission_metrics"] = submission_data.get("metrics", {})
+                        user_profile.submission_level = submission_data.get("submission_level", {}).get("id", 1)
+                        user_profile.submission_metrics = submission_data.get("metrics", {})
                 except Exception as e:
                     logger.error(f"Error retrieving submission data: {e}")
             
@@ -543,18 +612,22 @@ Output your recommendations and task management decisions as a JSON object.
             
         except Exception as e:
             logger.error(f"Error retrieving user profile: {e}")
-            return {"user_id": user_id, "error": str(e)}
+            return UserProfileResult(user_id=user_id, error=str(e))
     
     @function_tool
-    async def get_task_completion_history(self, user_id: str, limit: int = 5) -> Dict[str, Any]:
+    async def get_task_completion_history(self, user_id: str, limit: int = 5) -> TaskCompletionHistoryResult:
         """Retrieves task completion history for a user."""
         try:
             if user_id not in self.user_settings:
-                return {"user_id": user_id, "history": [], "stats": {
-                    "completion_rate": 1.0, 
-                    "total_completed": 0,
-                    "total_failed": 0
-                }}
+                return TaskCompletionHistoryResult(
+                    user_id=user_id, 
+                    history=[],
+                    stats={
+                        "completion_rate": 1.0, 
+                        "total_completed": 0,
+                        "total_failed": 0
+                    }
+                )
             
             settings = self.user_settings[user_id]
             
@@ -573,32 +646,55 @@ Output your recommendations and task management decisions as a JSON object.
                 )[:3] if settings.task_preferences else []
             }
             
-            return {
-                "user_id": user_id, 
-                "history": recent_history,
-                "stats": stats
-            }
+            return TaskCompletionHistoryResult(
+                user_id=user_id, 
+                history=recent_history,
+                stats=stats
+            )
             
         except Exception as e:
             logger.error(f"Error retrieving task history: {e}")
-            return {"user_id": user_id, "error": str(e), "history": []}
+            return TaskCompletionHistoryResult(user_id=user_id, error=str(e), history=[], stats={})
     
     @function_tool
-    async def get_task_details(self, task_id: str) -> Dict[str, Any]:
+    async def get_task_details(self, task_id: str) -> TaskDetailsResult:
         """Retrieves details for a specific task."""
         try:
             if task_id not in self.assigned_tasks:
-                return {"error": f"Task {task_id} not found"}
+                return TaskDetailsResult(error=f"Task {task_id} not found")
             
             task = self.assigned_tasks[task_id]
-            return task.dict()
+            return TaskDetailsResult(
+                task_id=task.id,
+                user_id=task.user_id,
+                title=task.title,
+                description=task.description,
+                instructions=task.instructions,
+                category=task.category,
+                difficulty=task.difficulty,
+                assigned_at=task.assigned_at.isoformat(),
+                due_at=task.due_at.isoformat() if task.due_at else None,
+                completed_at=task.completed_at.isoformat() if task.completed_at else None,
+                verification_type=task.verification_type,
+                verification_instructions=task.verification_instructions,
+                verification_data=task.verification_data,
+                completed=task.completed,
+                failed=task.failed,
+                rating=task.rating,
+                reward=task.reward,
+                punishment=task.punishment,
+                notes=task.notes,
+                extension_count=task.extension_count,
+                tags=task.tags,
+                custom_data=task.custom_data
+            )
             
         except Exception as e:
             logger.error(f"Error retrieving task details: {e}")
-            return {"error": str(e)}
+            return TaskDetailsResult(error=str(e))
     
     @function_tool
-    async def get_available_templates(self, category: Optional[str] = None) -> Dict[str, Any]:
+    async def get_available_templates(self, category: Optional[str] = None) -> TemplatesResult:
         """Retrieves available task templates filtered by category."""
         try:
             templates = []
@@ -616,26 +712,26 @@ Output your recommendations and task management decisions as a JSON object.
                     "description": template.description
                 })
             
-            return {
-                "templates": templates,
-                "count": len(templates),
-                "category_filter": category
-            }
+            return TemplatesResult(
+                templates=templates,
+                count=len(templates),
+                category_filter=category
+            )
             
         except Exception as e:
             logger.error(f"Error retrieving templates: {e}")
-            return {"error": str(e), "templates": []}
+            return TemplatesResult(error=str(e), templates=[], count=0)
     
     @function_tool
-    async def get_user_task_statistics(self, user_id: str) -> Dict[str, Any]:
+    async def get_user_task_statistics(self, user_id: str) -> TaskStatisticsResult:
         """Get statistics about a user's task history."""
         try:
             # Check if user has settings
             if user_id not in self.user_settings:
-                return {
-                    "success": True,
-                    "user_id": user_id,
-                    "statistics": {
+                return TaskStatisticsResult(
+                    success=True,
+                    user_id=user_id,
+                    statistics={
                         "total_tasks": 0,
                         "completed_tasks": 0,
                         "failed_tasks": 0,
@@ -643,9 +739,9 @@ Output your recommendations and task management decisions as a JSON object.
                         "average_rating": 0.0,
                         "active_tasks": 0
                     },
-                    "category_breakdown": {},
-                    "difficulty_breakdown": {}
-                }
+                    category_breakdown={},
+                    difficulty_breakdown={}
+                )
             
             settings = self.user_settings[user_id]
             
@@ -740,38 +836,38 @@ Output your recommendations and task management decisions as a JSON object.
                 for difficulty, counts in difficulty_counts.items()
             }
             
-            return {
-                "success": True,
-                "user_id": user_id,
-                "statistics": statistics,
-                "category_breakdown": category_breakdown,
-                "difficulty_breakdown": difficulty_breakdown,
-                "preferred_categories": sorted(
+            return TaskStatisticsResult(
+                success=True,
+                user_id=user_id,
+                statistics=statistics,
+                category_breakdown=category_breakdown,
+                difficulty_breakdown=difficulty_breakdown,
+                preferred_categories=sorted(
                     settings.task_preferences.items(),
                     key=lambda x: x[1],
                     reverse=True
                 ) if settings.task_preferences else []
-            }
+            )
             
         except Exception as e:
             logger.error(f"Error retrieving task statistics: {e}")
-            return {
-                "success": False,
-                "error": str(e)
-            }
+            return TaskStatisticsResult(
+                success=False,
+                error=str(e)
+            )
     
     @function_tool
-    async def get_active_tasks(self, user_id: str) -> Dict[str, Any]:
+    async def get_active_tasks(self, user_id: str) -> ActiveTasksResult:
         """Get all active tasks for a user."""
         try:
             # Check if user has settings
             if user_id not in self.user_settings:
-                return {
-                    "success": True,
-                    "user_id": user_id,
-                    "active_tasks": [],
-                    "count": 0
-                }
+                return ActiveTasksResult(
+                    success=True,
+                    user_id=user_id,
+                    active_tasks=[],
+                    count=0
+                )
             
             settings = self.user_settings[user_id]
             
@@ -803,23 +899,25 @@ Output your recommendations and task management decisions as a JSON object.
             # Sort by due date (closest first)
             active_tasks.sort(key=lambda t: t["due_at"] if t["due_at"] else "9999-12-31T23:59:59")
             
-            return {
-                "success": True,
-                "user_id": user_id,
-                "active_tasks": active_tasks,
-                "count": len(active_tasks),
-                "max_concurrent": settings.max_concurrent_tasks
-            }
+            return ActiveTasksResult(
+                success=True,
+                user_id=user_id,
+                active_tasks=active_tasks,
+                count=len(active_tasks),
+                max_concurrent=settings.max_concurrent_tasks
+            )
             
         except Exception as e:
             logger.error(f"Error retrieving active tasks: {e}")
-            return {
-                "success": False,
-                "error": str(e)
-            }
+            return ActiveTasksResult(
+                success=False,
+                error=str(e),
+                active_tasks=[],
+                count=0
+            )
     
     @function_tool
-    async def get_expired_tasks(self) -> List[Dict[str, Any]]:
+    async def get_expired_tasks(self) -> List[ExpiredTaskResult]:
         """Get all expired/overdue tasks."""
         try:
             now = datetime.datetime.now()
@@ -830,16 +928,16 @@ Output your recommendations and task management decisions as a JSON object.
                 if not task.completed and not task.failed and task.due_at:
                     # Check if overdue
                     if now > task.due_at:
-                        expired_tasks.append({
-                            "task_id": task_id,
-                            "user_id": task.user_id,
-                            "title": task.title,
-                            "due_at": task.due_at.isoformat(),
-                            "overdue_hours": (now - task.due_at).total_seconds() / 3600.0
-                        })
+                        expired_tasks.append(ExpiredTaskResult(
+                            task_id=task_id,
+                            user_id=task.user_id,
+                            title=task.title,
+                            due_at=task.due_at.isoformat(),
+                            overdue_hours=(now - task.due_at).total_seconds() / 3600.0
+                        ))
             
             # Sort by most overdue first
-            expired_tasks.sort(key=lambda t: t["overdue_hours"], reverse=True)
+            expired_tasks.sort(key=lambda t: t.overdue_hours, reverse=True)
             
             return expired_tasks
             
@@ -1109,17 +1207,17 @@ Output your recommendations and task management decisions as a JSON object.
             # Prepare prompt for AI
             prompt = {
                 "user_id": user_id,
-                "user_profile": user_profile,
-                "task_history": task_history,
-                "difficulty": difficulty_override or user_profile.get("preferred_difficulty", "moderate"),
-                "verification_type": verification_override or user_profile.get("preferred_verification", "honor"),
+                "user_profile": user_profile.dict(),
+                "task_history": task_history.dict(),
+                "difficulty": difficulty_override or user_profile.preferred_difficulty,
+                "verification_type": verification_override or user_profile.preferred_verification,
                 "due_in_hours": due_in_hours
             }
             
             # Add preferences for categories if available
-            if "task_preferences" in user_profile and user_profile["task_preferences"]:
+            if user_profile.task_preferences:
                 preferred_categories = sorted(
-                    user_profile["task_preferences"].items(),
+                    user_profile.task_preferences.items(),
                     key=lambda x: x[1],
                     reverse=True
                 )
@@ -1437,7 +1535,7 @@ Output your recommendations and task management decisions as a JSON object.
             
         # For difficulty-related options, use user's preferred difficulty
         if option_key in ["difficulty", "intensity", "duration"]:
-            preferred_difficulty = user_profile.get("preferred_difficulty", "moderate")
+            preferred_difficulty = user_profile.preferred_difficulty
             
             # Map preferred difficulty to option index
             difficulty_map = {
@@ -1457,7 +1555,7 @@ Output your recommendations and task management decisions as a JSON object.
         
         # For count-related options, adjust based on user experience
         elif option_key in ["count", "repetitions", "word_count", "minimum_words"]:
-            submission_level = user_profile.get("submission_level", 1)
+            submission_level = user_profile.submission_level or 1
             
             # Higher submission level = higher counts
             index = min(submission_level - 1, len(options) - 1)
@@ -1468,7 +1566,7 @@ Output your recommendations and task management decisions as a JSON object.
             
         # For frequency options, check user's completion rate
         elif option_key in ["frequency", "check_in_frequency"]:
-            completion_rate = user_profile.get("task_completion_rate", 1.0)
+            completion_rate = user_profile.task_completion_rate
             
             # Lower completion rate = less frequent requirements
             if completion_rate < 0.5:
@@ -2228,7 +2326,7 @@ Output your recommendations and task management decisions as a JSON object.
                         {
                             "action": "recommend_templates",
                             "user_id": user_id,
-                            "user_profile": user_profile,
+                            "user_profile": user_profile.dict(),
                             "available_templates": [t["id"] for t in templates],
                             "category_filter": category,
                             "difficulty_filter": difficulty
@@ -2289,9 +2387,9 @@ Output your recommendations and task management decisions as a JSON object.
             )
             
             for task_info in expired_tasks:
-                task_id = task_info["task_id"]
-                user_id = task_info["user_id"]
-                overdue_hours = task_info["overdue_hours"]
+                task_id = task_info.task_id
+                user_id = task_info.user_id
+                overdue_hours = task_info.overdue_hours
                 
                 # Default action is auto-fail if extremely late
                 action = "auto_fail" if overdue_hours >= auto_fail_hours else "warn"
@@ -2311,8 +2409,8 @@ Output your recommendations and task management decisions as a JSON object.
                                 "task_id": task_id,
                                 "user_id": user_id,
                                 "overdue_hours": overdue_hours,
-                                "user_history": history,
-                                "task_info": task_info
+                                "user_history": history.dict(),
+                                "task_info": task_info.dict()
                             },
                             context=task_context
                         )
@@ -2333,7 +2431,7 @@ Output your recommendations and task management decisions as a JSON object.
                         verification_data={"auto_failed": True},
                         completion_notes=f"Auto-failed due to being {overdue_hours:.1f} hours overdue"
                     )
-                    auto_failed.append(task_info)
+                    auto_failed.append(task_info.dict())
                     
                 elif action == "auto_extend":
                     # Auto-extend the deadline
@@ -2346,10 +2444,12 @@ Output your recommendations and task management decisions as a JSON object.
                         additional_hours=extension_hours,
                         reason="Automatic extension by system"
                     )
-                    extended.append({**task_info, "extension_hours": extension_hours})
+                    extended_info = task_info.dict()
+                    extended_info["extension_hours"] = extension_hours
+                    extended.append(extended_info)
                     
                 else:  # warn
-                    warned.append(task_info)
+                    warned.append(task_info.dict())
             
             return {
                 "success": True,
