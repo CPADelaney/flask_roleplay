@@ -13,10 +13,16 @@ from agents import Agent, Runner, function_tool, trace, handoff, RunContextWrapp
 from agents.run import RunConfig
 
 logger = logging.getLogger(__name__)
+class SubspaceDetectionResult(BaseModel, extra="forbid"):
+    subspace_detected: bool
+    depth: float = Field(0.0, ge=0.0, le=1.0)
+    indicators: List[str] = []
+    in_subspace_since: Optional[str] = None
 
+# 2. Then define the classes that use SubspaceDetectionResult
 class MonitorSubspaceExitParams(BaseModel, extra="forbid"):
     user_id: str
-    detection_result: SubspaceDetectionResult   # you already defined this
+    detection_result: SubspaceDetectionResult   # Now this works!
 
 class MonitorSubspaceExitResult(BaseModel, extra="forbid"):
     monitoring_needed: bool
@@ -24,17 +30,16 @@ class MonitorSubspaceExitResult(BaseModel, extra="forbid"):
     recommendations: List[str] | None = None
     message: str | None = None
 
-
+# 3. Continue with the rest of the classes in any order
 class CooldownInfo(BaseModel, extra="forbid"):
     game_id: str
-    cooldown_end: str                  # ISO-8601 string
+    cooldown_end: str
 
 class SubspaceGuidanceRequest(BaseModel, extra="forbid"):
     subspace_detected: bool
     depth: float = Field(0.0, ge=0.0, le=1.0)
     indicators: List[str] = []
-    in_subspace_since: Optional[str] = None      # ISO 8601 string
-
+    in_subspace_since: Optional[str] = None
 
 class SubspaceGuidanceResult(BaseModel, extra="forbid"):
     success: bool
