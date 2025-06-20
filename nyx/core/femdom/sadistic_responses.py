@@ -12,6 +12,54 @@ from agents.run import RunConfig
 
 logger = logging.getLogger(__name__)
 
+# Specific models for structured data to replace Dict[str, Any]
+class UserPreferences(BaseModel):
+    preferred_intensity: Optional[float] = 0.5
+    preferred_aspects: Optional[List[str]] = Field(default_factory=list)
+    sensitive_aspects: Optional[List[str]] = Field(default_factory=list)
+    preferred_categories: Optional[List[str]] = Field(default_factory=list)
+    limited_categories: Optional[List[str]] = Field(default_factory=list)
+
+class HumiliationHistoryEntry(BaseModel):
+    timestamp: str
+    level: float
+
+class TemplateUsageInfo(BaseModel):
+    category: str
+    intensity: float
+    usage_24h: int
+    max_frequency: Optional[int] = None
+
+class ResponseHistoryEntry(BaseModel):
+    timestamp: str
+    category: Optional[str] = None
+    intensity: Optional[float] = None
+    template_id: Optional[str] = None
+    response: Optional[str] = None
+    event_type: Optional[str] = None
+    target_aspect: Optional[str] = None
+    degradation_category: Optional[str] = None
+    humiliation_level: Optional[float] = None
+
+class CategoryUsageInfo(BaseModel):
+    count: int
+    total_intensity: float
+    avg_intensity: float
+
+class RecommendationInfo(BaseModel):
+    category: str
+    reason: str
+    priority: float
+    action: Optional[str] = None
+
+class ResponseEventData(BaseModel):
+    response: Optional[str] = None
+    intensity: Optional[float] = None
+    humiliation_level: Optional[float] = None
+    target_aspect: Optional[str] = None
+    degradation_category: Optional[str] = None
+    template_id: Optional[str] = None
+
 # Tool output models for strict JSON schema compliance
 class TemplateSelectionResult(BaseModel):
     success: bool
@@ -46,7 +94,7 @@ class HumiliationLevelResult(BaseModel):
 
 class UserPreferencesResult(BaseModel):
     user_id: str
-    preferences: Dict[str, Any]
+    preferences: UserPreferences
 
 class HumiliationSignalsResult(BaseModel):
     humiliation_detected: bool
@@ -68,7 +116,7 @@ class HumiliationCategorizationResult(BaseModel):
 class HumiliationHistoryResult(BaseModel):
     user_id: str
     current_level: float
-    history: List[Dict[str, Any]]
+    history: List[HumiliationHistoryEntry]
     last_updated: str
 
 class UserSadisticStateResult(BaseModel):
@@ -77,8 +125,8 @@ class UserSadisticStateResult(BaseModel):
     humiliation_level: Optional[float] = None
     last_humiliation_update: Optional[str] = None
     sadistic_intensity_preference: Optional[float] = None
-    template_usage: Optional[Dict[str, Any]] = None
-    recent_responses: Optional[List[Dict[str, Any]]] = None
+    template_usage: Optional[Dict[str, TemplateUsageInfo]] = None
+    recent_responses: Optional[List[ResponseHistoryEntry]] = None
 
 class UserPreferenceUpdateResult(BaseModel):
     success: bool
@@ -99,9 +147,9 @@ class ResponseEventResult(BaseModel):
 class ResponseReportResult(BaseModel):
     user_id: str
     humiliation_level: float
-    category_usage: Dict[str, Any]
+    category_usage: Dict[str, CategoryUsageInfo]
     top_templates: List[List[Any]]
-    recommendations: List[Dict[str, Any]]
+    recommendations: List[RecommendationInfo]
     generated_at: str
 
 # Input models for function tools
@@ -549,11 +597,11 @@ Use the available tools to maintain accurate state tracking.
                 response = response.replace("this", "your mistake")
         
         # Record the custom response
-        await self._record_response_event(user_id, "custom_amusement", {
-            "response": response,
-            "intensity": intensity,
-            "humiliation_level": humiliation_level
-        })
+        await self._record_response_event(user_id, "custom_amusement", ResponseEventData(
+            response=response,
+            intensity=intensity,
+            humiliation_level=humiliation_level
+        ))
         
         return CustomResponseResult(
             success=True,
@@ -721,11 +769,11 @@ Use the available tools to maintain accurate state tracking.
         response = random.choice(responses)
         
         # Record the custom response
-        await self._record_response_event(user_id, "custom_mockery", {
-            "response": response,
-            "intensity": intensity,
-            "target_aspect": target_aspect
-        })
+        await self._record_response_event(user_id, "custom_mockery", ResponseEventData(
+            response=response,
+            intensity=intensity,
+            target_aspect=target_aspect
+        ))
         
         return CustomResponseResult(
             success=True,
@@ -769,11 +817,11 @@ Use the available tools to maintain accurate state tracking.
     async def _get_user_mockery_preferences(self, user_id: str) -> UserPreferencesResult:
         """Get the mockery preferences for a user."""
         # Try to get preferences from relationship manager if available
-        preferences = {
-            "preferred_intensity": 0.5,
-            "preferred_aspects": ["general", "performance"],
-            "sensitive_aspects": []
-        }
+        preferences = UserPreferences(
+            preferred_intensity=0.5,
+            preferred_aspects=["general", "performance"],
+            sensitive_aspects=[]
+        )
         
         if self.relationship_manager:
             try:
@@ -781,7 +829,12 @@ Use the available tools to maintain accurate state tracking.
                 if hasattr(relationship, "mockery_preferences"):
                     mockery_prefs = relationship.mockery_preferences
                     if mockery_prefs:
-                        preferences.update(mockery_prefs)
+                        if "preferred_intensity" in mockery_prefs:
+                            preferences.preferred_intensity = mockery_prefs["preferred_intensity"]
+                        if "preferred_aspects" in mockery_prefs:
+                            preferences.preferred_aspects = mockery_prefs["preferred_aspects"]
+                        if "sensitive_aspects" in mockery_prefs:
+                            preferences.sensitive_aspects = mockery_prefs["sensitive_aspects"]
             except Exception as e:
                 logger.error(f"Error getting mockery preferences: {e}")
         
@@ -920,11 +973,11 @@ Use the available tools to maintain accurate state tracking.
         response = random.choice(responses)
         
         # Record the custom response
-        await self._record_response_event(user_id, "custom_degradation", {
-            "response": response,
-            "intensity": intensity,
-            "degradation_category": degradation_category
-        })
+        await self._record_response_event(user_id, "custom_degradation", ResponseEventData(
+            response=response,
+            intensity=intensity,
+            degradation_category=degradation_category
+        ))
         
         return CustomResponseResult(
             success=True,
@@ -968,11 +1021,11 @@ Use the available tools to maintain accurate state tracking.
     async def _get_degradation_preferences(self, user_id: str) -> UserPreferencesResult:
         """Get the degradation preferences for a user."""
         # Try to get preferences from relationship manager if available
-        preferences = {
-            "preferred_intensity": 0.5,
-            "preferred_categories": ["worth", "service"],
-            "limited_categories": []
-        }
+        preferences = UserPreferences(
+            preferred_intensity=0.5,
+            preferred_categories=["worth", "service"],
+            limited_categories=[]
+        )
         
         if self.relationship_manager:
             try:
@@ -980,12 +1033,15 @@ Use the available tools to maintain accurate state tracking.
                 if hasattr(relationship, "degradation_preferences"):
                     degradation_prefs = relationship.degradation_preferences
                     if degradation_prefs:
-                        preferences.update(degradation_prefs)
+                        if "preferred_intensity" in degradation_prefs:
+                            preferences.preferred_intensity = degradation_prefs["preferred_intensity"]
+                        if "preferred_categories" in degradation_prefs:
+                            preferences.preferred_categories = degradation_prefs["preferred_categories"]
                 
                 if hasattr(relationship, "degradation_limits"):
                     degradation_limits = relationship.degradation_limits
                     if degradation_limits:
-                        preferences["limited_categories"] = degradation_limits
+                        preferences.limited_categories = degradation_limits
             except Exception as e:
                 logger.error(f"Error getting degradation preferences: {e}")
         
@@ -1120,10 +1176,10 @@ Use the available tools to maintain accurate state tracking.
             humiliation_history = []
             for entry in user_state.response_history:
                 if "humiliation_level" in entry:
-                    humiliation_history.append({
-                        "timestamp": entry["timestamp"],
-                        "level": entry["humiliation_level"]
-                    })
+                    humiliation_history.append(HumiliationHistoryEntry(
+                        timestamp=entry["timestamp"],
+                        level=entry["humiliation_level"]
+                    ))
             
             return HumiliationHistoryResult(
                 user_id=user_id,
@@ -1154,12 +1210,27 @@ Use the available tools to maintain accurate state tracking.
                 
                 if template_id in self.context.response_templates:
                     template = self.context.response_templates[template_id]
-                    template_usage[template_id] = {
-                        "category": template.category,
-                        "intensity": template.intensity,
-                        "usage_24h": recent_count,
-                        "max_frequency": template.max_use_frequency
-                    }
+                    template_usage[template_id] = TemplateUsageInfo(
+                        category=template.category,
+                        intensity=template.intensity,
+                        usage_24h=recent_count,
+                        max_frequency=template.max_use_frequency
+                    )
+            
+            # Format recent responses
+            recent_responses = []
+            for entry in user_state.response_history[-5:] if user_state.response_history else []:
+                recent_responses.append(ResponseHistoryEntry(
+                    timestamp=entry.get("timestamp", ""),
+                    category=entry.get("category"),
+                    intensity=entry.get("intensity"),
+                    template_id=entry.get("template_id"),
+                    response=entry.get("response"),
+                    event_type=entry.get("event_type"),
+                    target_aspect=entry.get("target_aspect"),
+                    degradation_category=entry.get("degradation_category"),
+                    humiliation_level=entry.get("humiliation_level")
+                ))
             
             # Return formatted state
             return UserSadisticStateResult(
@@ -1169,11 +1240,11 @@ Use the available tools to maintain accurate state tracking.
                 last_humiliation_update=user_state.last_humiliation_update.isoformat(),
                 sadistic_intensity_preference=user_state.sadistic_intensity_preference,
                 template_usage=template_usage,
-                recent_responses=user_state.response_history[-5:] if user_state.response_history else []
+                recent_responses=recent_responses
             )
     
     @function_tool
-    async def _update_user_preference(self, user_id: str, preference_type: str, value: Any) -> UserPreferenceUpdateResult:
+    async def _update_user_preference(self, user_id: str, preference_type: str, value: float) -> UserPreferenceUpdateResult:
         """Update a preference for a user."""
         async with self._lock:
             user_state = self.context.get_user_state(user_id)
@@ -1197,17 +1268,33 @@ Use the available tools to maintain accurate state tracking.
                 )
     
     @function_tool
-    async def _record_response_event(self, user_id: str, event_type: str, event_data: Dict[str, Any]) -> ResponseEventResult:
+    async def _record_response_event(self, user_id: str, event_type: str, event_data: ResponseEventData) -> ResponseEventResult:
         """Record a response event in history."""
         async with self._lock:
             user_state = self.context.get_user_state(user_id)
             
-            # Add timestamp
-            event_data["timestamp"] = datetime.datetime.now().isoformat()
-            event_data["event_type"] = event_type
+            # Create history entry
+            history_entry = {
+                "timestamp": datetime.datetime.now().isoformat(),
+                "event_type": event_type,
+            }
+            
+            # Add event data fields
+            if event_data.response is not None:
+                history_entry["response"] = event_data.response
+            if event_data.intensity is not None:
+                history_entry["intensity"] = event_data.intensity
+            if event_data.humiliation_level is not None:
+                history_entry["humiliation_level"] = event_data.humiliation_level
+            if event_data.target_aspect is not None:
+                history_entry["target_aspect"] = event_data.target_aspect
+            if event_data.degradation_category is not None:
+                history_entry["degradation_category"] = event_data.degradation_category
+            if event_data.template_id is not None:
+                history_entry["template_id"] = event_data.template_id
             
             # Add to history
-            user_state.response_history.append(event_data)
+            user_state.response_history.append(history_entry)
             
             # Limit history size
             if len(user_state.response_history) > 20:
@@ -1218,7 +1305,7 @@ Use the available tools to maintain accurate state tracking.
                 user_id=user_id,
                 event_type=event_type,
                 recorded=True,
-                timestamp=event_data["timestamp"]
+                timestamp=history_entry["timestamp"]
             )
     
     @function_tool
@@ -1228,22 +1315,29 @@ Use the available tools to maintain accurate state tracking.
             user_state = self.context.get_user_state(user_id)
             
             # Calculate category usage
-            category_usage = {}
+            category_usage_data = {}
             for entry in user_state.response_history:
                 category = entry.get("category")
                 if category:
-                    if category not in category_usage:
-                        category_usage[category] = {"count": 0, "total_intensity": 0.0}
+                    if category not in category_usage_data:
+                        category_usage_data[category] = {"count": 0, "total_intensity": 0.0}
                     
-                    category_usage[category]["count"] += 1
-                    category_usage[category]["total_intensity"] += entry.get("intensity", 0.5)
+                    category_usage_data[category]["count"] += 1
+                    category_usage_data[category]["total_intensity"] += entry.get("intensity", 0.5)
             
             # Calculate average intensity per category
-            for category, data in category_usage.items():
+            category_usage = {}
+            for category, data in category_usage_data.items():
                 if data["count"] > 0:
-                    data["avg_intensity"] = data["total_intensity"] / data["count"]
+                    avg_intensity = data["total_intensity"] / data["count"]
                 else:
-                    data["avg_intensity"] = 0.0
+                    avg_intensity = 0.0
+                    
+                category_usage[category] = CategoryUsageInfo(
+                    count=data["count"],
+                    total_intensity=data["total_intensity"],
+                    avg_intensity=avg_intensity
+                )
             
             # Calculate most used templates
             template_usage = {}
@@ -1263,36 +1357,36 @@ Use the available tools to maintain accurate state tracking.
             
             # If humiliation level is high, recommend amusement responses
             if user_state.humiliation_level > 0.7:
-                recommendations.append({
-                    "category": "amusement",
-                    "reason": "High humiliation level detected",
-                    "priority": 0.9
-                })
+                recommendations.append(RecommendationInfo(
+                    category="amusement",
+                    reason="High humiliation level detected",
+                    priority=0.9
+                ))
             
             # If amusement is underused, recommend it
-            if "amusement" not in category_usage or category_usage["amusement"]["count"] < 2:
-                recommendations.append({
-                    "category": "amusement",
-                    "reason": "Underutilized response category",
-                    "priority": 0.7
-                })
+            if "amusement" not in category_usage or category_usage["amusement"].count < 2:
+                recommendations.append(RecommendationInfo(
+                    category="amusement",
+                    reason="Underutilized response category",
+                    priority=0.7
+                ))
             
             # If mockery is underused, recommend it
-            if "mockery" not in category_usage or category_usage["mockery"]["count"] < 2:
-                recommendations.append({
-                    "category": "mockery",
-                    "reason": "Underutilized response category",
-                    "priority": 0.6
-                })
+            if "mockery" not in category_usage or category_usage["mockery"].count < 2:
+                recommendations.append(RecommendationInfo(
+                    category="mockery",
+                    reason="Underutilized response category",
+                    priority=0.6
+                ))
             
             # If degradation is overused, recommend using less
-            if "degradation" in category_usage and category_usage["degradation"]["count"] > 5:
-                recommendations.append({
-                    "category": "degradation",
-                    "action": "reduce_usage",
-                    "reason": "Overused response category",
-                    "priority": 0.8
-                })
+            if "degradation" in category_usage and category_usage["degradation"].count > 5:
+                recommendations.append(RecommendationInfo(
+                    category="degradation",
+                    reason="Overused response category",
+                    priority=0.8,
+                    action="reduce_usage"
+                ))
             
             return ResponseReportResult(
                 user_id=user_id,
