@@ -12,6 +12,106 @@ from agents.run import RunConfig
 
 logger = logging.getLogger(__name__)
 
+# Tool output models for strict JSON schema compliance
+class TemplateSelectionResult(BaseModel):
+    success: bool
+    template_id: Optional[str] = None
+    template_name: Optional[str] = None
+    response: Optional[str] = None
+    intensity: Optional[float] = None
+    match_score: Optional[float] = None
+    category: Optional[str] = None
+    message: Optional[str] = None
+    humiliation_level: Optional[float] = None
+
+class CustomResponseResult(BaseModel):
+    success: bool
+    response: Optional[str] = None
+    intensity: Optional[float] = None
+    category: Optional[str] = None
+    is_custom: Optional[bool] = None
+    target_aspect: Optional[str] = None
+    degradation_category: Optional[str] = None
+
+class ResponseRecordResult(BaseModel):
+    success: bool
+    user_id: Optional[str] = None
+    recorded: Optional[bool] = None
+    timestamp: Optional[str] = None
+
+class HumiliationLevelResult(BaseModel):
+    user_id: str
+    humiliation_level: float
+    last_updated: str
+
+class UserPreferencesResult(BaseModel):
+    user_id: str
+    preferences: Dict[str, Any]
+
+class HumiliationSignalsResult(BaseModel):
+    humiliation_detected: bool
+    intensity: float
+    markers_found: List[str]
+    marker_count: int
+
+class HumiliationUpdateResult(BaseModel):
+    user_id: str
+    old_humiliation_level: float
+    new_humiliation_level: float
+    change: float
+
+class HumiliationCategorizationResult(BaseModel):
+    humiliation_type: str
+    confidence: float
+    all_types: Optional[Dict[str, float]] = None
+
+class HumiliationHistoryResult(BaseModel):
+    user_id: str
+    current_level: float
+    history: List[Dict[str, Any]]
+    last_updated: str
+
+class UserSadisticStateResult(BaseModel):
+    user_id: str
+    has_state: bool
+    humiliation_level: Optional[float] = None
+    last_humiliation_update: Optional[str] = None
+    sadistic_intensity_preference: Optional[float] = None
+    template_usage: Optional[Dict[str, Any]] = None
+    recent_responses: Optional[List[Dict[str, Any]]] = None
+
+class UserPreferenceUpdateResult(BaseModel):
+    success: bool
+    user_id: Optional[str] = None
+    preference_type: Optional[str] = None
+    old_value: Optional[float] = None
+    new_value: Optional[float] = None
+    message: Optional[str] = None
+    valid_types: Optional[List[str]] = None
+
+class ResponseEventResult(BaseModel):
+    success: bool
+    user_id: Optional[str] = None
+    event_type: Optional[str] = None
+    recorded: Optional[bool] = None
+    timestamp: Optional[str] = None
+
+class ResponseReportResult(BaseModel):
+    user_id: str
+    humiliation_level: float
+    category_usage: Dict[str, Any]
+    top_templates: List[List[Any]]
+    recommendations: List[Dict[str, Any]]
+    generated_at: str
+
+# Input models for function tools
+class CustomResponseContext(BaseModel):
+    situation: Optional[str] = None
+
+class HumiliationSignalsInput(BaseModel):
+    humiliation_detected: bool
+    intensity: float
+
 class SadisticResponseTemplate(BaseModel):
     """Template for generating sadistic responses."""
     id: str
@@ -345,15 +445,15 @@ Use the available tools to maintain accurate state tracking.
         )
     
     @function_tool
-    async def _select_amusement_template(self, user_id: str, humiliation_level: float, intensity: float) -> Dict[str, Any]:
+    async def _select_amusement_template(self, user_id: str, humiliation_level: float, intensity: float) -> TemplateSelectionResult:
         """Select an appropriate amusement template based on humiliation level and intensity."""
         # Get all amusement templates
         amusement_templates = self.context.get_templates_by_category("amusement")
         if not amusement_templates:
-            return {
-                "success": False,
-                "message": "No amusement templates available"
-            }
+            return TemplateSelectionResult(
+                success=False,
+                message="No amusement templates available"
+            )
         
         # Filter templates that require humiliation if humiliation level is too low
         available_templates = {}
@@ -374,12 +474,12 @@ Use the available tools to maintain accurate state tracking.
         
         # No available templates
         if not available_templates:
-            return {
-                "success": False,
-                "message": "No suitable amusement templates available",
-                "humiliation_level": humiliation_level,
-                "intensity": intensity
-            }
+            return TemplateSelectionResult(
+                success=False,
+                message="No suitable amusement templates available",
+                humiliation_level=humiliation_level,
+                intensity=intensity
+            )
         
         # Select best matching template (highest score)
         selected_id = max(available_templates.keys(), key=lambda k: available_templates[k]["match_score"])
@@ -392,21 +492,21 @@ Use the available tools to maintain accurate state tracking.
         # Record template usage
         await self._record_template_usage(selected_id, user_id)
         
-        return {
-            "success": True,
-            "template_id": selected_id,
-            "template_name": selected_template.id,
-            "response": response,
-            "intensity": selected_template.intensity,
-            "match_score": selected_info["match_score"],
-            "category": "amusement"
-        }
+        return TemplateSelectionResult(
+            success=True,
+            template_id=selected_id,
+            template_name=selected_template.id,
+            response=response,
+            intensity=selected_template.intensity,
+            match_score=selected_info["match_score"],
+            category="amusement"
+        )
     
     @function_tool
-    async def _generate_custom_amusement(self, user_id: str, humiliation_level: float, intensity: float, context: Dict[str, Any] = None) -> Dict[str, Any]:
+    async def _generate_custom_amusement(self, user_id: str, humiliation_level: float, intensity: float, context: Optional[CustomResponseContext] = None) -> CustomResponseResult:
         """Generate a custom amusement response for a specific situation."""
         # Build a context object for generation
-        generation_context = context or {}
+        generation_context = context.dict() if context else {}
         generation_context.update({
             "user_id": user_id,
             "humiliation_level": humiliation_level,
@@ -455,16 +555,16 @@ Use the available tools to maintain accurate state tracking.
             "humiliation_level": humiliation_level
         })
         
-        return {
-            "success": True,
-            "response": response,
-            "intensity": intensity,
-            "category": "amusement",
-            "is_custom": True
-        }
+        return CustomResponseResult(
+            success=True,
+            response=response,
+            intensity=intensity,
+            category="amusement",
+            is_custom=True
+        )
     
     @function_tool
-    async def _record_amusement_response(self, user_id: str, response: str, intensity: float, template_id: Optional[str] = None) -> Dict[str, Any]:
+    async def _record_amusement_response(self, user_id: str, response: str, intensity: float, template_id: Optional[str] = None) -> ResponseRecordResult:
         """Record an amusement response for history tracking."""
         async with self._lock:
             user_state = self.context.get_user_state(user_id)
@@ -485,35 +585,35 @@ Use the available tools to maintain accurate state tracking.
             if len(user_state.response_history) > 20:
                 user_state.response_history = user_state.response_history[-20:]
             
-            return {
-                "success": True,
-                "user_id": user_id,
-                "recorded": True,
-                "timestamp": history_entry["timestamp"]
-            }
+            return ResponseRecordResult(
+                success=True,
+                user_id=user_id,
+                recorded=True,
+                timestamp=history_entry["timestamp"]
+            )
     
     @function_tool
-    async def _get_humiliation_level(self, user_id: str) -> Dict[str, Any]:
+    async def _get_humiliation_level(self, user_id: str) -> HumiliationLevelResult:
         """Get the current humiliation level for a user."""
         async with self._lock:
             user_state = self.context.get_user_state(user_id)
             
-            return {
-                "user_id": user_id,
-                "humiliation_level": user_state.humiliation_level,
-                "last_updated": user_state.last_humiliation_update.isoformat()
-            }
+            return HumiliationLevelResult(
+                user_id=user_id,
+                humiliation_level=user_state.humiliation_level,
+                last_updated=user_state.last_humiliation_update.isoformat()
+            )
     
     @function_tool
-    async def _select_mockery_template(self, user_id: str, intensity: float) -> Dict[str, Any]:
+    async def _select_mockery_template(self, user_id: str, intensity: float) -> TemplateSelectionResult:
         """Select an appropriate mockery template based on intensity."""
         # Get all mockery templates
         mockery_templates = self.context.get_templates_by_category("mockery")
         if not mockery_templates:
-            return {
-                "success": False,
-                "message": "No mockery templates available"
-            }
+            return TemplateSelectionResult(
+                success=False,
+                message="No mockery templates available"
+            )
         
         # Filter available templates
         available_templates = {}
@@ -531,11 +631,11 @@ Use the available tools to maintain accurate state tracking.
         
         # No available templates
         if not available_templates:
-            return {
-                "success": False,
-                "message": "No suitable mockery templates available",
-                "intensity": intensity
-            }
+            return TemplateSelectionResult(
+                success=False,
+                message="No suitable mockery templates available",
+                intensity=intensity
+            )
         
         # Select best matching template (highest score)
         selected_id = max(available_templates.keys(), key=lambda k: available_templates[k]["match_score"])
@@ -548,18 +648,18 @@ Use the available tools to maintain accurate state tracking.
         # Record template usage
         await self._record_template_usage(selected_id, user_id)
         
-        return {
-            "success": True,
-            "template_id": selected_id,
-            "template_name": selected_template.id,
-            "response": response,
-            "intensity": selected_template.intensity,
-            "match_score": selected_info["match_score"],
-            "category": "mockery"
-        }
+        return TemplateSelectionResult(
+            success=True,
+            template_id=selected_id,
+            template_name=selected_template.id,
+            response=response,
+            intensity=selected_template.intensity,
+            match_score=selected_info["match_score"],
+            category="mockery"
+        )
     
     @function_tool
-    async def _generate_custom_mockery(self, user_id: str, intensity: float, target_aspect: str = "general") -> Dict[str, Any]:
+    async def _generate_custom_mockery(self, user_id: str, intensity: float, target_aspect: str = "general") -> CustomResponseResult:
         """Generate a custom mockery response targeting a specific aspect."""
         # Generate mockery based on target aspect and intensity
         responses = []
@@ -627,17 +727,17 @@ Use the available tools to maintain accurate state tracking.
             "target_aspect": target_aspect
         })
         
-        return {
-            "success": True,
-            "response": response,
-            "intensity": intensity,
-            "category": "mockery",
-            "target_aspect": target_aspect,
-            "is_custom": True
-        }
+        return CustomResponseResult(
+            success=True,
+            response=response,
+            intensity=intensity,
+            category="mockery",
+            target_aspect=target_aspect,
+            is_custom=True
+        )
     
     @function_tool
-    async def _record_mockery_response(self, user_id: str, response: str, intensity: float, target_aspect: str = "general") -> Dict[str, Any]:
+    async def _record_mockery_response(self, user_id: str, response: str, intensity: float, target_aspect: str = "general") -> ResponseRecordResult:
         """Record a mockery response for history tracking."""
         async with self._lock:
             user_state = self.context.get_user_state(user_id)
@@ -658,15 +758,15 @@ Use the available tools to maintain accurate state tracking.
             if len(user_state.response_history) > 20:
                 user_state.response_history = user_state.response_history[-20:]
             
-            return {
-                "success": True,
-                "user_id": user_id,
-                "recorded": True,
-                "timestamp": history_entry["timestamp"]
-            }
+            return ResponseRecordResult(
+                success=True,
+                user_id=user_id,
+                recorded=True,
+                timestamp=history_entry["timestamp"]
+            )
     
     @function_tool
-    async def _get_user_mockery_preferences(self, user_id: str) -> Dict[str, Any]:
+    async def _get_user_mockery_preferences(self, user_id: str) -> UserPreferencesResult:
         """Get the mockery preferences for a user."""
         # Try to get preferences from relationship manager if available
         preferences = {
@@ -685,21 +785,21 @@ Use the available tools to maintain accurate state tracking.
             except Exception as e:
                 logger.error(f"Error getting mockery preferences: {e}")
         
-        return {
-            "user_id": user_id,
-            "preferences": preferences
-        }
+        return UserPreferencesResult(
+            user_id=user_id,
+            preferences=preferences
+        )
     
     @function_tool
-    async def _select_degradation_template(self, user_id: str, intensity: float) -> Dict[str, Any]:
+    async def _select_degradation_template(self, user_id: str, intensity: float) -> TemplateSelectionResult:
         """Select an appropriate degradation template based on intensity."""
         # Get all degradation templates
         degradation_templates = self.context.get_templates_by_category("degradation")
         if not degradation_templates:
-            return {
-                "success": False,
-                "message": "No degradation templates available"
-            }
+            return TemplateSelectionResult(
+                success=False,
+                message="No degradation templates available"
+            )
         
         # Filter available templates
         available_templates = {}
@@ -717,11 +817,11 @@ Use the available tools to maintain accurate state tracking.
         
         # No available templates
         if not available_templates:
-            return {
-                "success": False,
-                "message": "No suitable degradation templates available",
-                "intensity": intensity
-            }
+            return TemplateSelectionResult(
+                success=False,
+                message="No suitable degradation templates available",
+                intensity=intensity
+            )
         
         # Select best matching template (highest score)
         selected_id = max(available_templates.keys(), key=lambda k: available_templates[k]["match_score"])
@@ -734,18 +834,18 @@ Use the available tools to maintain accurate state tracking.
         # Record template usage
         await self._record_template_usage(selected_id, user_id)
         
-        return {
-            "success": True,
-            "template_id": selected_id,
-            "template_name": selected_template.id,
-            "response": response,
-            "intensity": selected_template.intensity,
-            "match_score": selected_info["match_score"],
-            "category": "degradation"
-        }
+        return TemplateSelectionResult(
+            success=True,
+            template_id=selected_id,
+            template_name=selected_template.id,
+            response=response,
+            intensity=selected_template.intensity,
+            match_score=selected_info["match_score"],
+            category="degradation"
+        )
     
     @function_tool
-    async def _generate_custom_degradation(self, user_id: str, intensity: float, degradation_category: str = "worth") -> Dict[str, Any]:
+    async def _generate_custom_degradation(self, user_id: str, intensity: float, degradation_category: str = "worth") -> CustomResponseResult:
         """Generate a custom degradation response for a specific category."""
         # Check for degradation category limits
         if self.relationship_manager:
@@ -754,11 +854,9 @@ Use the available tools to maintain accurate state tracking.
                 if hasattr(relationship, "degradation_limits"):
                     degradation_limits = relationship.degradation_limits
                     if degradation_limits and degradation_category in degradation_limits:
-                        return {
-                            "success": False,
-                            "message": f"Degradation category '{degradation_category}' is limited for this user",
-                            "alternative_categories": ["worth", "service", "behavior", "general"]
-                        }
+                        return CustomResponseResult(
+                            success=False
+                        )
             except Exception as e:
                 logger.error(f"Error checking degradation limits: {e}")
         
@@ -828,17 +926,17 @@ Use the available tools to maintain accurate state tracking.
             "degradation_category": degradation_category
         })
         
-        return {
-            "success": True,
-            "response": response,
-            "intensity": intensity,
-            "category": "degradation",
-            "degradation_category": degradation_category,
-            "is_custom": True
-        }
+        return CustomResponseResult(
+            success=True,
+            response=response,
+            intensity=intensity,
+            category="degradation",
+            degradation_category=degradation_category,
+            is_custom=True
+        )
     
     @function_tool
-    async def _record_degradation_response(self, user_id: str, response: str, intensity: float, degradation_category: str = "general") -> Dict[str, Any]:
+    async def _record_degradation_response(self, user_id: str, response: str, intensity: float, degradation_category: str = "general") -> ResponseRecordResult:
         """Record a degradation response for history tracking."""
         async with self._lock:
             user_state = self.context.get_user_state(user_id)
@@ -859,15 +957,15 @@ Use the available tools to maintain accurate state tracking.
             if len(user_state.response_history) > 20:
                 user_state.response_history = user_state.response_history[-20:]
             
-            return {
-                "success": True,
-                "user_id": user_id,
-                "recorded": True,
-                "timestamp": history_entry["timestamp"]
-            }
+            return ResponseRecordResult(
+                success=True,
+                user_id=user_id,
+                recorded=True,
+                timestamp=history_entry["timestamp"]
+            )
     
     @function_tool
-    async def _get_degradation_preferences(self, user_id: str) -> Dict[str, Any]:
+    async def _get_degradation_preferences(self, user_id: str) -> UserPreferencesResult:
         """Get the degradation preferences for a user."""
         # Try to get preferences from relationship manager if available
         preferences = {
@@ -891,13 +989,13 @@ Use the available tools to maintain accurate state tracking.
             except Exception as e:
                 logger.error(f"Error getting degradation preferences: {e}")
         
-        return {
-            "user_id": user_id,
-            "preferences": preferences
-        }
+        return UserPreferencesResult(
+            user_id=user_id,
+            preferences=preferences
+        )
     
     @function_tool
-    async def _detect_humiliation_signals(self, user_id: str, message: str) -> Dict[str, Any]:
+    async def _detect_humiliation_signals(self, user_id: str, message: str) -> HumiliationSignalsResult:
         """Detect humiliation signals in a user message."""
         # Simple detection of humiliation markers
         humiliation_markers = [
@@ -926,22 +1024,22 @@ Use the available tools to maintain accurate state tracking.
             except Exception as e:
                 logger.error(f"Error using theory of mind: {e}")
         
-        return {
-            "humiliation_detected": humiliation_detected,
-            "intensity": intensity,
-            "markers_found": markers_found,
-            "marker_count": marker_count
-        }
+        return HumiliationSignalsResult(
+            humiliation_detected=humiliation_detected,
+            intensity=intensity,
+            markers_found=markers_found,
+            marker_count=marker_count
+        )
     
     @function_tool
-    async def _update_humiliation_level(self, user_id: str, humiliation_signals: Dict[str, Any]) -> Dict[str, Any]:
+    async def _update_humiliation_level(self, user_id: str, humiliation_signals: HumiliationSignalsInput) -> HumiliationUpdateResult:
         """Update the detected humiliation level for a user."""
         async with self._lock:
             user_state = self.context.get_user_state(user_id)
             
             # Extract detected humiliation level
-            detected_level = humiliation_signals.get("intensity", 0.0)
-            if humiliation_signals.get("humiliation_detected", False):
+            detected_level = humiliation_signals.intensity
+            if humiliation_signals.humiliation_detected:
                 # Blend with existing level (30% new, 70% existing)
                 new_level = (detected_level * 0.3) + (user_state.humiliation_level * 0.7)
             else:
@@ -954,21 +1052,21 @@ Use the available tools to maintain accurate state tracking.
             user_state.last_humiliation_update = datetime.datetime.now()
             user_state.last_updated = datetime.datetime.now()
             
-            return {
-                "user_id": user_id,
-                "old_humiliation_level": old_level,
-                "new_humiliation_level": user_state.humiliation_level,
-                "change": user_state.humiliation_level - old_level
-            }
+            return HumiliationUpdateResult(
+                user_id=user_id,
+                old_humiliation_level=old_level,
+                new_humiliation_level=user_state.humiliation_level,
+                change=user_state.humiliation_level - old_level
+            )
     
     @function_tool
-    async def _categorize_humiliation_type(self, message: str, humiliation_signals: Dict[str, Any]) -> Dict[str, Any]:
+    async def _categorize_humiliation_type(self, message: str, humiliation_signals: HumiliationSignalsInput) -> HumiliationCategorizationResult:
         """Categorize the type of humiliation detected."""
-        if not humiliation_signals.get("humiliation_detected", False):
-            return {
-                "humiliation_type": "none",
-                "confidence": 0.0
-            }
+        if not humiliation_signals.humiliation_detected:
+            return HumiliationCategorizationResult(
+                humiliation_type="none",
+                confidence=0.0
+            )
         
         # Initialize types with confidence scores
         humiliation_types = {
@@ -1001,19 +1099,19 @@ Use the available tools to maintain accurate state tracking.
         
         # If no specific type has confidence > 0, default to general embarrassment
         if highest_type[1] == 0:
-            return {
-                "humiliation_type": "embarrassment",
-                "confidence": humiliation_signals.get("intensity", 0.0)
-            }
+            return HumiliationCategorizationResult(
+                humiliation_type="embarrassment",
+                confidence=humiliation_signals.intensity
+            )
         
-        return {
-            "humiliation_type": highest_type[0],
-            "confidence": highest_type[1],
-            "all_types": humiliation_types
-        }
+        return HumiliationCategorizationResult(
+            humiliation_type=highest_type[0],
+            confidence=highest_type[1],
+            all_types=humiliation_types
+        )
     
     @function_tool
-    async def _get_humiliation_history(self, user_id: str) -> Dict[str, Any]:
+    async def _get_humiliation_history(self, user_id: str) -> HumiliationHistoryResult:
         """Get the history of humiliation levels for a user."""
         async with self._lock:
             user_state = self.context.get_user_state(user_id)
@@ -1027,19 +1125,22 @@ Use the available tools to maintain accurate state tracking.
                         "level": entry["humiliation_level"]
                     })
             
-            return {
-                "user_id": user_id,
-                "current_level": user_state.humiliation_level,
-                "history": humiliation_history,
-                "last_updated": user_state.last_humiliation_update.isoformat()
-            }
+            return HumiliationHistoryResult(
+                user_id=user_id,
+                current_level=user_state.humiliation_level,
+                history=humiliation_history,
+                last_updated=user_state.last_humiliation_update.isoformat()
+            )
     
     @function_tool
-    async def _get_user_sadistic_state(self, user_id: str) -> Dict[str, Any]:
+    async def _get_user_sadistic_state(self, user_id: str) -> UserSadisticStateResult:
         """Get the current sadistic interaction state for a user."""
         async with self._lock:
             if user_id not in self.context.user_states:
-                return {"user_id": user_id, "has_state": False}
+                return UserSadisticStateResult(
+                    user_id=user_id,
+                    has_state=False
+                )
                 
             user_state = self.context.user_states[user_id]
             
@@ -1061,18 +1162,18 @@ Use the available tools to maintain accurate state tracking.
                     }
             
             # Return formatted state
-            return {
-                "user_id": user_id,
-                "has_state": True,
-                "humiliation_level": user_state.humiliation_level,
-                "last_humiliation_update": user_state.last_humiliation_update.isoformat(),
-                "sadistic_intensity_preference": user_state.sadistic_intensity_preference,
-                "template_usage": template_usage,
-                "recent_responses": user_state.response_history[-5:] if user_state.response_history else []
-            }
+            return UserSadisticStateResult(
+                user_id=user_id,
+                has_state=True,
+                humiliation_level=user_state.humiliation_level,
+                last_humiliation_update=user_state.last_humiliation_update.isoformat(),
+                sadistic_intensity_preference=user_state.sadistic_intensity_preference,
+                template_usage=template_usage,
+                recent_responses=user_state.response_history[-5:] if user_state.response_history else []
+            )
     
     @function_tool
-    async def _update_user_preference(self, user_id: str, preference_type: str, value: Any) -> Dict[str, Any]:
+    async def _update_user_preference(self, user_id: str, preference_type: str, value: Any) -> UserPreferenceUpdateResult:
         """Update a preference for a user."""
         async with self._lock:
             user_state = self.context.get_user_state(user_id)
@@ -1081,22 +1182,22 @@ Use the available tools to maintain accurate state tracking.
                 old_value = user_state.sadistic_intensity_preference
                 user_state.sadistic_intensity_preference = min(1.0, max(0.0, float(value)))
                 
-                return {
-                    "success": True,
-                    "user_id": user_id,
-                    "preference_type": preference_type,
-                    "old_value": old_value,
-                    "new_value": user_state.sadistic_intensity_preference
-                }
+                return UserPreferenceUpdateResult(
+                    success=True,
+                    user_id=user_id,
+                    preference_type=preference_type,
+                    old_value=old_value,
+                    new_value=user_state.sadistic_intensity_preference
+                )
             else:
-                return {
-                    "success": False,
-                    "message": f"Unknown preference type: {preference_type}",
-                    "valid_types": ["sadistic_intensity"]
-                }
+                return UserPreferenceUpdateResult(
+                    success=False,
+                    message=f"Unknown preference type: {preference_type}",
+                    valid_types=["sadistic_intensity"]
+                )
     
     @function_tool
-    async def _record_response_event(self, user_id: str, event_type: str, event_data: Dict[str, Any]) -> Dict[str, Any]:
+    async def _record_response_event(self, user_id: str, event_type: str, event_data: Dict[str, Any]) -> ResponseEventResult:
         """Record a response event in history."""
         async with self._lock:
             user_state = self.context.get_user_state(user_id)
@@ -1112,16 +1213,16 @@ Use the available tools to maintain accurate state tracking.
             if len(user_state.response_history) > 20:
                 user_state.response_history = user_state.response_history[-20:]
             
-            return {
-                "success": True,
-                "user_id": user_id,
-                "event_type": event_type,
-                "recorded": True,
-                "timestamp": event_data["timestamp"]
-            }
+            return ResponseEventResult(
+                success=True,
+                user_id=user_id,
+                event_type=event_type,
+                recorded=True,
+                timestamp=event_data["timestamp"]
+            )
     
     @function_tool
-    async def _generate_response_report(self, user_id: str) -> Dict[str, Any]:
+    async def _generate_response_report(self, user_id: str) -> ResponseReportResult:
         """Generate a report on sadistic responses for a user."""
         async with self._lock:
             user_state = self.context.get_user_state(user_id)
@@ -1193,14 +1294,14 @@ Use the available tools to maintain accurate state tracking.
                     "priority": 0.8
                 })
             
-            return {
-                "user_id": user_id,
-                "humiliation_level": user_state.humiliation_level,
-                "category_usage": category_usage,
-                "top_templates": top_templates,
-                "recommendations": recommendations,
-                "generated_at": datetime.datetime.now().isoformat()
-            }
+            return ResponseReportResult(
+                user_id=user_id,
+                humiliation_level=user_state.humiliation_level,
+                category_usage=category_usage,
+                top_templates=top_templates,
+                recommendations=recommendations,
+                generated_at=datetime.datetime.now().isoformat()
+            )
     
     def _is_template_available(self, template_id: str, user_id: str) -> bool:
         """Check if a template is available for use (not exceeding frequency limits)."""
