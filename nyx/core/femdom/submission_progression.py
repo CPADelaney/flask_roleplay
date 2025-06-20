@@ -122,6 +122,13 @@ class MetricTrend(BaseModel):
     recent_avg: float
     previous_avg: float
 
+class SubmissionMetricsData(BaseModel):
+    """Model for submission metrics in reports."""
+    overall_score: float
+    compliance_rate: float
+    compliance_trend: str
+    metric_trends: Dict[str, MetricTrend]
+
 class AdvancementRequirement(BaseModel):
     """Model for advancement requirements."""
     type: str
@@ -219,7 +226,7 @@ class ProgressionReportResult(BaseModel):
     user_id: str
     generation_time: str
     current_level: LevelData
-    submission_metrics: Dict[str, Any]  # This contains mixed types, keeping as Any for now
+    submission_metrics: SubmissionMetricsData
     progression_path: ProgressionPathData
     recommendations: List[RecommendationData]
 
@@ -659,7 +666,8 @@ class SubmissionProgression:
             For requests involving metrics analysis, progression evaluation, or level assessment,
             use the appropriate specialized agent.
             """,
-            model_settings=model_settings
+            model_settings=model_settings,
+            model="gpt-4.1-nano"
         )
         
         # User initialization agent
@@ -675,7 +683,8 @@ class SubmissionProgression:
             Analyze any initial data provided and assign proper starting values.
             """,
             model_settings=model_settings,
-            output_type=UserInitResult
+            output_type=UserInitResult,
+            model="gpt-4.1-nano"
         )
         
         # Path recommendation agent
@@ -689,7 +698,8 @@ class SubmissionProgression:
             
             Provide clear reasoning for your recommendations with a strict, dominant tone.
             """,
-            model_settings=model_settings
+            model_settings=model_settings,
+            model="gpt-4.1-nano"
         )
         
         # Milestone tracking agent
@@ -704,7 +714,8 @@ class SubmissionProgression:
             
             Be precise in your evaluations and maintain a strict but encouraging tone.
             """,
-            model_settings=model_settings
+            model_settings=model_settings,
+            model="gpt-4.1-nano"
         )
         
         # Compliance recording agent
@@ -719,7 +730,8 @@ class SubmissionProgression:
             
             Be exacting in your analysis and maintain a stern tone for defiance.
             """,
-            model_settings=model_settings
+            model_settings=model_settings,
+            model="gpt-4.1-nano"
         )
         
         # Submission reporting agent
@@ -735,7 +747,8 @@ class SubmissionProgression:
             
             Your tone should be analytical but with a dominant edge that reinforces power dynamics.
             """,
-            model_settings=model_settings
+            model_settings=model_settings,
+            model="gpt-4.1-nano"
         )
         
         # Set up handoffs between agents
@@ -757,7 +770,8 @@ class SubmissionProgression:
                 self.milestone_agent,
                 self.compliance_agent,
                 self.reporting_agent
-            ]
+            ],
+            model="gpt-4.1-nano"
         )
         
         # Set up content guardrail
@@ -1818,12 +1832,12 @@ class SubmissionProgression:
                 else:
                     trend = "stable"
                 
-                metric_trends[metric_name] = {
-                    "trend": trend,
-                    "change": change,
-                    "recent_avg": recent_avg,
-                    "previous_avg": previous_avg
-                }
+                metric_trends[metric_name] = MetricTrend(
+                    trend=trend,
+                    change=change,
+                    recent_avg=recent_avg,
+                    previous_avg=previous_avg
+                )
         
         # Generate recommendations based on metric gaps
         recommendations = []
@@ -1910,12 +1924,12 @@ class SubmissionProgression:
                 progress_in_level=level_progress,
                 time_at_level_days=user_data.time_at_current_level
             ),
-            submission_metrics={
-                "overall_score": user_data.total_submission_score,
-                "compliance_rate": user_data.lifetime_compliance_rate,
-                "compliance_trend": compliance_trend,
-                "metric_trends": metric_trends
-            },
+            submission_metrics=SubmissionMetricsData(
+                overall_score=user_data.total_submission_score,
+                compliance_rate=user_data.lifetime_compliance_rate,
+                compliance_trend=compliance_trend,
+                metric_trends=metric_trends
+            ),
             progression_path=progression_path_data,
             recommendations=recommendations[:3]  # Top 3 recommendations
         )
