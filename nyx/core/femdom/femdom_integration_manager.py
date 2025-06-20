@@ -6,12 +6,115 @@ from typing import Dict, List, Any, Optional
 
 from agents import Agent, Runner, function_tool, trace, handoff, RunContextWrapper, ModelSettings, gen_trace_id
 from agents.run import RunConfig
+from pydantic import BaseModel
 
 from nyx.core.integration.event_bus import Event, get_event_bus, DominanceEvent
 from nyx.core.integration.integrated_tracer import trace_method, TraceLevel
 
 
 logger = logging.getLogger(__name__)
+
+# Pydantic models for function tool inputs/outputs
+class DominanceActionResponse(BaseModel):
+    success: bool
+    message: Optional[str] = None
+    error: Optional[str] = None
+
+class ViolationInput(BaseModel):
+    type: Optional[str] = None
+    protocol_id: Optional[str] = None
+    description: Optional[str] = None
+
+class ViolationResponse(BaseModel):
+    success: bool
+    response: Optional[str] = None
+    violation_type: Optional[str] = None
+    error: Optional[str] = None
+
+class AmplifyDominanceResponse(BaseModel):
+    success: bool
+    amplified_intensity: Optional[float] = None
+    message: Optional[str] = None
+    error: Optional[str] = None
+
+class ProtocolCheckResponse(BaseModel):
+    compliant: bool
+    violations: List[str] = []
+    error: Optional[str] = None
+
+class ViolationRecordResponse(BaseModel):
+    success: bool
+    error: Optional[str] = None
+
+class ProtocolAssignmentResponse(BaseModel):
+    success: bool
+    error: Optional[str] = None
+
+class PermissionRequestContext(BaseModel):
+    begging_allowed: Optional[bool] = None
+
+class PermissionRequestResponse(BaseModel):
+    success: bool
+    error: Optional[str] = None
+
+class DenialPeriodResponse(BaseModel):
+    success: bool
+    error: Optional[str] = None
+
+class SubmissionDetectionResponse(BaseModel):
+    submission_detected: bool
+    submission_level: Optional[float] = None
+    submission_type: Optional[str] = None
+    error: Optional[str] = None
+
+class ComplianceUpdateResponse(BaseModel):
+    success: bool
+    error: Optional[str] = None
+
+class SubmissionMetricResponse(BaseModel):
+    success: bool
+    error: Optional[str] = None
+
+class PersonaRecommendationResponse(BaseModel):
+    success: bool
+    error: Optional[str] = None
+
+class PersonaActivationResponse(BaseModel):
+    success: bool
+    error: Optional[str] = None
+
+class SubspaceCheckResponse(BaseModel):
+    in_subspace: bool
+    error: Optional[str] = None
+
+class UserStateInput(BaseModel):
+    user_id: str
+    deference: Optional[float] = None
+    obedience: Optional[float] = None
+
+class MindfuckResponse(BaseModel):
+    success: bool
+    error: Optional[str] = None
+
+class SubmissionRewardResponse(BaseModel):
+    success: bool
+    reward_value: Optional[float] = None
+    result: Optional[str] = None
+    error: Optional[str] = None
+
+class RewardSignalContext(BaseModel):
+    source: str
+    submission_type: Optional[str] = None
+    submission_level: Optional[float] = None
+
+class RewardSignalResponse(BaseModel):
+    success: bool
+    result: Optional[str] = None
+    error: Optional[str] = None
+
+class ServiceTaskResponse(BaseModel):
+    success: bool
+    error: Optional[str] = None
 
 class IntegrationContext:
     """Context object for integration operations."""
@@ -500,11 +603,11 @@ Manage service tasks, rituals, and body-related activities.
         )
     
     @function_tool
-    async def _process_dominance_action(self, action: str, user_id: str, intensity: float) -> Dict[str, Any]:
+    async def _process_dominance_action(self, action: str, user_id: str, intensity: float) -> DominanceActionResponse:
         """Process a dominance action for a user."""
         dominance_system = self.context.get_component("dominance_system")
         if not dominance_system:
-            return {"success": False, "message": "Dominance system not available"}
+            return DominanceActionResponse(success=False, message="Dominance system not available")
         
         try:
             # Create action event
@@ -516,133 +619,143 @@ Manage service tasks, rituals, and body-related activities.
             
             # Process the action
             result = await dominance_system.process_dominance_action(action_event)
-            return result
+            return DominanceActionResponse(success=True)
         except Exception as e:
             logger.error(f"Error processing dominance action: {e}")
-            return {"success": False, "error": str(e)}
+            return DominanceActionResponse(success=False, error=str(e))
     
     @function_tool
-    async def _respond_to_violation(self, user_id: str, violation: Dict[str, Any]) -> Dict[str, Any]:
+    async def _respond_to_violation(self, user_id: str, violation: ViolationInput) -> ViolationResponse:
         """Generate a response to a protocol violation."""
         dominance_system = self.context.get_component("dominance_system")
         if not dominance_system:
-            return {"success": False, "message": "Dominance system not available"}
+            return ViolationResponse(success=False, response="Dominance system not available")
         
         try:
             # Generate violation response
+            violation_dict = violation.model_dump()
             response = await dominance_system.generate_violation_response(
-                user_id, violation
+                user_id, violation_dict
             )
             
-            return {
-                "success": True,
-                "response": response,
-                "violation_type": violation.get("type", "unknown")
-            }
+            return ViolationResponse(
+                success=True,
+                response=response,
+                violation_type=violation.type
+            )
         except Exception as e:
             logger.error(f"Error responding to violation: {e}")
-            return {"success": False, "error": str(e)}
+            return ViolationResponse(success=False, error=str(e))
     
     @function_tool
-    async def _amplify_dominance(self, intensity: float) -> Dict[str, Any]:
+    async def _amplify_dominance(self, intensity: float) -> AmplifyDominanceResponse:
         """Amplify dominance intensity."""
         psychological_dominance = self.context.get_component("psychological_dominance")
         if not psychological_dominance:
-            return {"success": False, "message": "Psychological dominance not available"}
+            return AmplifyDominanceResponse(success=False, message="Psychological dominance not available")
         
         try:
             # Amplify dominance (placeholder - implement based on your system)
-            return {
-                "success": True,
-                "amplified_intensity": min(1.0, intensity * 1.2),
-                "message": "Dominance amplified"
-            }
+            return AmplifyDominanceResponse(
+                success=True,
+                amplified_intensity=min(1.0, intensity * 1.2),
+                message="Dominance amplified"
+            )
         except Exception as e:
             logger.error(f"Error amplifying dominance: {e}")
-            return {"success": False, "error": str(e)}
+            return AmplifyDominanceResponse(success=False, error=str(e))
     
     @function_tool
-    async def _check_protocols(self, user_id: str, content: str) -> Dict[str, Any]:
+    async def _check_protocols(self, user_id: str, content: str) -> ProtocolCheckResponse:
         """Check if a user message adheres to protocols."""
         protocol_enforcement = self.context.get_component("protocol_enforcement")
         if not protocol_enforcement:
-            return {"compliant": True, "message": "Protocol enforcement not available"}
+            return ProtocolCheckResponse(compliant=True, violations=[])
         
         try:
-            return await protocol_enforcement.check_protocol_compliance(
+            result = await protocol_enforcement.check_protocol_compliance(
                 user_id, content
+            )
+            return ProtocolCheckResponse(
+                compliant=result.get("compliant", True),
+                violations=result.get("violations", [])
             )
         except Exception as e:
             logger.error(f"Error checking protocols: {e}")
-            return {"compliant": True, "error": str(e)}
+            return ProtocolCheckResponse(compliant=True, violations=[], error=str(e))
     
     @function_tool
-    async def _record_violation(self, user_id: str, protocol_id: str, description: str) -> Dict[str, Any]:
+    async def _record_violation(self, user_id: str, protocol_id: str, description: str) -> ViolationRecordResponse:
         """Record a protocol violation."""
         protocol_enforcement = self.context.get_component("protocol_enforcement")
         if not protocol_enforcement:
-            return {"success": False, "message": "Protocol enforcement not available"}
+            return ViolationRecordResponse(success=False)
         
         try:
-            return await protocol_enforcement.record_violation(
+            await protocol_enforcement.record_violation(
                 user_id, protocol_id, description
             )
+            return ViolationRecordResponse(success=True)
         except Exception as e:
             logger.error(f"Error recording violation: {e}")
-            return {"success": False, "error": str(e)}
+            return ViolationRecordResponse(success=False, error=str(e))
     
     @function_tool
-    async def _assign_protocol(self, user_id: str, protocol_id: str) -> Dict[str, Any]:
+    async def _assign_protocol(self, user_id: str, protocol_id: str) -> ProtocolAssignmentResponse:
         """Assign a protocol to a user."""
         protocol_enforcement = self.context.get_component("protocol_enforcement")
         if not protocol_enforcement:
-            return {"success": False, "message": "Protocol enforcement not available"}
+            return ProtocolAssignmentResponse(success=False)
         
         try:
-            return await protocol_enforcement.assign_protocol(
+            await protocol_enforcement.assign_protocol(
                 user_id, protocol_id
             )
+            return ProtocolAssignmentResponse(success=True)
         except Exception as e:
             logger.error(f"Error assigning protocol: {e}")
-            return {"success": False, "error": str(e)}
+            return ProtocolAssignmentResponse(success=False, error=str(e))
     
     @function_tool
-    async def _process_permission_request(self, user_id: str, request_text: str, context: Dict[str, Any]) -> Dict[str, Any]:
+    async def _process_permission_request(self, user_id: str, request_text: str, context: PermissionRequestContext) -> PermissionRequestResponse:
         """Process an orgasm permission request."""
         orgasm_control = self.context.get_component("orgasm_control")
         if not orgasm_control:
-            return {"success": False, "message": "Orgasm control not available"}
+            return PermissionRequestResponse(success=False)
         
         try:
-            return await orgasm_control.process_permission_request(
-                user_id, request_text, context
+            context_dict = context.model_dump()
+            await orgasm_control.process_permission_request(
+                user_id, request_text, context_dict
             )
+            return PermissionRequestResponse(success=True)
         except Exception as e:
             logger.error(f"Error processing permission request: {e}")
-            return {"success": False, "error": str(e)}
+            return PermissionRequestResponse(success=False, error=str(e))
     
     @function_tool
-    async def _start_denial_period(self, user_id: str, duration_hours: int, level: int, begging_allowed: bool = True) -> Dict[str, Any]:
+    async def _start_denial_period(self, user_id: str, duration_hours: int, level: int, begging_allowed: bool = True) -> DenialPeriodResponse:
         """Start an orgasm denial period."""
         orgasm_control = self.context.get_component("orgasm_control")
         if not orgasm_control:
-            return {"success": False, "message": "Orgasm control not available"}
+            return DenialPeriodResponse(success=False)
         
         try:
-            context = {"begging_allowed": begging_allowed}
-            return await orgasm_control.start_denial_period(
-                user_id, duration_hours, level, context
+            context_data = {"begging_allowed": begging_allowed}
+            await orgasm_control.start_denial_period(
+                user_id, duration_hours, level, context_data
             )
+            return DenialPeriodResponse(success=True)
         except Exception as e:
             logger.error(f"Error starting denial period: {e}")
-            return {"success": False, "error": str(e)}
+            return DenialPeriodResponse(success=False, error=str(e))
     
     @function_tool
-    async def _detect_submission(self, user_id: str, content: str) -> Dict[str, Any]:
+    async def _detect_submission(self, user_id: str, content: str) -> SubmissionDetectionResponse:
         """Detect submission signals in a message."""
         theory_of_mind = self.context.get_component("theory_of_mind")
         if not theory_of_mind:
-            return {"submission_detected": False, "message": "Theory of mind not available"}
+            return SubmissionDetectionResponse(submission_detected=False)
         
         try:
             # This is a placeholder - implement based on your system
@@ -679,82 +792,88 @@ Manage service tasks, rituals, and body-related activities.
                 else:
                     submission_signals["submission_type"] = "general"
             
-            return submission_signals
+            return SubmissionDetectionResponse(
+                submission_detected=submission_signals["submission_detected"],
+                submission_level=submission_signals["submission_level"],
+                submission_type=submission_signals["submission_type"]
+            )
         except Exception as e:
             logger.error(f"Error detecting submission: {e}")
-            return {"submission_detected": False, "error": str(e)}
+            return SubmissionDetectionResponse(submission_detected=False, error=str(e))
     
     @function_tool
-    async def _update_compliance(self, user_id: str, compliant: bool, severity: float, reason: str) -> Dict[str, Any]:
+    async def _update_compliance(self, user_id: str, compliant: bool, severity: float, reason: str) -> ComplianceUpdateResponse:
         """Update compliance tracking for a user."""
         submission_progression = self.context.get_component("submission_progression")
         if not submission_progression:
-            return {"success": False, "message": "Submission progression not available"}
+            return ComplianceUpdateResponse(success=False)
         
         try:
             # Update compliance (implementation depends on your system)
             if hasattr(submission_progression, "record_compliance"):
-                return await submission_progression.record_compliance(
+                await submission_progression.record_compliance(
                     user_id=user_id,
                     instruction=reason,
                     complied=compliant,
                     difficulty=severity
                 )
-            else:
-                return {"success": False, "message": "record_compliance method not available"}
+            return ComplianceUpdateResponse(success=True)
         except Exception as e:
             logger.error(f"Error updating compliance: {e}")
-            return {"success": False, "error": str(e)}
+            return ComplianceUpdateResponse(success=False, error=str(e))
     
     @function_tool
-    async def _update_submission_metric(self, user_id: str, metric: str, value_change: float, reason: str) -> Dict[str, Any]:
+    async def _update_submission_metric(self, user_id: str, metric: str, value_change: float, reason: str) -> SubmissionMetricResponse:
         """Update a submission metric."""
         submission_progression = self.context.get_component("submission_progression")
         if not submission_progression:
-            return {"success": False, "message": "Submission progression not available"}
+            return SubmissionMetricResponse(success=False)
         
         try:
-            return await submission_progression.update_submission_metric(
+            await submission_progression.update_submission_metric(
                 user_id, metric, value_change, reason
             )
+            return SubmissionMetricResponse(success=True)
         except Exception as e:
             logger.error(f"Error updating submission metric: {e}")
-            return {"success": False, "error": str(e)}
+            return SubmissionMetricResponse(success=False, error=str(e))
     
     @function_tool
-    async def _recommend_persona(self, user_id: str) -> Dict[str, Any]:
+    async def _recommend_persona(self, user_id: str) -> PersonaRecommendationResponse:
         """Recommend a dominance persona for a user."""
         persona_manager = self.context.get_component("persona_manager")
         if not persona_manager:
-            return {"success": False, "message": "Persona manager not available"}
+            return PersonaRecommendationResponse(success=False)
         
         try:
-            return await persona_manager.recommend_persona(user_id)
+            await persona_manager.recommend_persona(user_id)
+            return PersonaRecommendationResponse(success=True)
         except Exception as e:
             logger.error(f"Error recommending persona: {e}")
-            return {"success": False, "error": str(e)}
+            return PersonaRecommendationResponse(success=False, error=str(e))
     
     @function_tool
-    async def _activate_persona(self, user_id: str, persona_id: str, dominance_level: float) -> Dict[str, Any]:
+    async def _activate_persona(self, user_id: str, persona_id: str, dominance_level: float) -> PersonaActivationResponse:
         """Activate a dominance persona for a user."""
         persona_manager = self.context.get_component("persona_manager")
         if not persona_manager:
-            return {"success": False, "message": "Persona manager not available"}
+            return PersonaActivationResponse(success=False)
         
         try:
-            return await persona_manager.activate_persona(
+            await persona_manager.activate_persona(
                 user_id, persona_id, dominance_level
             )
+            return PersonaActivationResponse(success=True)
         except Exception as e:
             logger.error(f"Error activating persona: {e}")
-            return {"success": False, "error": str(e)}
+            return PersonaActivationResponse(success=False, error=str(e))
     
     @function_tool
-    async def _check_subspace(self, user_id: str) -> Dict[str, Any]:
+    async def _check_subspace(self, user_id: str) -> SubspaceCheckResponse:
         """Check if a user is in subspace."""
         psychological_dominance = self.context.get_component("psychological_dominance")
         if not psychological_dominance or not hasattr(psychological_dominance, "SubspaceDetection"):
-            return {"in_subspace": False, "message": "Subspace detection not available"}
+            return SubspaceCheckResponse(in_subspace=False)
         
         try:
             # Create subspace detection instance
@@ -769,44 +888,41 @@ Manage service tasks, rituals, and body-related activities.
             # Detect subspace
             detection_result = await subspace_detection.detect_subspace(user_id, recent_messages)
             
-            if detection_result["subspace_detected"]:
-                # Get guidance if in subspace
-                guidance = await subspace_detection.get_subspace_guidance(detection_result)
-                detection_result["guidance"] = guidance
-            
-            return detection_result
+            return SubspaceCheckResponse(in_subspace=detection_result.get("subspace_detected", False))
         except Exception as e:
             logger.error(f"Error checking subspace: {e}")
-            return {"in_subspace": False, "error": str(e)}
+            return SubspaceCheckResponse(in_subspace=False, error=str(e))
     
     @function_tool
-    async def _generate_mindfuck(self, user_id: str, user_state: Dict[str, Any], intensity: float) -> Dict[str, Any]:
+    async def _generate_mindfuck(self, user_id: str, user_state: UserStateInput, intensity: float) -> MindfuckResponse:
         """Generate a psychological mind game."""
         psychological_dominance = self.context.get_component("psychological_dominance")
         if not psychological_dominance:
-            return {"success": False, "message": "Psychological dominance not available"}
+            return MindfuckResponse(success=False)
         
         try:
-            return await psychological_dominance.generate_mindfuck(
-                user_id, user_state, intensity
+            user_state_dict = user_state.model_dump()
+            await psychological_dominance.generate_mindfuck(
+                user_id, user_state_dict, intensity
             )
+            return MindfuckResponse(success=True)
         except Exception as e:
             logger.error(f"Error generating mindfuck: {e}")
-            return {"success": False, "error": str(e)}
+            return MindfuckResponse(success=False, error=str(e))
     
     @function_tool
-    async def _process_submission_reward(self, user_id: str, submission_type: str, submission_level: float) -> Dict[str, Any]:
+    async def _process_submission_reward(self, user_id: str, submission_type: str, submission_level: float) -> SubmissionRewardResponse:
         """Process a reward for submission."""
         reward_system = self.context.get_component("reward_system")
         if not reward_system:
-            return {"success": False, "message": "Reward system not available"}
+            return SubmissionRewardResponse(success=False)
         
         try:
             # Calculate reward based on submission level
             reward_value = 0.3 + (submission_level * 0.5)
             
             # Create reward context
-            context = {
+            context_data = {
                 "source": "submission_detection",
                 "submission_type": submission_type,
                 "submission_level": submission_level
@@ -817,59 +933,61 @@ Manage service tasks, rituals, and body-related activities.
                 reward_signal = reward_system.RewardSignal(
                     value=reward_value,
                     source="submission_detection",
-                    context=context
+                    context=context_data
                 )
                 
                 result = await reward_system.process_reward_signal(reward_signal)
-                return {
-                    "success": True,
-                    "reward_value": reward_value,
-                    "result": result
-                }
+                return SubmissionRewardResponse(
+                    success=True,
+                    reward_value=reward_value,
+                    result=str(result)
+                )
             else:
-                return {"success": False, "message": "Required reward methods not available"}
+                return SubmissionRewardResponse(success=False, error="Required reward methods not available")
         except Exception as e:
             logger.error(f"Error processing submission reward: {e}")
-            return {"success": False, "error": str(e)}
+            return SubmissionRewardResponse(success=False, error=str(e))
     
     @function_tool
-    async def _generate_reward_signal(self, value: float, source: str, context: Dict[str, Any]) -> Dict[str, Any]:
+    async def _generate_reward_signal(self, value: float, source: str, context: RewardSignalContext) -> RewardSignalResponse:
         """Generate a reward signal."""
         reward_system = self.context.get_component("reward_system")
         if not reward_system:
-            return {"success": False, "message": "Reward system not available"}
+            return RewardSignalResponse(success=False)
         
         try:
             if hasattr(reward_system, "process_reward_signal") and hasattr(reward_system, "RewardSignal"):
+                context_dict = context.model_dump()
                 reward_signal = reward_system.RewardSignal(
                     value=value,
                     source=source,
-                    context=context
+                    context=context_dict
                 )
                 
                 result = await reward_system.process_reward_signal(reward_signal)
-                return {
-                    "success": True,
-                    "result": result
-                }
+                return RewardSignalResponse(
+                    success=True,
+                    result=str(result)
+                )
             else:
-                return {"success": False, "message": "Required reward methods not available"}
+                return RewardSignalResponse(success=False, error="Required reward methods not available")
         except Exception as e:
             logger.error(f"Error generating reward signal: {e}")
-            return {"success": False, "error": str(e)}
+            return RewardSignalResponse(success=False, error=str(e))
     
     @function_tool
-    async def _assign_service_task(self, user_id: str, task_id: str) -> Dict[str, Any]:
+    async def _assign_service_task(self, user_id: str, task_id: str) -> ServiceTaskResponse:
         """Assign a service task to a user."""
         body_service = self.context.get_component("body_service")
         if not body_service:
-            return {"success": False, "message": "Body service not available"}
+            return ServiceTaskResponse(success=False)
         
         try:
-            return await body_service.assign_service_task(user_id, task_id)
+            await body_service.assign_service_task(user_id, task_id)
+            return ServiceTaskResponse(success=True)
         except Exception as e:
             logger.error(f"Error assigning service task: {e}")
-            return {"success": False, "error": str(e)}
+            return ServiceTaskResponse(success=False, error=str(e))
     
     @trace_method(level=TraceLevel.INFO, group_id="FemdomIntegration")
     async def initialize(self):
