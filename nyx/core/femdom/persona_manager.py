@@ -13,6 +13,108 @@ from agents import InputGuardrail, GuardrailFunctionOutput, Handoff, handoff
 
 logger = logging.getLogger(__name__)
 
+# Pydantic models for function tool inputs/outputs
+class PersonaCommunicationStyle(BaseModel):
+    formality: float
+    directness: float
+    emotionality: float
+
+class PersonaInfo(BaseModel):
+    id: str
+    name: str
+    description: str
+    style: str
+    communication_style: PersonaCommunicationStyle
+    key_traits: List[str]
+
+class AvailablePersonasResponse(BaseModel):
+    personas: List[PersonaInfo]
+
+class UserTraits(BaseModel):
+    inferred_traits: Optional[Dict[str, Any]] = None
+    preferences: Optional[Dict[str, Any]] = None
+    trust_level: Optional[float] = None
+    submission_level: Optional[float] = None
+
+class UserTraitsResponse(BaseModel):
+    user_id: str
+    traits: UserTraits
+
+class PersonaPreference(BaseModel):
+    name: str
+    score: float
+
+class PersonaHistoryEntry(BaseModel):
+    persona_id: str
+    persona_name: str
+    activated_at: str
+    intensity: float
+    reason: str
+    duration_minutes: Optional[int] = None
+    deactivated_at: Optional[str] = None
+    deactivation_reason: Optional[str] = None
+
+class MostUsedPersona(BaseModel):
+    persona_id: str
+    persona_name: str
+    usage_count: int
+
+class PersonaHistoryResponse(BaseModel):
+    success: bool
+    user_id: str
+    history: List[PersonaHistoryEntry]
+    preferences: Dict[str, PersonaPreference]
+    most_used_persona: Optional[MostUsedPersona] = None
+
+class PersonaTrait(BaseModel):
+    description: str
+    intensity: float
+    guidelines: List[str]
+
+class PersonaCommunication(BaseModel):
+    formality: float
+    verbosity: float
+    directness: float
+    emotionality: float
+    vocabulary_complexity: float
+    communication_guidelines: List[str]
+
+class PersonaDetailsResponse(BaseModel):
+    success: bool
+    id: Optional[str] = None
+    name: Optional[str] = None
+    description: Optional[str] = None
+    style: Optional[str] = None
+    traits: Optional[Dict[str, PersonaTrait]] = None
+    communication: Optional[PersonaCommunication] = None
+    suitable_for_users: Optional[Dict[str, float]] = None
+    preferred_activities: Optional[List[str]] = None
+    avoid_activities: Optional[List[str]] = None
+    roleplay_elements: Optional[Dict[str, Any]] = None
+    message: Optional[str] = None
+
+class ActivePersonaResponse(BaseModel):
+    success: bool
+    active: bool
+    message: Optional[str] = None
+    persona_id: Optional[str] = None
+    persona_name: Optional[str] = None
+    style: Optional[str] = None
+    activated_at: Optional[str] = None
+    intensity: Optional[float] = None
+    expiration_time: Optional[str] = None
+    customizations: Optional[Dict[str, Any]] = None
+    expired_at: Optional[str] = None
+
+class LanguagePatternsResponse(BaseModel):
+    success: bool
+    persona_id: Optional[str] = None
+    persona_name: Optional[str] = None
+    intensity: Optional[float] = None
+    patterns: Optional[Dict[str, List[str]]] = None
+    communication_style: Optional[PersonaCommunication] = None
+    message: Optional[str] = None
+
 class PersonalityTrait(BaseModel):
     """A defined personality trait for a dominance persona."""
     name: str
@@ -1185,63 +1287,65 @@ Generate original, varied, and authentic patterns that a dominatrix with this pe
         )
     
     @function_tool
-    async def get_available_personas(self) -> List[Dict[str, Any]]:
+    async def get_available_personas(self) -> AvailablePersonasResponse:
         """Get list of available dominance personas."""
         personas = []
         for persona_id, persona in self.personas.items():
-            personas.append({
-                "id": persona_id,
-                "name": persona.name,
-                "description": persona.description,
-                "style": persona.dominance_style.value,
-                "communication_style": {
-                    "formality": persona.communication.formality,
-                    "directness": persona.communication.directness,
-                    "emotionality": persona.communication.emotionality
-                },
-                "key_traits": list(persona.traits.keys())
-            })
-        return personas
+            personas.append(PersonaInfo(
+                id=persona_id,
+                name=persona.name,
+                description=persona.description,
+                style=persona.dominance_style.value,
+                communication_style=PersonaCommunicationStyle(
+                    formality=persona.communication.formality,
+                    directness=persona.communication.directness,
+                    emotionality=persona.communication.emotionality
+                ),
+                key_traits=list(persona.traits.keys())
+            ))
+        return AvailablePersonasResponse(personas=personas)
     
     @function_tool
-    async def get_user_traits(self, user_id: str) -> Dict[str, Any]:
+    async def get_user_traits(self, user_id: str) -> UserTraitsResponse:
         """Get user traits and preferences."""
-        user_traits = {}
+        user_traits = UserTraits()
         
         # Get relationship data if available
         if self.relationship_manager:
             try:
                 relationship = await self.relationship_manager.get_relationship_state(user_id)
                 if hasattr(relationship, "inferred_user_traits"):
-                    user_traits["inferred_traits"] = relationship.inferred_user_traits
+                    user_traits.inferred_traits = relationship.inferred_user_traits
                 if hasattr(relationship, "preferences"):
-                    user_traits["preferences"] = relationship.preferences
+                    user_traits.preferences = relationship.preferences
                 if hasattr(relationship, "trust"):
-                    user_traits["trust_level"] = relationship.trust
+                    user_traits.trust_level = relationship.trust
                 if hasattr(relationship, "submission_level"):
-                    user_traits["submission_level"] = relationship.submission_level
+                    user_traits.submission_level = relationship.submission_level
             except Exception as e:
                 logger.error(f"Error getting relationship data: {e}")
         
         # Get user persona preferences from history
         if user_id in self.user_preferences:
-            user_traits["persona_preferences"] = self.user_preferences[user_id]
+            if user_traits.preferences is None:
+                user_traits.preferences = {}
+            user_traits.preferences["persona_preferences"] = self.user_preferences[user_id]
         
-        return {
-            "user_id": user_id,
-            "traits": user_traits
-        }
+        return UserTraitsResponse(
+            user_id=user_id,
+            traits=user_traits
+        )
     
     @function_tool
-    async def get_persona_history(self, user_id: str) -> Dict[str, Any]:
+    async def get_persona_history(self, user_id: str) -> PersonaHistoryResponse:
         """Get history of persona usage for a user."""
         if user_id not in self.persona_history or not self.persona_history[user_id]:
-            return {
-                "success": True,
-                "user_id": user_id,
-                "history": [],
-                "preferences": {}
-            }
+            return PersonaHistoryResponse(
+                success=True,
+                user_id=user_id,
+                history=[],
+                preferences={}
+            )
         
         # Get preferences
         preferences = self.user_preferences.get(user_id, {})
@@ -1250,10 +1354,7 @@ Generate original, varied, and authentic patterns that a dominatrix with this pe
         formatted_preferences = {}
         for persona_id, score in preferences.items():
             name = self.personas[persona_id].name if persona_id in self.personas else "Unknown"
-            formatted_preferences[persona_id] = {
-                "name": name,
-                "score": score
-            }
+            formatted_preferences[persona_id] = PersonaPreference(name=name, score=score)
         
         # Format history
         formatted_history = []
@@ -1261,18 +1362,18 @@ Generate original, varied, and authentic patterns that a dominatrix with this pe
             persona_id = entry["persona_id"]
             name = self.personas[persona_id].name if persona_id in self.personas else "Unknown"
             
-            formatted_entry = {
-                "persona_id": persona_id,
-                "persona_name": name,
-                "activated_at": entry["activated_at"],
-                "intensity": entry["intensity"],
-                "reason": entry.get("reason", "unspecified"),
-                "duration_minutes": entry.get("actual_duration_minutes", entry.get("duration_minutes"))
-            }
+            formatted_entry = PersonaHistoryEntry(
+                persona_id=persona_id,
+                persona_name=name,
+                activated_at=entry["activated_at"],
+                intensity=entry["intensity"],
+                reason=entry.get("reason", "unspecified"),
+                duration_minutes=entry.get("actual_duration_minutes", entry.get("duration_minutes"))
+            )
             
             if "deactivated_at" in entry:
-                formatted_entry["deactivated_at"] = entry["deactivated_at"]
-                formatted_entry["deactivation_reason"] = entry.get("deactivation_reason", "unspecified")
+                formatted_entry.deactivated_at = entry["deactivated_at"]
+                formatted_entry.deactivation_reason = entry.get("deactivation_reason", "unspecified")
             
             formatted_history.append(formatted_entry)
         
@@ -1287,115 +1388,128 @@ Generate original, varied, and authentic patterns that a dominatrix with this pe
         if most_used:
             most_used_id, most_used_count = most_used
             most_used_name = self.personas[most_used_id].name if most_used_id in self.personas else "Unknown"
-            most_used_info = {
-                "persona_id": most_used_id,
-                "persona_name": most_used_name,
-                "usage_count": most_used_count
-            }
+            most_used_info = MostUsedPersona(
+                persona_id=most_used_id,
+                persona_name=most_used_name,
+                usage_count=most_used_count
+            )
         else:
             most_used_info = None
         
-        return {
-            "success": True,
-            "user_id": user_id,
-            "history": formatted_history,
-            "preferences": formatted_preferences,
-            "most_used_persona": most_used_info
-        }
+        return PersonaHistoryResponse(
+            success=True,
+            user_id=user_id,
+            history=formatted_history,
+            preferences=formatted_preferences,
+            most_used_persona=most_used_info
+        )
     
     @function_tool
-    async def get_persona_details(self, persona_id: str) -> Dict[str, Any]:
+    async def get_persona_details(self, persona_id: str) -> PersonaDetailsResponse:
         """Get detailed information about a specific persona."""
         if persona_id not in self.personas:
-            return {
-                "success": False,
-                "message": f"Persona {persona_id} not found"
-            }
+            return PersonaDetailsResponse(
+                success=False,
+                message=f"Persona {persona_id} not found"
+            )
         
         persona = self.personas[persona_id]
-        return {
-            "success": True,
-            "id": persona_id,
-            "name": persona.name,
-            "description": persona.description,
-            "style": persona.dominance_style.value,
-            "traits": {
-                name: {
-                    "description": trait.description,
-                    "intensity": trait.intensity,
-                    "guidelines": trait.behavioral_guidelines
-                }
-                for name, trait in persona.traits.items()
-            },
-            "communication": persona.communication.model_dump(),
-            "suitable_for_users": persona.suitable_for_users,
-            "preferred_activities": persona.preferred_activities,
-            "avoid_activities": persona.avoid_activities,
-            "roleplay_elements": persona.roleplay_elements
-        }
+        
+        # Convert traits
+        traits = {}
+        for name, trait in persona.traits.items():
+            traits[name] = PersonaTrait(
+                description=trait.description,
+                intensity=trait.intensity,
+                guidelines=trait.behavioral_guidelines
+            )
+        
+        # Convert communication
+        communication = PersonaCommunication(
+            formality=persona.communication.formality,
+            verbosity=persona.communication.verbosity,
+            directness=persona.communication.directness,
+            emotionality=persona.communication.emotionality,
+            vocabulary_complexity=persona.communication.vocabulary_complexity,
+            communication_guidelines=persona.communication.communication_guidelines
+        )
+        
+        return PersonaDetailsResponse(
+            success=True,
+            id=persona_id,
+            name=persona.name,
+            description=persona.description,
+            style=persona.dominance_style.value,
+            traits=traits,
+            communication=communication,
+            suitable_for_users=persona.suitable_for_users,
+            preferred_activities=persona.preferred_activities,
+            avoid_activities=persona.avoid_activities,
+            roleplay_elements=persona.roleplay_elements
+        )
     
     @function_tool
-    async def get_active_persona(self, user_id: str) -> Dict[str, Any]:
+    async def get_active_persona(self, user_id: str) -> ActivePersonaResponse:
         """Get the currently active persona for a user."""
         if user_id not in self.active_personas:
-            return {
-                "success": False,
-                "active": False,
-                "message": "No active persona for this user"
-            }
+            return ActivePersonaResponse(
+                success=False,
+                active=False,
+                message="No active persona for this user"
+            )
         
         activation = self.active_personas[user_id]
         
         # Check if expired
         if activation.expiration_time and activation.expiration_time < datetime.datetime.now():
             activation.active = False
-            return {
-                "success": True,
-                "active": False,
-                "message": "Persona has expired",
-                "persona_id": activation.persona_id,
-                "expired_at": activation.expiration_time.isoformat()
-            }
+            return ActivePersonaResponse(
+                success=True,
+                active=False,
+                message="Persona has expired",
+                persona_id=activation.persona_id,
+                expired_at=activation.expiration_time.isoformat()
+            )
         
         # Check if persona still exists
         if activation.persona_id not in self.personas:
-            return {
-                "success": False,
-                "active": False,
-                "message": f"Activated persona {activation.persona_id} no longer exists"
-            }
+            return ActivePersonaResponse(
+                success=False,
+                active=False,
+                message=f"Activated persona {activation.persona_id} no longer exists"
+            )
         
         persona = self.personas[activation.persona_id]
         
-        return {
-            "success": True,
-            "active": activation.active,
-            "persona_id": activation.persona_id,
-            "persona_name": persona.name,
-            "style": persona.dominance_style.value,
-            "activated_at": activation.activated_at.isoformat(),
-            "intensity": activation.intensity,
-            "expiration_time": activation.expiration_time.isoformat() if activation.expiration_time else None,
-            "customizations": activation.customizations
-        }
+        return ActivePersonaResponse(
+            success=True,
+            active=activation.active,
+            persona_id=activation.persona_id,
+            persona_name=persona.name,
+            style=persona.dominance_style.value,
+            activated_at=activation.activated_at.isoformat(),
+            intensity=activation.intensity,
+            expiration_time=activation.expiration_time.isoformat() if activation.expiration_time else None,
+            customizations=activation.customizations
+        )
     
     @function_tool
-    async def get_language_patterns(self, user_id: str, pattern_type: Optional[str] = None) -> Dict[str, Any]:
+    async def get_language_patterns(self, user_id: str, pattern_type: Optional[str] = None) -> LanguagePatternsResponse:
         """Get language patterns for the active persona."""
         if user_id not in self.active_personas or not self.active_personas[user_id].active:
-            return {
-                "success": False,
-                "message": "No active persona"
-            }
+            return LanguagePatternsResponse(
+                success=False,
+                message="No active persona"
+            )
         
         activation = self.active_personas[user_id]
         persona_id = activation.persona_id
         
         if persona_id not in self.personas:
-            return {
-                "success": False,
-                "message": f"Persona {persona_id} not found"
-            }
+            return LanguagePatternsResponse(
+                success=False,
+                message=f"Persona {persona_id} not found"
+            )
         
         persona = self.personas[persona_id]
         intensity = activation.intensity
@@ -1409,15 +1523,25 @@ Generate original, varied, and authentic patterns that a dominatrix with this pe
         else:
             available_patterns = patterns
         
+        # Convert communication style
+        communication_style = PersonaCommunication(
+            formality=persona.communication.formality,
+            verbosity=persona.communication.verbosity,
+            directness=persona.communication.directness,
+            emotionality=persona.communication.emotionality,
+            vocabulary_complexity=persona.communication.vocabulary_complexity,
+            communication_guidelines=persona.communication.communication_guidelines
+        )
+        
         # Return patterns with active persona info
-        return {
-            "success": True,
-            "persona_id": persona_id,
-            "persona_name": persona.name,
-            "intensity": intensity,
-            "patterns": available_patterns,
-            "communication_style": persona.communication.model_dump()
-        }
+        return LanguagePatternsResponse(
+            success=True,
+            persona_id=persona_id,
+            persona_name=persona.name,
+            intensity=intensity,
+            patterns=available_patterns,
+            communication_style=communication_style
+        )
     
     async def recommend_persona(self, user_id: str, scenario: Optional[str] = None) -> Dict[str, Any]:
         """
