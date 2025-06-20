@@ -109,6 +109,141 @@ class AgentContext(BaseModel):
     # Begging analysis thresholds
     desperation_keywords: Dict[str, List[str]] = Field(default_factory=dict)
 
+# Pydantic models for function tool inputs/outputs
+class PermissionRequestContext(BaseModel):
+    begging_allowed: Optional[bool] = None
+    min_begging: Optional[int] = None
+
+class PermissionRequestResponse(BaseModel):
+    request_id: str
+    permission_granted: bool
+    reason: str
+    response: str
+    desperation_level: float
+    current_status: str
+    denial_active: bool
+    reward_result: Optional[str] = None
+    somatic_result: Optional[str] = None
+
+class DenialConditions(BaseModel):
+    min_begging: Optional[int] = None
+    begging_allowed: Optional[bool] = None
+
+class DenialPeriodResponse(BaseModel):
+    denial_id: str
+    user_id: str
+    start_time: str
+    end_time: str
+    duration_hours: int
+    level: str
+    begging_allowed: bool
+    message: str
+    reward_result: Optional[str] = None
+    somatic_result: Optional[str] = None
+
+class DenialExtensionResponse(BaseModel):
+    success: bool
+    denial_id: Optional[str] = None
+    old_end_time: Optional[str] = None
+    new_end_time: Optional[str] = None
+    additional_hours: Optional[int] = None
+    total_extensions: Optional[int] = None
+    reason: Optional[str] = None
+    message: Optional[str] = None
+    reward_result: Optional[str] = None
+    somatic_result: Optional[str] = None
+
+class DenialEndResponse(BaseModel):
+    success: bool
+    denial_id: Optional[str] = None
+    level: Optional[str] = None
+    start_time: Optional[str] = None
+    end_time: Optional[str] = None
+    duration_hours: Optional[float] = None
+    extensions: Optional[int] = None
+    reason: Optional[str] = None
+    message: Optional[str] = None
+    reward_result: Optional[str] = None
+
+class OrgasmRecordResponse(BaseModel):
+    orgasm_id: str
+    user_id: str
+    type: str
+    with_permission: bool
+    timestamp: str
+    denial_ended: bool
+    message: str
+    reward_result: Optional[str] = None
+    somatic_result: Optional[str] = None
+
+class PermissionConditions(BaseModel):
+    tasks_required: Optional[int] = None
+    tasks_completed: Optional[int] = None
+    begging_required: Optional[int] = None
+    time_restriction: Optional[Dict[str, str]] = None
+
+class PermissionStatusResponse(BaseModel):
+    success: bool
+    user_id: str
+    old_status: str
+    new_status: str
+    conditions: Optional[PermissionConditions] = None
+    reason: str
+    message: str
+    reward_result: Optional[str] = None
+
+class TemplateApplicationResponse(BaseModel):
+    success: bool
+    template_name: str
+    template_type: str
+    description: str
+    result: Optional[str] = None
+
+class PermissionStateResponse(BaseModel):
+    user_id: str
+    current_status: str
+    denial_active: bool
+    active_denial: Optional[Dict[str, Any]] = None
+    last_orgasm: Optional[str] = None
+    days_since_last_orgasm: int
+    begging_count: int
+    denied_begging_count: int
+    orgasm_count: int
+    current_conditions: Dict[str, Any]
+    recent_begging: List[Dict[str, Any]]
+    recent_orgasms: List[Dict[str, Any]]
+    last_updated: str
+
+class TemplateData(BaseModel):
+    name: str
+    status: str
+    description: str
+    duration_hours: Optional[int] = None
+    begging_allowed: Optional[bool] = None
+    level: Optional[str] = None
+    conditions: Optional[Dict[str, Any]] = None
+
+class TemplateCreationResponse(BaseModel):
+    success: bool
+    template_name: Optional[str] = None
+    template: Optional[Dict[str, Any]] = None
+    message: Optional[str] = None
+
+class TemplateInfo(BaseModel):
+    name: str
+    status: str
+    description: str
+    duration_hours: Optional[int] = None
+    level: Optional[str] = None
+    begging_allowed: bool
+
+class ControlPatternsResponse(BaseModel):
+    user_id: str
+    compliance_metrics: Dict[str, Any]
+    usage_metrics: Dict[str, Any]
+    patterns: Dict[str, Any]
+    recommendations: List[Dict[str, Any]]
+
 # Input validation guardrail
 async def user_id_validation(ctx: RunContextWrapper[AgentContext], agent: Agent, input_data: str) -> GuardrailFunctionOutput:
     """Validate that user_id is provided in the input data."""
@@ -580,8 +715,8 @@ async def process_permission_request(
     ctx: RunContextWrapper[AgentContext], 
     user_id: str, 
     request_text: str,
-    context: Optional[Dict[str, Any]] = None
-) -> Dict[str, Any]:
+    context: Optional[PermissionRequestContext] = None
+) -> PermissionRequestResponse:
     """
     Process a request for permission to orgasm.
     
@@ -797,7 +932,7 @@ async def process_permission_request(
                     if denied_count > 3:
                         reward_value += min(0.3, denied_count * 0.03)
                 
-                reward_result = await agent_context.reward_system.process_reward_signal(
+                reward_result_obj = await agent_context.reward_system.process_reward_signal(
                     agent_context.reward_system.RewardSignal(
                         value=reward_value,
                         source="orgasm_control",
@@ -810,6 +945,7 @@ async def process_permission_request(
                         }
                     )
                 )
+                reward_result = str(reward_result_obj)
             except Exception as e:
                 logger.error(f"Error processing reward: {e}")
         
@@ -843,27 +979,28 @@ async def process_permission_request(
         if permission_granted and agent_context.somatosensory_system:
             try:
                 # Process positive sensation from granting permission
-                somatic_result = await agent_context.somatosensory_system.process_stimulus(
+                somatic_result_obj = await agent_context.somatosensory_system.process_stimulus(
                     stimulus_type="pleasure",
                     body_region="skin",
                     intensity=0.3 + (desperation_level * 0.2),
                     cause="granting_orgasm_permission",
                     duration=2.0
                 )
+                somatic_result = str(somatic_result_obj)
             except Exception as e:
                 logger.error(f"Error processing somatic response: {e}")
         
-        return {
-            "request_id": begging_record.id,
-            "permission_granted": permission_granted,
-            "reason": reason,
-            "response": response,
-            "desperation_level": desperation_level,
-            "current_status": user_state.current_status,
-            "denial_active": user_state.denial_active,
-            "reward_result": reward_result,
-            "somatic_result": somatic_result
-        }
+        return PermissionRequestResponse(
+            request_id=begging_record.id,
+            permission_granted=permission_granted,
+            reason=reason,
+            response=response,
+            desperation_level=desperation_level,
+            current_status=user_state.current_status.value,
+            denial_active=user_state.denial_active,
+            reward_result=reward_result,
+            somatic_result=somatic_result
+        )
 
 @function_tool
 async def start_denial_period(
@@ -872,8 +1009,8 @@ async def start_denial_period(
     duration_hours: int = 24, 
     level: Union[int, DenialLevel] = DenialLevel.MODERATE,
     begging_allowed: bool = True,
-    conditions: Optional[Dict[str, Any]] = None
-) -> Dict[str, Any]:
+    conditions: Optional[DenialConditions] = None
+) -> DenialPeriodResponse:
     """
     Start a denial period for a user.
     
@@ -899,11 +1036,12 @@ async def start_denial_period(
             level = DenialLevel(level)
         
         # Create denial period
+        conditions_dict = conditions.model_dump() if conditions else {}
         denial_period = DenialPeriod(
             user_id=user_id,
             level=level,
             begging_allowed=begging_allowed,
-            conditions=conditions or {}
+            conditions=conditions_dict
         )
         
         # Calculate end time
@@ -935,7 +1073,7 @@ async def start_denial_period(
                 
                 reward_value = base_reward + level_bonus + duration_bonus
                 
-                reward_result = await agent_context.reward_system.process_reward_signal(
+                reward_result_obj = await agent_context.reward_system.process_reward_signal(
                     agent_context.reward_system.RewardSignal(
                         value=reward_value,
                         source="orgasm_control",
@@ -947,6 +1085,7 @@ async def start_denial_period(
                         }
                     )
                 )
+                reward_result = str(reward_result_obj)
             except Exception as e:
                 logger.error(f"Error processing reward: {e}")
         
@@ -972,28 +1111,29 @@ async def start_denial_period(
         if agent_context.somatosensory_system:
             try:
                 # Process positive sensation from starting denial (domspace)
-                somatic_result = await agent_context.somatosensory_system.process_stimulus(
+                somatic_result_obj = await agent_context.somatosensory_system.process_stimulus(
                     stimulus_type="pleasure",
                     body_region="core",
                     intensity=0.3 + (level.value * 0.1),
                     cause="starting_denial_period",
                     duration=3.0
                 )
+                somatic_result = str(somatic_result_obj)
             except Exception as e:
                 logger.error(f"Error processing somatic response: {e}")
         
-        return {
-            "denial_id": denial_period.id,
-            "user_id": user_id,
-            "start_time": denial_period.start_time.isoformat(),
-            "end_time": denial_period.end_time.isoformat(),
-            "duration_hours": duration_hours,
-            "level": level.name,
-            "begging_allowed": begging_allowed,
-            "message": message,
-            "reward_result": reward_result,
-            "somatic_result": somatic_result
-        }
+        return DenialPeriodResponse(
+            denial_id=denial_period.id,
+            user_id=user_id,
+            start_time=denial_period.start_time.isoformat(),
+            end_time=denial_period.end_time.isoformat(),
+            duration_hours=duration_hours,
+            level=level.name,
+            begging_allowed=begging_allowed,
+            message=message,
+            reward_result=reward_result,
+            somatic_result=somatic_result
+        )
 
 @function_tool
 async def extend_denial_period(
@@ -1001,7 +1141,7 @@ async def extend_denial_period(
     user_id: str, 
     additional_hours: int = 24,
     reason: str = "standard extension"
-) -> Dict[str, Any]:
+) -> DenialExtensionResponse:
     """
     Extend an active denial period.
     
@@ -1018,13 +1158,13 @@ async def extend_denial_period(
     with custom_span("extend_denial_period", data={"user_id": user_id, "additional_hours": additional_hours}):
         # Ensure user is initialized
         if user_id not in agent_context.permission_states:
-            return {"success": False, "message": "User not initialized in orgasm control system"}
+            return DenialExtensionResponse(success=False)
         
         user_state = agent_context.permission_states[user_id]
         
         # Check if user is in active denial
         if not user_state.denial_active or not user_state.current_denial_period:
-            return {"success": False, "message": "No active denial period to extend"}
+            return DenialExtensionResponse(success=False)
         
         current_denial_id = user_state.current_denial_period
         current_denial = None
@@ -1036,7 +1176,7 @@ async def extend_denial_period(
                 break
         
         if not current_denial:
-            return {"success": False, "message": "Active denial period not found"}
+            return DenialExtensionResponse(success=False)
         
         # Calculate new end time
         old_end_time = current_denial.end_time
@@ -1074,7 +1214,7 @@ async def extend_denial_period(
                 
                 reward_value = base_reward + level_bonus + duration_bonus
                 
-                reward_result = await agent_context.reward_system.process_reward_signal(
+                reward_result_obj = await agent_context.reward_system.process_reward_signal(
                     agent_context.reward_system.RewardSignal(
                         value=reward_value,
                         source="orgasm_control",
@@ -1086,6 +1226,7 @@ async def extend_denial_period(
                         }
                     )
                 )
+                reward_result = str(reward_result_obj)
             except Exception as e:
                 logger.error(f"Error processing reward: {e}")
         
@@ -1111,28 +1252,29 @@ async def extend_denial_period(
         if agent_context.somatosensory_system:
             try:
                 # Process positive sensation from extending denial (domspace)
-                somatic_result = await agent_context.somatosensory_system.process_stimulus(
+                somatic_result_obj = await agent_context.somatosensory_system.process_stimulus(
                     stimulus_type="pleasure",
                     body_region="core",
                     intensity=0.2 + (current_denial.level.value * 0.08),
                     cause="extending_denial_period",
                     duration=2.0
                 )
+                somatic_result = str(somatic_result_obj)
             except Exception as e:
                 logger.error(f"Error processing somatic response: {e}")
         
-        return {
-            "success": True,
-            "denial_id": current_denial.id,
-            "old_end_time": old_end_time.isoformat(),
-            "new_end_time": new_end_time.isoformat(),
-            "additional_hours": additional_hours,
-            "total_extensions": len(current_denial.extensions),
-            "reason": reason,
-            "message": message,
-            "reward_result": reward_result,
-            "somatic_result": somatic_result
-        }
+        return DenialExtensionResponse(
+            success=True,
+            denial_id=current_denial.id,
+            old_end_time=old_end_time.isoformat(),
+            new_end_time=new_end_time.isoformat(),
+            additional_hours=additional_hours,
+            total_extensions=len(current_denial.extensions),
+            reason=reason,
+            message=message,
+            reward_result=reward_result,
+            somatic_result=somatic_result
+        )
 
 @function_tool
 async def end_denial_period(
@@ -1140,7 +1282,7 @@ async def end_denial_period(
     user_id: str, 
     denial_id: Optional[str] = None,
     reason: str = "completed"
-) -> Dict[str, Any]:
+) -> DenialEndResponse:
     """
     End an active denial period.
     
@@ -1157,7 +1299,7 @@ async def end_denial_period(
     with custom_span("end_denial_period", data={"user_id": user_id, "denial_id": denial_id}):
         # Ensure user is initialized
         if user_id not in agent_context.permission_states:
-            return {"success": False, "message": "User not initialized in orgasm control system"}
+            return DenialEndResponse(success=False)
         
         user_state = agent_context.permission_states[user_id]
         
@@ -1166,7 +1308,7 @@ async def end_denial_period(
             denial_id = user_state.current_denial_period
         
         if not denial_id:
-            return {"success": False, "message": "No active denial period specified"}
+            return DenialEndResponse(success=False)
         
         # Find the denial period
         target_denial = None
@@ -1176,7 +1318,7 @@ async def end_denial_period(
                 break
         
         if not target_denial:
-            return {"success": False, "message": f"Denial period {denial_id} not found or not active"}
+            return DenialEndResponse(success=False)
         
         # Mark as inactive
         target_denial.active = False
@@ -1212,7 +1354,7 @@ async def end_denial_period(
             try:
                 reward_value = 0.1 + (target_denial.level.value * 0.03)
                 
-                reward_result = await agent_context.reward_system.process_reward_signal(
+                reward_result_obj = await agent_context.reward_system.process_reward_signal(
                     agent_context.reward_system.RewardSignal(
                         value=reward_value,
                         source="orgasm_control",
@@ -1224,6 +1366,7 @@ async def end_denial_period(
                         }
                     )
                 )
+                reward_result = str(reward_result_obj)
             except Exception as e:
                 logger.error(f"Error processing reward: {e}")
         
@@ -1244,18 +1387,18 @@ async def end_denial_period(
             except Exception as e:
                 logger.error(f"Error recording memory: {e}")
         
-        return {
-            "success": True,
-            "denial_id": denial_id,
-            "level": target_denial.level.name,
-            "start_time": target_denial.start_time.isoformat(),
-            "end_time": end_time.isoformat(),
-            "duration_hours": duration_hours,
-            "extensions": len(target_denial.extensions),
-            "reason": reason,
-            "message": message,
-            "reward_result": reward_result
-        }
+        return DenialEndResponse(
+            success=True,
+            denial_id=denial_id,
+            level=target_denial.level.name,
+            start_time=target_denial.start_time.isoformat(),
+            end_time=end_time.isoformat(),
+            duration_hours=duration_hours,
+            extensions=len(target_denial.extensions),
+            reason=reason,
+            message=message,
+            reward_result=reward_result
+        )
 
 @function_tool
 async def record_orgasm(
@@ -1265,7 +1408,7 @@ async def record_orgasm(
     with_permission: bool = True,
     quality: Optional[float] = None,
     notes: Optional[str] = None
-) -> Dict[str, Any]:
+) -> OrgasmRecordResponse:
     """
     Record an orgasm event.
     
@@ -1352,7 +1495,7 @@ async def record_orgasm(
                     # Extra negative for breaking denial
                     reward_value -= 0.3
                 
-                reward_result = await agent_context.reward_system.process_reward_signal(
+                reward_result_obj = await agent_context.reward_system.process_reward_signal(
                     agent_context.reward_system.RewardSignal(
                         value=reward_value,
                         source="orgasm_control",
@@ -1365,6 +1508,7 @@ async def record_orgasm(
                         }
                     )
                 )
+                reward_result = str(reward_result_obj)
             except Exception as e:
                 logger.error(f"Error processing reward: {e}")
         
@@ -1405,13 +1549,14 @@ async def record_orgasm(
                     if orgasm_type == "ruined":
                         intensity = 0.5  # Higher pleasure from controlling orgasm quality
                     
-                    somatic_result = await agent_context.somatosensory_system.process_stimulus(
+                    somatic_result_obj = await agent_context.somatosensory_system.process_stimulus(
                         stimulus_type="pleasure",
                         body_region="skin",
                         intensity=intensity,
                         cause=f"permitted_{orgasm_type}_orgasm",
                         duration=3.0
                     )
+                    somatic_result = str(somatic_result_obj)
                 else:
                     # Mix of anger and arousal from disobedience
                     await agent_context.somatosensory_system.process_stimulus(
@@ -1423,36 +1568,37 @@ async def record_orgasm(
                     )
                     
                     # Also trigger some "anger" response
-                    somatic_result = await agent_context.somatosensory_system.process_stimulus(
+                    somatic_result_obj = await agent_context.somatosensory_system.process_stimulus(
                         stimulus_type="pressure",
                         body_region="face",
                         intensity=0.6,  # Pressure/tension from anger
                         cause="unauthorized_orgasm_anger",
                         duration=2.0
                     )
+                    somatic_result = str(somatic_result_obj)
             except Exception as e:
                 logger.error(f"Error processing somatic response: {e}")
         
-        return {
-            "orgasm_id": record.id,
-            "user_id": user_id,
-            "type": orgasm_type,
-            "with_permission": with_permission,
-            "timestamp": record.timestamp.isoformat(),
-            "denial_ended": denial_ended,
-            "message": message,
-            "reward_result": reward_result,
-            "somatic_result": somatic_result
-        }
+        return OrgasmRecordResponse(
+            orgasm_id=record.id,
+            user_id=user_id,
+            type=orgasm_type,
+            with_permission=with_permission,
+            timestamp=record.timestamp.isoformat(),
+            denial_ended=denial_ended,
+            message=message,
+            reward_result=reward_result,
+            somatic_result=somatic_result
+        )
 
 @function_tool
 async def set_permission_status(
     ctx: RunContextWrapper[AgentContext], 
     user_id: str, 
     status: Union[str, PermissionStatus],
-    conditions: Optional[Dict[str, Any]] = None,
+    conditions: Optional[PermissionConditions] = None,
     reason: str = "status update"
-) -> Dict[str, Any]:
+) -> PermissionStatusResponse:
     """
     Set a user's permission status directly.
     
@@ -1479,7 +1625,14 @@ async def set_permission_status(
             try:
                 status = PermissionStatus(status)
             except ValueError:
-                return {"success": False, "message": f"Invalid permission status: {status}"}
+                return PermissionStatusResponse(
+                    success=False,
+                    user_id=user_id,
+                    old_status="",
+                    new_status="",
+                    reason=f"Invalid permission status: {status}",
+                    message=""
+                )
         
         # Store previous status
         old_status = user_state.current_status
@@ -1488,8 +1641,10 @@ async def set_permission_status(
         user_state.current_status = status
         
         # If it's a restricted status, update conditions
+        conditions_dict = {}
         if status == PermissionStatus.RESTRICTED and conditions:
-            user_state.current_conditions = conditions
+            conditions_dict = conditions.model_dump()
+            user_state.current_conditions = conditions_dict
         
         # Update timestamp
         user_state.last_permission_update = datetime.datetime.now()
@@ -1513,7 +1668,7 @@ async def set_permission_status(
                 else:
                     reward_value = 0.05  # Minimal reward for other status changes
                 
-                reward_result = await agent_context.reward_system.process_reward_signal(
+                reward_result_obj = await agent_context.reward_system.process_reward_signal(
                     agent_context.reward_system.RewardSignal(
                         value=reward_value,
                         source="orgasm_control",
@@ -1525,6 +1680,7 @@ async def set_permission_status(
                         }
                     )
                 )
+                reward_result = str(reward_result_obj)
             except Exception as e:
                 logger.error(f"Error processing reward: {e}")
         
@@ -1545,16 +1701,16 @@ async def set_permission_status(
             except Exception as e:
                 logger.error(f"Error recording memory: {e}")
         
-        return {
-            "success": True,
-            "user_id": user_id,
-            "old_status": old_status.name,
-            "new_status": status.name,
-            "conditions": conditions,
-            "reason": reason,
-            "message": message,
-            "reward_result": reward_result
-        }
+        return PermissionStatusResponse(
+            success=True,
+            user_id=user_id,
+            old_status=old_status.name,
+            new_status=status.name,
+            conditions=conditions,
+            reason=reason,
+            message=message,
+            reward_result=reward_result
+        )
 
 @function_tool
 async def apply_permission_template(
@@ -1562,7 +1718,7 @@ async def apply_permission_template(
     user_id: str, 
     template_name: str,
     reason: str = "template application"
-) -> Dict[str, Any]:
+) -> TemplateApplicationResponse:
     """
     Apply a predefined permission template to a user.
     
@@ -1579,7 +1735,12 @@ async def apply_permission_template(
     with custom_span("apply_permission_template", data={"user_id": user_id, "template": template_name}):
         # Check if template exists
         if template_name not in agent_context.permission_templates:
-            return {"success": False, "message": f"Template '{template_name}' not found"}
+            return TemplateApplicationResponse(
+                success=False,
+                template_name=template_name,
+                template_type="",
+                description=""
+            )
         
         template = agent_context.permission_templates[template_name]
         
@@ -1601,36 +1762,36 @@ async def apply_permission_template(
                 begging_allowed=begging_allowed
             )
             
-            return {
-                "success": True,
-                "template_name": template_name,
-                "template_type": "denial_period",
-                "description": description,
-                "result": result
-            }
+            return TemplateApplicationResponse(
+                success=True,
+                template_name=template_name,
+                template_type="denial_period",
+                description=description,
+                result=str(result)
+            )
         else:
             # Set permission status
             result = await set_permission_status(
                 ctx,
                 user_id=user_id,
                 status=status,
-                conditions=template.get("conditions"),
+                conditions=PermissionConditions(**template.get("conditions", {})),
                 reason=f"Template: {template_name} - {reason}"
             )
             
-            return {
-                "success": True,
-                "template_name": template_name,
-                "template_type": "status_change",
-                "description": description,
-                "result": result
-            }
+            return TemplateApplicationResponse(
+                success=True,
+                template_name=template_name,
+                template_type="status_change",
+                description=description,
+                result=str(result)
+            )
 
 @function_tool
 async def get_permission_state(
     ctx: RunContextWrapper[AgentContext],
     user_id: str
-) -> Dict[str, Any]:
+) -> PermissionStateResponse:
     """Get the current permission state for a user."""
     agent_context = ctx.context
     
@@ -1699,56 +1860,53 @@ async def get_permission_state(
                 "with_permission": record.with_permission
             })
         
-        return {
-            "user_id": user_id,
-            "current_status": user_state.current_status.name,
-            "denial_active": user_state.denial_active,
-            "active_denial": active_denial,
-            "last_orgasm": user_state.last_orgasm.isoformat() if user_state.last_orgasm else None,
-            "days_since_last_orgasm": user_state.days_since_last_orgasm,
-            "begging_count": user_state.begging_count,
-            "denied_begging_count": user_state.denied_begging_count,
-            "orgasm_count": user_state.orgasm_count,
-            "current_conditions": user_state.current_conditions,
-            "recent_begging": recent_begging,
-            "recent_orgasms": recent_orgasms,
-            "last_updated": user_state.last_permission_update.isoformat()
-        }
+        return PermissionStateResponse(
+            user_id=user_id,
+            current_status=user_state.current_status.name,
+            denial_active=user_state.denial_active,
+            active_denial=active_denial,
+            last_orgasm=user_state.last_orgasm.isoformat() if user_state.last_orgasm else None,
+            days_since_last_orgasm=user_state.days_since_last_orgasm,
+            begging_count=user_state.begging_count,
+            denied_begging_count=user_state.denied_begging_count,
+            orgasm_count=user_state.orgasm_count,
+            current_conditions=user_state.current_conditions,
+            recent_begging=recent_begging,
+            recent_orgasms=recent_orgasms,
+            last_updated=user_state.last_permission_update.isoformat()
+        )
 
 @function_tool
 async def create_permission_template(
     ctx: RunContextWrapper[AgentContext],
-    template_data: Dict[str, Any]
-) -> Dict[str, Any]:
+    template_data: TemplateData
+) -> TemplateCreationResponse:
     """Create a custom permission template."""
     agent_context = ctx.context
     
-    # Check for required fields
-    required_fields = ["name", "status", "description"]
-    for field in required_fields:
-        if field not in template_data:
-            return {"success": False, "message": f"Missing required field: {field}"}
-    
-    template_name = template_data["name"]
+    template_name = template_data.name
     
     # Check if template already exists
     if template_name in agent_context.permission_templates:
-        return {"success": False, "message": f"Template '{template_name}' already exists"}
+        return TemplateCreationResponse(
+            success=False,
+            message=f"Template '{template_name}' already exists"
+        )
     
     try:
         # Parse status
-        status = template_data["status"]
+        status = template_data.status
         if isinstance(status, str):
             status = PermissionStatus(status)
         
         # Create template
         template = {
             "status": status,
-            "description": template_data["description"],
-            "duration_hours": template_data.get("duration_hours", 24),
-            "begging_allowed": template_data.get("begging_allowed", True),
-            "level": template_data.get("level", DenialLevel.MODERATE),
-            "conditions": template_data.get("conditions")
+            "description": template_data.description,
+            "duration_hours": template_data.duration_hours or 24,
+            "begging_allowed": template_data.begging_allowed if template_data.begging_allowed is not None else True,
+            "level": DenialLevel[template_data.level] if template_data.level else DenialLevel.MODERATE,
+            "conditions": template_data.conditions
         }
         
         # Store template
@@ -1756,30 +1914,33 @@ async def create_permission_template(
         
         logger.info(f"Created permission template '{template_name}'")
         
-        return {
-            "success": True,
-            "template_name": template_name,
-            "template": template
-        }
+        return TemplateCreationResponse(
+            success=True,
+            template_name=template_name,
+            template=template
+        )
         
     except ValueError as e:
-        return {"success": False, "message": f"Error creating template: {str(e)}"}
+        return TemplateCreationResponse(
+            success=False,
+            message=f"Error creating template: {str(e)}"
+        )
 
 @function_tool
-def get_available_templates(ctx: RunContextWrapper[AgentContext]) -> List[Dict[str, Any]]:
+def get_available_templates(ctx: RunContextWrapper[AgentContext]) -> List[TemplateInfo]:
     """Get all available permission templates."""
     agent_context = ctx.context
     templates = []
     
     for name, template in agent_context.permission_templates.items():
-        templates.append({
-            "name": name,
-            "status": template["status"].name if isinstance(template["status"], PermissionStatus) else template["status"],
-            "description": template["description"],
-            "duration_hours": template.get("duration_hours"),
-            "level": template.get("level").name if isinstance(template.get("level"), DenialLevel) else template.get("level"),
-            "begging_allowed": template.get("begging_allowed", True)
-        })
+        templates.append(TemplateInfo(
+            name=name,
+            status=template["status"].name if isinstance(template["status"], PermissionStatus) else template["status"],
+            description=template["description"],
+            duration_hours=template.get("duration_hours"),
+            level=template.get("level").name if isinstance(template.get("level"), DenialLevel) else template.get("level"),
+            begging_allowed=template.get("begging_allowed", True)
+        ))
     
     return templates
 
@@ -1787,7 +1948,7 @@ def get_available_templates(ctx: RunContextWrapper[AgentContext]) -> List[Dict[s
 async def analyze_control_patterns(
     ctx: RunContextWrapper[AgentContext], 
     user_id: str
-) -> Dict[str, Any]:
+) -> ControlPatternsResponse:
     """
     Analyze orgasm control patterns and effectiveness for a user.
     
@@ -1872,24 +2033,23 @@ async def analyze_control_patterns(
                 denial_level_compliance[level.name] = sum(period_compliance) / len(period_compliance)
         
         # Prepare analysis
-        analysis = {
-            "user_id": user_id,
-            "compliance_metrics": {
-                "overall_compliance_rate": compliance_rate,
-                "begging_success_rate": begging_success_rate,
-                "avg_denial_duration_hours": avg_denial_duration,
-                "denial_level_compliance": denial_level_compliance
-            },
-            "usage_metrics": {
-                "total_orgasms": total_orgasms,
-                "unauthorized_orgasms": total_orgasms - permitted_orgasms,
-                "total_begging_attempts": total_begging,
-                "total_denial_periods": len(denial_periods),
-                "active_denial_periods": sum(1 for p in denial_periods if p.active),
-                "denied_begging_count": user_state.denied_begging_count
-            },
-            "patterns": {}
+        compliance_metrics = {
+            "overall_compliance_rate": compliance_rate,
+            "begging_success_rate": begging_success_rate,
+            "avg_denial_duration_hours": avg_denial_duration,
+            "denial_level_compliance": denial_level_compliance
         }
+        
+        usage_metrics = {
+            "total_orgasms": total_orgasms,
+            "unauthorized_orgasms": total_orgasms - permitted_orgasms,
+            "total_begging_attempts": total_begging,
+            "total_denial_periods": len(denial_periods),
+            "active_denial_periods": sum(1 for p in denial_periods if p.active),
+            "denied_begging_count": user_state.denied_begging_count
+        }
+        
+        patterns = {}
         
         # Analyze patterns if enough data
         if len(begging_records) >= 5:
@@ -1901,7 +2061,7 @@ async def analyze_control_patterns(
             recent_success = [r.granted for r in begging_records[-5:]]
             success_pattern = "consistent" if all(recent_success) or not any(recent_success) else "varied"
             
-            analysis["patterns"]["begging"] = {
+            patterns["begging"] = {
                 "desperation_trend": desperation_trend,
                 "success_pattern": success_pattern,
                 "recent_desperation_levels": recent_desperation
@@ -1921,7 +2081,7 @@ async def analyze_control_patterns(
             recent_compliance = [r.with_permission for r in orgasm_records[-5:]]
             compliance_trend = "improving" if sum(recent_compliance[-3:]) > sum(recent_compliance[:2]) else "stable"
             
-            analysis["patterns"]["orgasms"] = {
+            patterns["orgasms"] = {
                 "preferred_types": type_counts,
                 "compliance_trend": compliance_trend,
                 "recent_compliance": recent_compliance
@@ -1930,7 +2090,7 @@ async def analyze_control_patterns(
         # Recommendations based on analysis
         recommendations = []
         
-        if analysis["compliance_metrics"]["overall_compliance_rate"] < 0.7:
+        if compliance_metrics["overall_compliance_rate"] < 0.7:
             recommendations.append({
                 "type": "compliance",
                 "description": "Increase strictness due to low compliance rate",
@@ -1938,7 +2098,7 @@ async def analyze_control_patterns(
                 "parameters": {"level_increase": 1}
             })
         
-        if analysis["compliance_metrics"]["begging_success_rate"] > 0.7:
+        if compliance_metrics["begging_success_rate"] > 0.7:
             recommendations.append({
                 "type": "begging",
                 "description": "User is too successful at begging, increase difficulty",
@@ -1946,10 +2106,13 @@ async def analyze_control_patterns(
                 "parameters": {"success_modifier": -0.2}
             })
         
-        # Add recommendations to analysis
-        analysis["recommendations"] = recommendations
-        
-        return analysis
+        return ControlPatternsResponse(
+            user_id=user_id,
+            compliance_metrics=compliance_metrics,
+            usage_metrics=usage_metrics,
+            patterns=patterns,
+            recommendations=recommendations
+        )
 
 # Main class for backwards compatibility
 class OrgasmControlSystem:
@@ -1989,12 +2152,14 @@ class OrgasmControlSystem:
                                        request_text: str,
                                        context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Backward compatibility method."""
-        return await process_permission_request(
+        context_obj = PermissionRequestContext(**(context or {}))
+        result = await process_permission_request(
             RunContextWrapper(context=self.context),
             user_id,
             request_text,
-            context
+            context_obj
         )
+        return result.model_dump()
     
     def _analyze_desperation(self, request_text: str) -> float:
         """Backward compatibility method."""
@@ -2023,14 +2188,16 @@ class OrgasmControlSystem:
                                 begging_allowed: bool = True,
                                 conditions: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Backward compatibility method."""
-        return await start_denial_period(
+        conditions_obj = DenialConditions(**(conditions or {}))
+        result = await start_denial_period(
             RunContextWrapper(context=self.context),
             user_id,
             duration_hours,
             level,
             begging_allowed,
-            conditions
+            conditions_obj
         )
+        return result.model_dump()
     
     def _generate_denial_start_message(self, 
                                       level: DenialLevel, 
@@ -2044,12 +2211,13 @@ class OrgasmControlSystem:
                                  additional_hours: int = 24,
                                  reason: str = "standard extension") -> Dict[str, Any]:
         """Backward compatibility method."""
-        return await extend_denial_period(
+        result = await extend_denial_period(
             RunContextWrapper(context=self.context),
             user_id,
             additional_hours,
             reason
         )
+        return result.model_dump()
     
     def _generate_extension_message(self, 
                                    level_name: str, 
@@ -2063,12 +2231,13 @@ class OrgasmControlSystem:
                               denial_id: Optional[str] = None,
                               reason: str = "completed") -> Dict[str, Any]:
         """Backward compatibility method."""
-        return await end_denial_period(
+        result = await end_denial_period(
             RunContextWrapper(context=self.context),
             user_id,
             denial_id,
             reason
         )
+        return result.model_dump()
     
     def _generate_denial_end_message(self, 
                                    level_name: str, 
@@ -2084,7 +2253,7 @@ class OrgasmControlSystem:
                           quality: Optional[float] = None,
                           notes: Optional[str] = None) -> Dict[str, Any]:
         """Backward compatibility method."""
-        return await record_orgasm(
+        result = await record_orgasm(
             RunContextWrapper(context=self.context),
             user_id,
             orgasm_type,
@@ -2092,6 +2261,7 @@ class OrgasmControlSystem:
             quality,
             notes
         )
+        return result.model_dump()
     
     def _generate_orgasm_message(self, 
                                orgasm_type: str, 
@@ -2106,13 +2276,15 @@ class OrgasmControlSystem:
                                   conditions: Optional[Dict[str, Any]] = None,
                                   reason: str = "status update") -> Dict[str, Any]:
         """Backward compatibility method."""
-        return await set_permission_status(
+        conditions_obj = PermissionConditions(**(conditions or {}))
+        result = await set_permission_status(
             RunContextWrapper(context=self.context),
             user_id,
             status,
-            conditions,
+            conditions_obj,
             reason
         )
+        return result.model_dump()
     
     def _generate_status_change_message(self, 
                                        old_status: PermissionStatus, 
@@ -2126,36 +2298,42 @@ class OrgasmControlSystem:
                                       template_name: str,
                                       reason: str = "template application") -> Dict[str, Any]:
         """Backward compatibility method."""
-        return await apply_permission_template(
+        result = await apply_permission_template(
             RunContextWrapper(context=self.context),
             user_id,
             template_name,
             reason
         )
+        return result.model_dump()
     
     async def get_permission_state(self, user_id: str) -> Dict[str, Any]:
         """Backward compatibility method."""
-        return await get_permission_state(
+        result = await get_permission_state(
             RunContextWrapper(context=self.context),
             user_id
         )
+        return result.model_dump()
     
     async def create_permission_template(self, template_data: Dict[str, Any]) -> Dict[str, Any]:
         """Backward compatibility method."""
-        return await create_permission_template(
+        template_data_obj = TemplateData(**template_data)
+        result = await create_permission_template(
             RunContextWrapper(context=self.context),
-            template_data
+            template_data_obj
         )
+        return result.model_dump()
     
     def get_available_templates(self) -> List[Dict[str, Any]]:
         """Backward compatibility method."""
-        return get_available_templates(
+        result = get_available_templates(
             RunContextWrapper(context=self.context)
         )
+        return [template.model_dump() for template in result]
     
     async def analyze_control_patterns(self, user_id: str) -> Dict[str, Any]:
         """Backward compatibility method."""
-        return await analyze_control_patterns(
+        result = await analyze_control_patterns(
             RunContextWrapper(context=self.context),
             user_id
         )
+        return result.model_dump()
