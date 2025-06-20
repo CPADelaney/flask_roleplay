@@ -14,6 +14,17 @@ from agents.run import RunConfig
 
 logger = logging.getLogger(__name__)
 
+class MonitorSubspaceExitParams(BaseModel, extra="forbid"):
+    user_id: str
+    detection_result: SubspaceDetectionResult   # you already defined this
+
+class MonitorSubspaceExitResult(BaseModel, extra="forbid"):
+    monitoring_needed: bool
+    drop_risk: Literal["low", "moderate", "high"] | None = None
+    recommendations: List[str] | None = None
+    message: str | None = None
+
+
 class CooldownInfo(BaseModel, extra="forbid"):
     game_id: str
     cooldown_end: str                  # ISO-8601 string
@@ -1096,50 +1107,55 @@ Use the available tools to maintain accurate psychological state tracking.
 
     
     @function_tool
-    async def _monitor_subspace_exit(self, user_id: str, detection_result: Dict[str, Any]) -> Dict[str, Any]:
-        """Monitor signs of potential subspace drop or unsafe exit."""
-        if not detection_result.get("subspace_detected", False):
-            return {
-                "monitoring_needed": False,
-                "message": "User not in subspace, no monitoring needed"
-            }
-        
-        depth = detection_result.get("depth", 0.0)
-        
-        # Deeper subspace requires more careful monitoring
-        if depth > 0.7:
-            return {
-                "monitoring_needed": True,
-                "drop_risk": "high",
-                "recommendations": [
+    async def monitor_subspace_exit(
+        ctx: RunContextWrapper[PsychologicalContext],      # FIRST!
+        params: MonitorSubspaceExitParams,                 # strict input
+    ) -> MonitorSubspaceExitResult:                        # strict output
+        """Assess whether a user in sub-space needs monitoring for drop."""
+    
+        det = params.detection_result
+    
+        # User not in sub-space → nothing to monitor
+        if not det.subspace_detected:
+            return MonitorSubspaceExitResult(
+                monitoring_needed=False,
+                message="User not in sub-space; no monitoring required."
+            )
+    
+        depth = det.depth or 0.0
+        if depth > 0.7:          # deep
+            return MonitorSubspaceExitResult(
+                monitoring_needed=True,
+                drop_risk="high",
+                recommendations=[
                     "Monitor for sudden emotional changes",
                     "Provide frequent reassurance",
                     "Gradually reduce intensity",
-                    "Plan for aftercare",
-                    "Check in regularly even after session ends"
-                ]
-            }
-        elif depth > 0.4:
-            return {
-                "monitoring_needed": True,
-                "drop_risk": "moderate",
-                "recommendations": [
+                    "Plan for thorough aftercare",
+                    "Check in regularly even after the session ends",
+                ],
+            )
+        elif depth > 0.4:        # moderate
+            return MonitorSubspaceExitResult(
+                monitoring_needed=True,
+                drop_risk="moderate",
+                recommendations=[
                     "Provide consistent reassurance",
-                    "Gradually transition to normal interaction",
+                    "Transition gradually back to normal interaction",
                     "Check emotional state before ending",
-                    "Offer light aftercare"
-                ]
-            }
-        else:
-            return {
-                "monitoring_needed": True,
-                "drop_risk": "low",
-                "recommendations": [
-                    "Acknowledge subspace experience",
-                    "Confirm user's return to normal cognitive state",
-                    "Brief check-in later"
-                ]
-            }
+                    "Offer light aftercare",
+                ],
+            )
+        else:                    # shallow
+            return MonitorSubspaceExitResult(
+                monitoring_needed=True,
+                drop_risk="low",
+                recommendations=[
+                    "Acknowledge the sub-space experience",
+                    "Confirm the user's return to baseline cognition",
+                    "Brief check-in later",
+                ],
+            )
     
     @function_tool
     async def _get_user_psychological_state(self, user_id: str) -> Dict[str, Any]:
