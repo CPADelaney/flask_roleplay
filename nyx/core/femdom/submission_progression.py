@@ -12,6 +12,79 @@ from agents import ModelSettings
 
 logger = logging.getLogger(__name__)
 
+# Tool output models for strict JSON schema compliance
+class PathRecommendationResult(BaseModel):
+    user_id: str
+    primary_recommendation: Optional[Dict[str, Any]] = None
+    all_recommendations: List[Dict[str, Any]]
+    user_traits_analyzed: List[str]
+    analysis_timestamp: str
+
+class PathAssignmentResult(BaseModel):
+    success: bool
+    user_id: Optional[str] = None
+    path_id: Optional[str] = None
+    path_name: Optional[str] = None
+    difficulty: Optional[float] = None
+    focus_areas: Optional[List[str]] = None
+    milestones: Optional[int] = None
+    message: Optional[str] = None
+    available_paths: Optional[List[str]] = None
+
+class MilestoneProgressResult(BaseModel):
+    success: bool
+    user_id: Optional[str] = None
+    path_id: Optional[str] = None
+    path_name: Optional[str] = None
+    newly_completed_milestones: List[Dict[str, Any]]
+    upcoming_milestones: List[Dict[str, Any]]
+    already_completed_milestones: List[Dict[str, Any]]
+    progress_summary: Dict[str, Any]
+    message: Optional[str] = None
+    recommendation: Optional[str] = None
+
+class ComplianceRecordResult(BaseModel):
+    success: bool
+    record_id: Optional[str] = None
+    compliance_recorded: Optional[bool] = None
+    metrics_updated: Dict[str, Any]
+    submission_score: Dict[str, Any]
+    level_changed: bool
+    level_change_details: Dict[str, Any]
+    reward_result: Optional[Dict[str, Any]] = None
+
+class MetricUpdateResult(BaseModel):
+    success: bool
+    metric: Optional[str] = None
+    old_value: Optional[float] = None
+    new_value: Optional[float] = None
+    change: Optional[float] = None
+    submission_score: Dict[str, Any]
+    level_changed: bool
+    level_change_details: Dict[str, Any]
+    message: Optional[str] = None
+
+class UserSubmissionDataResult(BaseModel):
+    user_id: str
+    submission_level: Dict[str, Any]
+    submission_score: float
+    metrics: Dict[str, Any]
+    trait_gaps: Dict[str, Any]
+    privileges: List[str]
+    restrictions: List[str]
+    training_focus: List[str]
+    compliance_rate: float
+    last_updated: str
+    compliance_history: Optional[List[Dict[str, Any]]] = None
+
+class ProgressionReportResult(BaseModel):
+    user_id: str
+    generation_time: str
+    current_level: Dict[str, Any]
+    submission_metrics: Dict[str, Any]
+    progression_path: Dict[str, Any]
+    recommendations: List[Dict[str, Any]]
+
 # Keep the existing Pydantic models as they are useful for data structures
 class SubmissionLevel(BaseModel):
     """Represents a level in the submission progression system."""
@@ -356,7 +429,7 @@ class SubmissionContext:
                     }
                 }
             ),
-"strict_discipline": DominancePath(
+            "strict_discipline": DominancePath(
                 id="strict_discipline",
                 name="Strict Discipline Path",
                 description="Focus on rules, punishment, and strict behavioral standards.",
@@ -417,7 +490,7 @@ class ComplianceOutput(BaseModel):
     metrics_updated: Dict[str, Any]
     submission_score_change: float
     level_changed: bool
-    level_change_details: Dict[str, Any] = {}
+    level_change_details: Dict[str, Any] = Field(default_factory=dict)
 
 class UserInitResult(BaseModel):
     """Output schema for user initialization"""
@@ -708,7 +781,7 @@ class SubmissionProgression:
         )
     
     @function_tool
-    async def recommend_dominance_path(self, ctx, user_id: str) -> Dict[str, Any]:
+    async def recommend_dominance_path(self, ctx, user_id: str) -> PathRecommendationResult:
         """
         Recommends the most suitable dominance path based on user traits and preferences.
         
@@ -795,16 +868,16 @@ class SubmissionProgression:
             })
         
         # Return recommendations
-        return {
-            "user_id": user_id,
-            "primary_recommendation": recommendations[0] if recommendations else None,
-            "all_recommendations": recommendations,
-            "user_traits_analyzed": list(user_traits.keys()),
-            "analysis_timestamp": datetime.datetime.now().isoformat()
-        }
+        return PathRecommendationResult(
+            user_id=user_id,
+            primary_recommendation=recommendations[0] if recommendations else None,
+            all_recommendations=recommendations,
+            user_traits_analyzed=list(user_traits.keys()),
+            analysis_timestamp=datetime.datetime.now().isoformat()
+        )
     
     @function_tool
-    async def assign_dominance_path(self, ctx, user_id: str, path_id: str) -> Dict[str, Any]:
+    async def assign_dominance_path(self, ctx, user_id: str, path_id: str) -> PathAssignmentResult:
         """
         Assigns a specific dominance path to a user.
         
@@ -816,11 +889,11 @@ class SubmissionProgression:
             Assignment details
         """
         if path_id not in self.context.dominance_paths:
-            return {
-                "success": False,
-                "message": f"Path '{path_id}' not found",
-                "available_paths": list(self.context.dominance_paths.keys())
-            }
+            return PathAssignmentResult(
+                success=False,
+                message=f"Path '{path_id}' not found",
+                available_paths=list(self.context.dominance_paths.keys())
+            )
             
         if user_id not in self.context.user_data:
             await self.initialize_user(ctx, user_id)
@@ -866,19 +939,19 @@ class SubmissionProgression:
             except Exception as e:
                 logger.error(f"Error updating relationship data: {e}")
         
-        return {
-            "success": True,
-            "user_id": user_id,
-            "path_id": path_id,
-            "path_name": path.name,
-            "difficulty": path.difficulty,
-            "focus_areas": path.focus_areas,
-            "milestones": len(path.progression_milestones),
-            "message": f"Assigned dominance path '{path.name}' to user"
-        }
+        return PathAssignmentResult(
+            success=True,
+            user_id=user_id,
+            path_id=path_id,
+            path_name=path.name,
+            difficulty=path.difficulty,
+            focus_areas=path.focus_areas,
+            milestones=len(path.progression_milestones),
+            message=f"Assigned dominance path '{path.name}' to user"
+        )
     
     @function_tool
-    async def check_milestone_progress(self, ctx, user_id: str) -> Dict[str, Any]:
+    async def check_milestone_progress(self, ctx, user_id: str) -> MilestoneProgressResult:
         """
         Checks user progress against assigned path milestones.
         
@@ -889,27 +962,39 @@ class SubmissionProgression:
             Milestone progress details
         """
         if user_id not in self.context.user_data:
-            return {
-                "success": False,
-                "message": f"No submission data found for user {user_id}"
-            }
+            return MilestoneProgressResult(
+                success=False,
+                message=f"No submission data found for user {user_id}",
+                newly_completed_milestones=[],
+                upcoming_milestones=[],
+                already_completed_milestones=[],
+                progress_summary={}
+            )
             
         user_data = self.context.user_data[user_id]
         
         # Check if user has an assigned path
         if not user_data.assigned_path:
-            return {
-                "success": False,
-                "message": "No dominance path assigned to user",
-                "recommendation": "Use assign_dominance_path to assign a path"
-            }
+            return MilestoneProgressResult(
+                success=False,
+                message="No dominance path assigned to user",
+                recommendation="Use assign_dominance_path to assign a path",
+                newly_completed_milestones=[],
+                upcoming_milestones=[],
+                already_completed_milestones=[],
+                progress_summary={}
+            )
         
         path_id = user_data.assigned_path
         if path_id not in self.context.dominance_paths:
-            return {
-                "success": False,
-                "message": f"Assigned path '{path_id}' not found"
-            }
+            return MilestoneProgressResult(
+                success=False,
+                message=f"Assigned path '{path_id}' not found",
+                newly_completed_milestones=[],
+                upcoming_milestones=[],
+                already_completed_milestones=[],
+                progress_summary={}
+            )
             
         path = self.context.dominance_paths[path_id]
         
@@ -1037,20 +1122,20 @@ class SubmissionProgression:
             except Exception as e:
                 logger.error(f"Error updating relationship data: {e}")
         
-        return {
-            "success": True,
-            "user_id": user_id,
-            "path_id": path_id,
-            "path_name": path.name,
-            "newly_completed_milestones": newly_completed,
-            "upcoming_milestones": upcoming_milestones[:3],  # Top 3 upcoming
-            "already_completed_milestones": already_completed,
-            "progress_summary": {
+        return MilestoneProgressResult(
+            success=True,
+            user_id=user_id,
+            path_id=path_id,
+            path_name=path.name,
+            newly_completed_milestones=newly_completed,
+            upcoming_milestones=upcoming_milestones[:3],  # Top 3 upcoming
+            already_completed_milestones=already_completed,
+            progress_summary={
                 "total_milestones": len(path.progression_milestones),
                 "completed": len(already_completed) + len(newly_completed),
                 "completion_percentage": ((len(already_completed) + len(newly_completed)) / len(path.progression_milestones)) * 100
             }
-        }
+        )
     
     @function_tool
     async def record_compliance(self, 
@@ -1060,7 +1145,7 @@ class SubmissionProgression:
                               complied: bool, 
                               difficulty: float = 0.5,
                               context_info: Optional[Dict[str, Any]] = None,
-                              defiance_reason: Optional[str] = None) -> Dict[str, Any]:
+                              defiance_reason: Optional[str] = None) -> ComplianceRecordResult:
         """
         Record compliance or defiance for a specific instruction.
         
@@ -1231,20 +1316,20 @@ class SubmissionProgression:
             except Exception as e:
                 logger.error(f"Error recording memory: {e}")
         
-        return {
-            "success": True,
-            "record_id": record.id,
-            "compliance_recorded": complied,
-            "metrics_updated": metrics_updates,
-            "submission_score": {
+        return ComplianceRecordResult(
+            success=True,
+            record_id=record.id,
+            compliance_recorded=complied,
+            metrics_updated=metrics_updates,
+            submission_score={
                 "old": old_score,
                 "new": user_data.total_submission_score,
                 "change": user_data.total_submission_score - old_score
             },
-            "level_changed": level_changed,
-            "level_change_details": level_change_details,
-            "reward_result": reward_result
-        }
+            level_changed=level_changed,
+            level_change_details=level_change_details,
+            reward_result=reward_result
+        )
     
     @function_tool
     async def update_submission_metric(self, 
@@ -1252,7 +1337,7 @@ class SubmissionProgression:
                                     user_id: str, 
                                     metric_name: str, 
                                     value_change: float,
-                                    reason: str = "general") -> Dict[str, Any]:
+                                    reason: str = "general") -> MetricUpdateResult:
         """
         Update a specific submission metric.
         
@@ -1273,10 +1358,13 @@ class SubmissionProgression:
         
         # Check if metric exists
         if metric_name not in user_data.obedience_metrics:
-            return {
-                "success": False,
-                "message": f"Metric '{metric_name}' not found for user"
-            }
+            return MetricUpdateResult(
+                success=False,
+                message=f"Metric '{metric_name}' not found for user",
+                submission_score={},
+                level_changed=False,
+                level_change_details={}
+            )
         
         metric = user_data.obedience_metrics[metric_name]
         old_value = metric.value
@@ -1298,20 +1386,20 @@ class SubmissionProgression:
         # Evaluate for level change
         level_changed, level_change_details = await self._check_level_change(user_id)
         
-        return {
-            "success": True,
-            "metric": metric_name,
-            "old_value": old_value,
-            "new_value": metric.value,
-            "change": metric.value - old_value,
-            "submission_score": {
+        return MetricUpdateResult(
+            success=True,
+            metric=metric_name,
+            old_value=old_value,
+            new_value=metric.value,
+            change=metric.value - old_value,
+            submission_score={
                 "old": old_score,
                 "new": user_data.total_submission_score,
                 "change": user_data.total_submission_score - old_score
             },
-            "level_changed": level_changed,
-            "level_change_details": level_change_details
-        }
+            level_changed=level_changed,
+            level_change_details=level_change_details
+        )
     
     async def _check_level_change(self, user_id: str) -> Tuple[bool, Dict[str, Any]]:
         """Check if user should change submission levels based on score."""
@@ -1463,7 +1551,7 @@ class SubmissionProgression:
         return False, {}
     
     @function_tool
-    async def get_user_submission_data(self, ctx, user_id: str, include_history: bool = False) -> Dict[str, Any]:
+    async def get_user_submission_data(self, ctx, user_id: str, include_history: bool = False) -> UserSubmissionDataResult:
         """
         Get the current submission data for a user.
         
@@ -1514,24 +1602,24 @@ class SubmissionProgression:
             }
         
         # Assemble result
-        result = {
-            "user_id": user_id,
-            "submission_level": {
+        result = UserSubmissionDataResult(
+            user_id=user_id,
+            submission_level={
                 "id": level.id,
                 "name": level.name,
                 "description": level.description,
                 "appropriate": level_appropriate,
                 "time_at_level_days": user_data.time_at_current_level
             },
-            "submission_score": user_data.total_submission_score,
-            "metrics": metrics,
-            "trait_gaps": trait_gaps,
-            "privileges": level.privileges,
-            "restrictions": level.restrictions,
-            "training_focus": level.training_focus,
-            "compliance_rate": user_data.lifetime_compliance_rate,
-            "last_updated": user_data.last_updated.isoformat()
-        }
+            submission_score=user_data.total_submission_score,
+            metrics=metrics,
+            trait_gaps=trait_gaps,
+            privileges=level.privileges,
+            restrictions=level.restrictions,
+            training_focus=level.training_focus,
+            compliance_rate=user_data.lifetime_compliance_rate,
+            last_updated=user_data.last_updated.isoformat()
+        )
         
         # Include history if requested
         if include_history:
@@ -1547,12 +1635,12 @@ class SubmissionProgression:
                     "defiance_reason": record.defiance_reason
                 })
             
-            result["compliance_history"] = history
+            result.compliance_history = history
         
         return result
     
     @function_tool
-    async def generate_progression_report(self, ctx, user_id: str) -> Dict[str, Any]:
+    async def generate_progression_report(self, ctx, user_id: str) -> ProgressionReportResult:
         """
         Generate a detailed report on user's submission progression.
         
@@ -1639,28 +1727,10 @@ class SubmissionProgression:
         recommendations.sort(key=lambda x: x["significance"], reverse=True)
         
         # Format report
-        report = {
-            "user_id": user_id,
-            "generation_time": datetime.datetime.now().isoformat(),
-            "current_level": {
-                "id": level.id,
-                "name": level.name,
-                "description": level.description,
-                "progress_in_level": level_progress,
-                "time_at_level_days": user_data.time_at_current_level
-            },
-            "submission_metrics": {
-                "overall_score": user_data.total_submission_score,
-                "compliance_rate": user_data.lifetime_compliance_rate,
-                "compliance_trend": compliance_trend,
-                "metric_trends": metric_trends
-            },
-            "progression_path": {
-                "next_level": None,
-                "requirements_for_advancement": [],
-                "estimated_time_to_next_level": None
-            },
-            "recommendations": recommendations[:3]  # Top 3 recommendations
+        progression_path_data = {
+            "next_level": None,
+            "requirements_for_advancement": [],
+            "estimated_time_to_next_level": None
         }
         
         # Add next level info if not at max level
@@ -1702,7 +1772,7 @@ class SubmissionProgression:
                     remaining_progress = 1.0 - level_progress
                     estimated_days = math.ceil(remaining_progress / progress_rate_per_day)
             
-            report["progression_path"] = {
+            progression_path_data = {
                 "next_level": {
                     "id": next_level.id,
                     "name": next_level.name,
@@ -1712,7 +1782,25 @@ class SubmissionProgression:
                 "estimated_time_to_next_level": estimated_days
             }
         
-        return report
+        return ProgressionReportResult(
+            user_id=user_id,
+            generation_time=datetime.datetime.now().isoformat(),
+            current_level={
+                "id": level.id,
+                "name": level.name,
+                "description": level.description,
+                "progress_in_level": level_progress,
+                "time_at_level_days": user_data.time_at_current_level
+            },
+            submission_metrics={
+                "overall_score": user_data.total_submission_score,
+                "compliance_rate": user_data.lifetime_compliance_rate,
+                "compliance_trend": compliance_trend,
+                "metric_trends": metric_trends
+            },
+            progression_path=progression_path_data,
+            recommendations=recommendations[:3]  # Top 3 recommendations
+        )
     
     # Public API for external components to use
     
