@@ -12,6 +12,23 @@ from agents import ModelSettings
 
 logger = logging.getLogger(__name__)
 
+# Input models for function tools (to replace Dict[str, Any])
+class InitialUserData(BaseModel):
+    """Model for initial user data when initializing a user."""
+    limits: Optional[Dict[str, List[str]]] = None
+    preferences: Optional[Dict[str, float]] = None
+    metrics: Optional[Dict[str, float]] = None
+    level: Optional[int] = None
+    path: Optional[str] = None
+
+class ComplianceContextInfo(BaseModel):
+    """Model for context information when recording compliance."""
+    session_id: Optional[str] = None
+    session_type: Optional[str] = None
+    difficulty_factors: Optional[List[str]] = None
+    environment: Optional[str] = None
+    additional_notes: Optional[str] = None
+
 # Tool output models for strict JSON schema compliance
 class PathRecommendationResult(BaseModel):
     user_id: str
@@ -696,7 +713,7 @@ class SubmissionProgression:
     # Create function tools for the various operations
     
     @function_tool
-    async def initialize_user(self, ctx, user_id: str, initial_data: Optional[Dict[str, Any]] = None) -> UserInitResult:
+    async def initialize_user(self, ctx, user_id: str, initial_data: Optional[InitialUserData] = None) -> UserInitResult:
         """
         Initialize or get user submission data.
         
@@ -724,27 +741,27 @@ class SubmissionProgression:
             
             # Apply any initial data if provided
             if initial_data:
-                if "limits" in initial_data:
-                    user_data.limits = initial_data["limits"]
+                if initial_data.limits:
+                    user_data.limits = initial_data.limits
                 
-                if "preferences" in initial_data:
-                    user_data.preferences = initial_data["preferences"]
+                if initial_data.preferences:
+                    user_data.preferences = initial_data.preferences
                 
                 # Set initial metrics if provided
-                if "metrics" in initial_data:
-                    for metric_name, value in initial_data["metrics"].items():
+                if initial_data.metrics:
+                    for metric_name, value in initial_data.metrics.items():
                         if metric_name in user_data.obedience_metrics:
                             user_data.obedience_metrics[metric_name].value = value
                 
                 # Set initial level if provided
-                if "level" in initial_data:
-                    level_id = initial_data["level"]
+                if initial_data.level:
+                    level_id = initial_data.level
                     if level_id in self.context.submission_levels:
                         user_data.current_level_id = level_id
                         
                 # Set initial path if provided
-                if "path" in initial_data:
-                    path_id = initial_data["path"]
+                if initial_data.path:
+                    path_id = initial_data.path
                     if path_id in self.context.dominance_paths:
                         user_data.assigned_path = path_id
                         user_data.assigned_path_date = datetime.datetime.now()
@@ -1144,7 +1161,7 @@ class SubmissionProgression:
                               instruction: str, 
                               complied: bool, 
                               difficulty: float = 0.5,
-                              context_info: Optional[Dict[str, Any]] = None,
+                              context_info: Optional[ComplianceContextInfo] = None,
                               defiance_reason: Optional[str] = None) -> ComplianceRecordResult:
         """
         Record compliance or defiance for a specific instruction.
@@ -1166,12 +1183,17 @@ class SubmissionProgression:
         
         user_data = self.context.user_data[user_id]
         
+        # Convert context_info to dict
+        context_dict = {}
+        if context_info:
+            context_dict = context_info.model_dump(exclude_none=True)
+        
         # Create compliance record
         record = ComplianceRecord(
             instruction=instruction,
             complied=complied,
             difficulty=difficulty,
-            context=context_info or {},
+            context=context_dict,
             defiance_reason=defiance_reason
         )
         
