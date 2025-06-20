@@ -51,6 +51,31 @@ class MilestoneData(BaseModel):
     requirements: Optional[Dict[str, float]] = None
     overall_progress: Optional[float] = None
 
+class HistoryEntry(BaseModel):
+    """Model for metric history entries."""
+    timestamp: str
+    old_value: float
+    new_value: float
+    final_value: float
+    reason: str
+
+class ComplianceContextData(BaseModel):
+    """Model for compliance context information."""
+    session_id: Optional[str] = None
+    session_type: Optional[str] = None
+    difficulty_factors: Optional[List[str]] = None
+    environment: Optional[str] = None
+    additional_notes: Optional[str] = None
+
+class MilestoneDefinition(BaseModel):
+    """Model for milestone definition data."""
+    id: str
+    name: str
+    description: str
+    requirements: Dict[str, float]
+    rewards: List[str]
+    unlocks: List[str]
+
 class ProgressSummary(BaseModel):
     """Model for progress summary data."""
     total_milestones: int
@@ -252,7 +277,7 @@ class DominancePath(BaseModel):
     recommended_metrics: List[str] = Field(default_factory=list)
     difficulty: float = Field(0.5, ge=0.0, le=1.0)
     suitable_for_traits: Dict[str, float] = Field(default_factory=dict)
-    progression_milestones: Dict[int, Dict[str, Any]] = Field(default_factory=dict)
+    progression_milestones: Dict[int, MilestoneDefinition] = Field(default_factory=dict)
 
 class ProgressionMilestone(BaseModel):
     """Represents a specific milestone in submission progression."""
@@ -272,23 +297,24 @@ class SubmissionMetric(BaseModel):
     value: float = Field(0.0, ge=0.0, le=1.0)
     weight: float = Field(1.0, ge=0.0, le=2.0)
     last_updated: datetime.datetime = Field(default_factory=datetime.datetime.now)
-    history: List[Dict[str, Any]] = Field(default_factory=list)
+    history: List[HistoryEntry] = Field(default_factory=list)
     
     def update(self, new_value: float, reason: str = "general"):
         """Update the metric with a new value."""
         # Calculate weighted average between old and new (30% new, 70% old)
+        old_value = self.value
         self.value = (self.value * 0.7) + (new_value * 0.3)
         self.value = max(0.0, min(1.0, self.value))  # Constrain to valid range
         self.last_updated = datetime.datetime.now()
         
         # Track history (limited to last 20 entries)
-        self.history.append({
-            "timestamp": self.last_updated.isoformat(),
-            "old_value": self.value,
-            "new_value": new_value,
-            "final_value": self.value,
-            "reason": reason
-        })
+        self.history.append(HistoryEntry(
+            timestamp=self.last_updated.isoformat(),
+            old_value=old_value,
+            new_value=new_value,
+            final_value=self.value,
+            reason=reason
+        ))
         
         if len(self.history) > 20:
             self.history = self.history[-20:]
@@ -302,7 +328,7 @@ class ComplianceRecord(BaseModel):
     instruction: str
     complied: bool
     difficulty: float = Field(0.5, ge=0.0, le=1.0)
-    context: Dict[str, Any] = Field(default_factory=dict)
+    context: ComplianceContextData = Field(default_factory=ComplianceContextData)
     defiance_reason: Optional[str] = None
     punishment_applied: Optional[str] = None
 
@@ -478,30 +504,30 @@ class SubmissionContext:
                 difficulty=0.4,
                 suitable_for_traits={"service_oriented": 0.7, "detail_oriented": 0.6, "methodical": 0.5},
                 progression_milestones={
-                    1: {
-                        "id": "basic_protocols",
-                        "name": "Basic Protocols",
-                        "description": "Learn and consistently follow basic service protocols.",
-                        "requirements": {"protocol_adherence": 0.3, "consistency": 0.3},
-                        "rewards": ["basic_protocol_certification"],
-                        "unlocks": ["intermediate_service_tasks"]
-                    },
-                    2: {
-                        "id": "consistent_service",
-                        "name": "Consistent Service",
-                        "description": "Demonstrate reliable service across multiple sessions.",
-                        "requirements": {"consistency": 0.5, "obedience": 0.4, "protocol_adherence": 0.5},
-                        "rewards": ["service_recognition"],
-                        "unlocks": ["advanced_service_positions"]
-                    },
-                    3: {
-                        "id": "anticipatory_service",
-                        "name": "Anticipatory Service",
-                        "description": "Anticipate needs and provide service without explicit direction.",
-                        "requirements": {"attentiveness": 0.7, "initiative": 0.6},
-                        "rewards": ["service_excellence_badge"],
-                        "unlocks": ["ritual_creation_privileges"]
-                    }
+                    1: MilestoneDefinition(
+                        id="basic_protocols",
+                        name="Basic Protocols",
+                        description="Learn and consistently follow basic service protocols.",
+                        requirements={"protocol_adherence": 0.3, "consistency": 0.3},
+                        rewards=["basic_protocol_certification"],
+                        unlocks=["intermediate_service_tasks"]
+                    ),
+                    2: MilestoneDefinition(
+                        id="consistent_service",
+                        name="Consistent Service",
+                        description="Demonstrate reliable service across multiple sessions.",
+                        requirements={"consistency": 0.5, "obedience": 0.4, "protocol_adherence": 0.5},
+                        rewards=["service_recognition"],
+                        unlocks=["advanced_service_positions"]
+                    ),
+                    3: MilestoneDefinition(
+                        id="anticipatory_service",
+                        name="Anticipatory Service",
+                        description="Anticipate needs and provide service without explicit direction.",
+                        requirements={"attentiveness": 0.7, "initiative": 0.6},
+                        rewards=["service_excellence_badge"],
+                        unlocks=["ritual_creation_privileges"]
+                    )
                 }
             ),
             "psychological": DominancePath(
@@ -513,30 +539,30 @@ class SubmissionContext:
                 difficulty=0.7,
                 suitable_for_traits={"analytical": 0.6, "introspective": 0.7, "emotionally_sensitive": 0.5},
                 progression_milestones={
-                    1: {
-                        "id": "mental_submission",
-                        "name": "Mental Submission Basics",
-                        "description": "Begin surrendering control mentally and emotionally.",
-                        "requirements": {"surrender": 0.3, "receptiveness": 0.4},
-                        "rewards": ["mind_control_session"],
-                        "unlocks": ["light_mindfuck_techniques"]
-                    },
-                    2: {
-                        "id": "psychological_surrender",
-                        "name": "Psychological Surrender",
-                        "description": "Deeper mental submission and acceptance of control.",
-                        "requirements": {"depth": 0.5, "surrender": 0.6},
-                        "rewards": ["psychological_dominance_session"],
-                        "unlocks": ["advanced_mindfuck_techniques"]
-                    },
-                    3: {
-                        "id": "cognitive_restructuring",
-                        "name": "Cognitive Restructuring",
-                        "description": "Allow thought patterns to be influenced and restructured.",
-                        "requirements": {"depth": 0.7, "surrender": 0.8, "receptiveness": 0.7},
-                        "rewards": ["deep_control_badge"],
-                        "unlocks": ["permission_structures", "thought_control_protocols"]
-                    }
+                    1: MilestoneDefinition(
+                        id="mental_submission",
+                        name="Mental Submission Basics",
+                        description="Begin surrendering control mentally and emotionally.",
+                        requirements={"surrender": 0.3, "receptiveness": 0.4},
+                        rewards=["mind_control_session"],
+                        unlocks=["light_mindfuck_techniques"]
+                    ),
+                    2: MilestoneDefinition(
+                        id="psychological_surrender",
+                        name="Psychological Surrender",
+                        description="Deeper mental submission and acceptance of control.",
+                        requirements={"depth": 0.5, "surrender": 0.6},
+                        rewards=["psychological_dominance_session"],
+                        unlocks=["advanced_mindfuck_techniques"]
+                    ),
+                    3: MilestoneDefinition(
+                        id="cognitive_restructuring",
+                        name="Cognitive Restructuring",
+                        description="Allow thought patterns to be influenced and restructured.",
+                        requirements={"depth": 0.7, "surrender": 0.8, "receptiveness": 0.7},
+                        rewards=["deep_control_badge"],
+                        unlocks=["permission_structures", "thought_control_protocols"]
+                    )
                 }
             ),
             "humiliation": DominancePath(
@@ -548,30 +574,30 @@ class SubmissionContext:
                 difficulty=0.8,
                 suitable_for_traits={"masochistic": 0.6, "exhibitionist": 0.5, "shame_responsive": 0.7},
                 progression_milestones={
-                    1: {
-                        "id": "light_embarrassment",
-                        "name": "Light Embarrassment",
-                        "description": "Introduction to light embarrassment and verbal humiliation.",
-                        "requirements": {"surrender": 0.3, "endurance": 0.3},
-                        "rewards": ["humiliation_beginner_badge"],
-                        "unlocks": ["moderate_humiliation_tasks"]
-                    },
-                    2: {
-                        "id": "moderate_humiliation",
-                        "name": "Moderate Humiliation",
-                        "description": "Acceptance of regular humiliation and embarrassment.",
-                        "requirements": {"surrender": 0.5, "endurance": 0.6},
-                        "rewards": ["humiliation_intermediate_badge"],
-                        "unlocks": ["embarrassment_challenges"]
-                    },
-                    3: {
-                        "id": "deep_degradation",
-                        "name": "Deep Degradation",
-                        "description": "Acceptance of profound humiliation and degradation.",
-                        "requirements": {"surrender": 0.8, "endurance": 0.7, "receptiveness": 0.7},
-                        "rewards": ["humiliation_advanced_badge"],
-                        "unlocks": ["custom_humiliation_scenarios"]
-                    }
+                    1: MilestoneDefinition(
+                        id="light_embarrassment",
+                        name="Light Embarrassment",
+                        description="Introduction to light embarrassment and verbal humiliation.",
+                        requirements={"surrender": 0.3, "endurance": 0.3},
+                        rewards=["humiliation_beginner_badge"],
+                        unlocks=["moderate_humiliation_tasks"]
+                    ),
+                    2: MilestoneDefinition(
+                        id="moderate_humiliation",
+                        name="Moderate Humiliation",
+                        description="Acceptance of regular humiliation and embarrassment.",
+                        requirements={"surrender": 0.5, "endurance": 0.6},
+                        rewards=["humiliation_intermediate_badge"],
+                        unlocks=["embarrassment_challenges"]
+                    ),
+                    3: MilestoneDefinition(
+                        id="deep_degradation",
+                        name="Deep Degradation",
+                        description="Acceptance of profound humiliation and degradation.",
+                        requirements={"surrender": 0.8, "endurance": 0.7, "receptiveness": 0.7},
+                        rewards=["humiliation_advanced_badge"],
+                        unlocks=["custom_humiliation_scenarios"]
+                    )
                 }
             ),
             "strict_discipline": DominancePath(
@@ -583,30 +609,30 @@ class SubmissionContext:
                 difficulty=0.6,
                 suitable_for_traits={"structure_seeking": 0.7, "rule_oriented": 0.6, "discipline_responsive": 0.7},
                 progression_milestones={
-                    1: {
-                        "id": "basic_rules",
-                        "name": "Basic Rules Adherence",
-                        "description": "Consistent following of basic rules and acceptance of correction.",
-                        "requirements": {"obedience": 0.4, "protocol_adherence": 0.3},
-                        "rewards": ["discipline_beginner_badge"],
-                        "unlocks": ["intermediate_rule_structures"]
-                    },
-                    2: {
-                        "id": "punishment_acceptance",
-                        "name": "Punishment Acceptance",
-                        "description": "Full acceptance of punishments and corrections.",
-                        "requirements": {"obedience": 0.6, "endurance": 0.5, "receptiveness": 0.5},
-                        "rewards": ["discipline_intermediate_badge"],
-                        "unlocks": ["advanced_punishment_protocols"]
-                    },
-                    3: {
-                        "id": "internalized_discipline",
-                        "name": "Internalized Discipline",
-                        "description": "Self-monitoring and anticipatory obedience.",
-                        "requirements": {"obedience": 0.8, "protocol_adherence": 0.7, "initiative": 0.6},
-                        "rewards": ["discipline_advanced_badge"],
-                        "unlocks": ["self_discipline_protocols", "punishment_authority"]
-                    }
+                    1: MilestoneDefinition(
+                        id="basic_rules",
+                        name="Basic Rules Adherence",
+                        description="Consistent following of basic rules and acceptance of correction.",
+                        requirements={"obedience": 0.4, "protocol_adherence": 0.3},
+                        rewards=["discipline_beginner_badge"],
+                        unlocks=["intermediate_rule_structures"]
+                    ),
+                    2: MilestoneDefinition(
+                        id="punishment_acceptance",
+                        name="Punishment Acceptance",
+                        description="Full acceptance of punishments and corrections.",
+                        requirements={"obedience": 0.6, "endurance": 0.5, "receptiveness": 0.5},
+                        rewards=["discipline_intermediate_badge"],
+                        unlocks=["advanced_punishment_protocols"]
+                    ),
+                    3: MilestoneDefinition(
+                        id="internalized_discipline",
+                        name="Internalized Discipline",
+                        description="Self-monitoring and anticipatory obedience.",
+                        requirements={"obedience": 0.8, "protocol_adherence": 0.7, "initiative": 0.6},
+                        rewards=["discipline_advanced_badge"],
+                        unlocks=["self_discipline_protocols", "punishment_authority"]
+                    )
                 }
             )
         }
@@ -666,8 +692,7 @@ class SubmissionProgression:
             For requests involving metrics analysis, progression evaluation, or level assessment,
             use the appropriate specialized agent.
             """,
-            model_settings=model_settings,
-            model="gpt-4.1-nano"
+            model_settings=model_settings
         )
         
         # User initialization agent
@@ -683,8 +708,7 @@ class SubmissionProgression:
             Analyze any initial data provided and assign proper starting values.
             """,
             model_settings=model_settings,
-            output_type=UserInitResult,
-            model="gpt-4.1-nano"
+            output_type=UserInitResult
         )
         
         # Path recommendation agent
@@ -698,8 +722,7 @@ class SubmissionProgression:
             
             Provide clear reasoning for your recommendations with a strict, dominant tone.
             """,
-            model_settings=model_settings,
-            model="gpt-4.1-nano"
+            model_settings=model_settings
         )
         
         # Milestone tracking agent
@@ -714,8 +737,7 @@ class SubmissionProgression:
             
             Be precise in your evaluations and maintain a strict but encouraging tone.
             """,
-            model_settings=model_settings,
-            model="gpt-4.1-nano"
+            model_settings=model_settings
         )
         
         # Compliance recording agent
@@ -730,8 +752,7 @@ class SubmissionProgression:
             
             Be exacting in your analysis and maintain a stern tone for defiance.
             """,
-            model_settings=model_settings,
-            model="gpt-4.1-nano"
+            model_settings=model_settings
         )
         
         # Submission reporting agent
@@ -747,8 +768,7 @@ class SubmissionProgression:
             
             Your tone should be analytical but with a dominant edge that reinforces power dynamics.
             """,
-            model_settings=model_settings,
-            model="gpt-4.1-nano"
+            model_settings=model_settings
         )
         
         # Set up handoffs between agents
@@ -770,8 +790,7 @@ class SubmissionProgression:
                 self.milestone_agent,
                 self.compliance_agent,
                 self.reporting_agent
-            ],
-            model="gpt-4.1-nano"
+            ]
         )
         
         # Set up content guardrail
@@ -1030,16 +1049,16 @@ class SubmissionProgression:
         # Initialize milestones for this path
         path = self.context.dominance_paths[path_id]
         for level, milestone_data in path.progression_milestones.items():
-            milestone_id = milestone_data["id"]
+            milestone_id = milestone_data.id
             if milestone_id not in user_data.milestones:
                 user_data.milestones[milestone_id] = ProgressionMilestone(
                     id=milestone_id,
                     level=level,
-                    name=milestone_data["name"],
-                    description=milestone_data["description"],
-                    requirements=milestone_data["requirements"],
-                    rewards=milestone_data["rewards"],
-                    unlocks=milestone_data["unlocks"],
+                    name=milestone_data.name,
+                    description=milestone_data.description,
+                    requirements=milestone_data.requirements,
+                    rewards=milestone_data.rewards,
+                    unlocks=milestone_data.unlocks,
                     completed=False
                 )
         
@@ -1123,18 +1142,18 @@ class SubmissionProgression:
         already_completed = []
         
         for level, milestone_data in path.progression_milestones.items():
-            milestone_id = milestone_data["id"]
+            milestone_id = milestone_data.id
             
             # Create milestone if it doesn't exist
             if milestone_id not in user_data.milestones:
                 user_data.milestones[milestone_id] = ProgressionMilestone(
                     id=milestone_id,
                     level=level,
-                    name=milestone_data["name"],
-                    description=milestone_data["description"],
-                    requirements=milestone_data["requirements"],
-                    rewards=milestone_data["rewards"],
-                    unlocks=milestone_data["unlocks"],
+                    name=milestone_data.name,
+                    description=milestone_data.description,
+                    requirements=milestone_data.requirements,
+                    rewards=milestone_data.rewards,
+                    unlocks=milestone_data.unlocks,
                     completed=False
                 )
                 
@@ -1286,17 +1305,17 @@ class SubmissionProgression:
         
         user_data = self.context.user_data[user_id]
         
-        # Convert context_info to dict
-        context_dict = {}
+        # Convert context_info to ComplianceContextData
+        context_data = ComplianceContextData()
         if context_info:
-            context_dict = context_info.model_dump(exclude_none=True)
+            context_data = context_info
         
         # Create compliance record
         record = ComplianceRecord(
             instruction=instruction,
             complied=complied,
             difficulty=difficulty,
-            context=context_dict,
+            context=context_data,
             defiance_reason=defiance_reason
         )
         
@@ -1820,8 +1839,8 @@ class SubmissionProgression:
                 recent_5 = metric.history[-5:]
                 previous_5 = metric.history[-10:-5]
                 
-                recent_avg = sum(r["final_value"] for r in recent_5) / 5
-                previous_avg = sum(r["final_value"] for r in previous_5) / 5
+                recent_avg = sum(r.final_value for r in recent_5) / 5
+                previous_avg = sum(r.final_value for r in previous_5) / 5
                 
                 change = recent_avg - previous_avg
                 
