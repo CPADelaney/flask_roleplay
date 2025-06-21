@@ -13,11 +13,37 @@ from agents import ModelSettings
 logger = logging.getLogger(__name__)
 
 # Input models for function tools (to replace Dict[str, Any])
+class LimitsData(BaseModel):
+    """Model for user limits data."""
+    hard_limits: List[str] = Field(default_factory=list)
+    soft_limits: List[str] = Field(default_factory=list)
+    
+class PreferencesData(BaseModel):
+    """Model for user preferences data."""
+    intensity: Optional[float] = None
+    humiliation: Optional[float] = None
+    service: Optional[float] = None
+    discipline: Optional[float] = None
+    psychological: Optional[float] = None
+
+class MetricsData(BaseModel):
+    """Model for initial metrics data."""
+    obedience: Optional[float] = None
+    consistency: Optional[float] = None
+    initiative: Optional[float] = None
+    depth: Optional[float] = None
+    protocol_adherence: Optional[float] = None
+    receptiveness: Optional[float] = None
+    endurance: Optional[float] = None
+    attentiveness: Optional[float] = None
+    surrender: Optional[float] = None
+    reverence: Optional[float] = None
+
 class InitialUserData(BaseModel):
     """Model for initial user data when initializing a user."""
-    limits: Optional[Dict[str, List[str]]] = None
-    preferences: Optional[Dict[str, float]] = None
-    metrics: Optional[Dict[str, float]] = None
+    limits: Optional[LimitsData] = None
+    preferences: Optional[PreferencesData] = None
+    metrics: Optional[MetricsData] = None
     level: Optional[int] = None
     path: Optional[str] = None
 
@@ -152,7 +178,7 @@ class SubmissionMetricsData(BaseModel):
     overall_score: float
     compliance_rate: float
     compliance_trend: str
-    metric_trends: Dict[str, MetricTrend]
+    metric_trends: MetricTrendsData
 
 class AdvancementRequirement(BaseModel):
     """Model for advancement requirements."""
@@ -174,6 +200,45 @@ class ProgressionPathData(BaseModel):
     requirements_for_advancement: List[AdvancementRequirement]
     estimated_time_to_next_level: Optional[int] = None
 
+class TraitGapsData(BaseModel):
+    """Model for trait gaps data."""
+    obedience: Optional[MetricUpdateData] = None
+    consistency: Optional[MetricUpdateData] = None
+    initiative: Optional[MetricUpdateData] = None
+    depth: Optional[MetricUpdateData] = None
+    protocol_adherence: Optional[MetricUpdateData] = None
+    receptiveness: Optional[MetricUpdateData] = None
+    endurance: Optional[MetricUpdateData] = None
+    attentiveness: Optional[MetricUpdateData] = None
+    surrender: Optional[MetricUpdateData] = None
+    reverence: Optional[MetricUpdateData] = None
+
+class AllMetricsData(BaseModel):
+    """Model for all metrics data."""
+    obedience: Optional[MetricData] = None
+    consistency: Optional[MetricData] = None
+    initiative: Optional[MetricData] = None
+    depth: Optional[MetricData] = None
+    protocol_adherence: Optional[MetricData] = None
+    receptiveness: Optional[MetricData] = None
+    endurance: Optional[MetricData] = None
+    attentiveness: Optional[MetricData] = None
+    surrender: Optional[MetricData] = None
+    reverence: Optional[MetricData] = None
+
+class MetricsUpdatesData(BaseModel):
+    """Model for metrics updates data."""
+    obedience: Optional[MetricUpdateData] = None
+    consistency: Optional[MetricUpdateData] = None
+    initiative: Optional[MetricUpdateData] = None
+    depth: Optional[MetricUpdateData] = None
+    protocol_adherence: Optional[MetricUpdateData] = None
+    receptiveness: Optional[MetricUpdateData] = None
+    endurance: Optional[MetricUpdateData] = None
+    attentiveness: Optional[MetricUpdateData] = None
+    surrender: Optional[MetricUpdateData] = None
+    reverence: Optional[MetricUpdateData] = None
+
 class RecommendationData(BaseModel):
     """Model for recommendation information."""
     focus_area: str
@@ -181,6 +246,32 @@ class RecommendationData(BaseModel):
     current_value: float
     target_value: float
     description: str
+
+class SimpleMetricsData(BaseModel):
+    """Model for simple metrics output."""
+    obedience: Optional[float] = None
+    consistency: Optional[float] = None
+    initiative: Optional[float] = None
+    depth: Optional[float] = None
+    protocol_adherence: Optional[float] = None
+    receptiveness: Optional[float] = None
+    endurance: Optional[float] = None
+    attentiveness: Optional[float] = None
+    surrender: Optional[float] = None
+    reverence: Optional[float] = None
+
+class MetricTrendsData(BaseModel):
+    """Model for metric trends data."""
+    obedience: Optional[MetricTrend] = None
+    consistency: Optional[MetricTrend] = None
+    initiative: Optional[MetricTrend] = None
+    depth: Optional[MetricTrend] = None
+    protocol_adherence: Optional[MetricTrend] = None
+    receptiveness: Optional[MetricTrend] = None
+    endurance: Optional[MetricTrend] = None
+    attentiveness: Optional[MetricTrend] = None
+    surrender: Optional[MetricTrend] = None
+    reverence: Optional[MetricTrend] = None
 
 # Tool output models for strict JSON schema compliance
 class PathRecommendationResult(BaseModel):
@@ -217,7 +308,7 @@ class ComplianceRecordResult(BaseModel):
     success: bool
     record_id: Optional[str] = None
     compliance_recorded: Optional[bool] = None
-    metrics_updated: Dict[str, MetricUpdateData]
+    metrics_updated: MetricsUpdatesData
     submission_score: SubmissionScoreData
     level_changed: bool
     level_change_details: LevelChangeDetails
@@ -238,8 +329,8 @@ class UserSubmissionDataResult(BaseModel):
     user_id: str
     submission_level: LevelData
     submission_score: float
-    metrics: Dict[str, MetricData]
-    trait_gaps: Dict[str, MetricUpdateData]
+    metrics: AllMetricsData
+    trait_gaps: TraitGapsData
     privileges: List[str]
     restrictions: List[str]
     training_focus: List[str]
@@ -256,6 +347,19 @@ class ProgressionReportResult(BaseModel):
     recommendations: List[RecommendationData]
 
 # Keep the existing Pydantic models as they are useful for data structures
+class TraitsData(BaseModel):
+    """Model for traits data."""
+    obedience: Optional[float] = None
+    consistency: Optional[float] = None
+    initiative: Optional[float] = None
+    depth: Optional[float] = None
+    protocol_adherence: Optional[float] = None
+    receptiveness: Optional[float] = None
+    endurance: Optional[float] = None
+    attentiveness: Optional[float] = None
+    surrender: Optional[float] = None
+    reverence: Optional[float] = None
+
 class SubmissionLevel(BaseModel):
     """Represents a level in the submission progression system."""
     id: int
@@ -263,10 +367,31 @@ class SubmissionLevel(BaseModel):
     description: str
     min_score: float  # Minimum submission score required
     max_score: float  # Maximum submission score for this level
-    traits: Dict[str, float] = Field(default_factory=dict)  # Expected traits at this level
+    traits: TraitsData = Field(default_factory=TraitsData)  # Expected traits at this level
     privileges: List[str] = Field(default_factory=list)
     restrictions: List[str] = Field(default_factory=list)
     training_focus: List[str] = Field(default_factory=list)
+
+class SuitableTraitsData(BaseModel):
+    """Model for suitable traits data."""
+    service_oriented: Optional[float] = None
+    detail_oriented: Optional[float] = None
+    methodical: Optional[float] = None
+    analytical: Optional[float] = None
+    introspective: Optional[float] = None
+    emotionally_sensitive: Optional[float] = None
+    masochistic: Optional[float] = None
+    exhibitionist: Optional[float] = None
+    shame_responsive: Optional[float] = None
+    structure_seeking: Optional[float] = None
+    rule_oriented: Optional[float] = None
+    discipline_responsive: Optional[float] = None
+
+class MilestonesData(BaseModel):
+    """Model for milestones data."""
+    milestone_1: Optional[MilestoneDefinition] = None
+    milestone_2: Optional[MilestoneDefinition] = None
+    milestone_3: Optional[MilestoneDefinition] = None
 
 class DominancePath(BaseModel):
     """Represents a specific path or style of dominance training."""
@@ -276,7 +401,7 @@ class DominancePath(BaseModel):
     focus_areas: List[str] = Field(default_factory=list)
     recommended_metrics: List[str] = Field(default_factory=list)
     difficulty: float = Field(0.5, ge=0.0, le=1.0)
-    suitable_for_traits: Dict[str, float] = Field(default_factory=dict)
+    suitable_for_traits: SuitableTraitsData = Field(default_factory=SuitableTraitsData)
     progression_milestones: Dict[int, MilestoneDefinition] = Field(default_factory=dict)
 
 class ProgressionMilestone(BaseModel):
@@ -340,8 +465,8 @@ class UserSubmissionData(BaseModel):
     time_at_current_level: int = 0  # Days
     obedience_metrics: Dict[str, SubmissionMetric] = Field(default_factory=dict)
     compliance_history: List[ComplianceRecord] = Field(default_factory=list)
-    limits: Dict[str, List[str]] = Field(default_factory=dict)
-    preferences: Dict[str, float] = Field(default_factory=dict)
+    limits: LimitsData = Field(default_factory=LimitsData)
+    preferences: PreferencesData = Field(default_factory=PreferencesData)
     last_level_change: Optional[datetime.datetime] = None
     lifetime_compliance_rate: float = 0.5
     last_updated: datetime.datetime = Field(default_factory=datetime.datetime.now)
@@ -395,7 +520,7 @@ class SubmissionContext:
                 description="Initial exploration of submission",
                 min_score=0.0,
                 max_score=0.2,
-                traits={"obedience": 0.1, "receptiveness": 0.2},
+                traits=TraitsData(obedience=0.1, receptiveness=0.2),
                 privileges=["Can ask questions freely", "Can negotiate boundaries"],
                 restrictions=[],
                 training_focus=["Basic protocols", "Relationship foundation", "Communication"]
@@ -406,7 +531,7 @@ class SubmissionContext:
                 description="Testing limits and establishing basic protocols",
                 min_score=0.2,
                 max_score=0.4,
-                traits={"obedience": 0.3, "receptiveness": 0.4, "protocol_adherence": 0.3},
+                traits=TraitsData(obedience=0.3, receptiveness=0.4, protocol_adherence=0.3),
                 privileges=["Can request specific activities", "Limited negotiation"],
                 restrictions=["Basic protocol adherence required"],
                 training_focus=["Protocol reinforcement", "Basic obedience", "Accepting correction"]
@@ -417,12 +542,12 @@ class SubmissionContext:
                 description="Regular compliance with established protocols",
                 min_score=0.4,
                 max_score=0.6,
-                traits={
-                    "obedience": 0.6, 
-                    "consistency": 0.5, 
-                    "protocol_adherence": 0.6,
-                    "receptiveness": 0.6
-                },
+                traits=TraitsData(
+                    obedience=0.6, 
+                    consistency=0.5, 
+                    protocol_adherence=0.6,
+                    receptiveness=0.6
+                ),
                 privileges=["Can earn rewards", "Some autonomy in tasks"],
                 restrictions=["Must follow all protocols", "Must accept correction without argument"],
                 training_focus=["Consistency", "Depth of submission", "Service skills"]
@@ -433,14 +558,14 @@ class SubmissionContext:
                 description="Deep submission with consistent obedience",
                 min_score=0.6,
                 max_score=0.8,
-                traits={
-                    "obedience": 0.8, 
-                    "consistency": 0.7, 
-                    "protocol_adherence": 0.8,
-                    "depth": 0.7,
-                    "surrender": 0.6,
-                    "reverence": 0.7
-                },
+                traits=TraitsData(
+                    obedience=0.8, 
+                    consistency=0.7, 
+                    protocol_adherence=0.8,
+                    depth=0.7,
+                    surrender=0.6,
+                    reverence=0.7
+                ),
                 privileges=["Can suggest training areas", "Some flexibility in protocols"],
                 restrictions=["High protocol requirements", "Regular ritual participation"],
                 training_focus=["Surrender", "Initiative", "Deeper psychological submission"]
@@ -451,17 +576,17 @@ class SubmissionContext:
                 description="Total submission with deep psychological investment",
                 min_score=0.8,
                 max_score=1.0,
-                traits={
-                    "obedience": 0.9, 
-                    "consistency": 0.9, 
-                    "protocol_adherence": 0.9,
-                    "depth": 0.9,
-                    "surrender": 0.9,
-                    "reverence": 0.9,
-                    "initiative": 0.8,
-                    "attentiveness": 0.8,
-                    "endurance": 0.8
-                },
+                traits=TraitsData(
+                    obedience=0.9, 
+                    consistency=0.9, 
+                    protocol_adherence=0.9,
+                    depth=0.9,
+                    surrender=0.9,
+                    reverence=0.9,
+                    initiative=0.8,
+                    attentiveness=0.8,
+                    endurance=0.8
+                ),
                 privileges=["Considerable trust", "Deep connection"],
                 restrictions=["High protocol at all times", "Total control in designated areas"],
                 training_focus=["Perfection in service", "Total surrender", "Deep psychological control"]
@@ -502,7 +627,7 @@ class SubmissionContext:
                 focus_areas=["protocol_adherence", "service", "consistency", "attentiveness"],
                 recommended_metrics=["obedience", "consistency", "protocol_adherence", "attentiveness"],
                 difficulty=0.4,
-                suitable_for_traits={"service_oriented": 0.7, "detail_oriented": 0.6, "methodical": 0.5},
+                suitable_for_traits=SuitableTraitsData(service_oriented=0.7, detail_oriented=0.6, methodical=0.5),
                 progression_milestones={
                     1: MilestoneDefinition(
                         id="basic_protocols",
@@ -537,7 +662,7 @@ class SubmissionContext:
                 focus_areas=["depth", "surrender", "receptiveness"],
                 recommended_metrics=["depth", "surrender", "receptiveness"],
                 difficulty=0.7,
-                suitable_for_traits={"analytical": 0.6, "introspective": 0.7, "emotionally_sensitive": 0.5},
+                suitable_for_traits=SuitableTraitsData(analytical=0.6, introspective=0.7, emotionally_sensitive=0.5),
                 progression_milestones={
                     1: MilestoneDefinition(
                         id="mental_submission",
@@ -572,7 +697,7 @@ class SubmissionContext:
                 focus_areas=["surrender", "endurance", "receptiveness"],
                 recommended_metrics=["surrender", "endurance", "receptiveness"],
                 difficulty=0.8,
-                suitable_for_traits={"masochistic": 0.6, "exhibitionist": 0.5, "shame_responsive": 0.7},
+                suitable_for_traits=SuitableTraitsData(masochistic=0.6, exhibitionist=0.5, shame_responsive=0.7),
                 progression_milestones={
                     1: MilestoneDefinition(
                         id="light_embarrassment",
@@ -607,7 +732,7 @@ class SubmissionContext:
                 focus_areas=["obedience", "discipline", "protocol_adherence"],
                 recommended_metrics=["obedience", "endurance", "protocol_adherence"],
                 difficulty=0.6,
-                suitable_for_traits={"structure_seeking": 0.7, "rule_oriented": 0.6, "discipline_responsive": 0.7},
+                suitable_for_traits=SuitableTraitsData(structure_seeking=0.7, rule_oriented=0.6, discipline_responsive=0.7),
                 progression_milestones={
                     1: MilestoneDefinition(
                         id="basic_rules",
@@ -652,7 +777,7 @@ class UserInitResult(BaseModel):
     user_id: str
     initialized: bool
     current_level: LevelData
-    metrics: Dict[str, float]
+    metrics: SimpleMetricsData
 
 # Main submission progression agent setup
 class SubmissionProgression:
@@ -870,9 +995,26 @@ class SubmissionProgression:
                 
                 # Set initial metrics if provided
                 if initial_data.metrics:
-                    for metric_name, value in initial_data.metrics.items():
-                        if metric_name in user_data.obedience_metrics:
-                            user_data.obedience_metrics[metric_name].value = value
+                    if initial_data.metrics.obedience is not None:
+                        user_data.obedience_metrics["obedience"].value = initial_data.metrics.obedience
+                    if initial_data.metrics.consistency is not None:
+                        user_data.obedience_metrics["consistency"].value = initial_data.metrics.consistency
+                    if initial_data.metrics.initiative is not None:
+                        user_data.obedience_metrics["initiative"].value = initial_data.metrics.initiative
+                    if initial_data.metrics.depth is not None:
+                        user_data.obedience_metrics["depth"].value = initial_data.metrics.depth
+                    if initial_data.metrics.protocol_adherence is not None:
+                        user_data.obedience_metrics["protocol_adherence"].value = initial_data.metrics.protocol_adherence
+                    if initial_data.metrics.receptiveness is not None:
+                        user_data.obedience_metrics["receptiveness"].value = initial_data.metrics.receptiveness
+                    if initial_data.metrics.endurance is not None:
+                        user_data.obedience_metrics["endurance"].value = initial_data.metrics.endurance
+                    if initial_data.metrics.attentiveness is not None:
+                        user_data.obedience_metrics["attentiveness"].value = initial_data.metrics.attentiveness
+                    if initial_data.metrics.surrender is not None:
+                        user_data.obedience_metrics["surrender"].value = initial_data.metrics.surrender
+                    if initial_data.metrics.reverence is not None:
+                        user_data.obedience_metrics["reverence"].value = initial_data.metrics.reverence
                 
                 # Set initial level if provided
                 if initial_data.level:
@@ -902,7 +1044,19 @@ class SubmissionProgression:
         level = self.context.submission_levels[user_data.current_level_id]
         
         # Format metrics for output
-        metrics = {name: metric.value for name, metric in user_data.obedience_metrics.items()}
+        metrics_dict = {name: metric.value for name, metric in user_data.obedience_metrics.items()}
+        metrics = SimpleMetricsData(
+            obedience=metrics_dict.get("obedience"),
+            consistency=metrics_dict.get("consistency"),
+            initiative=metrics_dict.get("initiative"),
+            depth=metrics_dict.get("depth"),
+            protocol_adherence=metrics_dict.get("protocol_adherence"),
+            receptiveness=metrics_dict.get("receptiveness"),
+            endurance=metrics_dict.get("endurance"),
+            attentiveness=metrics_dict.get("attentiveness"),
+            surrender=metrics_dict.get("surrender"),
+            reverence=metrics_dict.get("reverence")
+        )
         
         # Create result
         return UserInitResult(
@@ -958,7 +1112,35 @@ class SubmissionProgression:
             # Match based on traits
             trait_match_score = 0.0
             trait_count = 0
-            for trait, required_value in path.suitable_for_traits.items():
+            
+            # Convert SuitableTraitsData to dict for processing
+            path_traits_dict = {}
+            if path.suitable_for_traits.service_oriented is not None:
+                path_traits_dict["service_oriented"] = path.suitable_for_traits.service_oriented
+            if path.suitable_for_traits.detail_oriented is not None:
+                path_traits_dict["detail_oriented"] = path.suitable_for_traits.detail_oriented
+            if path.suitable_for_traits.methodical is not None:
+                path_traits_dict["methodical"] = path.suitable_for_traits.methodical
+            if path.suitable_for_traits.analytical is not None:
+                path_traits_dict["analytical"] = path.suitable_for_traits.analytical
+            if path.suitable_for_traits.introspective is not None:
+                path_traits_dict["introspective"] = path.suitable_for_traits.introspective
+            if path.suitable_for_traits.emotionally_sensitive is not None:
+                path_traits_dict["emotionally_sensitive"] = path.suitable_for_traits.emotionally_sensitive
+            if path.suitable_for_traits.masochistic is not None:
+                path_traits_dict["masochistic"] = path.suitable_for_traits.masochistic
+            if path.suitable_for_traits.exhibitionist is not None:
+                path_traits_dict["exhibitionist"] = path.suitable_for_traits.exhibitionist
+            if path.suitable_for_traits.shame_responsive is not None:
+                path_traits_dict["shame_responsive"] = path.suitable_for_traits.shame_responsive
+            if path.suitable_for_traits.structure_seeking is not None:
+                path_traits_dict["structure_seeking"] = path.suitable_for_traits.structure_seeking
+            if path.suitable_for_traits.rule_oriented is not None:
+                path_traits_dict["rule_oriented"] = path.suitable_for_traits.rule_oriented
+            if path.suitable_for_traits.discipline_responsive is not None:
+                path_traits_dict["discipline_responsive"] = path.suitable_for_traits.discipline_responsive
+                
+            for trait, required_value in path_traits_dict.items():
                 trait_count += 1
                 if trait in user_traits:
                     user_value = user_traits[trait]
@@ -1334,7 +1516,7 @@ class SubmissionProgression:
             user_data.lifetime_compliance_rate = compliant_records / total_records
         
         # Update metrics based on compliance
-        metrics_updates = {}
+        metrics_updates = MetricsUpdatesData()
         
         # Update obedience metric directly
         if "obedience" in user_data.obedience_metrics:
@@ -1352,7 +1534,7 @@ class SubmissionProgression:
                 reason=f"{'Compliance' if complied else 'Defiance'} - {instruction[:30]}..."
             )
             
-            metrics_updates["obedience"] = MetricUpdateData(
+            metrics_updates.obedience = MetricUpdateData(
                 old_value=old_value,
                 new_value=new_value,
                 change=obedience_change
@@ -1377,7 +1559,7 @@ class SubmissionProgression:
                     reason="Consistent pattern detected"
                 )
                 
-                metrics_updates["consistency"] = MetricUpdateData(
+                metrics_updates.consistency = MetricUpdateData(
                     old_value=old_value,
                     new_value=new_value,
                     change=consistency_change
@@ -1399,7 +1581,7 @@ class SubmissionProgression:
                     reason="Returned to compliance after defiance"
                 )
                 
-                metrics_updates["receptiveness"] = MetricUpdateData(
+                metrics_updates.receptiveness = MetricUpdateData(
                     old_value=old_value,
                     new_value=new_value,
                     change=receptiveness_change
@@ -1731,26 +1913,75 @@ class SubmissionProgression:
             user_data.time_at_current_level = days_at_level
         
         # Calculate trait and requirement gaps for current level
-        trait_gaps = {}
-        for trait_name, expected_value in level.traits.items():
+        trait_gaps_dict = {}
+        # Convert TraitsData to dict for processing
+        level_traits_dict = {}
+        if level.traits.obedience is not None:
+            level_traits_dict["obedience"] = level.traits.obedience
+        if level.traits.consistency is not None:
+            level_traits_dict["consistency"] = level.traits.consistency
+        if level.traits.initiative is not None:
+            level_traits_dict["initiative"] = level.traits.initiative
+        if level.traits.depth is not None:
+            level_traits_dict["depth"] = level.traits.depth
+        if level.traits.protocol_adherence is not None:
+            level_traits_dict["protocol_adherence"] = level.traits.protocol_adherence
+        if level.traits.receptiveness is not None:
+            level_traits_dict["receptiveness"] = level.traits.receptiveness
+        if level.traits.endurance is not None:
+            level_traits_dict["endurance"] = level.traits.endurance
+        if level.traits.attentiveness is not None:
+            level_traits_dict["attentiveness"] = level.traits.attentiveness
+        if level.traits.surrender is not None:
+            level_traits_dict["surrender"] = level.traits.surrender
+        if level.traits.reverence is not None:
+            level_traits_dict["reverence"] = level.traits.reverence
+            
+        for trait_name, expected_value in level_traits_dict.items():
             if trait_name in user_data.obedience_metrics:
                 current_value = user_data.obedience_metrics[trait_name].value
                 gap = expected_value - current_value
                 if gap > 0.1:  # Only report significant gaps
-                    trait_gaps[trait_name] = MetricUpdateData(
+                    trait_gaps_dict[trait_name] = MetricUpdateData(
                         old_value=expected_value,
                         new_value=current_value,
                         change=gap
                     )
         
+        trait_gaps = TraitGapsData(
+            obedience=trait_gaps_dict.get("obedience"),
+            consistency=trait_gaps_dict.get("consistency"),
+            initiative=trait_gaps_dict.get("initiative"),
+            depth=trait_gaps_dict.get("depth"),
+            protocol_adherence=trait_gaps_dict.get("protocol_adherence"),
+            receptiveness=trait_gaps_dict.get("receptiveness"),
+            endurance=trait_gaps_dict.get("endurance"),
+            attentiveness=trait_gaps_dict.get("attentiveness"),
+            surrender=trait_gaps_dict.get("surrender"),
+            reverence=trait_gaps_dict.get("reverence")
+        )
+        
         # Format metrics
-        metrics = {}
+        metrics_dict = {}
         for name, metric in user_data.obedience_metrics.items():
-            metrics[name] = MetricData(
+            metrics_dict[name] = MetricData(
                 value=metric.value,
                 weight=metric.weight,
                 last_updated=metric.last_updated.isoformat()
             )
+        
+        metrics = AllMetricsData(
+            obedience=metrics_dict.get("obedience"),
+            consistency=metrics_dict.get("consistency"),
+            initiative=metrics_dict.get("initiative"),
+            depth=metrics_dict.get("depth"),
+            protocol_adherence=metrics_dict.get("protocol_adherence"),
+            receptiveness=metrics_dict.get("receptiveness"),
+            endurance=metrics_dict.get("endurance"),
+            attentiveness=metrics_dict.get("attentiveness"),
+            surrender=metrics_dict.get("surrender"),
+            reverence=metrics_dict.get("reverence")
+        )
         
         # Assemble result
         result = UserSubmissionDataResult(
@@ -1832,7 +2063,7 @@ class SubmissionProgression:
                 compliance_trend = "declining"
         
         # Calculate metric changes over time
-        metric_trends = {}
+        metric_trends_dict = {}
         for metric_name, metric in user_data.obedience_metrics.items():
             if len(metric.history) >= 10:
                 # Compare last 5 with previous 5
@@ -1851,16 +2082,53 @@ class SubmissionProgression:
                 else:
                     trend = "stable"
                 
-                metric_trends[metric_name] = MetricTrend(
+                metric_trends_dict[metric_name] = MetricTrend(
                     trend=trend,
                     change=change,
                     recent_avg=recent_avg,
                     previous_avg=previous_avg
                 )
         
+        metric_trends = MetricTrendsData(
+            obedience=metric_trends_dict.get("obedience"),
+            consistency=metric_trends_dict.get("consistency"),
+            initiative=metric_trends_dict.get("initiative"),
+            depth=metric_trends_dict.get("depth"),
+            protocol_adherence=metric_trends_dict.get("protocol_adherence"),
+            receptiveness=metric_trends_dict.get("receptiveness"),
+            endurance=metric_trends_dict.get("endurance"),
+            attentiveness=metric_trends_dict.get("attentiveness"),
+            surrender=metric_trends_dict.get("surrender"),
+            reverence=metric_trends_dict.get("reverence")
+        )
+        
         # Generate recommendations based on metric gaps
         recommendations = []
-        for trait_name, expected in level.traits.items():
+        
+        # Convert TraitsData to dict for processing
+        level_traits_dict = {}
+        if level.traits.obedience is not None:
+            level_traits_dict["obedience"] = level.traits.obedience
+        if level.traits.consistency is not None:
+            level_traits_dict["consistency"] = level.traits.consistency
+        if level.traits.initiative is not None:
+            level_traits_dict["initiative"] = level.traits.initiative
+        if level.traits.depth is not None:
+            level_traits_dict["depth"] = level.traits.depth
+        if level.traits.protocol_adherence is not None:
+            level_traits_dict["protocol_adherence"] = level.traits.protocol_adherence
+        if level.traits.receptiveness is not None:
+            level_traits_dict["receptiveness"] = level.traits.receptiveness
+        if level.traits.endurance is not None:
+            level_traits_dict["endurance"] = level.traits.endurance
+        if level.traits.attentiveness is not None:
+            level_traits_dict["attentiveness"] = level.traits.attentiveness
+        if level.traits.surrender is not None:
+            level_traits_dict["surrender"] = level.traits.surrender
+        if level.traits.reverence is not None:
+            level_traits_dict["reverence"] = level.traits.reverence
+            
+        for trait_name, expected in level_traits_dict.items():
             if trait_name in user_data.obedience_metrics:
                 current = user_data.obedience_metrics[trait_name].value
                 gap = expected - current
@@ -1900,7 +2168,29 @@ class SubmissionProgression:
                 ))
             
             # Calculate trait requirements
-            for trait_name, expected in next_level.traits.items():
+            next_level_traits_dict = {}
+            if next_level.traits.obedience is not None:
+                next_level_traits_dict["obedience"] = next_level.traits.obedience
+            if next_level.traits.consistency is not None:
+                next_level_traits_dict["consistency"] = next_level.traits.consistency
+            if next_level.traits.initiative is not None:
+                next_level_traits_dict["initiative"] = next_level.traits.initiative
+            if next_level.traits.depth is not None:
+                next_level_traits_dict["depth"] = next_level.traits.depth
+            if next_level.traits.protocol_adherence is not None:
+                next_level_traits_dict["protocol_adherence"] = next_level.traits.protocol_adherence
+            if next_level.traits.receptiveness is not None:
+                next_level_traits_dict["receptiveness"] = next_level.traits.receptiveness
+            if next_level.traits.endurance is not None:
+                next_level_traits_dict["endurance"] = next_level.traits.endurance
+            if next_level.traits.attentiveness is not None:
+                next_level_traits_dict["attentiveness"] = next_level.traits.attentiveness
+            if next_level.traits.surrender is not None:
+                next_level_traits_dict["surrender"] = next_level.traits.surrender
+            if next_level.traits.reverence is not None:
+                next_level_traits_dict["reverence"] = next_level.traits.reverence
+                
+            for trait_name, expected in next_level_traits_dict.items():
                 if trait_name in user_data.obedience_metrics:
                     current = user_data.obedience_metrics[trait_name].value
                     gap = expected - current
