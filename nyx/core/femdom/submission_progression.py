@@ -65,6 +65,19 @@ class PathRecommendationData(BaseModel):
     difficulty: float
     focus_areas: List[str]
 
+class RequirementsData(BaseModel):
+    """Model for milestone requirements data."""
+    obedience: Optional[float] = None
+    consistency: Optional[float] = None
+    initiative: Optional[float] = None
+    depth: Optional[float] = None
+    protocol_adherence: Optional[float] = None
+    receptiveness: Optional[float] = None
+    endurance: Optional[float] = None
+    attentiveness: Optional[float] = None
+    surrender: Optional[float] = None
+    reverence: Optional[float] = None
+
 class MilestoneData(BaseModel):
     """Model for milestone data."""
     id: str
@@ -74,7 +87,7 @@ class MilestoneData(BaseModel):
     completion_date: Optional[str] = None
     rewards: Optional[List[str]] = None
     unlocks: Optional[List[str]] = None
-    requirements: Optional[Dict[str, float]] = None
+    requirements: Optional[RequirementsData] = None
     overall_progress: Optional[float] = None
 
 class HistoryEntry(BaseModel):
@@ -98,7 +111,7 @@ class MilestoneDefinition(BaseModel):
     id: str
     name: str
     description: str
-    requirements: Dict[str, float]
+    requirements: RequirementsData
     rewards: List[str]
     unlocks: List[str]
 
@@ -172,6 +185,19 @@ class MetricTrend(BaseModel):
     change: float
     recent_avg: float
     previous_avg: float
+
+class MetricTrendsData(BaseModel):
+    """Model for metric trends data."""
+    obedience: Optional[MetricTrend] = None
+    consistency: Optional[MetricTrend] = None
+    initiative: Optional[MetricTrend] = None
+    depth: Optional[MetricTrend] = None
+    protocol_adherence: Optional[MetricTrend] = None
+    receptiveness: Optional[MetricTrend] = None
+    endurance: Optional[MetricTrend] = None
+    attentiveness: Optional[MetricTrend] = None
+    surrender: Optional[MetricTrend] = None
+    reverence: Optional[MetricTrend] = None
 
 class SubmissionMetricsData(BaseModel):
     """Model for submission metrics in reports."""
@@ -259,19 +285,6 @@ class SimpleMetricsData(BaseModel):
     attentiveness: Optional[float] = None
     surrender: Optional[float] = None
     reverence: Optional[float] = None
-
-class MetricTrendsData(BaseModel):
-    """Model for metric trends data."""
-    obedience: Optional[MetricTrend] = None
-    consistency: Optional[MetricTrend] = None
-    initiative: Optional[MetricTrend] = None
-    depth: Optional[MetricTrend] = None
-    protocol_adherence: Optional[MetricTrend] = None
-    receptiveness: Optional[MetricTrend] = None
-    endurance: Optional[MetricTrend] = None
-    attentiveness: Optional[MetricTrend] = None
-    surrender: Optional[MetricTrend] = None
-    reverence: Optional[MetricTrend] = None
 
 # Tool output models for strict JSON schema compliance
 class PathRecommendationResult(BaseModel):
@@ -410,7 +423,7 @@ class ProgressionMilestone(BaseModel):
     level: int
     name: str
     description: str
-    requirements: Dict[str, float] = Field(default_factory=dict)  # metric -> threshold
+    requirements: RequirementsData = Field(default_factory=RequirementsData)
     rewards: List[str] = Field(default_factory=list)
     unlocks: List[str] = Field(default_factory=list)
     completed: bool = False
@@ -633,7 +646,7 @@ class SubmissionContext:
                         id="basic_protocols",
                         name="Basic Protocols",
                         description="Learn and consistently follow basic service protocols.",
-                        requirements={"protocol_adherence": 0.3, "consistency": 0.3},
+                        requirements=RequirementsData(protocol_adherence=0.3, consistency=0.3),
                         rewards=["basic_protocol_certification"],
                         unlocks=["intermediate_service_tasks"]
                     ),
@@ -641,7 +654,7 @@ class SubmissionContext:
                         id="consistent_service",
                         name="Consistent Service",
                         description="Demonstrate reliable service across multiple sessions.",
-                        requirements={"consistency": 0.5, "obedience": 0.4, "protocol_adherence": 0.5},
+                        requirements=RequirementsData(consistency=0.5, obedience=0.4, protocol_adherence=0.5),
                         rewards=["service_recognition"],
                         unlocks=["advanced_service_positions"]
                     ),
@@ -649,7 +662,7 @@ class SubmissionContext:
                         id="anticipatory_service",
                         name="Anticipatory Service",
                         description="Anticipate needs and provide service without explicit direction.",
-                        requirements={"attentiveness": 0.7, "initiative": 0.6},
+                        requirements=RequirementsData(attentiveness=0.7, initiative=0.6),
                         rewards=["service_excellence_badge"],
                         unlocks=["ritual_creation_privileges"]
                     )
@@ -668,7 +681,7 @@ class SubmissionContext:
                         id="mental_submission",
                         name="Mental Submission Basics",
                         description="Begin surrendering control mentally and emotionally.",
-                        requirements={"surrender": 0.3, "receptiveness": 0.4},
+                        requirements=RequirementsData(surrender=0.3, receptiveness=0.4),
                         rewards=["mind_control_session"],
                         unlocks=["light_mindfuck_techniques"]
                     ),
@@ -676,7 +689,7 @@ class SubmissionContext:
                         id="psychological_surrender",
                         name="Psychological Surrender",
                         description="Deeper mental submission and acceptance of control.",
-                        requirements={"depth": 0.5, "surrender": 0.6},
+                        requirements=RequirementsData(depth=0.5, surrender=0.6),
                         rewards=["psychological_dominance_session"],
                         unlocks=["advanced_mindfuck_techniques"]
                     ),
@@ -684,7 +697,7 @@ class SubmissionContext:
                         id="cognitive_restructuring",
                         name="Cognitive Restructuring",
                         description="Allow thought patterns to be influenced and restructured.",
-                        requirements={"depth": 0.7, "surrender": 0.8, "receptiveness": 0.7},
+                        requirements=RequirementsData(depth=0.7, surrender=0.8, receptiveness=0.7),
                         rewards=["deep_control_badge"],
                         unlocks=["permission_structures", "thought_control_protocols"]
                     )
@@ -703,7 +716,7 @@ class SubmissionContext:
                         id="light_embarrassment",
                         name="Light Embarrassment",
                         description="Introduction to light embarrassment and verbal humiliation.",
-                        requirements={"surrender": 0.3, "endurance": 0.3},
+                        requirements=RequirementsData(surrender=0.3, endurance=0.3),
                         rewards=["humiliation_beginner_badge"],
                         unlocks=["moderate_humiliation_tasks"]
                     ),
@@ -711,7 +724,7 @@ class SubmissionContext:
                         id="moderate_humiliation",
                         name="Moderate Humiliation",
                         description="Acceptance of regular humiliation and embarrassment.",
-                        requirements={"surrender": 0.5, "endurance": 0.6},
+                        requirements=RequirementsData(surrender=0.5, endurance=0.6),
                         rewards=["humiliation_intermediate_badge"],
                         unlocks=["embarrassment_challenges"]
                     ),
@@ -719,7 +732,7 @@ class SubmissionContext:
                         id="deep_degradation",
                         name="Deep Degradation",
                         description="Acceptance of profound humiliation and degradation.",
-                        requirements={"surrender": 0.8, "endurance": 0.7, "receptiveness": 0.7},
+                        requirements=RequirementsData(surrender=0.8, endurance=0.7, receptiveness=0.7),
                         rewards=["humiliation_advanced_badge"],
                         unlocks=["custom_humiliation_scenarios"]
                     )
@@ -738,7 +751,7 @@ class SubmissionContext:
                         id="basic_rules",
                         name="Basic Rules Adherence",
                         description="Consistent following of basic rules and acceptance of correction.",
-                        requirements={"obedience": 0.4, "protocol_adherence": 0.3},
+                        requirements=RequirementsData(obedience=0.4, protocol_adherence=0.3),
                         rewards=["discipline_beginner_badge"],
                         unlocks=["intermediate_rule_structures"]
                     ),
@@ -746,7 +759,7 @@ class SubmissionContext:
                         id="punishment_acceptance",
                         name="Punishment Acceptance",
                         description="Full acceptance of punishments and corrections.",
-                        requirements={"obedience": 0.6, "endurance": 0.5, "receptiveness": 0.5},
+                        requirements=RequirementsData(obedience=0.6, endurance=0.5, receptiveness=0.5),
                         rewards=["discipline_intermediate_badge"],
                         unlocks=["advanced_punishment_protocols"]
                     ),
@@ -754,7 +767,7 @@ class SubmissionContext:
                         id="internalized_discipline",
                         name="Internalized Discipline",
                         description="Self-monitoring and anticipatory obedience.",
-                        requirements={"obedience": 0.8, "protocol_adherence": 0.7, "initiative": 0.6},
+                        requirements=RequirementsData(obedience=0.8, protocol_adherence=0.7, initiative=0.6),
                         rewards=["discipline_advanced_badge"],
                         unlocks=["self_discipline_protocols", "punishment_authority"]
                     )
@@ -1355,7 +1368,30 @@ class SubmissionProgression:
             all_requirements_met = True
             requirement_progress = {}
             
-            for metric_name, threshold in milestone.requirements.items():
+            # Convert RequirementsData to dict for checking
+            requirements_dict = {}
+            if milestone.requirements.obedience is not None:
+                requirements_dict["obedience"] = milestone.requirements.obedience
+            if milestone.requirements.consistency is not None:
+                requirements_dict["consistency"] = milestone.requirements.consistency
+            if milestone.requirements.initiative is not None:
+                requirements_dict["initiative"] = milestone.requirements.initiative
+            if milestone.requirements.depth is not None:
+                requirements_dict["depth"] = milestone.requirements.depth
+            if milestone.requirements.protocol_adherence is not None:
+                requirements_dict["protocol_adherence"] = milestone.requirements.protocol_adherence
+            if milestone.requirements.receptiveness is not None:
+                requirements_dict["receptiveness"] = milestone.requirements.receptiveness
+            if milestone.requirements.endurance is not None:
+                requirements_dict["endurance"] = milestone.requirements.endurance
+            if milestone.requirements.attentiveness is not None:
+                requirements_dict["attentiveness"] = milestone.requirements.attentiveness
+            if milestone.requirements.surrender is not None:
+                requirements_dict["surrender"] = milestone.requirements.surrender
+            if milestone.requirements.reverence is not None:
+                requirements_dict["reverence"] = milestone.requirements.reverence
+            
+            for metric_name, threshold in requirements_dict.items():
                 if metric_name in user_data.obedience_metrics:
                     current_value = user_data.obedience_metrics[metric_name].value
                     requirement_met = current_value >= threshold
