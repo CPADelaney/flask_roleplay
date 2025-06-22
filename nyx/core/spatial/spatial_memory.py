@@ -17,6 +17,92 @@ from nyx.core.spatial.spatial_schemas import (
 
 logger = logging.getLogger(__name__)
 
+# Pydantic models for function tool inputs/outputs
+class CoordinatesInput(BaseModel):
+    """Coordinates input model"""
+    x: float
+    y: float
+    z: Optional[float] = None
+
+class PropertiesInput(BaseModel):
+    """Generic properties model"""
+    significance: Optional[int] = None
+    change_type: Optional[str] = None
+    map_id: Optional[str] = None
+    # Allow any additional fields by not specifying them
+
+class StateInput(BaseModel):
+    """State information model"""
+    state_data: Optional[str] = None  # JSON string representation of state
+
+class StoreMemoryResult(BaseModel):
+    """Result of storing a spatial memory"""
+    memory_id: str
+    success: bool
+    location_id: Optional[str] = None
+    coordinates: Optional[CoordinatesInput] = None
+    map_id: Optional[str] = None
+    error: Optional[str] = None
+
+class MemoryInfo(BaseModel):
+    """Information about a retrieved memory"""
+    memory_id: str
+    memory_text: Optional[str] = None
+    description: Optional[str] = None
+    memory_type: Optional[str] = None
+    significance: Optional[int] = None
+    timestamp: Optional[str] = None
+    location_id: Optional[str] = None
+    distance: Optional[float] = None
+    coordinates: Optional[CoordinatesInput] = None
+
+class EventResult(BaseModel):
+    """Result of recording a spatial event"""
+    event_id: str
+    memory_id: Optional[str] = None
+    event_type: str
+    location_id: Optional[str] = None
+    coordinates: Optional[CoordinatesInput] = None
+    timestamp: str
+
+class LandmarkResult(BaseModel):
+    """Result of registering an episodic landmark"""
+    landmark_id: str
+    name: str
+    landmark_type: str
+    salience: float
+    map_id: str
+    error: Optional[str] = None
+
+class ChangeResult(BaseModel):
+    """Result of recording an environment change"""
+    change_type: str
+    timestamp: str
+    object_id: Optional[str] = None
+    region_id: Optional[str] = None
+    map_id: str
+    error: Optional[str] = None
+
+class LandmarkInfo(BaseModel):
+    """Information about an episodic landmark"""
+    landmark_id: str
+    name: str
+    landmark_type: str
+    salience: float
+    description: str
+    coordinates: CoordinatesInput
+    visibility_radius: Optional[float] = None
+
+class ChangeInfo(BaseModel):
+    """Information about an environment change"""
+    change_type: str
+    timestamp: str
+    object_id: Optional[str] = None
+    region_id: Optional[str] = None
+    description: str
+    old_state: Optional[StateInput] = None
+    new_state: Optional[StateInput] = None
+
 class SpatialMemoryIntegration:
     """
     Integrates spatial cognition with the memory system.
@@ -83,26 +169,27 @@ class SpatialMemoryIntegration:
             Connect locations to the experiences and events that happened there.
             """,
             tools=[
-                function_tool(self.store_spatial_memory),
-                function_tool(self.retrieve_memories_at_location),
-                function_tool(self.retrieve_memories_near_coordinates),
-                function_tool(self.record_spatial_event),
-                function_tool(self.register_episodic_landmark),
-                function_tool(self.record_environment_change),
-                function_tool(self.get_episodic_landmarks),
-                function_tool(self.get_environment_changes)
-            ]
+                self.store_spatial_memory,
+                self.retrieve_memories_at_location,
+                self.retrieve_memories_near_coordinates,
+                self.record_spatial_event,
+                self.register_episodic_landmark,
+                self.record_environment_change,
+                self.get_episodic_landmarks,
+                self.get_environment_changes
+            ],
+            model="gpt-4.1-nano"
         )
     
     @function_tool
     async def store_spatial_memory(self, 
                                 memory_text: str,
                                 location_id: Optional[str] = None,
-                                coordinates: Optional[Dict[str, float]] = None,
+                                coordinates: Optional[CoordinatesInput] = None,
                                 map_id: Optional[str] = None,
                                 tags: List[str] = None,
                                 memory_type: str = "observation",
-                                significance: int = 5) -> Dict[str, Any]:
+                                significance: int = 5) -> StoreMemoryResult:
         """
         Store a memory linked to a spatial location
         
@@ -130,7 +217,11 @@ class SpatialMemoryIntegration:
             # Use active map if not provided
             if not map_id and self.spatial_mapper:
                 if not self.spatial_mapper.context.active_map_id:
-                    return {"error": "No active map set and no map_id provided"}
+                    return StoreMemoryResult(
+                        memory_id="",
+                        success=False,
+                        error="No active map set and no map_id provided"
+                    )
                 map_id = self.spatial_mapper.context.active_map_id
             
             # Prepare metadata
@@ -155,7 +246,7 @@ class SpatialMemoryIntegration:
             
             # Add coordinates
             if coordinates:
-                metadata["coordinates"] = coordinates
+                metadata["coordinates"] = coordinates.model_dump()
             
             # Store in memory core if available
             memory_id = None
@@ -182,7 +273,7 @@ class SpatialMemoryIntegration:
                 memory_id=memory_id,
                 relevance=1.0,
                 location_id=location_id,
-                coordinates=SpatialCoordinate(**coordinates) if coordinates else None,
+                coordinates=SpatialCoordinate(**coordinates.model_dump()) if coordinates else None,
                 timestamp=metadata["timestamp"],
                 description=memory_text[:100]  # Store a brief description
             )
@@ -200,28 +291,28 @@ class SpatialMemoryIntegration:
                 
                 # Update coordinate grid
                 if coordinates:
-                    grid_x = int(coordinates["x"] / self.grid_cell_size)
-                    grid_y = int(coordinates["y"] / self.grid_cell_size)
+                    grid_x = int(coordinates.x / self.grid_cell_size)
+                    grid_y = int(coordinates.y / self.grid_cell_size)
                     grid_key = (grid_x, grid_y)
                     
                     if grid_key not in self.coordinate_grid:
                         self.coordinate_grid[grid_key] = set()
                     self.coordinate_grid[grid_key].add(memory_id)
             
-            return {
-                "memory_id": memory_id,
-                "success": True,
-                "location_id": location_id,
-                "coordinates": coordinates,
-                "map_id": map_id
-            }
+            return StoreMemoryResult(
+                memory_id=memory_id,
+                success=True,
+                location_id=location_id,
+                coordinates=coordinates,
+                map_id=map_id
+            )
     
     @function_tool
     async def retrieve_memories_at_location(self, 
                                          location_id: str,
                                          limit: int = 5,
                                          min_significance: int = 0,
-                                         map_id: Optional[str] = None) -> List[Dict[str, Any]]:
+                                         map_id: Optional[str] = None) -> List[MemoryInfo]:
         """
         Retrieve memories associated with a location
         
@@ -251,14 +342,14 @@ class SpatialMemoryIntegration:
                         # Apply significance filter
                         if memory and memory.get("significance", 0) >= min_significance:
                             # Format memory for return
-                            results.append({
-                                "memory_id": memory_id,
-                                "memory_text": memory.get("memory_text", ""),
-                                "memory_type": memory.get("memory_type", "observation"),
-                                "significance": memory.get("significance", 5),
-                                "timestamp": memory.get("metadata", {}).get("timestamp", ""),
-                                "location_id": location_id
-                            })
+                            results.append(MemoryInfo(
+                                memory_id=memory_id,
+                                memory_text=memory.get("memory_text", ""),
+                                memory_type=memory.get("memory_type", "observation"),
+                                significance=memory.get("significance", 5),
+                                timestamp=memory.get("metadata", {}).get("timestamp", ""),
+                                location_id=location_id
+                            ))
                     except Exception as e:
                         logger.error(f"Error retrieving memory {memory_id}: {e}")
             else:
@@ -266,23 +357,23 @@ class SpatialMemoryIntegration:
                 for memory_id in memory_ids:
                     if memory_id in self.spatial_memories:
                         memory_ref = self.spatial_memories[memory_id]
-                        results.append({
-                            "memory_id": memory_id,
-                            "description": memory_ref.description,
-                            "timestamp": memory_ref.timestamp,
-                            "location_id": location_id
-                        })
+                        results.append(MemoryInfo(
+                            memory_id=memory_id,
+                            description=memory_ref.description,
+                            timestamp=memory_ref.timestamp,
+                            location_id=location_id
+                        ))
             
             # Sort by timestamp (most recent first) and limit results
-            results.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+            results.sort(key=lambda x: x.timestamp or "", reverse=True)
             return results[:limit]
     
     @function_tool
     async def retrieve_memories_near_coordinates(self, 
-                                              coordinates: Dict[str, float],
+                                              coordinates: CoordinatesInput,
                                               radius: float = 10.0,
                                               limit: int = 5,
-                                              min_significance: int = 0) -> List[Dict[str, Any]]:
+                                              min_significance: int = 0) -> List[MemoryInfo]:
         """
         Retrieve memories near specified coordinates
         
@@ -297,13 +388,13 @@ class SpatialMemoryIntegration:
         """
         with custom_span("retrieve_memories_near_coordinates"):
             results = []
-            coord = SpatialCoordinate(**coordinates)
+            coord = SpatialCoordinate(**coordinates.model_dump())
             
             # Calculate grid cell range to search
-            min_grid_x = int((coordinates["x"] - radius) / self.grid_cell_size)
-            max_grid_x = int((coordinates["x"] + radius) / self.grid_cell_size)
-            min_grid_y = int((coordinates["y"] - radius) / self.grid_cell_size)
-            max_grid_y = int((coordinates["y"] + radius) / self.grid_cell_size)
+            min_grid_x = int((coordinates.x - radius) / self.grid_cell_size)
+            max_grid_x = int((coordinates.x + radius) / self.grid_cell_size)
+            min_grid_y = int((coordinates.y - radius) / self.grid_cell_size)
+            max_grid_y = int((coordinates.y + radius) / self.grid_cell_size)
             
             # Collect memory IDs from all relevant grid cells
             candidate_memory_ids = set()
@@ -335,15 +426,15 @@ class SpatialMemoryIntegration:
                             # Apply significance filter
                             if memory.get("significance", 0) >= min_significance:
                                 # Format memory for return
-                                results.append({
-                                    "memory_id": memory_id,
-                                    "memory_text": memory.get("memory_text", ""),
-                                    "memory_type": memory.get("memory_type", "observation"),
-                                    "significance": memory.get("significance", 5),
-                                    "timestamp": memory.get("metadata", {}).get("timestamp", ""),
-                                    "distance": distance,
-                                    "coordinates": mem_coords
-                                })
+                                results.append(MemoryInfo(
+                                    memory_id=memory_id,
+                                    memory_text=memory.get("memory_text", ""),
+                                    memory_type=memory.get("memory_type", "observation"),
+                                    significance=memory.get("significance", 5),
+                                    timestamp=memory.get("metadata", {}).get("timestamp", ""),
+                                    distance=distance,
+                                    coordinates=CoordinatesInput(**mem_coords)
+                                ))
                     except Exception as e:
                         logger.error(f"Error retrieving memory {memory_id}: {e}")
             else:
@@ -357,16 +448,16 @@ class SpatialMemoryIntegration:
                             distance = coord.distance_to(memory_ref.coordinates) if hasattr(coord, "distance_to") else self._calculate_distance(coord, memory_ref.coordinates)
                             
                             if distance <= radius:
-                                results.append({
-                                    "memory_id": memory_id,
-                                    "description": memory_ref.description,
-                                    "timestamp": memory_ref.timestamp,
-                                    "distance": distance,
-                                    "coordinates": memory_ref.coordinates.dict()
-                                })
+                                results.append(MemoryInfo(
+                                    memory_id=memory_id,
+                                    description=memory_ref.description,
+                                    timestamp=memory_ref.timestamp,
+                                    distance=distance,
+                                    coordinates=CoordinatesInput(**memory_ref.coordinates.dict())
+                                ))
             
             # Sort by distance and limit results
-            results.sort(key=lambda x: x.get("distance", float('inf')))
+            results.sort(key=lambda x: x.distance or float('inf'))
             return results[:limit]
     
     def _calculate_distance(self, coord1: SpatialCoordinate, coord2: SpatialCoordinate) -> float:
@@ -388,10 +479,10 @@ class SpatialMemoryIntegration:
                                 event_type: str,
                                 description: str,
                                 location_id: Optional[str] = None,
-                                coordinates: Optional[Dict[str, float]] = None,
+                                coordinates: Optional[CoordinatesInput] = None,
                                 participants: List[str] = None,
-                                properties: Dict[str, Any] = None,
-                                store_as_memory: bool = True) -> Dict[str, Any]:
+                                properties: Optional[PropertiesInput] = None,
+                                store_as_memory: bool = True) -> EventResult:
         """
         Record an event that occurred at a specific location
         
@@ -416,11 +507,11 @@ class SpatialMemoryIntegration:
                 event_id=event_id,
                 event_type=event_type,
                 location_id=location_id,
-                coordinates=SpatialCoordinate(**coordinates) if coordinates else None,
+                coordinates=SpatialCoordinate(**coordinates.model_dump()) if coordinates else None,
                 timestamp=datetime.now().isoformat(),
                 description=description,
                 participants=participants or [],
-                properties=properties or {}
+                properties=properties.model_dump() if properties else {}
             )
             
             # Store as memory if requested
@@ -432,24 +523,24 @@ class SpatialMemoryIntegration:
                     coordinates=coordinates,
                     tags=["spatial", "event", event_type],
                     memory_type="experience",
-                    significance=properties.get("significance", 6) if properties else 6
+                    significance=properties.significance if properties and properties.significance else 6
                 )
                 
-                memory_id = memory_result.get("memory_id")
+                memory_id = memory_result.memory_id
                 event.memory_id = memory_id
             
             # Store event
             async with self._lock:
                 self.spatial_events[event_id] = event
             
-            return {
-                "event_id": event_id,
-                "memory_id": memory_id,
-                "event_type": event_type,
-                "location_id": location_id,
-                "coordinates": coordinates,
-                "timestamp": event.timestamp
-            }
+            return EventResult(
+                event_id=event_id,
+                memory_id=memory_id,
+                event_type=event_type,
+                location_id=location_id,
+                coordinates=coordinates,
+                timestamp=event.timestamp
+            )
     
     @function_tool
     async def register_episodic_landmark(self,
@@ -458,7 +549,7 @@ class SpatialMemoryIntegration:
                                       description: Optional[str] = None,
                                       salience: float = 1.0,
                                       visibility_radius: Optional[float] = None,
-                                      properties: Dict[str, Any] = None) -> Dict[str, Any]:
+                                      properties: Optional[PropertiesInput] = None) -> LandmarkResult:
         """
         Register a landmark with episodic significance
         
@@ -477,17 +568,38 @@ class SpatialMemoryIntegration:
             # Use active map if not provided
             if not map_id and self.spatial_mapper:
                 if not self.spatial_mapper.context.active_map_id:
-                    return {"error": "No active map set and no map_id provided"}
+                    return LandmarkResult(
+                        landmark_id=landmark_id,
+                        name="",
+                        landmark_type="",
+                        salience=0.0,
+                        map_id="",
+                        error="No active map set and no map_id provided"
+                    )
                 map_id = self.spatial_mapper.context.active_map_id
             
             # Check if landmark exists
             if not self.spatial_mapper or map_id not in self.spatial_mapper.maps:
-                return {"error": f"Map {map_id} not found"}
+                return LandmarkResult(
+                    landmark_id=landmark_id,
+                    name="",
+                    landmark_type="",
+                    salience=0.0,
+                    map_id=map_id or "",
+                    error=f"Map {map_id} not found"
+                )
                 
             map_obj = self.spatial_mapper.maps[map_id]
             
             if landmark_id not in map_obj.spatial_objects:
-                return {"error": f"Landmark {landmark_id} not found in map {map_id}"}
+                return LandmarkResult(
+                    landmark_id=landmark_id,
+                    name="",
+                    landmark_type="",
+                    salience=0.0,
+                    map_id=map_id,
+                    error=f"Landmark {landmark_id} not found in map {map_id}"
+                )
             
             # Get landmark object
             landmark_obj = map_obj.spatial_objects[landmark_id]
@@ -505,22 +617,21 @@ class SpatialMemoryIntegration:
                 landmark_type=landmark_obj.object_type,
                 salience=salience,
                 description=description or f"Landmark: {landmark_obj.name}",
-                coordinates=landmark_obj.coordinates,
-                visibility_radius=visibility_radius,
-                properties=properties or {}
+                coordinates=CoordinatesInput(**landmark_obj.coordinates.dict()),
+                visibility_radius=visibility_radius
             )
             
             # Store landmark info
             async with self._lock:
                 self.episodic_landmarks[landmark_id] = landmark_info
             
-            return {
-                "landmark_id": landmark_id,
-                "name": landmark_obj.name,
-                "landmark_type": landmark_obj.object_type,
-                "salience": salience,
-                "map_id": map_id
-            }
+            return LandmarkResult(
+                landmark_id=landmark_id,
+                name=landmark_obj.name,
+                landmark_type=landmark_obj.object_type,
+                salience=salience,
+                map_id=map_id
+            )
     
     @function_tool
     async def record_environment_change(self,
@@ -528,9 +639,9 @@ class SpatialMemoryIntegration:
                                      description: str,
                                      object_id: Optional[str] = None,
                                      region_id: Optional[str] = None,
-                                     old_state: Optional[Dict[str, Any]] = None,
-                                     new_state: Optional[Dict[str, Any]] = None,
-                                     map_id: Optional[str] = None) -> Dict[str, Any]:
+                                     old_state: Optional[StateInput] = None,
+                                     new_state: Optional[StateInput] = None,
+                                     map_id: Optional[str] = None) -> ChangeResult:
         """
         Record a change in the environment
         
@@ -550,7 +661,12 @@ class SpatialMemoryIntegration:
             # Use active map if not provided
             if not map_id and self.spatial_mapper:
                 if not self.spatial_mapper.context.active_map_id:
-                    return {"error": "No active map set and no map_id provided"}
+                    return ChangeResult(
+                        change_type=change_type,
+                        timestamp=datetime.now().isoformat(),
+                        map_id="",
+                        error="No active map set and no map_id provided"
+                    )
                 map_id = self.spatial_mapper.context.active_map_id
             
             # Create change object
@@ -558,8 +674,8 @@ class SpatialMemoryIntegration:
                 change_type=change_type,
                 object_id=object_id,
                 region_id=region_id,
-                old_state=old_state,
-                new_state=new_state,
+                old_state=old_state.model_dump() if old_state else None,
+                new_state=new_state.model_dump() if new_state else None,
                 timestamp=datetime.now().isoformat(),
                 description=description
             )
@@ -573,25 +689,25 @@ class SpatialMemoryIntegration:
                 event_type=f"environment_{change_type}",
                 description=description,
                 location_id=object_id or region_id,
-                properties={
-                    "change_type": change_type,
-                    "map_id": map_id
-                },
+                properties=PropertiesInput(
+                    change_type=change_type,
+                    map_id=map_id
+                ),
                 store_as_memory=True
             )
             
-            return {
-                "change_type": change_type,
-                "timestamp": change.timestamp,
-                "object_id": object_id,
-                "region_id": region_id,
-                "map_id": map_id
-            }
+            return ChangeResult(
+                change_type=change_type,
+                timestamp=change.timestamp,
+                object_id=object_id,
+                region_id=region_id,
+                map_id=map_id
+            )
     
     @function_tool
     async def get_episodic_landmarks(self, 
                                   map_id: Optional[str] = None, 
-                                  min_salience: float = 0.0) -> List[Dict[str, Any]]:
+                                  min_salience: float = 0.0) -> List[LandmarkInfo]:
         """
         Get episodic landmarks
         
@@ -619,18 +735,10 @@ class SpatialMemoryIntegration:
                         continue
             
             # Add to results
-            results.append({
-                "landmark_id": landmark_id,
-                "name": landmark.name,
-                "landmark_type": landmark.landmark_type,
-                "salience": landmark.salience,
-                "description": landmark.description,
-                "coordinates": landmark.coordinates.dict(),
-                "visibility_radius": landmark.visibility_radius
-            })
+            results.append(landmark)
         
         # Sort by salience (highest first)
-        results.sort(key=lambda x: x["salience"], reverse=True)
+        results.sort(key=lambda x: x.salience, reverse=True)
         return results
     
     @function_tool
@@ -639,7 +747,7 @@ class SpatialMemoryIntegration:
                                    object_id: Optional[str] = None,
                                    region_id: Optional[str] = None,
                                    change_types: Optional[List[str]] = None,
-                                   limit: int = 10) -> List[Dict[str, Any]]:
+                                   limit: int = 10) -> List[ChangeInfo]:
         """
         Get environment changes
         
@@ -669,16 +777,16 @@ class SpatialMemoryIntegration:
                 continue
             
             # Add to results
-            results.append({
-                "change_type": change.change_type,
-                "timestamp": change.timestamp,
-                "object_id": change.object_id,
-                "region_id": change.region_id,
-                "description": change.description,
-                "old_state": change.old_state,
-                "new_state": change.new_state
-            })
+            results.append(ChangeInfo(
+                change_type=change.change_type,
+                timestamp=change.timestamp,
+                object_id=change.object_id,
+                region_id=change.region_id,
+                description=change.description,
+                old_state=StateInput(state_data=str(change.old_state)) if change.old_state else None,
+                new_state=StateInput(state_data=str(change.new_state)) if change.new_state else None
+            ))
         
         # Sort by timestamp (most recent first)
-        results.sort(key=lambda x: x["timestamp"], reverse=True)
+        results.sort(key=lambda x: x.timestamp, reverse=True)
         return results[:limit]
