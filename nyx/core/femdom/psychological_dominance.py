@@ -587,7 +587,7 @@ Use the available tools to maintain accurate psychological state tracking.
         )
     
     @function_tool
-    async def select_mind_game(
+    async def _select_mind_game(
         ctx: RunContextWrapper,
         params: SelectMindGameParams,
     ) -> SelectMindGameResult:
