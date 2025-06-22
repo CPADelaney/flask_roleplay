@@ -12,24 +12,160 @@ from agents import Agent, ModelSettings, function_tool, Runner, trace, RunContex
 
 logger = logging.getLogger(__name__)
 
+# Create explicit models for all Dict[str, Any] fields
+class TaskPreferences(BaseModel):
+    """Explicit model for task preferences mapping"""
+    service: Optional[float] = None
+    self_improvement: Optional[float] = None
+    ritual: Optional[float] = None
+    humiliation: Optional[float] = None
+    endurance: Optional[float] = None
+    protocol: Optional[float] = None
+    creative: Optional[float] = None
+    obedience: Optional[float] = None
+    worship: Optional[float] = None
+    punishment: Optional[float] = None
+
+class InferredTraits(BaseModel):
+    """Explicit model for inferred traits"""
+    obedient: Optional[float] = None
+    ritual_oriented: Optional[float] = None
+    morning_person: Optional[float] = None
+    consistency: Optional[float] = None
+
+class UserLimits(BaseModel):
+    """Explicit model for user limits"""
+    hard: List[str] = Field(default_factory=list)
+    soft: List[str] = Field(default_factory=list)
+
+class SubmissionMetrics(BaseModel):
+    """Explicit model for submission metrics"""
+    compliance_rate: Optional[float] = None
+    defiance_count: Optional[int] = None
+    submission_depth: Optional[float] = None
+
+class TaskHistoryEntry(BaseModel):
+    """Explicit model for task history entries"""
+    task_id: str
+    title: str
+    category: str
+    completed: bool
+    rating: Optional[float] = None
+    completed_at: str
+    difficulty: str
+    cancelled: Optional[bool] = None
+    reason: Optional[str] = None
+    punishment_applied: Optional[bool] = None
+    cancelled_at: Optional[str] = None
+
+class TaskStats(BaseModel):
+    """Explicit model for task statistics"""
+    completion_rate: float
+    total_completed: int
+    total_failed: int
+    preferred_categories: Optional[List[List[Union[str, float]]]] = None
+
+class VerificationData(BaseModel):
+    """Explicit model for verification data"""
+    image_urls: Optional[List[str]] = None
+    video_url: Optional[str] = None
+    text_content: Optional[str] = None
+    answers: Optional[List[str]] = None
+    audio_url: Optional[str] = None
+    auto_failed: Optional[bool] = None
+
+class RewardData(BaseModel):
+    """Explicit model for reward data"""
+    description: str
+    type: str = "standard"
+
+class PunishmentData(BaseModel):
+    """Explicit model for punishment data"""
+    description: str
+    type: str = "standard"
+    generate_punishment_task: Optional[bool] = None
+
+class CustomTaskData(BaseModel):
+    """Explicit model for custom task data"""
+    additional_notes: Optional[str] = None
+
+class TemplateData(BaseModel):
+    """Explicit model for template data"""
+    id: str
+    title: str
+    category: str
+    difficulty: str
+    description: str
+
+class TaskStatisticsData(BaseModel):
+    """Explicit model for task statistics data"""
+    total_tasks: int
+    completed_tasks: int
+    failed_tasks: int
+    active_tasks: int
+    completion_rate: float
+    average_rating: float
+
+class CategoryBreakdownItem(BaseModel):
+    """Explicit model for category breakdown item"""
+    count: int
+    completed: int
+    completion_rate: float
+
+class DifficultyBreakdownItem(BaseModel):
+    """Explicit model for difficulty breakdown item"""
+    count: int
+    completed: int
+    completion_rate: float
+
+class ActiveTaskData(BaseModel):
+    """Explicit model for active task data"""
+    task_id: str
+    title: str
+    description: str
+    instructions: List[str]
+    category: str
+    difficulty: str
+    assigned_at: str
+    due_at: Optional[str] = None
+    verification_type: str
+    time_remaining: Optional[Dict[str, Any]] = None
+
+class CustomizationOptions(BaseModel):
+    """Explicit model for customization options"""
+    duration: Optional[List[int]] = None
+    mantra_repetitions: Optional[List[int]] = None
+    position: Optional[List[str]] = None
+    count: Optional[List[int]] = None
+    repetitions: Optional[List[int]] = None
+    word_count: Optional[List[int]] = None
+    minimum_words: Optional[List[int]] = None
+    frequency: Optional[List[str]] = None
+    check_in_frequency: Optional[List[str]] = None
+
+class CustomRewardPunishment(BaseModel):
+    """Explicit model for customized rewards/punishments"""
+    description: str
+    type: Optional[str] = None
+
 # Tool output models for strict JSON schema compliance
 class UserProfileResult(BaseModel):
     user_id: str
-    task_preferences: Dict[str, float] = Field(default_factory=dict)
+    task_preferences: TaskPreferences = Field(default_factory=TaskPreferences)
     preferred_difficulty: str = "moderate"
     preferred_verification: str = "honor"
     task_completion_rate: float = 1.0
     trust_level: Optional[float] = None
     submission_level: Optional[int] = None
-    inferred_traits: Dict[str, Any] = Field(default_factory=dict)
-    limits: Dict[str, List[str]] = Field(default_factory=dict)
-    submission_metrics: Dict[str, Any] = Field(default_factory=dict)
+    inferred_traits: InferredTraits = Field(default_factory=InferredTraits)
+    limits: UserLimits = Field(default_factory=UserLimits)
+    submission_metrics: SubmissionMetrics = Field(default_factory=SubmissionMetrics)
     error: Optional[str] = None
 
 class TaskCompletionHistoryResult(BaseModel):
     user_id: str
-    history: List[Dict[str, Any]]
-    stats: Dict[str, Any]
+    history: List[TaskHistoryEntry]
+    stats: TaskStats
     error: Optional[str] = None
 
 class TaskDetailsResult(BaseModel):
@@ -45,20 +181,20 @@ class TaskDetailsResult(BaseModel):
     completed_at: Optional[str] = None
     verification_type: Optional[str] = None
     verification_instructions: Optional[str] = None
-    verification_data: Optional[Dict[str, Any]] = None
+    verification_data: Optional[VerificationData] = None
     completed: bool = False
     failed: bool = False
     rating: Optional[float] = None
-    reward: Optional[Dict[str, Any]] = None
-    punishment: Optional[Dict[str, Any]] = None
+    reward: Optional[RewardData] = None
+    punishment: Optional[PunishmentData] = None
     notes: Optional[str] = None
     extension_count: int = 0
     tags: List[str] = Field(default_factory=list)
-    custom_data: Optional[Dict[str, Any]] = None
+    custom_data: Optional[CustomTaskData] = None
     error: Optional[str] = None
 
 class TemplatesResult(BaseModel):
-    templates: List[Dict[str, Any]]
+    templates: List[TemplateData]
     count: int
     category_filter: Optional[str] = None
     error: Optional[str] = None
@@ -66,16 +202,16 @@ class TemplatesResult(BaseModel):
 class TaskStatisticsResult(BaseModel):
     success: bool
     user_id: Optional[str] = None
-    statistics: Dict[str, Any] = Field(default_factory=dict)
-    category_breakdown: Dict[str, Any] = Field(default_factory=dict)
-    difficulty_breakdown: Dict[str, Any] = Field(default_factory=dict)
+    statistics: TaskStatisticsData = Field(default_factory=TaskStatisticsData)
+    category_breakdown: Dict[str, CategoryBreakdownItem] = Field(default_factory=dict)
+    difficulty_breakdown: Dict[str, DifficultyBreakdownItem] = Field(default_factory=dict)
     preferred_categories: List[List[Any]] = Field(default_factory=list)
     error: Optional[str] = None
 
 class ActiveTasksResult(BaseModel):
     success: bool
     user_id: Optional[str] = None
-    active_tasks: List[Dict[str, Any]]
+    active_tasks: List[ActiveTaskData]
     count: int
     max_concurrent: Optional[int] = None
     error: Optional[str] = None
@@ -132,16 +268,16 @@ class AssignedTask(BaseModel):
     completed_at: Optional[datetime.datetime] = None
     verification_type: str
     verification_instructions: str
-    verification_data: Optional[Dict[str, Any]] = None
+    verification_data: Optional[VerificationData] = None
     completed: bool = False
     failed: bool = False
     rating: Optional[float] = None
-    reward: Optional[Dict[str, Any]] = None
-    punishment: Optional[Dict[str, Any]] = None
+    reward: Optional[RewardData] = None
+    punishment: Optional[PunishmentData] = None
     notes: Optional[str] = None
     extension_count: int = 0
     tags: List[str] = Field(default_factory=list)
-    custom_data: Optional[Dict[str, Any]] = None
+    custom_data: Optional[CustomTaskData] = None
 
 class TaskTemplate(BaseModel):
     """Template for generating tasks."""
@@ -155,8 +291,8 @@ class TaskTemplate(BaseModel):
     verification_instructions: str
     estimated_duration_minutes: int
     suitable_for_levels: List[int] = Field(default_factory=list)
-    suitable_for_traits: Dict[str, float] = Field(default_factory=dict)
-    customization_options: Dict[str, List[Any]] = Field(default_factory=dict)
+    suitable_for_traits: TaskPreferences = Field(default_factory=TaskPreferences)
+    customization_options: CustomizationOptions = Field(default_factory=CustomizationOptions)
     reward_suggestions: List[str] = Field(default_factory=list)
     punishment_suggestions: List[str] = Field(default_factory=list)
     tags: List[str] = Field(default_factory=list)
@@ -167,15 +303,15 @@ class UserTaskSettings(BaseModel):
     active_tasks: List[str] = Field(default_factory=list)  # IDs of currently active tasks
     completed_tasks: List[str] = Field(default_factory=list)  # IDs of completed tasks
     failed_tasks: List[str] = Field(default_factory=list)  # IDs of failed tasks
-    task_preferences: Dict[str, float] = Field(default_factory=dict)  # category -> preference (0.0-1.0)
+    task_preferences: TaskPreferences = Field(default_factory=TaskPreferences)  # category -> preference (0.0-1.0)
     preferred_difficulty: str = "moderate"
     preferred_verification: str = "honor"
     max_concurrent_tasks: int = 3  # Maximum number of concurrent tasks
     last_updated: datetime.datetime = Field(default_factory=datetime.datetime.now)
-    customized_rewards: List[Dict[str, Any]] = Field(default_factory=list)
-    customized_punishments: List[Dict[str, Any]] = Field(default_factory=list)
+    customized_rewards: List[CustomRewardPunishment] = Field(default_factory=list)
+    customized_punishments: List[CustomRewardPunishment] = Field(default_factory=list)
     task_completion_rate: float = 1.0  # Initial perfect rate
-    task_history: List[Dict[str, Any]] = Field(default_factory=list)
+    task_history: List[TaskHistoryEntry] = Field(default_factory=list)
 
 class TaskValidationInput(BaseModel):
     """Input for task validation guardrail."""
@@ -195,7 +331,7 @@ class TaskValidationOutput(BaseModel):
 class VerificationValidationInput(BaseModel):
     """Input for verification validation guardrail."""
     task_id: str
-    verification_data: Dict[str, Any]
+    verification_data: VerificationData
 
 class VerificationValidationOutput(BaseModel):
     """Output for verification validation guardrail."""
@@ -211,6 +347,18 @@ class TaskContext(BaseModel):
     reward_system: Any = None
     relationship_manager: Any = None
     submission_progression: Any = None
+
+# Explicit model for guardrail input data
+class GuardrailInputData(BaseModel):
+    """Model for guardrail input data"""
+    user_id: str = ""
+    title: str = ""
+    description: str = ""
+    category: str = ""
+    difficulty: str = ""
+    verification_type: str = ""
+    task_id: str = ""
+    verification_data: Optional[VerificationData] = None
 
 class TaskAssignmentSystem:
     """System for assigning and tracking real-life tasks for femdom dynamics using Agent SDK."""
@@ -369,17 +517,17 @@ Output your recommendations and task management decisions as a JSON object.
     def _create_task_validation_guardrail(self) -> InputGuardrail:
         """Create guardrail for task validation."""
         @function_tool
-        async def task_validation_function(ctx: Any, agent: Any, input_data: Dict[str, Any]) -> GuardrailFunctionOutput:
+        async def task_validation_function(ctx: Any, agent: Any, input_data: GuardrailInputData) -> GuardrailFunctionOutput:
             """Validate task input to ensure it's appropriate and well-formed."""
             # Create input model
             try:
                 validation_input = TaskValidationInput(
-                    user_id=input_data.get("user_id", ""),
-                    task_title=input_data.get("title", ""),
-                    task_description=input_data.get("description", ""),
-                    task_category=input_data.get("category", ""),
-                    task_difficulty=input_data.get("difficulty", ""),
-                    verification_type=input_data.get("verification_type", "")
+                    user_id=input_data.user_id,
+                    task_title=input_data.title,
+                    task_description=input_data.description,
+                    task_category=input_data.category,
+                    task_difficulty=input_data.difficulty,
+                    verification_type=input_data.verification_type
                 )
                 
                 # Basic validation
@@ -450,13 +598,13 @@ Output your recommendations and task management decisions as a JSON object.
     def _create_verification_validation_guardrail(self) -> InputGuardrail:
         """Create guardrail for verification validation."""
         @function_tool
-        async def verification_validation_function(ctx: Any, agent: Any, input_data: Dict[str, Any]) -> GuardrailFunctionOutput:
+        async def verification_validation_function(ctx: Any, agent: Any, input_data: GuardrailInputData) -> GuardrailFunctionOutput:
             """Validate verification data to ensure it meets requirements."""
             # Create input model
             try:
                 verification_input = VerificationValidationInput(
-                    task_id=input_data.get("task_id", ""),
-                    verification_data=input_data.get("verification_data", {})
+                    task_id=input_data.task_id,
+                    verification_data=input_data.verification_data or VerificationData()
                 )
                 
                 # Basic validation
@@ -475,23 +623,23 @@ Output your recommendations and task management decisions as a JSON object.
                     verification_type = task.verification_type
                     
                     # Check verification data based on type
-                    if verification_type == VerificationType.PHOTO and "image_urls" not in verification_input.verification_data:
+                    if verification_type == VerificationType.PHOTO and not verification_input.verification_data.image_urls:
                         is_valid = False
                         reason = "Photo verification requires image URLs"
                     
-                    elif verification_type == VerificationType.VIDEO and "video_url" not in verification_input.verification_data:
+                    elif verification_type == VerificationType.VIDEO and not verification_input.verification_data.video_url:
                         is_valid = False
                         reason = "Video verification requires a video URL"
                     
-                    elif verification_type == VerificationType.TEXT and "text_content" not in verification_input.verification_data:
+                    elif verification_type == VerificationType.TEXT and not verification_input.verification_data.text_content:
                         is_valid = False
                         reason = "Text verification requires text content"
                     
-                    elif verification_type == VerificationType.QUIZ and "answers" not in verification_input.verification_data:
+                    elif verification_type == VerificationType.QUIZ and not verification_input.verification_data.answers:
                         is_valid = False
                         reason = "Quiz verification requires answers"
                     
-                    elif verification_type == VerificationType.VOICE and "audio_url" not in verification_input.verification_data:
+                    elif verification_type == VerificationType.VOICE and not verification_input.verification_data.audio_url:
                         is_valid = False
                         reason = "Voice verification requires an audio URL"
                 
@@ -520,14 +668,14 @@ Output your recommendations and task management decisions as a JSON object.
     
     def _load_default_task_templates(self):
         """Load default task templates."""
-        # Service Tasks
+        # RITUAL Tasks
         self.task_templates["morning_ritual"] = TaskTemplate(
             id="morning_ritual",
             title="Morning Devotion Ritual",
             description="Establish a morning ritual to start each day with submission and devotion.",
             instructions=[
-                "Upon waking, immediately kneel beside your bed for [X] minutes",
-                "Recite your devotional mantra [X] times",
+                "Upon waking, immediately kneel beside your bed for [duration] minutes",
+                "Recite your devotional mantra [mantra_repetitions] times",
                 "Write a short gratitude note and send it",
                 "Complete this ritual before any other morning activities"
             ],
@@ -537,12 +685,12 @@ Output your recommendations and task management decisions as a JSON object.
             verification_instructions="Submit a daily log describing your ritual completion, including time, feelings, and any challenges.",
             estimated_duration_minutes=15,
             suitable_for_levels=[2, 3, 4, 5],
-            suitable_for_traits={"ritual_oriented": 0.8, "morning_person": 0.7, "consistency": 0.6},
-            customization_options={
-                "duration": [5, 10, 15, 20, 30],
-                "mantra_repetitions": [3, 5, 10, 15],
-                "position": ["kneeling", "prostrate", "lotus", "standing with head bowed"]
-            },
+            suitable_for_traits=TaskPreferences(ritual_oriented=0.8, morning_person=0.7, consistency=0.6),
+            customization_options=CustomizationOptions(
+                duration=[5, 10, 15, 20, 30],
+                mantra_repetitions=[3, 5, 10, 15],
+                position=["kneeling", "prostrate", "lotus", "standing with head bowed"]
+            ),
             reward_suggestions=[
                 "Verbal praise and affirmation",
                 "Permission for a small pleasure",
@@ -556,9 +704,635 @@ Output your recommendations and task management decisions as a JSON object.
             tags=["morning", "ritual", "devotion", "consistency"]
         )
         
-        # Add more task templates as in the original code...
-        # For brevity, I've included just one template here, but you would add all the 
-        # original templates from the original code
+        self.task_templates["evening_reflection"] = TaskTemplate(
+            id="evening_reflection",
+            title="Evening Reflection and Gratitude",
+            description="End each day with reflection on your submission and gratitude for guidance.",
+            instructions=[
+                "Before bed, kneel in your designated space",
+                "Reflect on your day's obedience and any failures",
+                "Write [minimum_words] words about what you learned today",
+                "End with [count] statements of gratitude"
+            ],
+            category=TaskCategory.RITUAL,
+            difficulty=TaskDifficulty.EASY,
+            verification_type=VerificationType.TEXT,
+            verification_instructions="Submit your written reflection and gratitude statements.",
+            estimated_duration_minutes=20,
+            suitable_for_levels=[1, 2, 3, 4, 5],
+            suitable_for_traits=TaskPreferences(ritual_oriented=0.7, self_improvement=0.6),
+            customization_options=CustomizationOptions(
+                minimum_words=[50, 100, 150, 200],
+                count=[3, 5, 7, 10]
+            ),
+            reward_suggestions=[
+                "Words of affirmation",
+                "Permission for comfortable sleep position",
+                "Reduced morning ritual requirements"
+            ],
+            punishment_suggestions=[
+                "Sleep on the floor",
+                "Write additional reflection",
+                "Earlier bedtime for a week"
+            ],
+            tags=["evening", "ritual", "reflection", "gratitude"]
+        )
+
+        # SERVICE Tasks
+        self.task_templates["domestic_service"] = TaskTemplate(
+            id="domestic_service",
+            title="Domestic Service Excellence",
+            description="Perform household tasks with dedication and attention to detail.",
+            instructions=[
+                "Complete assigned cleaning tasks to perfection",
+                "Take before and after photos of each area",
+                "Spend at least [duration] minutes on detailed cleaning",
+                "Present results with pride in your service"
+            ],
+            category=TaskCategory.SERVICE,
+            difficulty=TaskDifficulty.MODERATE,
+            verification_type=VerificationType.PHOTO,
+            verification_instructions="Submit before/after photos of cleaned areas with description of work completed.",
+            estimated_duration_minutes=60,
+            suitable_for_levels=[2, 3, 4, 5],
+            suitable_for_traits=TaskPreferences(service=0.8, obedience=0.6),
+            customization_options=CustomizationOptions(
+                duration=[30, 45, 60, 90, 120]
+            ),
+            reward_suggestions=[
+                "Praise for excellent service",
+                "Permission for a reward activity",
+                "Reduced service requirements next day"
+            ],
+            punishment_suggestions=[
+                "Redo the entire task",
+                "Additional service assignments",
+                "Loss of privileges"
+            ],
+            tags=["service", "domestic", "cleaning", "dedication"]
+        )
+
+        self.task_templates["personal_service"] = TaskTemplate(
+            id="personal_service",
+            title="Personal Service and Attendance",
+            description="Provide attentive personal service demonstrating devotion.",
+            instructions=[
+                "Prepare and serve a beverage exactly as preferred",
+                "Maintain proper posture and demeanor throughout",
+                "Anticipate needs without being asked",
+                "Complete service in silence unless spoken to"
+            ],
+            category=TaskCategory.SERVICE,
+            difficulty=TaskDifficulty.CHALLENGING,
+            verification_type=VerificationType.VIDEO,
+            verification_instructions="Record a video showing your service preparation and presentation.",
+            estimated_duration_minutes=30,
+            suitable_for_levels=[3, 4, 5],
+            suitable_for_traits=TaskPreferences(service=0.9, protocol=0.7),
+            customization_options=CustomizationOptions(),
+            reward_suggestions=[
+                "Verbal praise and acknowledgment",
+                "Brief physical contact as reward",
+                "Elevated status for the day"
+            ],
+            punishment_suggestions=[
+                "Service training exercises",
+                "Written essay on proper service",
+                "Loss of speaking privileges"
+            ],
+            tags=["service", "personal", "protocol", "attention"]
+        )
+
+        # OBEDIENCE Tasks
+        self.task_templates["position_training"] = TaskTemplate(
+            id="position_training",
+            title="Position Training and Holding",
+            description="Practice and maintain submissive positions to demonstrate obedience.",
+            instructions=[
+                "Assume the assigned position",
+                "Hold for [duration] minutes without moving",
+                "Focus on your submission during this time",
+                "Document any physical or mental challenges"
+            ],
+            category=TaskCategory.OBEDIENCE,
+            difficulty=TaskDifficulty.MODERATE,
+            verification_type=VerificationType.PHOTO,
+            verification_instructions="Submit photo proof at start and end, plus written report of experience.",
+            estimated_duration_minutes=30,
+            suitable_for_levels=[2, 3, 4, 5],
+            suitable_for_traits=TaskPreferences(obedience=0.8, endurance=0.6),
+            customization_options=CustomizationOptions(
+                duration=[10, 15, 20, 30, 45],
+                position=["kneeling", "standing at attention", "prostrate", "wall sit"]
+            ),
+            reward_suggestions=[
+                "Praise for endurance",
+                "Massage or comfort afterwards",
+                "Choice of next position"
+            ],
+            punishment_suggestions=[
+                "Extended holding time",
+                "More difficult position",
+                "Daily position practice for a week"
+            ],
+            tags=["obedience", "positions", "training", "endurance"]
+        )
+
+        self.task_templates["command_response"] = TaskTemplate(
+            id="command_response",
+            title="Instant Command Response Training",
+            description="Practice immediate obedience to commands without hesitation.",
+            instructions=[
+                "Set [count] random alarms throughout the day",
+                "When alarm sounds, immediately perform assigned action",
+                "Complete action within 30 seconds",
+                "Log each response time and any delays"
+            ],
+            category=TaskCategory.OBEDIENCE,
+            difficulty=TaskDifficulty.CHALLENGING,
+            verification_type=VerificationType.TEXT,
+            verification_instructions="Submit detailed log of all command responses with timestamps and completion times.",
+            estimated_duration_minutes=10,
+            suitable_for_levels=[3, 4, 5],
+            suitable_for_traits=TaskPreferences(obedience=0.9, protocol=0.7),
+            customization_options=CustomizationOptions(
+                count=[3, 5, 7, 10]
+            ),
+            reward_suggestions=[
+                "Recognition of perfect obedience",
+                "Reduced commands next day",
+                "Special privilege earned"
+            ],
+            punishment_suggestions=[
+                "Double commands next day",
+                "Write lines about obedience",
+                "Additional obedience training"
+            ],
+            tags=["obedience", "commands", "training", "immediate"]
+        )
+
+        # WORSHIP Tasks
+        self.task_templates["written_worship"] = TaskTemplate(
+            id="written_worship",
+            title="Written Worship and Adoration",
+            description="Express deep worship and admiration through written words.",
+            instructions=[
+                "Write [minimum_words] words of sincere worship",
+                "Include specific reasons for your devotion",
+                "Express how submission enriches your life",
+                "End with a pledge of continued service"
+            ],
+            category=TaskCategory.WORSHIP,
+            difficulty=TaskDifficulty.MODERATE,
+            verification_type=VerificationType.TEXT,
+            verification_instructions="Submit your complete written worship for review.",
+            estimated_duration_minutes=45,
+            suitable_for_levels=[2, 3, 4, 5],
+            suitable_for_traits=TaskPreferences(worship=0.8, creative=0.6),
+            customization_options=CustomizationOptions(
+                minimum_words=[200, 300, 500, 750, 1000]
+            ),
+            reward_suggestions=[
+                "Acknowledgment of devotion",
+                "Permission to serve more closely",
+                "Special attention or praise"
+            ],
+            punishment_suggestions=[
+                "Rewrite until satisfactory",
+                "Read aloud while kneeling",
+                "Copy by hand multiple times"
+            ],
+            tags=["worship", "writing", "devotion", "expression"]
+        )
+
+        self.task_templates["tribute_creation"] = TaskTemplate(
+            id="tribute_creation",
+            title="Creative Tribute Creation",
+            description="Create a artistic tribute demonstrating your worship and creativity.",
+            instructions=[
+                "Create an artistic tribute (drawing, poem, song, etc.)",
+                "Spend at least [duration] minutes on creation",
+                "Include symbolism of your submission",
+                "Present with explanation of meaning"
+            ],
+            category=TaskCategory.WORSHIP,
+            difficulty=TaskDifficulty.CHALLENGING,
+            verification_type=VerificationType.PHOTO,
+            verification_instructions="Submit photos of your tribute with detailed explanation of symbolism and meaning.",
+            estimated_duration_minutes=90,
+            suitable_for_levels=[2, 3, 4, 5],
+            suitable_for_traits=TaskPreferences(worship=0.7, creative=0.9),
+            customization_options=CustomizationOptions(
+                duration=[60, 90, 120, 180]
+            ),
+            reward_suggestions=[
+                "Display of tribute",
+                "Special recognition",
+                "Privilege of creating more"
+            ],
+            punishment_suggestions=[
+                "Start over from scratch",
+                "Create multiple tributes",
+                "Loss of creative privileges"
+            ],
+            tags=["worship", "creative", "tribute", "artistic"]
+        )
+
+        # SELF_IMPROVEMENT Tasks
+        self.task_templates["fitness_challenge"] = TaskTemplate(
+            id="fitness_challenge",
+            title="Physical Fitness Challenge",
+            description="Improve your physical condition to better serve.",
+            instructions=[
+                "Complete [count] sets of assigned exercises",
+                "Maintain proper form throughout",
+                "Push yourself but stay safe",
+                "Log all repetitions and any difficulties"
+            ],
+            category=TaskCategory.SELF_IMPROVEMENT,
+            difficulty=TaskDifficulty.MODERATE,
+            verification_type=VerificationType.TEXT,
+            verification_instructions="Submit detailed workout log with sets, reps, and how you felt.",
+            estimated_duration_minutes=30,
+            suitable_for_levels=[1, 2, 3, 4, 5],
+            suitable_for_traits=TaskPreferences(self_improvement=0.8, endurance=0.7),
+            customization_options=CustomizationOptions(
+                count=[3, 4, 5, 6]
+            ),
+            reward_suggestions=[
+                "Praise for dedication",
+                "Rest day earned",
+                "Choice of next workout"
+            ],
+            punishment_suggestions=[
+                "Additional exercises",
+                "No rest day",
+                "Fitness essay writing"
+            ],
+            tags=["fitness", "self-improvement", "exercise", "health"]
+        )
+
+        self.task_templates["skill_development"] = TaskTemplate(
+            id="skill_development",
+            title="Skill Development Practice",
+            description="Develop a skill that enhances your ability to serve.",
+            instructions=[
+                "Practice designated skill for [duration] minutes",
+                "Focus on improvement and perfection",
+                "Document what you learned",
+                "Show measurable progress"
+            ],
+            category=TaskCategory.SELF_IMPROVEMENT,
+            difficulty=TaskDifficulty.MODERATE,
+            verification_type=VerificationType.VIDEO,
+            verification_instructions="Submit video showing skill practice and demonstration of progress.",
+            estimated_duration_minutes=45,
+            suitable_for_levels=[2, 3, 4, 5],
+            suitable_for_traits=TaskPreferences(self_improvement=0.9, service=0.6),
+            customization_options=CustomizationOptions(
+                duration=[30, 45, 60, 90]
+            ),
+            reward_suggestions=[
+                "Recognition of improvement",
+                "Opportunity to demonstrate skill",
+                "Advanced skill assignments"
+            ],
+            punishment_suggestions=[
+                "Repeat basic training",
+                "Double practice time",
+                "Write about importance of skills"
+            ],
+            tags=["self-improvement", "skills", "practice", "development"]
+        )
+
+        # PROTOCOL Tasks
+        self.task_templates["speech_protocol"] = TaskTemplate(
+            id="speech_protocol",
+            title="Speech Protocol Practice",
+            description="Practice proper speech protocols and forms of address.",
+            instructions=[
+                "Use only approved forms of address all day",
+                "Speak only when permitted",
+                "Request permission before speaking freely",
+                "Log any protocol violations"
+            ],
+            category=TaskCategory.PROTOCOL,
+            difficulty=TaskDifficulty.CHALLENGING,
+            verification_type=VerificationType.TEXT,
+            verification_instructions="Submit log of all speech interactions and any protocol violations with explanations.",
+            estimated_duration_minutes=1440,
+            suitable_for_levels=[3, 4, 5],
+            suitable_for_traits=TaskPreferences(protocol=0.9, obedience=0.7),
+            customization_options=CustomizationOptions(),
+            reward_suggestions=[
+                "Brief free speech period",
+                "Praise for perfect protocol",
+                "Relaxed protocols for an hour"
+            ],
+            punishment_suggestions=[
+                "Silent day",
+                "Write lines about proper speech",
+                "Extended protocol period"
+            ],
+            tags=["protocol", "speech", "formality", "discipline"]
+        )
+
+        self.task_templates["dress_code"] = TaskTemplate(
+            id="dress_code",
+            title="Dress Code and Presentation",
+            description="Maintain required dress code and presentation standards.",
+            instructions=[
+                "Wear designated outfit or style all day",
+                "Maintain impeccable grooming",
+                "Send photos at [check_in_frequency]",
+                "Note any reactions or feelings"
+            ],
+            category=TaskCategory.PROTOCOL,
+            difficulty=TaskDifficulty.MODERATE,
+            verification_type=VerificationType.PHOTO,
+            verification_instructions="Submit photos at required check-ins showing full compliance with dress code.",
+            estimated_duration_minutes=1440,
+            suitable_for_levels=[2, 3, 4, 5],
+            suitable_for_traits=TaskPreferences(protocol=0.8, obedience=0.7),
+            customization_options=CustomizationOptions(
+                check_in_frequency=["morning and evening", "every 4 hours", "every 2 hours"]
+            ),
+            reward_suggestions=[
+                "Choice of outfit next day",
+                "Compliments on appearance",
+                "Relaxed dress code for a day"
+            ],
+            punishment_suggestions=[
+                "More restrictive dress code",
+                "Public inspection",
+                "Extended dress code period"
+            ],
+            tags=["protocol", "dress code", "appearance", "presentation"]
+        )
+
+        # ENDURANCE Tasks
+        self.task_templates["endurance_challenge"] = TaskTemplate(
+            id="endurance_challenge",
+            title="Physical Endurance Challenge",
+            description="Test your physical endurance and push your limits safely.",
+            instructions=[
+                "Maintain challenging position or activity",
+                "Continue for [duration] minutes",
+                "Focus on mental strength",
+                "Stop if genuinely unsafe"
+            ],
+            category=TaskCategory.ENDURANCE,
+            difficulty=TaskDifficulty.DIFFICULT,
+            verification_type=VerificationType.VIDEO,
+            verification_instructions="Submit video clips showing start, middle, and end of endurance challenge.",
+            estimated_duration_minutes=45,
+            suitable_for_levels=[3, 4, 5],
+            suitable_for_traits=TaskPreferences(endurance=0.9, obedience=0.7),
+            customization_options=CustomizationOptions(
+                duration=[20, 30, 45, 60]
+            ),
+            reward_suggestions=[
+                "Pride in accomplishment",
+                "Special recognition",
+                "Choice of next challenge"
+            ],
+            punishment_suggestions=[
+                "Repeat at longer duration",
+                "Additional endurance training",
+                "Essay on mental weakness"
+            ],
+            tags=["endurance", "challenge", "physical", "mental"]
+        )
+
+        self.task_templates["denial_endurance"] = TaskTemplate(
+            id="denial_endurance",
+            title="Denial and Self-Control",
+            description="Practice self-control through denial of pleasures.",
+            instructions=[
+                "Abstain from specified pleasure all day",
+                "Note every temptation and how you resisted",
+                "Find strength in your submission",
+                "Report honestly on any failures"
+            ],
+            category=TaskCategory.ENDURANCE,
+            difficulty=TaskDifficulty.CHALLENGING,
+            verification_type=VerificationType.HONOR,
+            verification_instructions="Submit honest report of your day including all temptations and how you handled them.",
+            estimated_duration_minutes=1440,
+            suitable_for_levels=[2, 3, 4, 5],
+            suitable_for_traits=TaskPreferences(endurance=0.8, obedience=0.8),
+            customization_options=CustomizationOptions(),
+            reward_suggestions=[
+                "Brief enjoyment of denied pleasure",
+                "Praise for self-control",
+                "Reduced denial period"
+            ],
+            punishment_suggestions=[
+                "Extended denial period",
+                "Additional denials added",
+                "Write about lack of control"
+            ],
+            tags=["endurance", "denial", "self-control", "discipline"]
+        )
+
+        # HUMILIATION Tasks
+        self.task_templates["private_humiliation"] = TaskTemplate(
+            id="private_humiliation",
+            title="Private Humiliation Task",
+            description="Experience humiliation in private to deepen submission.",
+            instructions=[
+                "Complete the assigned humiliating task",
+                "Focus on how it makes you feel",
+                "Embrace the vulnerability",
+                "Write about the experience"
+            ],
+            category=TaskCategory.HUMILIATION,
+            difficulty=TaskDifficulty.MODERATE,
+            verification_type=VerificationType.TEXT,
+            verification_instructions="Submit detailed written account of the experience and your emotional journey.",
+            estimated_duration_minutes=30,
+            suitable_for_levels=[3, 4, 5],
+            suitable_for_traits=TaskPreferences(humiliation=0.7, obedience=0.6),
+            customization_options=CustomizationOptions(),
+            reward_suggestions=[
+                "Comfort and reassurance",
+                "Acknowledgment of bravery",
+                "Aftercare attention"
+            ],
+            punishment_suggestions=[
+                "Repeat with additions",
+                "Share more details",
+                "Extended humiliation"
+            ],
+            tags=["humiliation", "private", "emotional", "vulnerability"]
+        )
+
+        self.task_templates["confession_task"] = TaskTemplate(
+            id="confession_task",
+            title="Embarrassing Confession",
+            description="Share embarrassing truths to demonstrate vulnerability.",
+            instructions=[
+                "Write [count] embarrassing confessions",
+                "Be completely honest",
+                "Include why each embarrasses you",
+                "Submit without editing"
+            ],
+            category=TaskCategory.HUMILIATION,
+            difficulty=TaskDifficulty.CHALLENGING,
+            verification_type=VerificationType.TEXT,
+            verification_instructions="Submit your unedited confessions with explanations.",
+            estimated_duration_minutes=45,
+            suitable_for_levels=[3, 4, 5],
+            suitable_for_traits=TaskPreferences(humiliation=0.8, worship=0.5),
+            customization_options=CustomizationOptions(
+                count=[3, 5, 7, 10]
+            ),
+            reward_suggestions=[
+                "Confessions kept private",
+                "Gentle acceptance",
+                "Trust building praise"
+            ],
+            punishment_suggestions=[
+                "Read confessions aloud",
+                "Write more confessions",
+                "Deeper revelations required"
+            ],
+            tags=["humiliation", "confession", "vulnerability", "honesty"]
+        )
+
+        # CREATIVE Tasks
+        self.task_templates["creative_writing"] = TaskTemplate(
+            id="creative_writing",
+            title="Creative Writing Task",
+            description="Create written content that explores your submission.",
+            instructions=[
+                "Write a creative piece about submission",
+                "Minimum [minimum_words] words",
+                "Be original and thoughtful",
+                "Express genuine feelings"
+            ],
+            category=TaskCategory.CREATIVE,
+            difficulty=TaskDifficulty.MODERATE,
+            verification_type=VerificationType.TEXT,
+            verification_instructions="Submit your complete creative writing piece.",
+            estimated_duration_minutes=60,
+            suitable_for_levels=[2, 3, 4, 5],
+            suitable_for_traits=TaskPreferences(creative=0.9, worship=0.6),
+            customization_options=CustomizationOptions(
+                minimum_words=[300, 500, 750, 1000]
+            ),
+            reward_suggestions=[
+                "Share writing publicly",
+                "Praise for creativity",
+                "Request for more writing"
+            ],
+            punishment_suggestions=[
+                "Rewrite completely",
+                "Write on assigned topic",
+                "Loss of creative freedom"
+            ],
+            tags=["creative", "writing", "expression", "original"]
+        )
+
+        self.task_templates["artistic_expression"] = TaskTemplate(
+            id="artistic_expression",
+            title="Artistic Expression of Submission",
+            description="Create visual art that represents your submission.",
+            instructions=[
+                "Create original artwork about submission",
+                "Use any medium available",
+                "Include written explanation",
+                "Spend at least [duration] minutes"
+            ],
+            category=TaskCategory.CREATIVE,
+            difficulty=TaskDifficulty.MODERATE,
+            verification_type=VerificationType.PHOTO,
+            verification_instructions="Submit photos of artwork with written explanation of meaning and process.",
+            estimated_duration_minutes=90,
+            suitable_for_levels=[2, 3, 4, 5],
+            suitable_for_traits=TaskPreferences(creative=0.9, worship=0.7),
+            customization_options=CustomizationOptions(
+                duration=[60, 90, 120, 180]
+            ),
+            reward_suggestions=[
+                "Display of artwork",
+                "Praise for creativity",
+                "Commission for more art"
+            ],
+            punishment_suggestions=[
+                "Destroy and recreate",
+                "Art restriction",
+                "Assigned art topics only"
+            ],
+            tags=["creative", "art", "expression", "visual"]
+        )
+
+        # PUNISHMENT Tasks
+        self.task_templates["punishment_lines"] = TaskTemplate(
+            id="punishment_lines",
+            title="Write Punishment Lines",
+            description="Write lines as punishment for disobedience or failure.",
+            instructions=[
+                "Write the assigned line [repetitions] times",
+                "Each must be neat and legible",
+                "Number each line",
+                "Submit photo of completed lines"
+            ],
+            category=TaskCategory.PUNISHMENT,
+            difficulty=TaskDifficulty.MODERATE,
+            verification_type=VerificationType.PHOTO,
+            verification_instructions="Submit clear photos showing all completed lines.",
+            estimated_duration_minutes=60,
+            suitable_for_levels=[1, 2, 3, 4, 5],
+            suitable_for_traits=TaskPreferences(obedience=0.5),
+            customization_options=CustomizationOptions(
+                repetitions=[50, 100, 200, 300, 500]
+            ),
+            reward_suggestions=[
+                "Forgiveness expressed",
+                "Clean slate granted",
+                "Reduced future punishments"
+            ],
+            punishment_suggestions=[
+                "Double the lines",
+                "Rewrite if messy",
+                "Additional punishment task"
+            ],
+            tags=["punishment", "lines", "discipline", "correction"]
+        )
+
+        self.task_templates["corner_time"] = TaskTemplate(
+            id="corner_time",
+            title="Corner Time Punishment",
+            description="Spend time in the corner reflecting on behavior.",
+            instructions=[
+                "Stand facing corner for [duration] minutes",
+                "Hands behind back or at sides",
+                "No fidgeting or moving",
+                "Reflect on your behavior"
+            ],
+            category=TaskCategory.PUNISHMENT,
+            difficulty=TaskDifficulty.EASY,
+            verification_type=VerificationType.PHOTO,
+            verification_instructions="Submit photo proof at start and end, plus written reflection.",
+            estimated_duration_minutes=30,
+            suitable_for_levels=[1, 2, 3, 4, 5],
+            suitable_for_traits=TaskPreferences(obedience=0.4),
+            customization_options=CustomizationOptions(
+                duration=[15, 30, 45, 60]
+            ),
+            reward_suggestions=[
+                "Early release",
+                "Forgiveness granted",
+                "Comfort afterwards"
+            ],
+            punishment_suggestions=[
+                "Extended time",
+                "Harder position",
+                "Daily corner time"
+            ],
+            tags=["punishment", "corner", "reflection", "discipline"]
+        )
         
         logger.info(f"Loaded {len(self.task_templates)} default task templates")
     
@@ -578,7 +1352,11 @@ Output your recommendations and task management decisions as a JSON object.
             # Get user settings if available
             if user_id in self.user_settings:
                 settings = self.user_settings[user_id]
-                user_profile.task_preferences = settings.task_preferences
+                # Convert dict to TaskPreferences model
+                if hasattr(settings, 'task_preferences') and isinstance(settings.task_preferences, dict):
+                    user_profile.task_preferences = TaskPreferences(**settings.task_preferences)
+                else:
+                    user_profile.task_preferences = settings.task_preferences
                 user_profile.preferred_difficulty = settings.preferred_difficulty
                 user_profile.preferred_verification = settings.preferred_verification
                 user_profile.task_completion_rate = settings.task_completion_rate
@@ -590,11 +1368,17 @@ Output your recommendations and task management decisions as a JSON object.
                     if relationship:
                         user_profile.trust_level = getattr(relationship, "trust", 0.5)
                         user_profile.submission_level = getattr(relationship, "submission_level", 1)
-                        user_profile.inferred_traits = getattr(relationship, "inferred_user_traits", {})
-                        user_profile.limits = {
-                            "hard": getattr(relationship, "hard_limits", []),
-                            "soft": getattr(relationship, "soft_limits", [])
-                        }
+                        
+                        # Convert dict to InferredTraits model
+                        traits = getattr(relationship, "inferred_user_traits", {})
+                        if isinstance(traits, dict):
+                            user_profile.inferred_traits = InferredTraits(**{k: v for k, v in traits.items() if hasattr(InferredTraits, k)})
+                        
+                        # Convert to UserLimits model
+                        user_profile.limits = UserLimits(
+                            hard=getattr(relationship, "hard_limits", []),
+                            soft=getattr(relationship, "soft_limits", [])
+                        )
                 except Exception as e:
                     logger.error(f"Error retrieving relationship data: {e}")
             
@@ -604,7 +1388,10 @@ Output your recommendations and task management decisions as a JSON object.
                     submission_data = await self.submission_progression.get_user_submission_data(user_id)
                     if submission_data:
                         user_profile.submission_level = submission_data.get("submission_level", {}).get("id", 1)
-                        user_profile.submission_metrics = submission_data.get("metrics", {})
+                        # Convert dict to SubmissionMetrics model
+                        metrics = submission_data.get("metrics", {})
+                        if isinstance(metrics, dict):
+                            user_profile.submission_metrics = SubmissionMetrics(**{k: v for k, v in metrics.items() if hasattr(SubmissionMetrics, k)})
                 except Exception as e:
                     logger.error(f"Error retrieving submission data: {e}")
             
@@ -622,29 +1409,43 @@ Output your recommendations and task management decisions as a JSON object.
                 return TaskCompletionHistoryResult(
                     user_id=user_id, 
                     history=[],
-                    stats={
-                        "completion_rate": 1.0, 
-                        "total_completed": 0,
-                        "total_failed": 0
-                    }
+                    stats=TaskStats(
+                        completion_rate=1.0, 
+                        total_completed=0,
+                        total_failed=0
+                    )
                 )
             
             settings = self.user_settings[user_id]
             
-            # Get recent task history
-            recent_history = settings.task_history[-limit:] if settings.task_history else []
+            # Get recent task history - convert dicts to TaskHistoryEntry
+            recent_history = []
+            for entry in settings.task_history[-limit:]:
+                if isinstance(entry, dict):
+                    recent_history.append(TaskHistoryEntry(**entry))
+                else:
+                    recent_history.append(entry)
             
             # Compile statistics
-            stats = {
-                "completion_rate": settings.task_completion_rate,
-                "total_completed": len(settings.completed_tasks),
-                "total_failed": len(settings.failed_tasks),
-                "preferred_categories": sorted(
-                    settings.task_preferences.items(), 
-                    key=lambda x: x[1], 
-                    reverse=True
-                )[:3] if settings.task_preferences else []
-            }
+            preferred_categories = []
+            if hasattr(settings, 'task_preferences'):
+                if isinstance(settings.task_preferences, dict):
+                    prefs = sorted(settings.task_preferences.items(), key=lambda x: x[1], reverse=True)[:3]
+                    preferred_categories = [[k, v] for k, v in prefs]
+                elif isinstance(settings.task_preferences, TaskPreferences):
+                    prefs = []
+                    for field_name, field_value in settings.task_preferences.model_dump().items():
+                        if field_value is not None:
+                            prefs.append((field_name, field_value))
+                    prefs.sort(key=lambda x: x[1], reverse=True)
+                    preferred_categories = [[k, v] for k, v in prefs[:3]]
+            
+            stats = TaskStats(
+                completion_rate=settings.task_completion_rate,
+                total_completed=len(settings.completed_tasks),
+                total_failed=len(settings.failed_tasks),
+                preferred_categories=preferred_categories
+            )
             
             return TaskCompletionHistoryResult(
                 user_id=user_id, 
@@ -654,7 +1455,12 @@ Output your recommendations and task management decisions as a JSON object.
             
         except Exception as e:
             logger.error(f"Error retrieving task history: {e}")
-            return TaskCompletionHistoryResult(user_id=user_id, error=str(e), history=[], stats={})
+            return TaskCompletionHistoryResult(
+                user_id=user_id, 
+                error=str(e), 
+                history=[], 
+                stats=TaskStats(completion_rate=0.0, total_completed=0, total_failed=0)
+            )
     
     @function_tool
     async def get_task_details(self, task_id: str) -> TaskDetailsResult:
@@ -704,13 +1510,13 @@ Output your recommendations and task management decisions as a JSON object.
                 if category and template.category != category:
                     continue
                     
-                templates.append({
-                    "id": template_id,
-                    "title": template.title,
-                    "category": template.category,
-                    "difficulty": template.difficulty,
-                    "description": template.description
-                })
+                templates.append(TemplateData(
+                    id=template_id,
+                    title=template.title,
+                    category=template.category,
+                    difficulty=template.difficulty,
+                    description=template.description
+                ))
             
             return TemplatesResult(
                 templates=templates,
@@ -731,14 +1537,14 @@ Output your recommendations and task management decisions as a JSON object.
                 return TaskStatisticsResult(
                     success=True,
                     user_id=user_id,
-                    statistics={
-                        "total_tasks": 0,
-                        "completed_tasks": 0,
-                        "failed_tasks": 0,
-                        "completion_rate": 0.0,
-                        "average_rating": 0.0,
-                        "active_tasks": 0
-                    },
+                    statistics=TaskStatisticsData(
+                        total_tasks=0,
+                        completed_tasks=0,
+                        failed_tasks=0,
+                        completion_rate=0.0,
+                        average_rating=0.0,
+                        active_tasks=0
+                    ),
                     category_breakdown={},
                     difficulty_breakdown={}
                 )
@@ -775,9 +1581,14 @@ Output your recommendations and task management decisions as a JSON object.
             
             # Analyze task history
             for entry in settings.task_history:
-                category = entry.get("category")
-                difficulty = entry.get("difficulty")
-                completed = entry.get("completed", False)
+                if isinstance(entry, dict):
+                    category = entry.get("category")
+                    difficulty = entry.get("difficulty")
+                    completed = entry.get("completed", False)
+                else:
+                    category = entry.category
+                    difficulty = entry.difficulty
+                    completed = entry.completed
                 
                 # Update category stats
                 if category:
@@ -808,33 +1619,47 @@ Output your recommendations and task management decisions as a JSON object.
                     difficulty_completion_rates[difficulty] = counts["completed"] / counts["total"]
             
             # Format statistics
-            statistics = {
-                "total_tasks": total_tasks,
-                "completed_tasks": total_completed,
-                "failed_tasks": total_failed,
-                "active_tasks": total_active,
-                "completion_rate": completion_rate,
-                "average_rating": average_rating
-            }
+            statistics = TaskStatisticsData(
+                total_tasks=total_tasks,
+                completed_tasks=total_completed,
+                failed_tasks=total_failed,
+                active_tasks=total_active,
+                completion_rate=completion_rate,
+                average_rating=average_rating
+            )
             
             # Format breakdowns
             category_breakdown = {
-                category: {
-                    "count": counts["total"],
-                    "completed": counts["completed"],
-                    "completion_rate": category_completion_rates.get(category, 0.0)
-                }
+                category: CategoryBreakdownItem(
+                    count=counts["total"],
+                    completed=counts["completed"],
+                    completion_rate=category_completion_rates.get(category, 0.0)
+                )
                 for category, counts in category_counts.items()
             }
             
             difficulty_breakdown = {
-                difficulty: {
-                    "count": counts["total"],
-                    "completed": counts["completed"],
-                    "completion_rate": difficulty_completion_rates.get(difficulty, 0.0)
-                }
+                difficulty: DifficultyBreakdownItem(
+                    count=counts["total"],
+                    completed=counts["completed"],
+                    completion_rate=difficulty_completion_rates.get(difficulty, 0.0)
+                )
                 for difficulty, counts in difficulty_counts.items()
             }
+            
+            # Get preferred categories
+            preferred_categories = []
+            if hasattr(settings, 'task_preferences'):
+                if isinstance(settings.task_preferences, dict):
+                    prefs = sorted(settings.task_preferences.items(), key=lambda x: x[1], reverse=True)
+                    preferred_categories = [[k, v] for k, v in prefs]
+                elif isinstance(settings.task_preferences, TaskPreferences):
+                    prefs = []
+                    for field_name, field_value in settings.task_preferences.model_dump().items():
+                        if field_value is not None:
+                            prefs.append((field_name, field_value))
+                    prefs.sort(key=lambda x: x[1], reverse=True)
+                    preferred_categories = [[k, v] for k, v in prefs]
             
             return TaskStatisticsResult(
                 success=True,
@@ -842,11 +1667,7 @@ Output your recommendations and task management decisions as a JSON object.
                 statistics=statistics,
                 category_breakdown=category_breakdown,
                 difficulty_breakdown=difficulty_breakdown,
-                preferred_categories=sorted(
-                    settings.task_preferences.items(),
-                    key=lambda x: x[1],
-                    reverse=True
-                ) if settings.task_preferences else []
+                preferred_categories=preferred_categories
             )
             
         except Exception as e:
@@ -881,23 +1702,23 @@ Output your recommendations and task management decisions as a JSON object.
                     task = self.assigned_tasks[task_id]
                     
                     # Format task
-                    formatted_task = {
-                        "task_id": task.id,
-                        "title": task.title,
-                        "description": task.description,
-                        "instructions": task.instructions,
-                        "category": task.category,
-                        "difficulty": task.difficulty,
-                        "assigned_at": task.assigned_at.isoformat(),
-                        "due_at": task.due_at.isoformat() if task.due_at else None,
-                        "verification_type": task.verification_type,
-                        "time_remaining": self._get_time_remaining(task) if task.due_at else None
-                    }
+                    formatted_task = ActiveTaskData(
+                        task_id=task.id,
+                        title=task.title,
+                        description=task.description,
+                        instructions=task.instructions,
+                        category=task.category,
+                        difficulty=task.difficulty,
+                        assigned_at=task.assigned_at.isoformat(),
+                        due_at=task.due_at.isoformat() if task.due_at else None,
+                        verification_type=task.verification_type,
+                        time_remaining=self._get_time_remaining(task) if task.due_at else None
+                    )
                     
                     active_tasks.append(formatted_task)
             
             # Sort by due date (closest first)
-            active_tasks.sort(key=lambda t: t["due_at"] if t["due_at"] else "9999-12-31T23:59:59")
+            active_tasks.sort(key=lambda t: t.due_at if t.due_at else "9999-12-31T23:59:59")
             
             return ActiveTasksResult(
                 success=True,
@@ -1019,16 +1840,9 @@ Output your recommendations and task management decisions as a JSON object.
                 settings.last_updated = datetime.datetime.now()
                 
                 # Update task preferences based on category
-                if task.category in settings.task_preferences:
-                    settings.task_preferences[task.category] += 0.1
-                else:
-                    settings.task_preferences[task.category] = 0.5
-                
-                # Normalize preferences to keep them in 0-1 range
-                max_pref = max(settings.task_preferences.values()) if settings.task_preferences else 1.0
-                if max_pref > 1.0:
-                    for key in settings.task_preferences:
-                        settings.task_preferences[key] /= max_pref
+                if hasattr(settings.task_preferences, task.category):
+                    current_value = getattr(settings.task_preferences, task.category) or 0.0
+                    setattr(settings.task_preferences, task.category, min(current_value + 0.1, 1.0))
                 
                 # Add task to relationship manager if available
                 if self.relationship_manager:
@@ -1064,8 +1878,8 @@ Output your recommendations and task management decisions as a JSON object.
                     "due_at": task.due_at.isoformat() if task.due_at else None,
                     "verification_type": task.verification_type,
                     "verification_instructions": task.verification_instructions,
-                    "reward": task.reward,
-                    "punishment": task.punishment
+                    "reward": task.reward.model_dump() if task.reward else None,
+                    "punishment": task.punishment.model_dump() if task.punishment else None
                 }
                 
                 return {
@@ -1096,8 +1910,9 @@ Output your recommendations and task management decisions as a JSON object.
         instructions = list(template.instructions)  # Copy to modify
         
         # Customize instructions if template has options
-        if template.customization_options:
-            for option_key, option_values in template.customization_options.items():
+        customization_dict = template.customization_options.model_dump()
+        if any(v for v in customization_dict.values() if v):
+            for option_key, option_values in customization_dict.items():
                 if option_values:
                     # Find relevant option placeholder in instructions
                     for i, instruction in enumerate(instructions):
@@ -1108,19 +1923,23 @@ Output your recommendations and task management decisions as a JSON object.
                             instructions[i] = instruction.replace(f"[{option_key}]", str(chosen_value)).replace("[X]", str(chosen_value))
         
         # Choose reward and punishment if not provided
-        reward = custom_reward
-        if not reward and template.reward_suggestions:
-            reward = {
-                "description": random.choice(template.reward_suggestions),
-                "type": "standard"
-            }
+        reward = None
+        if custom_reward:
+            reward = RewardData(**custom_reward)
+        elif template.reward_suggestions:
+            reward = RewardData(
+                description=random.choice(template.reward_suggestions),
+                type="standard"
+            )
             
-        punishment = custom_punishment
-        if not punishment and template.punishment_suggestions:
-            punishment = {
-                "description": random.choice(template.punishment_suggestions),
-                "type": "standard"
-            }
+        punishment = None
+        if custom_punishment:
+            punishment = PunishmentData(**custom_punishment)
+        elif template.punishment_suggestions:
+            punishment = PunishmentData(
+                description=random.choice(template.punishment_suggestions),
+                type="standard"
+            )
         
         # Create task
         task = AssignedTask(
@@ -1158,6 +1977,23 @@ Output your recommendations and task management decisions as a JSON object.
         if due_in_hours is not None:
             due_at = datetime.datetime.now() + datetime.timedelta(hours=due_in_hours)
         
+        # Create reward and punishment models
+        reward = None
+        if custom_reward:
+            reward = RewardData(**custom_reward)
+        elif custom_task.get("reward"):
+            reward = RewardData(**custom_task["reward"])
+            
+        punishment = None
+        if custom_punishment:
+            punishment = PunishmentData(**custom_punishment)
+        elif custom_task.get("punishment"):
+            punishment = PunishmentData(**custom_task["punishment"])
+            
+        custom_data = None
+        if custom_task.get("custom_data"):
+            custom_data = CustomTaskData(**custom_task["custom_data"])
+        
         # Create task
         task = AssignedTask(
             id=task_id,
@@ -1170,10 +2006,10 @@ Output your recommendations and task management decisions as a JSON object.
             verification_type=verification_override or custom_task.get("verification_type", VerificationType.HONOR),
             verification_instructions=custom_task.get("verification_instructions", "Verify completion as specified."),
             due_at=due_at,
-            reward=custom_reward or custom_task.get("reward"),
-            punishment=custom_punishment or custom_task.get("punishment"),
+            reward=reward,
+            punishment=punishment,
             tags=custom_task.get("tags", []),
-            custom_data=custom_task.get("custom_data")
+            custom_data=custom_data
         )
         
         return task
@@ -1207,8 +2043,8 @@ Output your recommendations and task management decisions as a JSON object.
             # Prepare prompt for AI
             prompt = {
                 "user_id": user_id,
-                "user_profile": user_profile.dict(),
-                "task_history": task_history.dict(),
+                "user_profile": user_profile.model_dump(),
+                "task_history": task_history.model_dump(),
                 "difficulty": difficulty_override or user_profile.preferred_difficulty,
                 "verification_type": verification_override or user_profile.preferred_verification,
                 "due_in_hours": due_in_hours
@@ -1216,13 +2052,13 @@ Output your recommendations and task management decisions as a JSON object.
             
             # Add preferences for categories if available
             if user_profile.task_preferences:
-                preferred_categories = sorted(
-                    user_profile.task_preferences.items(),
-                    key=lambda x: x[1],
-                    reverse=True
-                )
-                if preferred_categories:
-                    prompt["preferred_categories"] = [c[0] for c in preferred_categories[:3]]
+                prefs = []
+                for field_name, field_value in user_profile.task_preferences.model_dump().items():
+                    if field_value is not None:
+                        prefs.append((field_name, field_value))
+                prefs.sort(key=lambda x: x[1], reverse=True)
+                if prefs:
+                    prompt["preferred_categories"] = [c[0] for c in prefs[:3]]
             
             # Run the agent
             result = await Runner.run(
@@ -1256,8 +2092,23 @@ Output your recommendations and task management decisions as a JSON object.
                 due_at = datetime.datetime.now() + datetime.timedelta(hours=due_in_hours)
             
             # Choose reward and punishment
-            reward = custom_reward or task_idea.get("reward")
-            punishment = custom_punishment or task_idea.get("punishment")
+            reward = None
+            if custom_reward:
+                reward = RewardData(**custom_reward)
+            elif task_idea.get("reward"):
+                if isinstance(task_idea["reward"], dict):
+                    reward = RewardData(**task_idea["reward"])
+                else:
+                    reward = RewardData(description=str(task_idea["reward"]))
+                    
+            punishment = None
+            if custom_punishment:
+                punishment = PunishmentData(**custom_punishment)
+            elif task_idea.get("punishment"):
+                if isinstance(task_idea["punishment"], dict):
+                    punishment = PunishmentData(**task_idea["punishment"])
+                else:
+                    punishment = PunishmentData(description=str(task_idea["punishment"]))
             
             # Create task
             task = AssignedTask(
@@ -1324,8 +2175,11 @@ Output your recommendations and task management decisions as a JSON object.
                     submission_progression=self.submission_progression
                 )
                 
+                # Convert verification data to model
+                verification_model = VerificationData(**verification_data)
+                
                 # Verify the task using verification agent
-                verification_result = await self._verify_task_completion(task_id, verification_data, task_context)
+                verification_result = await self._verify_task_completion(task_id, verification_model, task_context)
                 
                 # Update task state
                 completed_successfully = verification_result.get("verified", False)
@@ -1335,7 +2189,7 @@ Output your recommendations and task management decisions as a JSON object.
                 task.completed = completed_successfully
                 task.failed = not completed_successfully
                 task.completed_at = datetime.datetime.now()
-                task.verification_data = verification_data
+                task.verification_data = verification_model
                 task.rating = rating
                 task.notes = completion_notes
                 
@@ -1358,15 +2212,15 @@ Output your recommendations and task management decisions as a JSON object.
                     settings.task_completion_rate = len(settings.completed_tasks) / total_tasks
                 
                 # Add to task history
-                history_entry = {
-                    "task_id": task_id,
-                    "title": task.title,
-                    "category": task.category,
-                    "completed": completed_successfully,
-                    "rating": rating,
-                    "completed_at": task.completed_at.isoformat(),
-                    "difficulty": task.difficulty
-                }
+                history_entry = TaskHistoryEntry(
+                    task_id=task_id,
+                    title=task.title,
+                    category=task.category,
+                    completed=completed_successfully,
+                    rating=rating,
+                    completed_at=task.completed_at.isoformat(),
+                    difficulty=task.difficulty
+                )
                 settings.task_history.append(history_entry)
                 
                 # Limit history size
@@ -1467,7 +2321,7 @@ Output your recommendations and task management decisions as a JSON object.
                     "sadistic_response": sadistic_response if not completed_successfully else None
                 }
     
-    async def _verify_task_completion(self, task_id: str, verification_data: Dict[str, Any], 
+    async def _verify_task_completion(self, task_id: str, verification_data: VerificationData, 
                                    task_context: TaskContext) -> Dict[str, Any]:
         """Verify task completion using the verification agent."""
         # Get task details
@@ -1479,19 +2333,18 @@ Output your recommendations and task management decisions as a JSON object.
         # For honor-based verification, we trust the user
         if verification_type == VerificationType.HONOR:
             # If they submitted anything, consider it verified
-            if verification_data:
-                return {
-                    "verified": True,
-                    "rating": 1.0,
-                    "feedback": "Task completion accepted on your honor."
-                }
+            return {
+                "verified": True,
+                "rating": 1.0,
+                "feedback": "Task completion accepted on your honor."
+            }
         
         # For other verification types, use the verification agent
         try:
             # Prepare prompt
             prompt = {
                 "task_id": task_id,
-                "verification_data": verification_data,
+                "verification_data": verification_data.model_dump(),
                 "verification_type": verification_type,
                 "verification_instructions": task.verification_instructions
             }
@@ -1521,9 +2374,10 @@ Output your recommendations and task management decisions as a JSON object.
             logger.error(f"Error verifying task completion: {e}")
         
         # Default verification (fallback)
+        has_data = any(v for v in verification_data.model_dump().values() if v)
         return {
-            "verified": bool(verification_data),
-            "rating": 0.7 if verification_data else 0.0,
+            "verified": has_data,
+            "rating": 0.7 if has_data else 0.0,
             "feedback": "Task verification processed without agent."
         }
     
@@ -1584,10 +2438,8 @@ Output your recommendations and task management decisions as a JSON object.
     async def _process_reward(self, user_id: str, task: AssignedTask, rating: float) -> Dict[str, Any]:
         """Process reward for successful task completion."""
         reward_description = None
-        if isinstance(task.reward, dict):
-            reward_description = task.reward.get("description", "Task completion reward")
-        else:
-            reward_description = str(task.reward)
+        if task.reward:
+            reward_description = task.reward.description
         
         # Create reward result
         result = {
@@ -1625,10 +2477,8 @@ Output your recommendations and task management decisions as a JSON object.
     async def _process_punishment(self, user_id: str, task: AssignedTask) -> Dict[str, Any]:
         """Process punishment for failed task."""
         punishment_description = None
-        if isinstance(task.punishment, dict):
-            punishment_description = task.punishment.get("description", "Task failure punishment")
-        else:
-            punishment_description = str(task.punishment)
+        if task.punishment:
+            punishment_description = task.punishment.description
         
         # Create punishment result
         result = {
@@ -1660,7 +2510,7 @@ Output your recommendations and task management decisions as a JSON object.
                 logger.error(f"Error processing punishment: {e}")
                 
         # Generate punishment task if requested
-        if isinstance(task.punishment, dict) and task.punishment.get("generate_punishment_task", False):
+        if task.punishment and task.punishment.generate_punishment_task:
             try:
                 # Create a punishment task
                 punishment_task_result = await self.assign_task(
@@ -1942,16 +2792,19 @@ Output your recommendations and task management decisions as a JSON object.
                         settings.task_completion_rate = len(settings.completed_tasks) / total_tasks
                 
                 # Add to task history
-                history_entry = {
-                    "task_id": task_id,
-                    "title": task.title,
-                    "category": task.category,
-                    "cancelled": True,
-                    "reason": reason,
-                    "punishment_applied": apply_punishment,
-                    "cancelled_at": datetime.datetime.now().isoformat(),
-                    "difficulty": task.difficulty
-                }
+                history_entry = TaskHistoryEntry(
+                    task_id=task_id,
+                    title=task.title,
+                    category=task.category,
+                    completed=False,
+                    cancelled=True,
+                    reason=reason,
+                    punishment_applied=apply_punishment,
+                    cancelled_at=datetime.datetime.now().isoformat(),
+                    difficulty=task.difficulty,
+                    completed_at=datetime.datetime.now().isoformat(),
+                    rating=None
+                )
                 settings.task_history.append(history_entry)
                 
                 # Limit history size
@@ -2053,7 +2906,7 @@ Output your recommendations and task management decisions as a JSON object.
                             {
                                 "action": "validate_user_settings",
                                 "user_id": user_id,
-                                "current_settings": settings.dict(),
+                                "current_settings": settings.model_dump(),
                                 "proposed_updates": settings_update
                             },
                             context=task_context
@@ -2077,7 +2930,7 @@ Output your recommendations and task management decisions as a JSON object.
                     return {
                         "success": False,
                         "message": validation_message or "Invalid settings",
-                        "current_settings": settings.dict()
+                        "current_settings": settings.model_dump()
                     }
                 
                 # Update settings
@@ -2092,18 +2945,26 @@ Output your recommendations and task management decisions as a JSON object.
                     
                 if "task_preferences" in settings_update:
                     # Update existing preferences
-                    for category, value in settings_update["task_preferences"].items():
-                        settings.task_preferences[category] = value
+                    if isinstance(settings_update["task_preferences"], dict):
+                        for category, value in settings_update["task_preferences"].items():
+                            if hasattr(settings.task_preferences, category):
+                                setattr(settings.task_preferences, category, value)
                 
                 if "customized_rewards" in settings_update:
                     # Replace or extend rewards
                     if isinstance(settings_update["customized_rewards"], list):
-                        settings.customized_rewards = settings_update["customized_rewards"]
+                        settings.customized_rewards = [
+                            CustomRewardPunishment(**r) if isinstance(r, dict) else r 
+                            for r in settings_update["customized_rewards"]
+                        ]
                 
                 if "customized_punishments" in settings_update:
                     # Replace or extend punishments
                     if isinstance(settings_update["customized_punishments"], list):
-                        settings.customized_punishments = settings_update["customized_punishments"]
+                        settings.customized_punishments = [
+                            CustomRewardPunishment(**p) if isinstance(p, dict) else p 
+                            for p in settings_update["customized_punishments"]
+                        ]
                 
                 # Update timestamp
                 settings.last_updated = datetime.datetime.now()
@@ -2127,7 +2988,7 @@ Output your recommendations and task management decisions as a JSON object.
                         "preferred_difficulty": settings.preferred_difficulty,
                         "preferred_verification": settings.preferred_verification,
                         "max_concurrent_tasks": settings.max_concurrent_tasks,
-                        "task_preferences": settings.task_preferences,
+                        "task_preferences": settings.task_preferences.model_dump(),
                         "task_completion_rate": settings.task_completion_rate,
                         "active_tasks_count": len(settings.active_tasks),
                         "customized_rewards_count": len(settings.customized_rewards),
@@ -2206,6 +3067,24 @@ Output your recommendations and task management decisions as a JSON object.
                     except Exception as e:
                         logger.error(f"Error validating template: {e}")
                 
+                # Convert suitable_for_traits to TaskPreferences
+                suitable_for_traits = TaskPreferences()
+                if "suitable_for_traits" in validated_template:
+                    traits_data = validated_template["suitable_for_traits"]
+                    if isinstance(traits_data, dict):
+                        for trait, value in traits_data.items():
+                            if hasattr(suitable_for_traits, trait):
+                                setattr(suitable_for_traits, trait, value)
+                
+                # Convert customization_options to CustomizationOptions
+                customization_options = CustomizationOptions()
+                if "customization_options" in validated_template:
+                    options_data = validated_template["customization_options"]
+                    if isinstance(options_data, dict):
+                        for option, values in options_data.items():
+                            if hasattr(customization_options, option):
+                                setattr(customization_options, option, values)
+                
                 # Create template from validated data
                 template = TaskTemplate(
                     id=template_id,
@@ -2218,8 +3097,8 @@ Output your recommendations and task management decisions as a JSON object.
                     verification_instructions=validated_template["verification_instructions"],
                     estimated_duration_minutes=validated_template.get("estimated_duration_minutes", 30),
                     suitable_for_levels=validated_template.get("suitable_for_levels", [1, 2, 3, 4, 5]),
-                    suitable_for_traits=validated_template.get("suitable_for_traits", {}),
-                    customization_options=validated_template.get("customization_options", {}),
+                    suitable_for_traits=suitable_for_traits,
+                    customization_options=customization_options,
                     reward_suggestions=validated_template.get("reward_suggestions", []),
                     punishment_suggestions=validated_template.get("punishment_suggestions", []),
                     tags=validated_template.get("tags", [])
@@ -2296,7 +3175,7 @@ Output your recommendations and task management decisions as a JSON object.
                     "difficulty": template.difficulty,
                     "verification_type": template.verification_type,
                     "estimated_duration_minutes": template.estimated_duration_minutes,
-                    "customization_options": bool(template.customization_options),
+                    "customization_options": any(v for v in template.customization_options.model_dump().values() if v),
                     "tags": template.tags
                 }
                 
@@ -2326,7 +3205,7 @@ Output your recommendations and task management decisions as a JSON object.
                         {
                             "action": "recommend_templates",
                             "user_id": user_id,
-                            "user_profile": user_profile.dict(),
+                            "user_profile": user_profile.model_dump(),
                             "available_templates": [t["id"] for t in templates],
                             "category_filter": category,
                             "difficulty_filter": difficulty
@@ -2409,8 +3288,8 @@ Output your recommendations and task management decisions as a JSON object.
                                 "task_id": task_id,
                                 "user_id": user_id,
                                 "overdue_hours": overdue_hours,
-                                "user_history": history.dict(),
-                                "task_info": task_info.dict()
+                                "user_history": history.model_dump(),
+                                "task_info": task_info.model_dump()
                             },
                             context=task_context
                         )
@@ -2431,7 +3310,7 @@ Output your recommendations and task management decisions as a JSON object.
                         verification_data={"auto_failed": True},
                         completion_notes=f"Auto-failed due to being {overdue_hours:.1f} hours overdue"
                     )
-                    auto_failed.append(task_info.dict())
+                    auto_failed.append(task_info.model_dump())
                     
                 elif action == "auto_extend":
                     # Auto-extend the deadline
@@ -2444,12 +3323,12 @@ Output your recommendations and task management decisions as a JSON object.
                         additional_hours=extension_hours,
                         reason="Automatic extension by system"
                     )
-                    extended_info = task_info.dict()
+                    extended_info = task_info.model_dump()
                     extended_info["extension_hours"] = extension_hours
                     extended.append(extended_info)
                     
                 else:  # warn
-                    warned.append(task_info.dict())
+                    warned.append(task_info.model_dump())
             
             return {
                 "success": True,
