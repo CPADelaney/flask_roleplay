@@ -204,6 +204,49 @@ class PersonaActivationOutput(BaseModel):
     reason: Optional[str] = None
     suggested_intensity: Optional[float] = None
 
+# New models for guardrail function inputs
+class GuardrailInputData(BaseModel):
+    """Base input data for guardrail functions."""
+    user_id: str
+
+class RecommendationGuardrailInput(GuardrailInputData):
+    """Input for recommendation validation guardrail."""
+    scenario: Optional[str] = None
+
+class ActivationGuardrailInput(GuardrailInputData):
+    """Input for activation validation guardrail."""
+    persona_id: str
+    intensity: float = 0.5
+    duration_minutes: Optional[int] = None
+
+# Models for agent outputs
+class PersonaRecommendationResult(BaseModel):
+    """Result from persona recommendation agent."""
+    success: bool
+    primary_recommendation: Optional[Dict[str, Any]] = None
+    all_recommendations: List[Dict[str, Any]] = Field(default_factory=list)
+    scenario: Optional[str] = None
+    user_traits_considered: List[str] = Field(default_factory=list)
+    fallback_method: bool = False
+
+class PersonaActivationResult(BaseModel):
+    """Result from persona activation agent."""
+    action: str
+    recommended_intensity: Optional[float] = None
+    recommended_duration: Optional[int] = None
+    message: Optional[str] = None
+
+class BehaviorGuidelinesResult(BaseModel):
+    """Result from behavior guidelines agent."""
+    trait_guidelines: List[Dict[str, Any]] = Field(default_factory=list)
+    communication_guidelines: List[str] = Field(default_factory=list)
+    behavioral_rules: List[str] = Field(default_factory=list)
+
+class LanguagePatternResult(BaseModel):
+    """Result from language pattern agent."""
+    example: Optional[Dict[str, Any]] = None
+    patterns: Optional[Dict[str, List[str]]] = None
+
 class DominancePersonaManager:
     """Manages different dominance personas and their activation using Agent SDK."""
 
@@ -285,7 +328,7 @@ Explain the strengths and potential challenges of each recommended persona.
                 function_tool(self.get_persona_history),
                 function_tool(self.get_active_persona)
             ],
-            output_type=Dict[str, Any],
+            output_type=PersonaRecommendationResult,
             input_guardrails=[self.persona_recommendation_guardrail]
         )
     
@@ -319,7 +362,7 @@ Manage deactivations carefully to maintain psychological continuity.
                 function_tool(self.get_active_persona),
                 function_tool(self.get_user_traits)
             ],
-            output_type=Dict[str, Any],
+            output_type=PersonaActivationResult,
             input_guardrails=[self.persona_activation_guardrail]
         )
     
@@ -351,7 +394,7 @@ Focus on creating a cohesive behavioral profile that authentically expresses the
                 function_tool(self.get_persona_details),
                 function_tool(self.get_active_persona)
             ],
-            output_type=Dict[str, Any]
+            output_type=BehaviorGuidelinesResult
         )
     
     def _create_language_pattern_agent(self) -> Agent:
@@ -384,7 +427,7 @@ Generate original, varied, and authentic patterns that a dominatrix with this pe
                 function_tool(self.get_active_persona),
                 function_tool(self.get_language_patterns)
             ],
-            output_type=Dict[str, Any]
+            output_type=LanguagePatternResult
         )
     
     def _create_persona_recommendation_guardrail(self) -> InputGuardrail:
@@ -393,14 +436,14 @@ Generate original, varied, and authentic patterns that a dominatrix with this pe
         @function_tool
         async def recommendation_validation_function(
             ctx: RunContextWrapper,
-            agent: Any,                       # ← was "Agent"
-            input_data: Dict[str, Any],
+            agent: Any,
+            input_data: RecommendationGuardrailInput,
         ) -> GuardrailFunctionOutput:
             """Validate persona-recommendation input."""
             try:
                 validation_input = PersonaRecommendationInput(
-                    user_id=input_data.get("user_id", ""),
-                    scenario=input_data.get("scenario"),
+                    user_id=input_data.user_id,
+                    scenario=input_data.scenario,
                 )
     
                 # ----- basic checks -----
@@ -445,14 +488,14 @@ Generate original, varied, and authentic patterns that a dominatrix with this pe
     def _create_persona_activation_guardrail(self) -> InputGuardrail:
         """Create guardrail for persona activation validation."""
         @function_tool
-        async def activation_validation_function(ctx: RunContextWrapper, agent: Any, input_data: Dict[str, Any]) -> GuardrailFunctionOutput:
+        async def activation_validation_function(ctx: RunContextWrapper, agent: Any, input_data: ActivationGuardrailInput) -> GuardrailFunctionOutput:
             """Validate persona activation input to ensure it's appropriate."""
             try:
                 validation_input = PersonaActivationInput(
-                    user_id=input_data.get("user_id", ""),
-                    persona_id=input_data.get("persona_id", ""),
-                    intensity=input_data.get("intensity", 0.5),
-                    duration_minutes=input_data.get("duration_minutes")
+                    user_id=input_data.user_id,
+                    persona_id=input_data.persona_id,
+                    intensity=input_data.intensity,
+                    duration_minutes=input_data.duration_minutes
                 )
                 
                 # Basic validation
@@ -1593,7 +1636,7 @@ Generate original, varied, and authentic patterns that a dominatrix with this pe
                 )
                 
                 # Process the recommendation result
-                recommendation = result.final_output
+                recommendation = result.final_output.model_dump()
                 
                 # Record in memory if available
                 if self.memory_core:
@@ -1762,7 +1805,7 @@ Generate original, varied, and authentic patterns that a dominatrix with this pe
                     )
                     
                     # Process optimization recommendations
-                    optimization = activation_result.final_output
+                    optimization = activation_result.final_output.model_dump()
                     if "recommended_intensity" in optimization:
                         intensity = optimization["recommended_intensity"]
                     
@@ -2000,7 +2043,7 @@ Generate original, varied, and authentic patterns that a dominatrix with this pe
                 )
                 
                 # Get behavior guidelines
-                behavior = behavior_result.final_output
+                behavior = behavior_result.final_output.model_dump()
                 
                 # Return agent's results if available
                 if "trait_guidelines" in behavior and "communication_guidelines" in behavior:
@@ -2156,7 +2199,7 @@ Generate original, varied, and authentic patterns that a dominatrix with this pe
                 )
                 
                 # Get language patterns
-                response_example = pattern_result.final_output
+                response_example = pattern_result.final_output.model_dump()
                 
                 # Return agent's results if available
                 if "example" in response_example:
