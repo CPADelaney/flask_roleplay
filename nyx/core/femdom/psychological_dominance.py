@@ -1197,7 +1197,7 @@ Use the available tools to maintain accurate psychological state tracking.
         )
         
     @function_tool
-    async def analyze_subspace_depth(
+    async def _analyze_subspace_depth(
         ctx: RunContextWrapper,
         params: SubspaceDetectionResult,
     ) -> AnalyzeSubspaceDepthResult:
