@@ -3,6 +3,7 @@
 import logging
 import asyncio
 from typing import Dict, List, Any, Optional, Tuple
+from pydantic import BaseModel
 
 from agents import Agent, Runner, function_tool, handoff, trace, ModelSettings, RunContextWrapper
 
@@ -13,6 +14,21 @@ from nyx.core.spatial.spatial_schemas import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Create explicit Pydantic models for Dict types used in function tools
+class PositionDict(BaseModel):
+    """Position coordinates"""
+    x: float
+    y: float
+    z: Optional[float] = None
+
+class ProcessingResult(BaseModel):
+    """Result from processing spatial description"""
+    message: Optional[str] = None
+    error: Optional[str] = None
+    map_id: Optional[str] = None
+    features: Optional[Dict[str, Any]] = None
+    final_output: Optional[Any] = None
 
 class SpatialNavigatorAgent:
     """
@@ -47,7 +63,8 @@ class SpatialNavigatorAgent:
                         tool_description_override="For navigation, route finding, and direction giving tasks"),
                 handoff(self.mapper_agent, 
                         tool_description_override="For map building, observation processing, and spatial environment understanding")
-            ]
+            ],
+            model="gpt-4.1-nano"
         )
     
     def _create_navigator_agent(self) -> Agent:
@@ -68,18 +85,19 @@ class SpatialNavigatorAgent:
             Explain routes in terms of observable features and easy-to-follow directions.
             """,
             tools=[
-                function_tool(self.spatial_mapper.find_path),
-                function_tool(self.spatial_mapper.calculate_directions),
-                function_tool(self.spatial_mapper.identify_shortcuts),
-                function_tool(self.spatial_mapper.get_nearest_landmarks),
-                function_tool(self.spatial_mapper.update_route),
-                function_tool(self.navigate_to_location),
-                function_tool(self.describe_surroundings),
-                function_tool(self.find_path_to_landmark)
+                self.spatial_mapper.find_path,
+                self.spatial_mapper.calculate_directions,
+                self.spatial_mapper.identify_shortcuts,
+                self.spatial_mapper.get_nearest_landmarks,
+                self.spatial_mapper.update_route,
+                self.navigate_to_location,
+                self.describe_surroundings,
+                self.find_path_to_landmark
             ],
             model_settings=ModelSettings(
                 temperature=0.2  # Lower temperature for more predictable navigation
-            )
+            ),
+            model="gpt-4.1-nano"
         )
     
     def _create_map_builder_agent(self) -> Agent:
@@ -101,25 +119,26 @@ class SpatialNavigatorAgent:
             boundaries, and spatial relationships.
             """,
             tools=[
-                function_tool(self.spatial_mapper.create_cognitive_map),
-                function_tool(self.spatial_mapper.add_spatial_object),
-                function_tool(self.spatial_mapper.define_region),
-                function_tool(self.spatial_mapper.process_spatial_observation),
-                function_tool(self.spatial_mapper.extract_spatial_features),
-                function_tool(self.spatial_mapper.get_map),
-                function_tool(self.spatial_mapper.identify_landmarks),
-                function_tool(self.spatial_mapper.reconcile_observations),
-                function_tool(self.process_spatial_description)
+                self.spatial_mapper.create_cognitive_map,
+                self.spatial_mapper.add_spatial_object,
+                self.spatial_mapper.define_region,
+                self.spatial_mapper.process_spatial_observation,
+                self.spatial_mapper.extract_spatial_features,
+                self.spatial_mapper.get_map,
+                self.spatial_mapper.identify_landmarks,
+                self.spatial_mapper.reconcile_observations,
+                self.process_spatial_description
             ],
             model_settings=ModelSettings(
                 temperature=0.3
-            )
+            ),
+            model="gpt-4.1-nano"
         )
     
     @function_tool
     async def navigate_to_location(self, 
                                 location_name: str, 
-                                current_position: Optional[Dict[str, float]] = None,
+                                current_position: Optional[PositionDict] = None,
                                 map_id: Optional[str] = None) -> NavigationResult:
         """
         Navigate to a named location
@@ -169,7 +188,7 @@ class SpatialNavigatorAgent:
         # If current position provided, create a temporary starting point
         if current_position:
             # Create a temporary object for the current position
-            start_id = await self._create_temporary_position(map_id, current_position)
+            start_id = await self._create_temporary_position(map_id, current_position.model_dump())
         else:
             # Use observer position if available
             if self.spatial_mapper.context.observer_position:
@@ -244,7 +263,7 @@ class SpatialNavigatorAgent:
     
     @function_tool
     async def describe_surroundings(self, 
-                                 position: Optional[Dict[str, float]] = None,
+                                 position: Optional[PositionDict] = None,
                                  radius: float = 10.0,
                                  map_id: Optional[str] = None) -> SpatialDescription:
         """
@@ -273,7 +292,7 @@ class SpatialNavigatorAgent:
         use_position = None
         
         if position:
-            use_position = position
+            use_position = position.model_dump()
         elif self.spatial_mapper.context.observer_position:
             pos = self.spatial_mapper.context.observer_position
             use_position = {"x": pos.x, "y": pos.y, "z": pos.z if pos.z is not None else None}
@@ -377,7 +396,7 @@ class SpatialNavigatorAgent:
     @function_tool
     async def find_path_to_landmark(self, 
                                  landmark_type: str,
-                                 current_position: Optional[Dict[str, float]] = None,
+                                 current_position: Optional[PositionDict] = None,
                                  map_id: Optional[str] = None) -> NavigationResult:
         """
         Find a path to the nearest landmark of a given type
@@ -404,7 +423,7 @@ class SpatialNavigatorAgent:
         use_position = None
         
         if current_position:
-            use_position = current_position
+            use_position = current_position.model_dump()
         elif self.spatial_mapper.context.observer_position:
             pos = self.spatial_mapper.context.observer_position
             use_position = {"x": pos.x, "y": pos.y, "z": pos.z if pos.z is not None else None}
@@ -479,7 +498,7 @@ class SpatialNavigatorAgent:
     @function_tool
     async def process_spatial_description(self, 
                                        description: str,
-                                       map_id: Optional[str] = None) -> Dict[str, Any]:
+                                       map_id: Optional[str] = None) -> ProcessingResult:
         """
         Process a natural language description of a space
         
@@ -506,7 +525,7 @@ class SpatialNavigatorAgent:
         features = await self.spatial_mapper.extract_spatial_features(description)
         
         if not features or "error" in features:
-            return {"error": "Failed to extract spatial features from description"}
+            return ProcessingResult(error="Failed to extract spatial features from description")
         
         # Process the features to update the map
         with trace(workflow_name="process_spatial_description"):
@@ -532,9 +551,18 @@ class SpatialNavigatorAgent:
             )
             
             if hasattr(result, 'final_output'):
-                return result.final_output
+                return ProcessingResult(
+                    message="Description processed successfully",
+                    map_id=map_id,
+                    features=features,
+                    final_output=result.final_output
+                )
             else:
-                return {"message": "Description processed but no structured output available"}
+                return ProcessingResult(
+                    message="Description processed but no structured output available",
+                    map_id=map_id,
+                    features=features
+                )
     
     async def process_request(self, request: str) -> str:
         """Process a user request through the triage agent"""
