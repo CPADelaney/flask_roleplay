@@ -1290,7 +1290,7 @@ Use the available tools to maintain accurate psychological state tracking.
 
     
     @function_tool
-    async def monitor_subspace_exit(
+    async def _monitor_subspace_exit(
         ctx: RunContextWrapper[PsychologicalContext],      # FIRST!
         params: MonitorSubspaceExitParams,                 # strict input
     ) -> MonitorSubspaceExitResult:                        # strict output
