@@ -90,6 +90,56 @@ class ReflexiveSystemStats(BaseModel):
     active_status: bool = Field(description="Whether the system is active")
     top_patterns: List[Dict[str, Any]] = Field(description="Top patterns by execution count")
 
+# =============== New Models for Function Tools ===============
+
+class PatternData(BaseModel):
+    """Pattern data structure for matching"""
+    min: Optional[float] = Field(None, description="Minimum value for numeric range")
+    max: Optional[float] = Field(None, description="Maximum value for numeric range")
+    primary: Optional[str] = Field(None, description="Primary string value")
+    variants: Optional[List[str]] = Field(None, description="String variants")
+    weight: Optional[float] = Field(None, description="Feature weight")
+    optimal: Optional[float] = Field(None, description="Optimal value for numeric range")
+    required: Optional[bool] = Field(None, description="Whether this field is required")
+
+class StimulusData(BaseModel):
+    """Stimulus data structure"""
+    text: Optional[Union[str, Dict[str, Any]]] = Field(None, description="Text content or structured data")
+    visual_clarity: Optional[float] = Field(None, description="Visual clarity score")
+    opponent: Optional[Dict[str, str]] = Field(None, description="Opponent state information")
+    distractors: Optional[List[Dict[str, float]]] = Field(None, description="Distractor elements")
+    _timing: Optional[Dict[str, int]] = Field(None, description="Timing information", alias="_timing")
+
+class RegisterReflexResult(BaseModel):
+    """Result of registering a reflex"""
+    success: bool = Field(description="Whether registration was successful")
+    error: Optional[str] = Field(None, description="Error message if failed")
+    reflex: Optional[Dict[str, Any]] = Field(None, description="Registered reflex details")
+
+class ProcessStimulusResult(BaseModel):
+    """Result of processing a stimulus"""
+    success: bool = Field(description="Whether processing was successful")
+    reason: Optional[str] = Field(None, description="Reason for failure")
+    error: Optional[str] = Field(None, description="Error message if failed")
+    pattern_name: Optional[str] = Field(None, description="Name of matched pattern")
+    reaction_time_ms: Optional[float] = Field(None, description="Reaction time in milliseconds")
+    match_score: Optional[float] = Field(None, description="Pattern match score")
+    reaction: Optional[Dict[str, Any]] = Field(None, description="Reaction metadata")
+
+class SetResponseModeResult(BaseModel):
+    """Result of setting response mode"""
+    success: bool = Field(description="Whether mode was set successfully")
+    error: Optional[str] = Field(None, description="Error message if failed")
+    mode: Optional[str] = Field(None, description="New response mode")
+
+class OptimizeReflexesResult(BaseModel):
+    """Result of optimizing reflexes"""
+    success: bool = Field(description="Whether optimization was successful")
+    error: Optional[str] = Field(None, description="Error message if failed")
+    optimizations: Optional[Dict[str, Any]] = Field(None, description="Optimization details")
+    patterns_examined: Optional[int] = Field(None, description="Number of patterns examined")
+    patterns_optimized: Optional[int] = Field(None, description="Number of patterns optimized")
+
 # =============== Pattern Recognition ===============
 
 class ReflexPattern:
@@ -175,18 +225,25 @@ class ReflexPattern:
 
 # =============== Pattern Recognition Agent and Tools ===============
 
+class FastMatchInput(BaseModel):
+    """Input for fast pattern matching"""
+    stimulus: Dict[str, Any] = Field(description="Stimulus data")
+    pattern: Dict[str, Any] = Field(description="Pattern to match against")
+
 @function_tool
-async def fast_match(ctx: RunContextWrapper[Any], stimulus: Dict[str, Any], pattern: Dict[str, Any]) -> float:
+async def fast_match(ctx: RunContextWrapper[Any], input_data: FastMatchInput) -> float:
     """
     Perform fast pattern matching
     
     Args:
-        stimulus: Stimulus data
-        pattern: Pattern to match against
+        input_data: Contains stimulus and pattern data
         
     Returns:
         Match score (0.0-1.0)
     """
+    stimulus = input_data.stimulus
+    pattern = input_data.pattern
+    
     with custom_span("fast_match"):
         # Handle empty cases
         if not stimulus or not pattern:
@@ -258,17 +315,27 @@ async def fast_match(ctx: RunContextWrapper[Any], stimulus: Dict[str, Any], patt
         
         return 0.0
 
+class GenerateSimilarStimulusInput(BaseModel):
+    """Input for generating similar stimulus"""
+    pattern: Dict[str, Any] = Field(description="Pattern to generate similar stimulus for")
+
+class GeneratedStimulus(BaseModel):
+    """Generated stimulus data"""
+    data: Dict[str, Any] = Field(description="Generated stimulus data")
+
 @function_tool
-async def generate_similar_stimulus(ctx: RunContextWrapper[Any], pattern: Dict[str, Any]) -> Dict[str, Any]:
+async def generate_similar_stimulus(ctx: RunContextWrapper[Any], input_data: GenerateSimilarStimulusInput) -> GeneratedStimulus:
     """
     Generate a stimulus similar to the given pattern for training
     
     Args:
-        pattern: Pattern to generate similar stimulus for
+        input_data: Contains pattern to generate similar stimulus for
         
     Returns:
         Generated stimulus
     """
+    pattern = input_data.pattern
+    
     with custom_span("generate_similar_stimulus"):
         stimulus = {}
         
@@ -303,25 +370,33 @@ async def generate_similar_stimulus(ctx: RunContextWrapper[Any], pattern: Dict[s
             else:
                 stimulus[key] = value
         
-        return stimulus
+        return GeneratedStimulus(data=stimulus)
+
+class GenerateGamingStimulusInput(BaseModel):
+    """Input for generating gaming stimulus"""
+    pattern: Dict[str, Any] = Field(description="Base pattern")
+    difficulty: float = Field(0.5, description="Difficulty level (0.0-1.0)")
 
 @function_tool
 async def generate_gaming_stimulus(ctx: RunContextWrapper[Any], 
-                                  pattern: Dict[str, Any], 
-                                  difficulty: float = 0.5) -> Dict[str, Any]:
+                                  input_data: GenerateGamingStimulusInput) -> GeneratedStimulus:
     """
     Generate a gaming-specific stimulus with appropriate timing and visual elements
     
     Args:
-        pattern: Base pattern
-        difficulty: Difficulty level (0.0-1.0)
+        input_data: Contains pattern and difficulty level
         
     Returns:
         Gaming-specific stimulus
     """
+    pattern = input_data.pattern
+    difficulty = input_data.difficulty
+    
     with custom_span("generate_gaming_stimulus"):
         # Start with base stimulus
-        stimulus = await generate_similar_stimulus(ctx, pattern)
+        base_input = GenerateSimilarStimulusInput(pattern=pattern)
+        base_result = await generate_similar_stimulus(ctx, base_input)
+        stimulus = base_result.data
         
         # Add gaming-specific elements
         stimulus["_timing"] = {
@@ -341,19 +416,29 @@ async def generate_gaming_stimulus(ctx: RunContextWrapper[Any],
             "orientation": random.choice(["facing", "side", "away"])
         }
         
-        return stimulus
+        return GeneratedStimulus(data=stimulus)
+
+class OptimizePatternInput(BaseModel):
+    """Input for optimizing a pattern"""
+    pattern: Dict[str, Any] = Field(description="Pattern to optimize")
+
+class OptimizedPattern(BaseModel):
+    """Optimized pattern data"""
+    data: Dict[str, Any] = Field(description="Optimized pattern data")
 
 @function_tool
-async def optimize_pattern(ctx: RunContextWrapper[Any], pattern: Dict[str, Any]) -> Dict[str, Any]:
+async def optimize_pattern(ctx: RunContextWrapper[Any], input_data: OptimizePatternInput) -> OptimizedPattern:
     """
     Optimize a pattern for better recognition
     
     Args:
-        pattern: Pattern to optimize
+        input_data: Contains pattern to optimize
         
     Returns:
         Optimized pattern
     """
+    pattern = input_data.pattern
+    
     with custom_span("optimize_pattern"):
         optimized = pattern.copy()
         
@@ -386,19 +471,29 @@ async def optimize_pattern(ctx: RunContextWrapper[Any], pattern: Dict[str, Any])
                     'weight': 1.5
                 }
         
-        return optimized
+        return OptimizedPattern(data=optimized)
+
+class SimplifyPatternInput(BaseModel):
+    """Input for simplifying a pattern"""
+    pattern: Dict[str, Any] = Field(description="Pattern to simplify")
+
+class SimplifiedPattern(BaseModel):
+    """Simplified pattern data"""
+    data: Dict[str, Any] = Field(description="Simplified pattern data")
 
 @function_tool
-async def simplify_pattern(ctx: RunContextWrapper[Any], pattern: Dict[str, Any]) -> Dict[str, Any]:
+async def simplify_pattern(ctx: RunContextWrapper[Any], input_data: SimplifyPatternInput) -> SimplifiedPattern:
     """
     Simplify a pattern for faster recognition
     
     Args:
-        pattern: Pattern to simplify
+        input_data: Contains pattern to simplify
         
     Returns:
         Simplified pattern
     """
+    pattern = input_data.pattern
+    
     with custom_span("simplify_pattern"):
         simplified = {}
         
@@ -432,7 +527,7 @@ async def simplify_pattern(ctx: RunContextWrapper[Any], pattern: Dict[str, Any])
             if key.startswith('_'):
                 simplified[key] = value
         
-        return simplified
+        return SimplifiedPattern(data=simplified)
 
 # =============== Reflexive System Class ===============
 
@@ -496,7 +591,8 @@ class ReflexiveSystem:
                 function_tool(generate_similar_stimulus),
                 function_tool(generate_gaming_stimulus)
             ],
-            model_settings=ModelSettings(temperature=0.4)
+            model_settings=ModelSettings(temperature=0.4),
+            model="gpt-4.1-nano"
         )
         
         # Pattern Optimization Agent
@@ -509,7 +605,8 @@ class ReflexiveSystem:
                 function_tool(optimize_pattern),
                 function_tool(simplify_pattern)
             ],
-            model_settings=ModelSettings(temperature=0.4)
+            model_settings=ModelSettings(temperature=0.4),
+            model="gpt-4.1-nano"
         )
         
         # Gaming Reflex Agent
@@ -522,7 +619,8 @@ class ReflexiveSystem:
                 function_tool(generate_gaming_stimulus),
                 function_tool(fast_match)
             ],
-            model_settings=ModelSettings(temperature=0.4)
+            model_settings=ModelSettings(temperature=0.4),
+            model="gpt-4.1-nano"
         )
         
         # Decision System Agent
@@ -531,7 +629,8 @@ class ReflexiveSystem:
             instructions="""You are a specialized agent for the reflex decision system.
             Your job is to decide when to use reflexes vs. deliberate thinking based on context.
             Focus on analyzing stimuli and contexts to make appropriate reflex usage decisions.""",
-            model_settings=ModelSettings(temperature=0.5)
+            model_settings=ModelSettings(temperature=0.5),
+            model="gpt-4.1-nano"
         )
         
         # Main Reflexive Agent
@@ -554,7 +653,8 @@ class ReflexiveSystem:
                        tool_name_override="make_reflex_decision",
                        tool_description_override="Decide whether to use reflexes or deliberate thinking")
             ],
-            model_settings=ModelSettings(temperature=0.4)
+            model_settings=ModelSettings(temperature=0.4),
+            model="gpt-4.1-nano"
         )
 
     # Add this method to the ReflexiveSystem class in nyx/core/reflexive_system.py
@@ -620,26 +720,23 @@ class ReflexiveSystem:
         
         return should_use, confidence
     
+    class RegisterReflexInput(BaseModel):
+        """Input for registering a reflex"""
+        name: str = Field(description="Unique name for this pattern")
+        pattern_data: Dict[str, Any] = Field(description="Pattern definition")
+        procedure_name: str = Field(description="Name of procedure to execute")
+        threshold: float = Field(0.7, description="Matching threshold (0.0-1.0)")
+        priority: int = Field(1, description="Priority level")
+        domain: Optional[str] = Field(None, description="Optional domain")
+        context_template: Optional[Dict[str, Any]] = Field(None, description="Context template")
+    
     @function_tool
-    async def register_reflex(self, 
-                             name: str,
-                             pattern_data: Dict[str, Any],
-                             procedure_name: str,
-                             threshold: float = 0.7,
-                             priority: int = 1,
-                             domain: str = None,
-                             context_template: Dict[str, Any] = None) -> Dict[str, Any]:
+    async def register_reflex(self, input_data: RegisterReflexInput) -> RegisterReflexResult:
         """
         Register a new reflex pattern
         
         Args:
-            name: Unique name for this pattern
-            pattern_data: Pattern definition (features that should trigger this reflex)
-            procedure_name: Name of procedure to execute when triggered
-            threshold: Matching threshold (0.0-1.0)
-            priority: Priority level (higher values take precedence)
-            domain: Optional domain for specialized responses
-            context_template: Template for context to pass to procedure
+            input_data: Registration parameters
             
         Returns:
             Registration result
@@ -647,57 +744,58 @@ class ReflexiveSystem:
         with trace(workflow_name="Register Reflex", group_id=self.trace_group_id):
             # Validate procedure exists
             procedures = await self.memory_manager.list_procedures()
-            if procedure_name not in [p["name"] for p in procedures]:
-                return {
-                    "success": False,
-                    "error": f"Procedure '{procedure_name}' not found"
-                }
+            if input_data.procedure_name not in [p["name"] for p in procedures]:
+                return RegisterReflexResult(
+                    success=False,
+                    error=f"Procedure '{input_data.procedure_name}' not found"
+                )
             
             # Create reflex pattern
             reflex = ReflexPattern(
-                name=name,
-                pattern_data=pattern_data,
-                procedure_name=procedure_name,
-                threshold=threshold,
-                priority=priority,
-                context_template=context_template
+                name=input_data.name,
+                pattern_data=input_data.pattern_data,
+                procedure_name=input_data.procedure_name,
+                threshold=input_data.threshold,
+                priority=input_data.priority,
+                context_template=input_data.context_template or {}
             )
             
             # Store in main registry
-            self.reflex_patterns[name] = reflex
+            self.reflex_patterns[input_data.name] = reflex
             
             # If domain specified, add to domain library
-            if domain and domain in self.domain_libraries:
-                self.domain_libraries[domain][name] = reflex
+            if input_data.domain and input_data.domain in self.domain_libraries:
+                self.domain_libraries[input_data.domain][input_data.name] = reflex
             
-            logger.info(f"Registered reflex pattern '{name}' for procedure '{procedure_name}'")
+            logger.info(f"Registered reflex pattern '{input_data.name}' for procedure '{input_data.procedure_name}'")
             
-            return {
-                "success": True,
-                "reflex": reflex.to_dict()
-            }
+            return RegisterReflexResult(
+                success=True,
+                reflex=reflex.to_dict()
+            )
+    
+    class ProcessStimulusInput(BaseModel):
+        """Input for processing stimulus"""
+        stimulus: Dict[str, Any] = Field(description="The stimulus data")
+        domain: Optional[str] = Field(None, description="Optional domain")
+        context: Optional[Dict[str, Any]] = Field(None, description="Additional context")
     
     @function_tool
-    async def process_stimulus_fast(self, 
-                                  stimulus: Dict[str, Any],
-                                  domain: str = None,
-                                  context: Dict[str, Any] = None) -> Dict[str, Any]:
+    async def process_stimulus_fast(self, input_data: ProcessStimulusInput) -> ProcessStimulusResult:
         """
         Process stimulus with minimal overhead for fastest possible reaction
         
         This method uses a streamlined matching process for absolute minimum latency.
         
         Args:
-            stimulus: The stimulus data requiring immediate reaction
-            domain: Optional domain to limit reflex patterns
-            context: Additional context information
+            input_data: Stimulus processing parameters
             
         Returns:
             Reaction result
         """
         with trace(workflow_name="Process Stimulus Fast", group_id=self.trace_group_id):
             if not self._is_active:
-                return {"success": False, "reason": "reflexive_system_inactive"}
+                return ProcessStimulusResult(success=False, reason="reflexive_system_inactive")
             
             start_time = time.time()
             matched_pattern = None
@@ -706,22 +804,25 @@ class ReflexiveSystem:
             
             # Determine patterns to check
             patterns_to_check = self.reflex_patterns
-            if domain and domain in self.domain_libraries:
-                patterns_to_check = self.domain_libraries[domain]
+            if input_data.domain and input_data.domain in self.domain_libraries:
+                patterns_to_check = self.domain_libraries[input_data.domain]
             
             # Create context for function tools
             tool_context = {
-                "stimulus": stimulus,
-                "domain": domain,
-                "context": context or {}
+                "stimulus": input_data.stimulus,
+                "domain": input_data.domain,
+                "context": input_data.context or {}
             }
             
             # Fast pattern matching
             for name, pattern in patterns_to_check.items():
+                match_input = FastMatchInput(
+                    stimulus=input_data.stimulus,
+                    pattern=pattern.pattern_data
+                )
                 match_score = await fast_match(
                     RunContextWrapper(tool_context),
-                    stimulus, 
-                    pattern.pattern_data
+                    match_input
                 )
                 
                 if match_score >= pattern.threshold:
@@ -739,19 +840,19 @@ class ReflexiveSystem:
                 if len(self.reaction_times) > 100:
                     self.reaction_times.pop(0)
                     
-                return {
-                    "success": False,
-                    "reason": "no_matching_pattern",
-                    "reaction_time_ms": (end_time - start_time) * 1000
-                }
+                return ProcessStimulusResult(
+                    success=False,
+                    reason="no_matching_pattern",
+                    reaction_time_ms=(end_time - start_time) * 1000
+                )
             
             # Prepare execution context
             execution_context = matched_pattern.context_template.copy() if matched_pattern.context_template else {}
-            if context:
-                execution_context.update(context)
+            if input_data.context:
+                execution_context.update(input_data.context)
             
             # Add stimulus data and match details
-            execution_context["stimulus"] = stimulus
+            execution_context["stimulus"] = input_data.stimulus
             execution_context["match_score"] = highest_match
             execution_context["reflexive"] = True
             execution_context["reaction_start_time"] = start_time
@@ -782,20 +883,24 @@ class ReflexiveSystem:
                 # For training purposes
                 if self.response_mode == "learning":
                     self.training_data.append({
-                        "stimulus": stimulus,
+                        "stimulus": input_data.stimulus,
                         "pattern_name": matched_pattern.name,
                         "reaction_time_ms": reaction_time_ms,
                         "success": result.get("success", False)
                     })
                 
-                # Add reaction metadata to result
-                result["reaction"] = {
-                    "pattern_name": matched_pattern.name,
-                    "reaction_time_ms": reaction_time_ms,
-                    "match_score": highest_match
-                }
-                
-                return result
+                # Build result
+                return ProcessStimulusResult(
+                    success=result.get("success", False),
+                    pattern_name=matched_pattern.name,
+                    reaction_time_ms=reaction_time_ms,
+                    match_score=highest_match,
+                    reaction={
+                        "pattern_name": matched_pattern.name,
+                        "reaction_time_ms": reaction_time_ms,
+                        "match_score": highest_match
+                    }
+                )
                 
             except Exception as e:
                 logger.error(f"Error executing reflex pattern '{matched_pattern.name}': {e}")
@@ -807,23 +912,25 @@ class ReflexiveSystem:
                     execution_time=end_time - start_time
                 )
                 
-                return {
-                    "success": False,
-                    "error": str(e),
-                    "pattern_name": matched_pattern.name,
-                    "reaction_time_ms": (end_time - start_time) * 1000
-                }
+                return ProcessStimulusResult(
+                    success=False,
+                    error=str(e),
+                    pattern_name=matched_pattern.name,
+                    reaction_time_ms=(end_time - start_time) * 1000
+                )
+    
+    class TrainReflexesInput(BaseModel):
+        """Input for training reflexes"""
+        training_iterations: int = Field(100, description="Number of training iterations")
+        domain: Optional[str] = Field(None, description="Optional domain to limit training")
     
     @function_tool
-    async def train_reflexes(self, 
-                           training_iterations: int = 100,
-                           domain: str = None) -> TrainingResult:
+    async def train_reflexes(self, input_data: TrainReflexesInput) -> TrainingResult:
         """
         Train reflexes to improve response time and accuracy
         
         Args:
-            training_iterations: Number of training iterations to perform
-            domain: Optional domain to limit training
+            input_data: Training parameters
             
         Returns:
             Training results
@@ -843,8 +950,8 @@ class ReflexiveSystem:
             try:
                 # Get patterns to train
                 patterns_to_train = self.reflex_patterns
-                if domain and domain in self.domain_libraries:
-                    patterns_to_train = self.domain_libraries[domain]
+                if input_data.domain and input_data.domain in self.domain_libraries:
+                    patterns_to_train = self.domain_libraries[input_data.domain]
                 
                 if not patterns_to_train:
                     return TrainingResult(
@@ -865,22 +972,23 @@ class ReflexiveSystem:
                 
                 # Create context for function tools
                 tool_context = {
-                    "domain": domain,
-                    "iterations": training_iterations,
+                    "domain": input_data.domain,
+                    "iterations": input_data.training_iterations,
                     "patterns": {name: pattern.pattern_data for name, pattern in patterns_to_train.items()}
                 }
                 
                 # Generate training stimuli
                 training_stimuli = []
-                for _ in range(training_iterations):
+                for _ in range(input_data.training_iterations):
                     # Generate stimulus similar to patterns we're training
                     pattern = random.choice(list(patterns_to_train.values()))
-                    stimulus = await generate_similar_stimulus(
+                    gen_input = GenerateSimilarStimulusInput(pattern=pattern.pattern_data)
+                    gen_result = await generate_similar_stimulus(
                         RunContextWrapper(tool_context),
-                        pattern.pattern_data
+                        gen_input
                     )
                     training_stimuli.append({
-                        "stimulus": stimulus,
+                        "stimulus": gen_result.data,
                         "target_pattern": pattern.name
                     })
                 
@@ -894,14 +1002,15 @@ class ReflexiveSystem:
                     target_pattern = training_item["target_pattern"]
                     
                     # Process stimulus
-                    result = await self.process_stimulus_fast(stimulus)
+                    process_input = ProcessStimulusInput(stimulus=stimulus)
+                    result = await self.process_stimulus_fast(process_input)
                     
                     # Record result
                     results.append({
                         "target_pattern": target_pattern,
-                        "matched_pattern": result.get("pattern_name"),
-                        "reaction_time_ms": result.get("reaction_time_ms"),
-                        "success": result.get("success", False)
+                        "matched_pattern": result.pattern_name,
+                        "reaction_time_ms": result.reaction_time_ms,
+                        "success": result.success
                     })
                 
                 # Restore original mode
@@ -944,7 +1053,7 @@ class ReflexiveSystem:
                 
                 return TrainingResult(
                     success=True,
-                    iterations=training_iterations,
+                    iterations=input_data.training_iterations,
                     improvements=improvements,
                     training_accuracy=training_accuracy,
                     avg_reaction_time=avg_reaction_time
@@ -963,33 +1072,32 @@ class ReflexiveSystem:
             finally:
                 self.training_in_progress = False
     
+    class AddGamingReflexInput(BaseModel):
+        """Input for adding a gaming reflex"""
+        game_name: str = Field(description="Name of the game")
+        action_type: str = Field(description="Type of action")
+        trigger_pattern: Dict[str, Any] = Field(description="Pattern to recognize")
+        response_procedure: str = Field(description="Procedure to execute")
+        reaction_threshold: float = Field(0.7, description="Recognition threshold")
+    
     @function_tool
-    async def add_gaming_reflex(self, 
-                              game_name: str,
-                              action_type: str,
-                              trigger_pattern: Dict[str, Any],
-                              response_procedure: str,
-                              reaction_threshold: float = 0.7) -> Dict[str, Any]:
+    async def add_gaming_reflex(self, input_data: AddGamingReflexInput) -> RegisterReflexResult:
         """
         Add a specialized gaming reflex
         
         Args:
-            game_name: Name of the game
-            action_type: Type of action (e.g., "block", "attack", "dodge")
-            trigger_pattern: Pattern to recognize
-            response_procedure: Procedure to execute
-            reaction_threshold: Recognition threshold
+            input_data: Gaming reflex parameters
             
         Returns:
             Registration result
         """
         with trace(workflow_name="Add Gaming Reflex", group_id=self.trace_group_id):
-            reflex_name = f"gaming_{game_name}_{action_type}_{len(self.domain_libraries['gaming'])+1}"
+            reflex_name = f"gaming_{input_data.game_name}_{input_data.action_type}_{len(self.domain_libraries['gaming'])+1}"
             
             # Add game-specific context to template
             context_template = {
-                "game": game_name,
-                "action_type": action_type,
+                "game": input_data.game_name,
+                "action_type": input_data.action_type,
                 "gaming_reflex": True
             }
             
@@ -998,24 +1106,24 @@ class ReflexiveSystem:
             
             # Create context for the gaming reflex agent
             agent_context = {
-                "game_name": game_name,
-                "action_type": action_type,
-                "trigger_pattern": trigger_pattern,
-                "response_procedure": response_procedure,
-                "reaction_threshold": reaction_threshold
+                "game_name": input_data.game_name,
+                "action_type": input_data.action_type,
+                "trigger_pattern": input_data.trigger_pattern,
+                "response_procedure": input_data.response_procedure,
+                "reaction_threshold": input_data.reaction_threshold
             }
             
             # Run the gaming reflex agent to optimize the pattern
-            gaming_agent_prompt = f"""Create an optimized gaming reflex pattern for game '{game_name}' and action '{action_type}'.
+            gaming_agent_prompt = f"""Create an optimized gaming reflex pattern for game '{input_data.game_name}' and action '{input_data.action_type}'.
             The pattern should be optimized for quick recognition in gaming scenarios with appropriate timing elements.
             Consider adding timing information, visual elements, and game-specific attributes for better recognition.
             """
             
             run_config = RunConfig(
-                workflow_name=f"Gaming Reflex Creation - {game_name}",
+                workflow_name=f"Gaming Reflex Creation - {input_data.game_name}",
                 trace_metadata={
-                    "game": game_name,
-                    "action_type": action_type
+                    "game": input_data.game_name,
+                    "action_type": input_data.action_type
                 }
             )
             
@@ -1028,53 +1136,58 @@ class ReflexiveSystem:
                 )
                 
                 # Check if we got an optimized pattern
-                optimized_pattern = trigger_pattern
+                optimized_pattern = input_data.trigger_pattern
                 if isinstance(result.final_output, dict) and "optimized_pattern" in result.final_output:
                     optimized_pattern = result.final_output["optimized_pattern"]
                 
                 # Register the reflex
-                registration_result = await self.register_reflex(
+                reg_input = self.RegisterReflexInput(
                     name=reflex_name,
                     pattern_data=optimized_pattern,
-                    procedure_name=response_procedure,
-                    threshold=reaction_threshold,
+                    procedure_name=input_data.response_procedure,
+                    threshold=input_data.reaction_threshold,
                     priority=priority,
                     domain="gaming",
                     context_template=context_template
                 )
+                registration_result = await self.register_reflex(reg_input)
                 
                 return registration_result
                 
             except Exception as e:
                 logger.error(f"Error creating gaming reflex: {e}")
-                return {
-                    "success": False,
-                    "error": f"Failed to create gaming reflex: {str(e)}"
-                }
+                return RegisterReflexResult(
+                    success=False,
+                    error=f"Failed to create gaming reflex: {str(e)}"
+                )
+    
+    class SimulateGamingScenariosInput(BaseModel):
+        """Input for simulating gaming scenarios"""
+        game_name: str = Field(description="Game to simulate")
+        scenario_count: int = Field(10, description="Number of scenarios to run")
     
     @function_tool
-    async def simulate_gaming_scenarios(self, game_name: str, scenario_count: int = 10) -> Dict[str, Any]:
+    async def simulate_gaming_scenarios(self, input_data: SimulateGamingScenariosInput) -> SimulationResult:
         """
         Simulate gaming scenarios to test and improve reaction time
         
         Args:
-            game_name: Game to simulate
-            scenario_count: Number of scenarios to run
+            input_data: Simulation parameters
             
         Returns:
             Simulation results
         """
-        with trace(workflow_name=f"Simulate Gaming Scenarios - {game_name}", group_id=self.trace_group_id):
+        with trace(workflow_name=f"Simulate Gaming Scenarios - {input_data.game_name}", group_id=self.trace_group_id):
             # Get game-specific patterns
             game_patterns = {
                 name: pattern for name, pattern in self.domain_libraries.get("gaming", {}).items()
-                if pattern.context_template.get("game") == game_name
+                if pattern.context_template.get("game") == input_data.game_name
             }
             
             if not game_patterns:
                 return SimulationResult(
                     success=False,
-                    game=game_name,
+                    game=input_data.game_name,
                     scenarios_run=0,
                     success_rate=0.0,
                     avg_reaction_time_ms=0.0,
@@ -1083,27 +1196,31 @@ class ReflexiveSystem:
             
             # Create context for function tools
             tool_context = {
-                "game_name": game_name,
-                "scenario_count": scenario_count,
+                "game_name": input_data.game_name,
+                "scenario_count": input_data.scenario_count,
                 "game_patterns": {name: pattern.pattern_data for name, pattern in game_patterns.items()}
             }
             
             # Run simulations
             results = []
             
-            for i in range(scenario_count):
+            for i in range(input_data.scenario_count):
                 # Select a random pattern to test
                 pattern_name = random.choice(list(game_patterns.keys()))
                 pattern = game_patterns[pattern_name]
                 
                 # Generate a stimulus based on the pattern
-                difficulty = min(1.0, 0.5 + (i/scenario_count))  # Increase difficulty gradually
+                difficulty = min(1.0, 0.5 + (i/input_data.scenario_count))  # Increase difficulty gradually
                 
-                stimulus = await generate_gaming_stimulus(
-                    RunContextWrapper(tool_context),
-                    pattern.pattern_data,
-                    difficulty
+                gen_input = GenerateGamingStimulusInput(
+                    pattern=pattern.pattern_data,
+                    difficulty=difficulty
                 )
+                gen_result = await generate_gaming_stimulus(
+                    RunContextWrapper(tool_context),
+                    gen_input
+                )
+                stimulus = gen_result.data
                 
                 # Add some distractor elements
                 if random.random() < 0.3:
@@ -1114,19 +1231,20 @@ class ReflexiveSystem:
                 
                 # Process stimulus
                 start_time = time.time()
-                reaction = await self.process_stimulus_fast(
+                process_input = ProcessStimulusInput(
                     stimulus=stimulus,
                     domain="gaming",
                     context={"simulation": True, "difficulty": difficulty}
                 )
+                reaction = await self.process_stimulus_fast(process_input)
                 reaction_time = (time.time() - start_time) * 1000  # ms
                 
                 results.append({
                     "scenario": i+1,
                     "pattern_tested": pattern_name,
                     "reaction_time_ms": reaction_time,
-                    "success": reaction.get("success", False),
-                    "matched_pattern": reaction.get("pattern_name")
+                    "success": reaction.success,
+                    "matched_pattern": reaction.pattern_name
                 })
             
             # Calculate statistics
@@ -1135,44 +1253,48 @@ class ReflexiveSystem:
             
             return SimulationResult(
                 success=True,
-                game=game_name,
-                scenarios_run=scenario_count,
-                success_rate=success_count / scenario_count if scenario_count > 0 else 0.0,
+                game=input_data.game_name,
+                scenarios_run=input_data.scenario_count,
+                success_rate=success_count / input_data.scenario_count if input_data.scenario_count > 0 else 0.0,
                 avg_reaction_time_ms=avg_reaction_time,
                 results=results
             )
     
+    class SetResponseModeInput(BaseModel):
+        """Input for setting response mode"""
+        mode: str = Field(description="Response mode (normal, hyper, relaxed, learning)")
+    
     @function_tool
-    def set_response_mode(self, mode: str) -> Dict[str, Any]:
+    def set_response_mode(self, input_data: SetResponseModeInput) -> SetResponseModeResult:
         """
         Set the response mode
         
         Args:
-            mode: Response mode (normal, hyper, relaxed, learning)
+            input_data: Mode setting parameters
             
         Returns:
             Mode change result
         """
         valid_modes = ["normal", "hyper", "relaxed", "learning"]
         
-        if mode not in valid_modes:
-            return {
-                "success": False,
-                "error": f"Invalid mode. Valid modes are: {', '.join(valid_modes)}"
-            }
+        if input_data.mode not in valid_modes:
+            return SetResponseModeResult(
+                success=False,
+                error=f"Invalid mode. Valid modes are: {', '.join(valid_modes)}"
+            )
         
         # Apply mode-specific adjustments
-        if mode == "hyper":
+        if input_data.mode == "hyper":
             # Hyper mode lowers thresholds for quicker reactions
             for pattern in self.reflex_patterns.values():
                 pattern._original_threshold = pattern.threshold
                 pattern.threshold = max(0.5, pattern.threshold - 0.15)
-        elif mode == "relaxed":
+        elif input_data.mode == "relaxed":
             # Relaxed mode increases thresholds for more deliberate reactions
             for pattern in self.reflex_patterns.values():
                 pattern._original_threshold = pattern.threshold
                 pattern.threshold = min(0.95, pattern.threshold + 0.15)
-        elif mode == "normal" and hasattr(self, "_original_thresholds"):
+        elif input_data.mode == "normal" and hasattr(self, "_original_thresholds"):
             # Restore original thresholds
             for name, pattern in self.reflex_patterns.items():
                 if hasattr(pattern, "_original_threshold"):
@@ -1180,12 +1302,12 @@ class ReflexiveSystem:
                     delattr(pattern, "_original_threshold")
         
         # Set mode
-        self.response_mode = mode
+        self.response_mode = input_data.mode
         
-        return {
-            "success": True,
-            "mode": mode
-        }
+        return SetResponseModeResult(
+            success=True,
+            mode=input_data.mode
+        )
     
     @function_tool
     async def get_reflexive_stats(self) -> ReflexiveSystemStats:
@@ -1221,7 +1343,7 @@ class ReflexiveSystem:
             )
     
     @function_tool
-    async def optimize_reflexes(self) -> Dict[str, Any]:
+    async def optimize_reflexes(self) -> OptimizeReflexesResult:
         """
         Optimize reflexes through analysis and pattern refinement
         
@@ -1230,7 +1352,7 @@ class ReflexiveSystem:
         """
         with trace(workflow_name="Optimize Reflexes", group_id=self.trace_group_id):
             if not self.reflex_patterns:
-                return {"success": False, "error": "No reflex patterns to optimize"}
+                return OptimizeReflexesResult(success=False, error="No reflex patterns to optimize")
             
             optimization_results = {}
             
@@ -1266,13 +1388,14 @@ class ReflexiveSystem:
                         if can_optimize:
                             # Try to optimize pattern
                             old_pattern = pattern.pattern_data.copy()
-                            optimized_pattern = await optimize_pattern(
+                            opt_input = OptimizePatternInput(pattern=pattern.pattern_data)
+                            opt_result = await optimize_pattern(
                                 RunContextWrapper(tool_context),
-                                pattern.pattern_data
+                                opt_input
                             )
                             
-                            if optimized_pattern:
-                                pattern.pattern_data = optimized_pattern
+                            if opt_result:
+                                pattern.pattern_data = opt_result.data
                                 optimization_results[pattern.name] = {
                                     "status": "optimized",
                                     "original_success_rate": success_rate,
@@ -1305,13 +1428,14 @@ class ReflexiveSystem:
                         
                         if can_simplify:
                             old_pattern = pattern.pattern_data.copy()
-                            simplified_pattern = await simplify_pattern(
+                            simp_input = SimplifyPatternInput(pattern=pattern.pattern_data)
+                            simp_result = await simplify_pattern(
                                 RunContextWrapper(tool_context),
-                                pattern.pattern_data
+                                simp_input
                             )
                             
-                            if simplified_pattern and simplified_pattern != old_pattern:
-                                pattern.pattern_data = simplified_pattern
+                            if simp_result and simp_result.data != old_pattern:
+                                pattern.pattern_data = simp_result.data
                                 optimization_results[pattern.name] = {
                                     "status": "simplified",
                                     "original_avg_response_time": pattern.get_avg_response_time(),
@@ -1322,9 +1446,9 @@ class ReflexiveSystem:
                 except Exception as e:
                     logger.error(f"Error optimizing pattern '{pattern.name}': {e}")
             
-            return {
-                "success": True,
-                "optimizations": optimization_results,
-                "patterns_examined": len(sorted_patterns),
-                "patterns_optimized": len(optimization_results)
-            }
+            return OptimizeReflexesResult(
+                success=True,
+                optimizations=optimization_results,
+                patterns_examined=len(sorted_patterns),
+                patterns_optimized=len(optimization_results)
+            )
