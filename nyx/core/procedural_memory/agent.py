@@ -1085,7 +1085,17 @@ class AgentEnhancedMemoryManager:
                 success=False,
                 message=str(e)
             )
-
+            
+    def register_function(self, name: str, func: Any) -> None:
+        """
+        Register a function in the agent context's function registry
+        
+        Args:
+            name: Name of the function
+            func: The function to register
+        """
+        self.agents.agent_context.register_function(name, func)
+    
     async def add_domination_procedures(self, brain=None):
         """Add predatory domination procedures to the agent's memory"""
         # Get the agent_enhanced_memory manager
