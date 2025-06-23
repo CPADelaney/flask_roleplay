@@ -112,6 +112,116 @@ class ArousalState(BaseModel):
     refractory_until: Optional[datetime.datetime] = Field(None, description="When refractory period ends")
     arousal_history: List[Tuple[datetime.datetime, float]] = Field(default_factory=list, description="History of arousal levels")
 
+# =============== Return Type Models for Function Tools ===============
+
+class RegionStateResult(BaseModel):
+    """Result from get_region_state"""
+    name: str
+    pressure: float
+    temperature: float
+    pain: float
+    pleasure: float
+    tingling: float
+    dominant_sensation: str
+    last_update: Optional[str]
+    recent_memories: List[Dict[str, Any]]
+    erogenous_level: float
+    sensitivity: float
+    error: Optional[str] = None
+
+class AllRegionStatesResult(BaseModel):
+    """Result from get_all_region_states"""
+    regions: Dict[str, Dict[str, float]]
+
+class PostureEffectsResult(BaseModel):
+    """Result from get_posture_effects"""
+    posture: str
+    movement: str
+    tension: float
+    fatigue: float
+
+class TemperatureComfortResult(BaseModel):
+    """Result from get_temperature_comfort"""
+    body_temperature: float
+    ambient_temperature: float
+    is_comfortable: bool
+    discomfort_level: float
+    perception: str
+    adapting_to_ambient: bool
+
+class CurrentTemperatureEffectsResult(BaseModel):
+    """Result from get_current_temperature_effects"""
+    body_temperature: float
+    tone_effect: str
+    posture_effect: str
+    interaction_effect: str
+    expression_examples: List[str]
+
+class BodyTemperatureUpdateResult(BaseModel):
+    """Result from update_body_temperature"""
+    previous_body_temp: float
+    new_body_temp: float
+    ambient_temp: float
+    adaptation_applied: float
+
+class StimulusProcessResult(BaseModel):
+    """Result from process_stimulus_tool"""
+    region: str
+    type: str
+    intensity: float
+    new_value: float
+    error: Optional[str] = None
+    pain_caused: Optional[float] = None
+    memory_created: Optional[bool] = None
+    pain_reduced: Optional[float] = None
+    arousal_updated: Optional[bool] = None
+    association_strength: Optional[float] = None
+    reward_value: Optional[float] = None
+    emotional_impact: Optional[Dict[str, float]] = None
+
+class MemoryTriggerResult(BaseModel):
+    """Result from process_memory_trigger"""
+    triggered_responses: List[Dict[str, Any]]
+
+class LinkMemorySensationResult(BaseModel):
+    """Result from link_memory_to_sensation_tool"""
+    success: bool
+    trigger: Optional[str] = None
+    body_region: Optional[str] = None
+    sensation_type: Optional[str] = None
+    intensity: Optional[float] = None
+    memory_id: Optional[str] = None
+    error: Optional[str] = None
+
+class ArousalStateResult(BaseModel):
+    """Result from get_arousal_state"""
+    arousal_level: float
+    physical_arousal: float
+    cognitive_arousal: float
+    in_afterglow: bool
+    in_refractory: bool
+    last_update: Optional[str]
+    afterglow_ends: Optional[str]
+    refractory_until: Optional[str]
+    time_since_update: Optional[float]
+
+class ArousalUpdateResult(BaseModel):
+    """Result from update_arousal_state"""
+    operation: str
+    old_state: Dict[str, float]
+    new_state: ArousalStateResult
+    components_updated: Optional[Dict[str, bool]] = None
+
+class ArousalExpressionDataResult(BaseModel):
+    """Result from get_arousal_expression_data"""
+    arousal_level: float
+    afterglow: bool
+    affinity_modifier: float
+    emotional_connection: float
+    expression_hint: str
+    tone_hint: str
+    urge_hint: str
+
 # =============== Context Classes ===============
 
 @dataclass
@@ -147,32 +257,45 @@ async def get_valid_body_regions(ctx: RunContextWrapper[SomatosensoryContext]) -
     return list(system.body_regions.keys())
 
 @function_tool
-async def get_region_state(ctx: RunContextWrapper[SomatosensoryContext], region_name: str) -> Dict[str, Any]:
+async def get_region_state(ctx: RunContextWrapper[SomatosensoryContext], region_name: str) -> RegionStateResult:
     """Get the current state of a specific body region"""
     system = get_system_instance()
     
     if region_name not in system.body_regions:
-        return {"error": f"Region {region_name} not found"}
+        return RegionStateResult(
+            name=region_name,
+            pressure=0.0,
+            temperature=0.5,
+            pain=0.0,
+            pleasure=0.0,
+            tingling=0.0,
+            dominant_sensation="neutral",
+            last_update=None,
+            recent_memories=[],
+            erogenous_level=0.0,
+            sensitivity=1.0,
+            error=f"Region {region_name} not found"
+        )
     
     region = system.body_regions[region_name]
     dominant = system._get_dominant_sensation(region)
     
-    return {
-        "name": region.name,
-        "pressure": region.pressure,
-        "temperature": region.temperature,
-        "pain": region.pain,
-        "pleasure": region.pleasure,
-        "tingling": region.tingling,
-        "dominant_sensation": dominant,
-        "last_update": region.last_update.isoformat() if region.last_update else None,
-        "recent_memories": region.sensation_memory[-3:] if region.sensation_memory else [],
-        "erogenous_level": region.erogenous_level,
-        "sensitivity": region.sensitivity
-    }
+    return RegionStateResult(
+        name=region.name,
+        pressure=region.pressure,
+        temperature=region.temperature,
+        pain=region.pain,
+        pleasure=region.pleasure,
+        tingling=region.tingling,
+        dominant_sensation=dominant,
+        last_update=region.last_update.isoformat() if region.last_update else None,
+        recent_memories=region.sensation_memory[-3:] if region.sensation_memory else [],
+        erogenous_level=region.erogenous_level,
+        sensitivity=region.sensitivity
+    )
 
 @function_tool
-async def get_all_region_states(ctx: RunContextWrapper[SomatosensoryContext]) -> Dict[str, Dict[str, Any]]:
+async def get_all_region_states(ctx: RunContextWrapper[SomatosensoryContext]) -> AllRegionStatesResult:
     """Get the current state of all body regions"""
     system = get_system_instance()
     all_states = {}
@@ -188,7 +311,7 @@ async def get_all_region_states(ctx: RunContextWrapper[SomatosensoryContext]) ->
             "erogenous_level": region.erogenous_level
         }
     
-    return all_states
+    return AllRegionStatesResult(regions=all_states)
 
 @function_tool
 async def calculate_overall_comfort(ctx: RunContextWrapper[SomatosensoryContext]) -> float:
@@ -233,7 +356,7 @@ async def calculate_overall_comfort(ctx: RunContextWrapper[SomatosensoryContext]
     return max(-1.0, min(1.0, comfort))
 
 @function_tool
-async def get_posture_effects(ctx: RunContextWrapper[SomatosensoryContext]) -> Dict[str, str]:
+async def get_posture_effects(ctx: RunContextWrapper[SomatosensoryContext]) -> PostureEffectsResult:
     """Get the effects of current body state on posture and movement"""
     system = get_system_instance()
     
@@ -296,12 +419,12 @@ async def get_posture_effects(ctx: RunContextWrapper[SomatosensoryContext]) -> D
         posture_effect = "Alert, posture slightly arched, small anticipatory gestures"
         movement_quality = "Butterflies-in-the-stomach restlessness, subtle shivers"
     
-    return {
-        "posture": posture_effect,
-        "movement": movement_quality,
-        "tension": tension,
-        "fatigue": fatigue
-    }
+    return PostureEffectsResult(
+        posture=posture_effect,
+        movement=movement_quality,
+        tension=tension,
+        fatigue=fatigue
+    )
 
 @function_tool
 async def get_ambient_temperature(ctx: RunContextWrapper[SomatosensoryContext]) -> float:
@@ -316,7 +439,7 @@ async def get_body_temperature(ctx: RunContextWrapper[SomatosensoryContext]) -> 
     return system.temperature_model["body_temperature"]
 
 @function_tool
-async def get_temperature_comfort(ctx: RunContextWrapper[SomatosensoryContext]) -> Dict[str, Any]:
+async def get_temperature_comfort(ctx: RunContextWrapper[SomatosensoryContext]) -> TemperatureComfortResult:
     """Get temperature comfort assessment"""
     system = get_system_instance()
     
@@ -342,17 +465,17 @@ async def get_temperature_comfort(ctx: RunContextWrapper[SomatosensoryContext]) 
     elif body_temp > 0.6:
         perception = "warm"
     
-    return {
-        "body_temperature": body_temp,
-        "ambient_temperature": ambient_temp,
-        "is_comfortable": is_comfortable,
-        "discomfort_level": min(1.0, discomfort),
-        "perception": perception,
-        "adapting_to_ambient": abs(body_temp - ambient_temp) > 0.1
-    }
+    return TemperatureComfortResult(
+        body_temperature=body_temp,
+        ambient_temperature=ambient_temp,
+        is_comfortable=is_comfortable,
+        discomfort_level=min(1.0, discomfort),
+        perception=perception,
+        adapting_to_ambient=abs(body_temp - ambient_temp) > 0.1
+    )
 
 @function_tool
-async def get_current_temperature_effects(ctx: RunContextWrapper[SomatosensoryContext]) -> Dict[str, Any]:
+async def get_current_temperature_effects(ctx: RunContextWrapper[SomatosensoryContext]) -> CurrentTemperatureEffectsResult:
     """Get effects of current temperature on expression and behavior"""
     system = get_system_instance()
     
@@ -391,13 +514,13 @@ async def get_current_temperature_effects(ctx: RunContextWrapper[SomatosensoryCo
         interaction_effect = "comfortable engagement without temperature influence"
         expression_examples = []
     
-    return {
-        "body_temperature": body_temp,
-        "tone_effect": tone_effect,
-        "posture_effect": posture_effect,
-        "interaction_effect": interaction_effect,
-        "expression_examples": expression_examples
-    }
+    return CurrentTemperatureEffectsResult(
+        body_temperature=body_temp,
+        tone_effect=tone_effect,
+        posture_effect=posture_effect,
+        interaction_effect=interaction_effect,
+        expression_examples=expression_examples
+    )
 
 @function_tool
 async def get_pain_expression(ctx: RunContextWrapper[SomatosensoryContext], pain_level: float, region: str) -> str:
@@ -434,7 +557,7 @@ async def update_body_temperature(
     ctx: RunContextWrapper[SomatosensoryContext],
     ambient_temperature: float,
     duration: float
-) -> Dict[str, Any]:
+) -> BodyTemperatureUpdateResult:
     """Update body temperature based on ambient temperature"""
     system = get_system_instance()
     
@@ -452,12 +575,12 @@ async def update_body_temperature(
         region_diff = target - region.temperature
         region.temperature += region_diff * region_adaptation
     
-    return {
-        "previous_body_temp": current,
-        "new_body_temp": system.temperature_model["body_temperature"],
-        "ambient_temp": ambient_temperature,
-        "adaptation_applied": adaptation
-    }
+    return BodyTemperatureUpdateResult(
+        previous_body_temp=current,
+        new_body_temp=system.temperature_model["body_temperature"],
+        ambient_temp=ambient_temperature,
+        adaptation_applied=adaptation
+    )
 
 @function_tool
 async def process_stimulus_tool(
@@ -467,31 +590,42 @@ async def process_stimulus_tool(
     intensity: float,
     cause: str,
     duration: float
-) -> Dict[str, Any]:
+) -> StimulusProcessResult:
     """Process a sensory stimulus on a body region"""
     system = get_system_instance()
     
     if body_region not in system.body_regions:
-        return {"error": f"Invalid body region: {body_region}"}
+        return StimulusProcessResult(
+            region=body_region,
+            type=stimulus_type,
+            intensity=intensity,
+            new_value=0.0,
+            error=f"Invalid body region: {body_region}"
+        )
     
     region = system.body_regions[body_region]
     region.last_update = datetime.datetime.now()
-    result = {"region": body_region, "type": stimulus_type, "intensity": intensity}
+    result = StimulusProcessResult(
+        region=body_region,
+        type=stimulus_type,
+        intensity=intensity,
+        new_value=0.0
+    )
     
     # Process stimulus based on type
     if stimulus_type == "pressure":
         region.pressure = min(1.0, region.pressure + (intensity * duration / 10.0))
-        result["new_value"] = region.pressure
+        result.new_value = region.pressure
         if intensity > 0.7 and duration > 5.0:
             pain_from_pressure = (intensity - 0.7) * (duration / 10.0) * 0.5
             region.pain = min(1.0, region.pain + pain_from_pressure)
-            result["pain_caused"] = pain_from_pressure
+            result.pain_caused = pain_from_pressure
     
     elif stimulus_type == "temperature":
         target_temp = intensity
         temp_change = (target_temp - region.temperature) * min(1.0, duration / 30.0)
         region.temperature = max(0.0, min(1.0, region.temperature + temp_change))
-        result["new_value"] = region.temperature
+        result.new_value = region.temperature
         
         if region.temperature < 0.2 or region.temperature > 0.8:
             temp_deviation = 0.0
@@ -501,11 +635,11 @@ async def process_stimulus_tool(
                 temp_deviation = region.temperature - 0.8
             pain_from_temp = temp_deviation * 2.0 * (duration / 10.0)
             region.pain = min(1.0, region.pain + pain_from_temp)
-            result["pain_caused"] = pain_from_temp
+            result.pain_caused = pain_from_temp
     
     elif stimulus_type == "pain":
         region.pain = min(1.0, region.pain + (intensity * duration / 10.0))
-        result["new_value"] = region.pain
+        result.new_value = region.pain
         
         if intensity > system.pain_model["threshold"]:
             pain_memory = PainMemory(
@@ -517,28 +651,28 @@ async def process_stimulus_tool(
                 associated_memory_id=None
             )
             system.pain_model["pain_memories"].append(pain_memory)
-            result["memory_created"] = True
+            result.memory_created = True
     
     elif stimulus_type == "pleasure":
         region.pleasure = min(1.0, region.pleasure + (intensity * duration / 10.0))
-        result["new_value"] = region.pleasure
+        result.new_value = region.pleasure
         
         if intensity > 0.5 and region.pain > 0.0:
             pain_reduction = min(region.pain, (intensity - 0.5) * 0.2)
             region.pain = max(0.0, region.pain - pain_reduction)
-            result["pain_reduced"] = pain_reduction
+            result.pain_reduced = pain_reduction
         
         if region.erogenous_level > 0.3:
             system._update_physical_arousal()
-            result["arousal_updated"] = True
+            result.arousal_updated = True
     
     elif stimulus_type == "tingling":
         region.tingling = min(1.0, region.tingling + (intensity * duration / 10.0))
-        result["new_value"] = region.tingling
+        result.new_value = region.tingling
         
         if region.erogenous_level > 0.3:
             system._update_physical_arousal()
-            result["arousal_updated"] = True
+            result.arousal_updated = True
     
     # Add memory entry
     memory_entry = {
@@ -565,7 +699,7 @@ async def process_stimulus_tool(
         current = associations[cause][body_region][stimulus_type]
         learned = system.memory_linked_sensations["learning_rate"] * intensity
         associations[cause][body_region][stimulus_type] = min(1.0, current + learned)
-        result["association_strength"] = associations[cause][body_region][stimulus_type]
+        result.association_strength = associations[cause][body_region][stimulus_type]
     
     # Update tension based on stimulus
     if stimulus_type == "pain" and intensity > 0.5:
@@ -588,7 +722,7 @@ async def process_stimulus_tool(
                 context={"stimulus_type": stimulus_type, "intensity": intensity, "cause": cause},
                 timestamp=datetime.datetime.now().isoformat()
             )
-            result["reward_value"] = reward_value
+            result.reward_value = reward_value
             asyncio.create_task(system.reward_system.process_reward_signal(reward_signal))
     
     # Process emotional impact if available
@@ -614,15 +748,15 @@ async def process_stimulus_tool(
                 logger.error(f"Error updating emotional core: {e}")
         
         if emotional_impact:
-            result["emotional_impact"] = emotional_impact
+            result.emotional_impact = emotional_impact
     
     return result
 
 @function_tool
-async def process_memory_trigger(ctx: RunContextWrapper[SomatosensoryContext], trigger: str) -> Dict[str, Any]:
+async def process_memory_trigger(ctx: RunContextWrapper[SomatosensoryContext], trigger: str) -> MemoryTriggerResult:
     """Process a memory trigger that may have associated physical responses"""
     system = get_system_instance()
-    results = {"triggered_responses": []}
+    results = []
     
     if trigger in system.memory_linked_sensations["associations"]:
         for region, stimuli in system.memory_linked_sensations["associations"][trigger].items():
@@ -637,14 +771,14 @@ async def process_memory_trigger(ctx: RunContextWrapper[SomatosensoryContext], t
                         cause=f"Memory trigger: {trigger}",
                         duration=1.0
                     )
-                    results["triggered_responses"].append({
+                    results.append({
                         "region": region,
                         "stimulus_type": stim_type,
                         "strength": strength,
-                        "response": response
+                        "response": response.model_dump()
                     })
     
-    return results
+    return MemoryTriggerResult(triggered_responses=results)
 
 @function_tool
 async def link_memory_to_sensation_tool(
@@ -654,16 +788,22 @@ async def link_memory_to_sensation_tool(
     body_region: str,
     intensity: float,
     trigger_text: Optional[str] = None
-) -> Dict[str, Any]:
+) -> LinkMemorySensationResult:
     """Link a memory to a physical sensation"""
     system = get_system_instance()
     
     if body_region not in system.body_regions:
-        return {"error": f"Invalid body region: {body_region}", "success": False}
+        return LinkMemorySensationResult(
+            success=False,
+            error=f"Invalid body region: {body_region}"
+        )
     
     valid_types = ["pressure", "temperature", "pain", "pleasure", "tingling"]
     if sensation_type not in valid_types:
-        return {"error": f"Invalid sensation type: {sensation_type}", "success": False}
+        return LinkMemorySensationResult(
+            success=False,
+            error=f"Invalid sensation type: {sensation_type}"
+        )
     
     memory_text = None
     if system.memory_core:
@@ -698,32 +838,32 @@ async def link_memory_to_sensation_tool(
         )
         system.pain_model["pain_memories"].append(pain_memory)
     
-    return {
-        "success": True,
-        "trigger": trigger,
-        "body_region": body_region,
-        "sensation_type": sensation_type,
-        "intensity": intensity,
-        "memory_id": memory_id
-    }
+    return LinkMemorySensationResult(
+        success=True,
+        trigger=trigger,
+        body_region=body_region,
+        sensation_type=sensation_type,
+        intensity=intensity,
+        memory_id=memory_id
+    )
 
 @function_tool
-async def get_arousal_state(ctx: RunContextWrapper[SomatosensoryContext]) -> Dict[str, Any]:
+async def get_arousal_state(ctx: RunContextWrapper[SomatosensoryContext]) -> ArousalStateResult:
     """Get the current arousal state"""
     system = get_system_instance()
     now = datetime.datetime.now()
     
-    return {
-        "arousal_level": system.arousal_state.arousal_level,
-        "physical_arousal": system.arousal_state.physical_arousal,
-        "cognitive_arousal": system.arousal_state.cognitive_arousal,
-        "in_afterglow": system.is_in_afterglow(),
-        "in_refractory": system.is_in_refractory(),
-        "last_update": system.arousal_state.last_update.isoformat() if system.arousal_state.last_update else None,
-        "afterglow_ends": system.arousal_state.afterglow_ends.isoformat() if system.arousal_state.afterglow_ends else None,
-        "refractory_until": system.arousal_state.refractory_until.isoformat() if system.arousal_state.refractory_until else None,
-        "time_since_update": (now - system.arousal_state.last_update).total_seconds() if system.arousal_state.last_update else None
-    }
+    return ArousalStateResult(
+        arousal_level=system.arousal_state.arousal_level,
+        physical_arousal=system.arousal_state.physical_arousal,
+        cognitive_arousal=system.arousal_state.cognitive_arousal,
+        in_afterglow=system.is_in_afterglow(),
+        in_refractory=system.is_in_refractory(),
+        last_update=system.arousal_state.last_update.isoformat() if system.arousal_state.last_update else None,
+        afterglow_ends=system.arousal_state.afterglow_ends.isoformat() if system.arousal_state.afterglow_ends else None,
+        refractory_until=system.arousal_state.refractory_until.isoformat() if system.arousal_state.refractory_until else None,
+        time_since_update=(now - system.arousal_state.last_update).total_seconds() if system.arousal_state.last_update else None
+    )
 
 @function_tool
 async def update_arousal_state(
@@ -732,7 +872,7 @@ async def update_arousal_state(
     cognitive_arousal: Optional[float] = None,
     reset: bool = False,
     trigger_orgasm: bool = False
-) -> Dict[str, Any]:
+) -> ArousalUpdateResult:
     """Update the arousal state"""
     system = get_system_instance()
     
@@ -748,19 +888,19 @@ async def update_arousal_state(
         system.update_global_arousal()
         system.arousal_state.last_update = datetime.datetime.now()
         
-        return {
-            "operation": "reset",
-            "old_state": old_state_dict,
-            "new_state": await get_arousal_state(ctx)
-        }
+        return ArousalUpdateResult(
+            operation="reset",
+            old_state=old_state_dict,
+            new_state=await get_arousal_state(ctx)
+        )
     
     if trigger_orgasm:
         system.process_orgasm()
-        return {
-            "operation": "orgasm",
-            "old_state": old_state_dict,
-            "new_state": await get_arousal_state(ctx)
-        }
+        return ArousalUpdateResult(
+            operation="orgasm",
+            old_state=old_state_dict,
+            new_state=await get_arousal_state(ctx)
+        )
     
     if physical_arousal is not None:
         system.arousal_state.physical_arousal = max(0.0, min(1.0, physical_arousal))
@@ -769,21 +909,30 @@ async def update_arousal_state(
     
     system.update_global_arousal()
     
-    return {
-        "operation": "update",
-        "old_state": old_state_dict,
-        "new_state": await get_arousal_state(ctx),
-        "components_updated": {
+    return ArousalUpdateResult(
+        operation="update",
+        old_state=old_state_dict,
+        new_state=await get_arousal_state(ctx),
+        components_updated={
             "physical_arousal": physical_arousal is not None,
             "cognitive_arousal": cognitive_arousal is not None
         }
-    }
+    )
 
 @function_tool
-async def get_arousal_expression_data(ctx: RunContextWrapper[SomatosensoryContext], partner_id: Optional[str] = None) -> Dict[str, Any]:
+async def get_arousal_expression_data(ctx: RunContextWrapper[SomatosensoryContext], partner_id: Optional[str] = None) -> ArousalExpressionDataResult:
     """Get expression data related to arousal state"""
     system = get_system_instance()
-    return system.get_arousal_expression_modifier(partner_id)
+    data = system.get_arousal_expression_modifier(partner_id)
+    return ArousalExpressionDataResult(
+        arousal_level=data["arousal_level"],
+        afterglow=data["afterglow"],
+        affinity_modifier=data["affinity_modifier"],
+        emotional_connection=data["emotional_connection"],
+        expression_hint=data["expression_hint"],
+        tone_hint=data["tone_hint"],
+        urge_hint=data["urge_hint"]
+    )
 
 # =============== System Hooks ===============
 
@@ -1267,7 +1416,8 @@ class DigitalSomatosensorySystem:
     async def _get_region_state_internal(self, region_name: str) -> Dict[str, Any]:
         """Internal method to get region state (for backward compatibility)"""
         context = SomatosensoryContext(system=self)
-        return await get_region_state(RunContextWrapper(context=context), region_name)
+        result = await get_region_state(RunContextWrapper(context=context), region_name)
+        return result.model_dump()
     
     def _decay_sensations(self, duration: float = 60.0):
         """Decay all sensations over time"""
@@ -1697,7 +1847,7 @@ class DigitalSomatosensorySystem:
                     system=self,
                     operation="process_stimulus_fallback"
                 )
-                return await process_stimulus_tool(
+                result = await process_stimulus_tool(
                     RunContextWrapper(context=fallback_context),
                     stimulus_type=stimulus_type,
                     body_region=body_region,
@@ -1705,6 +1855,7 @@ class DigitalSomatosensorySystem:
                     cause=cause,
                     duration=duration
                 )
+                return result.model_dump()
     
     async def get_sensory_influence(self, message_text: str) -> Dict[str, Any]:
         """Get sensory influences to potentially include in a response"""
@@ -1857,7 +2008,8 @@ class DigitalSomatosensorySystem:
                 logger.error(f"Error in temperature effects analysis: {e}")
             
             context = SomatosensoryContext(system=self)
-            return await get_current_temperature_effects(RunContextWrapper(context=context))
+            result = await get_current_temperature_effects(RunContextWrapper(context=context))
+            return result.model_dump()
     
     async def update(self, ambient_temperature: Optional[float] = None) -> Dict[str, Any]:
         """Update the somatosensory system state"""
@@ -1922,7 +2074,8 @@ class DigitalSomatosensorySystem:
             except Exception as e:
                 logger.error(f"Error in trigger processing: {e}")
                 context = SomatosensoryContext(system=self)
-                return await process_memory_trigger(RunContextWrapper(context=context), trigger)
+                result = await process_memory_trigger(RunContextWrapper(context=context), trigger)
+                return result.model_dump()
     
     async def link_memory_to_sensation(self,
                                      memory_id: str,
@@ -1944,7 +2097,7 @@ class DigitalSomatosensorySystem:
             except Exception as e:
                 logger.error(f"Error in memory linking: {e}")
                 context = SomatosensoryContext(system=self)
-                return await link_memory_to_sensation_tool(
+                result = await link_memory_to_sensation_tool(
                     RunContextWrapper(context=context),
                     memory_id=memory_id,
                     sensation_type=sensation_type,
@@ -1952,6 +2105,7 @@ class DigitalSomatosensorySystem:
                     intensity=intensity,
                     trigger_text=trigger_text
                 )
+                return result.model_dump()
     
     async def get_somatic_memory(self, memory_id: str) -> Dict[str, Any]:
         """Get somatic memory associated with a memory ID"""
