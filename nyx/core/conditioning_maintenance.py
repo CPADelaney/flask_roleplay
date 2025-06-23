@@ -13,30 +13,30 @@ logger = logging.getLogger(__name__)
 
 # Maintenance-specific tools
 
-class RecordHistoryParams(BaseModel, extra="forbid"):
+class RecordHistoryParams(BaseModel):
     """JSON string with a full maintenance-record object"""
     maintenance_record_json: str
 
-class TraitStat(BaseModel, extra="forbid"):
+class TraitStat(BaseModel):
     name: str
     count: int
     average_strength: float
 
-class TraitDistributionResult(BaseModel, extra="forbid"):
+class TraitDistributionResult(BaseModel):
     traits: List[TraitStat]
     total_traits: int
 
-class ExtinctionCandidate(BaseModel, extra="forbid"):
+class ExtinctionCandidate(BaseModel):
     association_key: str
     association_type: Literal["classical", "operant"]
     strength: float
     reason: str
 
-class ExtinctionCandidatesResult(BaseModel, extra="forbid"):
+class ExtinctionCandidatesResult(BaseModel):
     candidates: List[ExtinctionCandidate]
     total: int
 
-class ApplyExtinctionResult(BaseModel, extra="forbid"):
+class ApplyExtinctionResult(BaseModel):
     success: bool
     association_key: str
     association_type: Literal["classical", "operant"]
@@ -45,14 +45,14 @@ class ApplyExtinctionResult(BaseModel, extra="forbid"):
     error: Optional[str] = None
     message: Optional[str] = None
 
-class ReinforceTraitResult(BaseModel, extra="forbid"):
+class ReinforceTraitResult(BaseModel):
     success: bool
     trait: str
     adjustment: float
     new_value: Optional[float] = None
     error: Optional[str] = None
 
-class MaintenanceStatusResult(BaseModel, extra="forbid"):
+class MaintenanceStatusResult(BaseModel):
     last_maintenance_time: Optional[str] = None
     hours_since_last_maintenance: Optional[float] = None
     hours_until_next: Optional[float] = None
@@ -60,7 +60,7 @@ class MaintenanceStatusResult(BaseModel, extra="forbid"):
     consolidation_due: bool
     maintenance_interval_hours: float
 
-class RecordHistoryResult(BaseModel, extra="forbid"):
+class RecordHistoryResult(BaseModel):
     success: bool
     history_count: int
     error: Optional[str] = None
