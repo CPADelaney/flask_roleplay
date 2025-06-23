@@ -253,15 +253,22 @@ class MoodManager:
             # 3. Influence from Needs
             if self.needs_system:
                 try:
-                    needs_state = await self.needs_system.get_needs_state_async()
-                    if needs_state:
+                    needs_response = await self.needs_system.get_needs_state_async()
+                    if needs_response and hasattr(needs_response, 'needs'):
+                        needs_state = needs_response.needs  # Extract the dict from the response
+                        
                         # Calculate weighted deficit
                         total_deficit = 0
                         total_importance = 0
                         
                         for need_name, need_data in needs_state.items():
-                            deficit = need_data.get('deficit', 0)
-                            importance = need_data.get('importance', 0.5)
+                            # Handle both dict and NeedStateInfo objects
+                            if hasattr(need_data, 'deficit'):
+                                deficit = need_data.deficit
+                                importance = need_data.importance
+                            else:
+                                deficit = need_data.get('deficit', 0)
+                                importance = need_data.get('importance', 0.5)
                             
                             total_deficit += deficit * importance
                             total_importance += importance
@@ -277,19 +284,25 @@ class MoodManager:
                         weight = self.influence_weights["needs"]
             
                         # Add valence/arousal/control from pleasure deprivation
-                        pleasure_state = needs_state.get("pleasure_indulgence", {})
-                        pleasure_deficit = pleasure_state.get("deficit", 0.0)
-                        pleasure_importance = pleasure_state.get("importance", 0.0)
-                        
-                        valence_drop = -pleasure_deficit * pleasure_importance * 0.6
-                        arousal_boost = pleasure_deficit * 0.4
-                        control_bias = pleasure_deficit * 0.2
-                        
-                        target_valence += valence_drop * weight
-                        target_arousal += arousal_boost * weight
-                        target_control += control_bias * weight
-                        
-                        influences["pleasure_deprivation"] = pleasure_deficit * weight
+                        if "pleasure_indulgence" in needs_state:
+                            pleasure_data = needs_state["pleasure_indulgence"]
+                            # Handle both dict and NeedStateInfo objects
+                            if hasattr(pleasure_data, 'deficit'):
+                                pleasure_deficit = pleasure_data.deficit
+                                pleasure_importance = pleasure_data.importance
+                            else:
+                                pleasure_deficit = pleasure_data.get("deficit", 0.0)
+                                pleasure_importance = pleasure_data.get("importance", 0.0)
+                            
+                            valence_drop = -pleasure_deficit * pleasure_importance * 0.6
+                            arousal_boost = pleasure_deficit * 0.4
+                            control_bias = pleasure_deficit * 0.2
+                            
+                            target_valence += valence_drop * weight
+                            target_arousal += arousal_boost * weight
+                            target_control += control_bias * weight
+                            
+                            influences["pleasure_deprivation"] = pleasure_deficit * weight
             
                         # Apply needs weight (already defined above)
                         target_valence += needs_influence_valence * weight
