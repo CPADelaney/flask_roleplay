@@ -6,7 +6,7 @@ import re
 from typing import Dict, List, Any, Optional, Tuple, Union
 import random
 from datetime import datetime
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field
 
 from agents import Agent, Runner, function_tool, trace, ModelSettings, RunContextWrapper
 
@@ -19,95 +19,97 @@ logger = logging.getLogger(__name__)
 # Pydantic models for structured data
 class PatternDetection(BaseModel):
     """Detected pattern information"""
-    model_config = ConfigDict(extra='forbid')
-    
     pattern_name: str = Field(description="Name of the detected pattern")
     confidence: float = Field(default=0.8, ge=0.0, le=1.0, description="Confidence level for the detection (0.0-1.0)")
     matched_text: str = Field(description="Text that matched the pattern")
 
 class ConditionedResponse(BaseModel):
     """Conditioned response information"""
-    model_config = ConfigDict(extra='forbid')
-    
     response_type: str = Field(description="Type of conditioned response")
     strength: float = Field(ge=0.0, le=1.0, description="Strength of the response (0.0-1.0)")
     description: str = Field(description="Description of the triggered response")
 
+class AssociationData(BaseModel):
+    """Association data"""
+    id: str
+    type: str
+    strength: float
+    context: str
+
 class BehaviorEvaluation(BaseModel):
     """Behavior evaluation result"""
-    model_config = ConfigDict(extra='forbid')
-    
     behavior: str = Field(description="Behavior being evaluated")
     recommendation: str = Field(pattern="^(approach|avoid)$", description="Approach or avoid recommendation")
     confidence: float = Field(ge=0.0, le=1.0, description="Confidence in the recommendation (0.0-1.0)")
     reasoning: str = Field(description="Reasoning for the evaluation")
-    relevant_associations: Optional[List[Dict[str, Any]]] = Field(default=None, description="Relevant associations considered")
+    relevant_associations: Optional[List[AssociationData]] = Field(default=None, description="Relevant associations considered")
 
 class OperantConditioningResult(BaseModel):
     """Result of operant conditioning"""
-    model_config = ConfigDict(extra='forbid')
-    
     behavior: str = Field(description="Behavior being conditioned")
     consequence_type: str = Field(description="Type of operant conditioning")
     intensity: float = Field(ge=0.0, le=1.0, description="Intensity of the conditioning (0.0-1.0)")
     effect: str = Field(description="Expected effect on future behavior")
     success: bool = Field(default=True, description="Whether conditioning was successful")
 
+class ModificationDetail(BaseModel):
+    """Detail of a modification made"""
+    type: str
+    description: str
+    source_mode: Optional[str] = None
+
 class BlendedResponseModification(BaseModel):
     """Output schema for blended response modification"""
-    model_config = ConfigDict(extra='forbid')
-    
     modified_text: str = Field(description="Modified response text")
     mode_influences: Dict[str, float] = Field(description="Influence of each mode on the modification")
-    modifications_made: List[Dict[str, Any]] = Field(description="List of modifications made to the response")
+    modifications_made: List[ModificationDetail] = Field(description="List of modifications made to the response")
     coherence: float = Field(ge=0.0, le=1.0, description="Coherence of the modified response (0.0-1.0)")
     style_notes: Optional[str] = Field(default=None, description="Notes about the style of the modified response")
 
 # Input/Output models for function tools
 class DetectPatternsInput(BaseModel):
     """Input for pattern detection"""
-    model_config = ConfigDict(extra='forbid')
-    
     text: str = Field(default="", description="Text to analyze for patterns")
 
 class DetectPatternsResult(BaseModel):
     """Result of pattern detection"""
-    model_config = ConfigDict(extra='forbid')
-    
     patterns: List[PatternDetection] = Field(default_factory=list, description="Detected patterns")
     pattern_count: int = Field(default=0, description="Number of patterns detected")
 
+class UserHistoryData(BaseModel):
+    """User history data"""
+    interaction_count: int = 0
+    last_interaction: Optional[str] = None
+    common_patterns: List[str] = []
+
 class EvaluateBehaviorInput(BaseModel):
     """Input for behavior evaluation"""
-    model_config = ConfigDict(extra='forbid')
-    
     behavior: str = Field(default="", description="Behavior to evaluate")
     detected_patterns: List[PatternDetection] = Field(default_factory=list, description="Detected patterns")
-    user_history: Optional[Dict[str, Any]] = Field(default=None, description="User interaction history")
+    user_history: Optional[UserHistoryData] = Field(default=None, description="User interaction history")
 
 class EvaluateBehaviorResult(BaseModel):
     """Result of behavior evaluation"""
-    model_config = ConfigDict(extra='forbid')
-    
     behavior: str = Field(description="Evaluated behavior")
     recommendation: str = Field(description="Recommendation (approach/avoid)")
     confidence: float = Field(ge=0.0, le=1.0, description="Confidence in recommendation")
     reasoning: str = Field(description="Reasoning for the recommendation")
-    associations: Optional[List[Dict[str, Any]]] = Field(default=None, description="Relevant associations")
+    associations: Optional[List[AssociationData]] = Field(default=None, description="Relevant associations")
+
+class ContextInfo(BaseModel):
+    """Context information for conditioning"""
+    user_id: str
+    context_keys: List[str] = []
 
 class ProcessConditioningInput(BaseModel):
     """Input for operant conditioning"""
-    model_config = ConfigDict(extra='forbid')
-    
     behavior: str = Field(default="unspecified", description="Behavior being conditioned")
     consequence_type: str = Field(default="neutral", description="Type of conditioning")
     intensity: float = Field(default=0.5, ge=0.0, le=1.0, description="Intensity of conditioning")
-    context_info: Optional[Dict[str, Any]] = Field(default=None, description="Additional context")
+    context_info: Optional[ContextInfo] = Field(default=None, description="Additional context")
 
 class ProcessConditioningResult(BaseModel):
     """Result of operant conditioning"""
-    model_config = ConfigDict(extra='forbid')
-    
     behavior: str = Field(description="Behavior that was conditioned")
     consequence_type: str = Field(description="Type of conditioning applied")
     intensity: float = Field(ge=0.0, le=1.0, description="Intensity of conditioning")
@@ -116,55 +118,57 @@ class ProcessConditioningResult(BaseModel):
 
 class ModePreferencesInput(BaseModel):
     """Input for getting mode preferences"""
-    model_config = ConfigDict(extra='forbid')
-    
     mode: str = Field(default="", description="Mode to get preferences for")
+
+class LexicalPreferences(BaseModel):
+    """Lexical preferences for a mode"""
+    high: List[str] = []
+    low: List[str] = []
 
 class ModePreferencesResult(BaseModel):
     """Result of mode preferences query"""
-    model_config = ConfigDict(extra='forbid')
-    
     mode: str = Field(description="Mode name")
     add_elements: List[str] = Field(default_factory=list, description="Elements to add")
     remove_elements: List[str] = Field(default_factory=list, description="Elements to remove")
     tone_elements: List[str] = Field(default_factory=list, description="Tone elements")
     phrasing_examples: List[str] = Field(default_factory=list, description="Example phrases")
     typical_pronouns: List[str] = Field(default_factory=list, description="Typical pronouns")
-    lexical_preferences: Optional[Dict[str, List[str]]] = Field(default=None, description="Lexical preferences")
+    lexical_preferences: Optional[LexicalPreferences] = Field(default=None, description="Lexical preferences")
 
 class StyleElementsInput(BaseModel):
     """Input for calculating style elements"""
-    model_config = ConfigDict(extra='forbid')
-    
     mode_distribution: Dict[str, float] = Field(default_factory=dict, description="Mode distribution")
+
+class ElementSources(BaseModel):
+    """Sources for style elements"""
+    element: str
+    sources: List[str]
 
 class StyleElementsResult(BaseModel):
     """Result of style elements calculation"""
-    model_config = ConfigDict(extra='forbid')
-    
     blended_style: Dict[str, List[str]] = Field(description="Blended style elements")
     influences: Dict[str, float] = Field(description="Mode influences")
     element_sources: Dict[str, Dict[str, List[str]]] = Field(description="Sources for each element")
 
 class CoherenceAnalysisInput(BaseModel):
     """Input for coherence analysis"""
-    model_config = ConfigDict(extra='forbid')
-    
     original_response: str = Field(default="", description="Original response text")
     modified_response: str = Field(default="", description="Modified response text")
 
+class CoherenceMetrics(BaseModel):
+    """Coherence metrics"""
+    length_change: float
+    word_retention: float
+    sentence_count_ratio: float
+
 class CoherenceAnalysisResult(BaseModel):
     """Result of coherence analysis"""
-    model_config = ConfigDict(extra='forbid')
-    
     coherence_score: float = Field(ge=0.0, le=1.0, description="Overall coherence score")
-    metrics: Dict[str, float] = Field(description="Detailed coherence metrics")
+    metrics: CoherenceMetrics = Field(description="Detailed coherence metrics")
     is_coherent: bool = Field(description="Whether response is coherent")
 
 class ProcessInputResult(BaseModel):
     """Result of input processing"""
-    model_config = ConfigDict(extra='forbid')
-    
     input_text: str = Field(description="Original input text")
     user_id: str = Field(description="User ID")
     detected_patterns: List[PatternDetection] = Field(description="Detected patterns")
@@ -384,7 +388,7 @@ class BlendedInputProcessor:
             model="gpt-4o-mini",
             model_settings=ModelSettings(temperature=0.2),
             tools=[
-                function_tool(self._detect_patterns, strict_mode=False)
+                self._detect_patterns
             ],
             output_type=List[PatternDetection]
         )
@@ -408,8 +412,8 @@ class BlendedInputProcessor:
             model="gpt-4o-mini",
             model_settings=ModelSettings(temperature=0.3),
             tools=[
-                function_tool(self._evaluate_behavior, strict_mode=False),
-                function_tool(self._process_operant_conditioning, strict_mode=False)
+                self._evaluate_behavior,
+                self._process_operant_conditioning
             ],
             output_type=List[BehaviorEvaluation]
         )
@@ -453,15 +457,15 @@ class BlendedInputProcessor:
             model="gpt-4o-mini",
             model_settings=ModelSettings(temperature=0.4),
             tools=[
-                function_tool(self._get_mode_preferences, strict_mode=False),
-                function_tool(self._calculate_style_elements, strict_mode=False),
-                function_tool(self._analyze_response_coherence, strict_mode=False)
+                self._get_mode_preferences,
+                self._calculate_style_elements,
+                self._analyze_response_coherence
             ],
             output_type=BlendedResponseModification
         )
 
     @staticmethod
-    @function_tool(strict_mode=False)
+    @function_tool
     async def _detect_patterns(ctx: RunContextWrapper[InputProcessingAgentContext], input_data: DetectPatternsInput) -> DetectPatternsResult:
         """
         Detect patterns in input text using regular expressions.
@@ -502,7 +506,7 @@ class BlendedInputProcessor:
         )
 
     @staticmethod
-    @function_tool(strict_mode=False)
+    @function_tool
     async def _evaluate_behavior(
         ctx: RunContextWrapper[InputProcessingAgentContext], 
         input_data: EvaluateBehaviorInput
@@ -520,7 +524,7 @@ class BlendedInputProcessor:
         context = ctx.context
         behavior = input_data.behavior
         detected_patterns = input_data.detected_patterns
-        user_history = input_data.user_history or {}
+        user_history = input_data.user_history
         
         # Handle empty behavior
         if not behavior:
@@ -551,16 +555,28 @@ class BlendedInputProcessor:
                 behavior=behavior,
                 context={
                     "detected_patterns": [p.pattern_name for p in detected_patterns],
-                    "user_history": user_history,
+                    "user_history": user_history.model_dump() if user_history else {},
                     "adjusted_sensitivities": adjusted_sensitivities
                 }
             )
+            
+            # Convert associations to AssociationData objects
+            associations = []
+            if result.get("relevant_associations"):
+                for assoc in result["relevant_associations"]:
+                    associations.append(AssociationData(
+                        id=assoc.get("id", ""),
+                        type=assoc.get("type", "unknown"),
+                        strength=assoc.get("strength", 0.5),
+                        context=assoc.get("context", "")
+                    ))
+            
             return EvaluateBehaviorResult(
                 behavior=result.get("behavior", behavior),
                 recommendation=result.get("recommendation", "avoid"),
                 confidence=result.get("confidence", 0.5),
                 reasoning=result.get("reasoning", "Based on conditioning system evaluation"),
-                associations=result.get("relevant_associations")
+                associations=associations if associations else None
             )
         
         # Fallback logic if no conditioning system is available
@@ -615,7 +631,7 @@ class BlendedInputProcessor:
         )
 
     @staticmethod
-    @function_tool(strict_mode=False)
+    @function_tool
     async def _process_operant_conditioning(
         ctx: RunContextWrapper[InputProcessingAgentContext],
         input_data: ProcessConditioningInput
@@ -634,15 +650,16 @@ class BlendedInputProcessor:
         behavior = input_data.behavior
         consequence_type = input_data.consequence_type
         intensity = input_data.intensity
-        context_info = input_data.context_info or {}
+        context_info = input_data.context_info
         
         if processor_ctx.conditioning_system and hasattr(processor_ctx.conditioning_system, 'process_operant_conditioning'):
             # Use the actual conditioning system if available
+            context_dict = context_info.model_dump() if context_info else {}
             result = await processor_ctx.conditioning_system.process_operant_conditioning(
                 behavior=behavior,
                 consequence_type=consequence_type,
                 intensity=intensity,
-                context=context_info
+                context=context_dict
             )
             return ProcessConditioningResult(
                 behavior=result.get("behavior", behavior),
@@ -664,7 +681,7 @@ class BlendedInputProcessor:
         )
 
     @staticmethod
-    @function_tool(strict_mode=False)
+    @function_tool
     async def _get_mode_preferences(
         ctx: RunContextWrapper[InputProcessingAgentContext],
         input_data: ModePreferencesInput
@@ -716,6 +733,14 @@ class BlendedInputProcessor:
                     topics_to_avoid = conv_style.topics_to_avoid
                     remove_elements = [t.strip() for t in topics_to_avoid.split(",")] if topics_to_avoid else []
                     
+                    # Convert lexical preferences if present
+                    lexical_prefs = None
+                    if preferences.get("lexical_preferences"):
+                        lexical_prefs = LexicalPreferences(
+                            high=preferences["lexical_preferences"].get("high", []),
+                            low=preferences["lexical_preferences"].get("low", [])
+                        )
+                    
                     # Return constructed preferences
                     return ModePreferencesResult(
                         mode=mode,
@@ -724,10 +749,18 @@ class BlendedInputProcessor:
                         tone_elements=tone_elements,
                         phrasing_examples=vocal_patterns.key_phrases,
                         typical_pronouns=vocal_patterns.pronouns,
-                        lexical_preferences=preferences.get("lexical_preferences")
+                        lexical_preferences=lexical_prefs
                     )
             except Exception as e:
                 logger.warning(f"Error getting mode preferences from mode manager: {e}")
+        
+        # Convert lexical preferences to model
+        lexical_prefs = None
+        if preferences.get("lexical_preferences"):
+            lexical_prefs = LexicalPreferences(
+                high=preferences["lexical_preferences"].get("high", []),
+                low=preferences["lexical_preferences"].get("low", [])
+            )
         
         # Return preferences from stored data
         return ModePreferencesResult(
@@ -737,11 +770,11 @@ class BlendedInputProcessor:
             tone_elements=preferences.get("tone_elements", []),
             phrasing_examples=preferences.get("phrasing_examples", []),
             typical_pronouns=preferences.get("typical_pronouns", []),
-            lexical_preferences=preferences.get("lexical_preferences")
+            lexical_preferences=lexical_prefs
         )
 
     @staticmethod
-    @function_tool(strict_mode=False)
+    @function_tool
     async def _calculate_style_elements(
         ctx: RunContextWrapper[InputProcessingAgentContext],
         input_data: StyleElementsInput
@@ -851,7 +884,7 @@ class BlendedInputProcessor:
         )
 
     @staticmethod
-    @function_tool(strict_mode=False)
+    @function_tool
     async def _analyze_response_coherence(
         ctx: RunContextWrapper[InputProcessingAgentContext],
         input_data: CoherenceAnalysisInput
@@ -873,11 +906,11 @@ class BlendedInputProcessor:
         if not original_response and not modified_response:
             return CoherenceAnalysisResult(
                 coherence_score=1.0,
-                metrics={
-                    "length_change": 1.0,
-                    "word_retention": 1.0,
-                    "sentence_count_ratio": 1.0
-                },
+                metrics=CoherenceMetrics(
+                    length_change=1.0,
+                    word_retention=1.0,
+                    sentence_count_ratio=1.0
+                ),
                 is_coherent=True
             )
         
@@ -928,11 +961,11 @@ class BlendedInputProcessor:
         
         return CoherenceAnalysisResult(
             coherence_score=coherence_score,
-            metrics={
-                "length_change": length_change,
-                "word_retention": word_retention,
-                "sentence_count_ratio": sentence_count_ratio
-            },
+            metrics=CoherenceMetrics(
+                length_change=length_change,
+                word_retention=word_retention,
+                sentence_count_ratio=sentence_count_ratio
+            ),
             is_coherent=coherence_score >= 0.5
         )
     
@@ -1042,10 +1075,10 @@ class BlendedInputProcessor:
                     behavior="submission_language_response",
                     consequence_type="positive_reinforcement",
                     intensity=0.8,
-                    context_info={
-                        "user_id": user_id,
-                        "context_keys": ["conversation"]
-                    }
+                    context_info=ContextInfo(
+                        user_id=user_id,
+                        context_keys=["conversation"]
+                    )
                 )
                 reinforcement = await self._process_operant_conditioning(
                     RunContextWrapper(self.context),
@@ -1059,10 +1092,10 @@ class BlendedInputProcessor:
                     behavior="tolerate_defiance",
                     consequence_type="positive_punishment",
                     intensity=0.7,
-                    context_info={
-                        "user_id": user_id,
-                        "context_keys": ["conversation"]
-                    }
+                    context_info=ContextInfo(
+                        user_id=user_id,
+                        context_keys=["conversation"]
+                    )
                 )
                 punishment = await self._process_operant_conditioning(
                     RunContextWrapper(self.context),
