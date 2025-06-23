@@ -133,8 +133,7 @@ class UnifiedProcessor:
                 self._create_emotional_agent(),
                 self._create_memory_agent()
             ],
-            output_type=ProcessingResult,
-            output_schema_strict=False  # Disable strict mode for this agent due to complex output
+            output_type=ProcessingResult
         )
         
         self._initialized = True
