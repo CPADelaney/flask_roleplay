@@ -33,6 +33,44 @@ from agents.items import TResponseInputItem  # <--- ADD THIS LINE
 
 logger = logging.getLogger(__name__)
 
+# =============== Helper Functions ===============
+
+def _extract_temporal_context_data(temporal_context) -> Optional['TemporalContextData']:
+    """Safely extract temporal context data from either dict or TemporalContext object"""
+    if not temporal_context:
+        return None
+    
+    # If it's already a TemporalContextData object, return it
+    if isinstance(temporal_context, TemporalContextData):
+        return temporal_context
+    
+    # If it's a dictionary, use get() method
+    if isinstance(temporal_context, dict):
+        return TemporalContextData(
+            time_of_day=temporal_context.get("time_of_day"),
+            day_type=temporal_context.get("day_type"),
+            season=temporal_context.get("season"),
+            day_of_week=temporal_context.get("day_of_week"),
+            month=temporal_context.get("month"),
+            year=temporal_context.get("year"),
+            timestamp=temporal_context.get("timestamp")
+        )
+    
+    # If it's a TemporalContext object (or any object with attributes), access directly
+    try:
+        return TemporalContextData(
+            time_of_day=getattr(temporal_context, "time_of_day", None),
+            day_type=getattr(temporal_context, "day_type", None),
+            season=getattr(temporal_context, "season", None),
+            day_of_week=getattr(temporal_context, "day_of_week", None),
+            month=getattr(temporal_context, "month", None),
+            year=getattr(temporal_context, "year", None),
+            timestamp=getattr(temporal_context, "timestamp", None)
+        )
+    except Exception as e:
+        logger.error(f"Error extracting temporal context data: {str(e)}")
+        return None
+
 # =============== Pydantic Models ===============
 
 # New explicit models for dict fields
@@ -88,6 +126,10 @@ class TemporalContextData(BaseModel):
     time_of_day: Optional[str] = None
     day_type: Optional[str] = None
     season: Optional[str] = None
+    day_of_week: Optional[str] = None
+    month: Optional[str] = None
+    year: Optional[int] = None
+    timestamp: Optional[str] = None
 
 class ContextData(BaseModel):
     """Explicit model for context data"""
@@ -462,11 +504,21 @@ async def generate_observation_from_source(
     
     # Source-specific observation generation logic
     if source == "environment":
-        # Extract temporal context
+        # Extract temporal context safely
         temporal = context.temporal_context
-        time_of_day = temporal.time_of_day if temporal else ""
-        day_type = temporal.day_type if temporal else ""
-        season = temporal.season if temporal else ""
+        if temporal:
+            if isinstance(temporal, dict):
+                time_of_day = temporal.get("time_of_day", "")
+                day_type = temporal.get("day_type", "")
+                season = temporal.get("season", "")
+            else:
+                time_of_day = getattr(temporal, "time_of_day", "")
+                day_type = getattr(temporal, "day_type", "")
+                season = getattr(temporal, "season", "")
+        else:
+            time_of_day = ""
+            day_type = ""
+            season = ""
         
         # Generate based on temporal context
         observations = []
@@ -549,10 +601,13 @@ async def generate_observation_from_source(
     elif relevance < 0.4:
         lifetime = 1800  # 30 minutes for low relevance
     
-    # Build context elements
+    # Build context elements safely
     context_elements = ContextElements()
     if temporal:
-        context_elements.temporal_context = temporal.time_of_day or "unknown"
+        if isinstance(temporal, dict):
+            context_elements.temporal_context = temporal.get("time_of_day", "unknown")
+        else:
+            context_elements.temporal_context = getattr(temporal, "time_of_day", "unknown")
     if emotion_state and emotion_state.primary_emotion:
         context_elements.emotional_state = emotion_state.primary_emotion.name or "unknown"
     
@@ -1074,12 +1129,9 @@ class PassiveObservationSystem:
                 
                 # Convert context to ContextData
                 context_data = ContextData()
-                if context.temporal_context:
-                    context_data.temporal_context = TemporalContextData(
-                        time_of_day=context.temporal_context.get("time_of_day"),
-                        day_type=context.temporal_context.get("day_type"),
-                        season=context.temporal_context.get("season")
-                    )
+                # Use helper function for temporal context
+                context_data.temporal_context = _extract_temporal_context_data(context.temporal_context)
+                
                 if context.emotional_state:
                     # Extract primary emotion data
                     primary_emotion_dict = context.emotional_state.get("primary_emotion", {})
@@ -1170,12 +1222,9 @@ class PassiveObservationSystem:
                 
                 # Convert context to ContextData
                 context_data = ContextData()
-                if context.temporal_context:
-                    context_data.temporal_context = TemporalContextData(
-                        time_of_day=context.temporal_context.get("time_of_day"),
-                        day_type=context.temporal_context.get("day_type"),
-                        season=context.temporal_context.get("season")
-                    )
+                # Use helper function for temporal context
+                context_data.temporal_context = _extract_temporal_context_data(context.temporal_context)
+                
                 if context.emotional_state:
                     # Extract primary emotion data
                     primary_emotion_dict = context.emotional_state.get("primary_emotion", {})
@@ -1257,12 +1306,9 @@ class PassiveObservationSystem:
                 
                 # Convert context to ContextData
                 context_data = ContextData()
-                if context.temporal_context:
-                    context_data.temporal_context = TemporalContextData(
-                        time_of_day=context.temporal_context.get("time_of_day"),
-                        day_type=context.temporal_context.get("day_type"),
-                        season=context.temporal_context.get("season")
-                    )
+                # Use helper function for temporal context
+                context_data.temporal_context = _extract_temporal_context_data(context.temporal_context)
+                
                 if context.emotional_state:
                     # Extract primary emotion data
                     primary_emotion_dict = context.emotional_state.get("primary_emotion", {})
@@ -1378,12 +1424,9 @@ class PassiveObservationSystem:
                 
                 # Convert context to ContextData
                 context_data = ContextData()
-                if context.temporal_context:
-                    context_data.temporal_context = TemporalContextData(
-                        time_of_day=context.temporal_context.get("time_of_day"),
-                        day_type=context.temporal_context.get("day_type"),
-                        season=context.temporal_context.get("season")
-                    )
+                # Use helper function for temporal context
+                context_data.temporal_context = _extract_temporal_context_data(context.temporal_context)
+                
                 if context.emotional_state:
                     # Extract primary emotion data
                     primary_emotion_dict = context.emotional_state.get("primary_emotion", {})
@@ -1634,12 +1677,9 @@ class PassiveObservationSystem:
             
             # Convert context to ContextData
             context_data = ContextData()
-            if context.temporal_context:
-                context_data.temporal_context = TemporalContextData(
-                    time_of_day=context.temporal_context.get("time_of_day"),
-                    day_type=context.temporal_context.get("day_type"),
-                    season=context.temporal_context.get("season")
-                )
+            # Use helper function for temporal context
+            context_data.temporal_context = _extract_temporal_context_data(context.temporal_context)
+            
             if context.emotional_state:
                 # Extract primary emotion data
                 primary_emotion_dict = context.emotional_state.get("primary_emotion", {})
