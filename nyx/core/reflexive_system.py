@@ -6,7 +6,7 @@ import time
 import random
 import math
 import datetime
-from typing import Dict, List, Any, Optional, Tuple, Union, Callable
+from typing import Dict, List, Any, Optional, Tuple, Callable
 
 from agents import Agent, Runner, trace, function_tool, custom_span, RunContextWrapper, ModelSettings, RunConfig, handoff
 from agents.exceptions import MaxTurnsExceeded, ModelBehaviorError
@@ -29,8 +29,29 @@ class StringPattern(BaseModel):
     variants: Optional[List[str]] = Field(None, description="String variants")
     weight: Optional[float] = Field(None, description="Feature weight")
 
+class KeyValuePair(BaseModel):
+    """A key-value pair for dynamic data"""
+    key: str = Field(description="Key name")
+    value: str = Field(description="String value")
+
+class KeyNumberPair(BaseModel):
+    """A key-number pair for dynamic numeric data"""
+    key: str = Field(description="Key name")
+    value: float = Field(description="Numeric value")
+
+class KeyBooleanPair(BaseModel):
+    """A key-boolean pair for dynamic boolean data"""
+    key: str = Field(description="Key name")
+    value: bool = Field(description="Boolean value")
+
+class KeyListPair(BaseModel):
+    """A key-list pair for dynamic list data"""
+    key: str = Field(description="Key name")
+    value: List[str] = Field(description="List of string values")
+
 class PatternValue(BaseModel):
     """Generic pattern value that can be various types"""
+    key: str = Field(description="Pattern key")
     type: str = Field(description="Type of value: string, number, range, list, boolean")
     string_value: Optional[str] = Field(None, description="String value")
     number_value: Optional[float] = Field(None, description="Numeric value")
@@ -42,7 +63,7 @@ class PatternValue(BaseModel):
 
 class PatternDict(BaseModel):
     """Dictionary of pattern values"""
-    values: Dict[str, PatternValue] = Field(default_factory=dict, description="Pattern values by key")
+    values: List[PatternValue] = Field(default_factory=list, description="Pattern values")
 
 class TimingInfo(BaseModel):
     """Timing information for gaming stimuli"""
@@ -69,9 +90,9 @@ class StimulusDict(BaseModel):
     opponent: Optional[OpponentState] = Field(None, description="Opponent state")
     distractors: Optional[List[DistractorInfo]] = Field(None, description="Distractor elements")
     # Generic fields for other stimulus data
-    string_fields: Dict[str, str] = Field(default_factory=dict, description="Additional string fields")
-    number_fields: Dict[str, float] = Field(default_factory=dict, description="Additional numeric fields")
-    list_fields: Dict[str, List[str]] = Field(default_factory=dict, description="Additional list fields")
+    string_fields: Optional[List[KeyValuePair]] = Field(None, description="Additional string fields")
+    number_fields: Optional[List[KeyNumberPair]] = Field(None, description="Additional numeric fields")
+    list_fields: Optional[List[KeyListPair]] = Field(None, description="Additional list fields")
 
 class ContextDict(BaseModel):
     """Context dictionary"""
@@ -82,15 +103,22 @@ class ContextDict(BaseModel):
     difficulty: Optional[float] = Field(None, description="Difficulty level")
     domain: Optional[str] = Field(None, description="Domain")
     # Generic fields for additional context
-    string_fields: Dict[str, str] = Field(default_factory=dict, description="Additional string fields")
-    number_fields: Dict[str, float] = Field(default_factory=dict, description="Additional numeric fields")
-    boolean_fields: Dict[str, bool] = Field(default_factory=dict, description="Additional boolean fields")
+    string_fields: Optional[List[KeyValuePair]] = Field(None, description="Additional string fields")
+    number_fields: Optional[List[KeyNumberPair]] = Field(None, description="Additional numeric fields")
+    boolean_fields: Optional[List[KeyBooleanPair]] = Field(None, description="Additional boolean fields")
 
 class ExecutionResult(BaseModel):
     """Result from procedure execution"""
     success: bool = Field(description="Whether execution was successful")
     error: Optional[str] = Field(None, description="Error message if failed")
-    data: Optional[Dict[str, str]] = Field(None, description="Result data")
+    data: Optional[List[KeyValuePair]] = Field(None, description="Result data")
+
+class ReflexStats(BaseModel):
+    """Statistics for a reflex"""
+    execution_count: int = Field(description="Number of executions")
+    success_rate: float = Field(description="Success rate")
+    avg_response_time_ms: float = Field(description="Average response time in ms")
+    last_executed: Optional[str] = Field(None, description="Last execution timestamp")
 
 class ReflexInfo(BaseModel):
     """Information about a reflex"""
@@ -98,7 +126,7 @@ class ReflexInfo(BaseModel):
     procedure_name: str = Field(description="Procedure name")
     threshold: float = Field(description="Matching threshold")
     priority: int = Field(description="Priority level")
-    stats: Dict[str, Union[int, float, str, None]] = Field(description="Reflex statistics")
+    stats: ReflexStats = Field(description="Reflex statistics")
 
 # =============== Pydantic Models ===============
 
@@ -148,17 +176,27 @@ class GamingReflexInput(BaseModel):
     response_procedure: str = Field(description="Procedure to execute")
     reaction_threshold: float = Field(0.7, description="Recognition threshold")
 
+class CurrentStats(BaseModel):
+    """Current statistics for a pattern"""
+    avg_response_time: float = Field(description="Average response time")
+    success_rate: float = Field(description="Success rate")
+
 class ImprovementData(BaseModel):
     """Improvement data for a pattern"""
     response_time_improvement_ms: float = Field(description="Response time improvement in ms")
     success_rate_improvement: float = Field(description="Success rate improvement")
-    current_stats: Dict[str, float] = Field(description="Current statistics")
+    current_stats: CurrentStats = Field(description="Current statistics")
+
+class PatternImprovement(BaseModel):
+    """Improvement for a specific pattern"""
+    pattern_name: str = Field(description="Pattern name")
+    improvement: ImprovementData = Field(description="Improvement data")
 
 class TrainingResult(BaseModel):
     """Result of reflex training"""
     success: bool = Field(description="Whether training was successful")
     iterations: int = Field(description="Number of training iterations performed")
-    improvements: Dict[str, ImprovementData] = Field(description="Improvements by pattern")
+    improvements: List[PatternImprovement] = Field(description="Improvements by pattern")
     training_accuracy: float = Field(description="Overall training accuracy")
     avg_reaction_time: float = Field(description="Average reaction time in milliseconds")
 
@@ -179,10 +217,15 @@ class SimulationResult(BaseModel):
     avg_reaction_time_ms: float = Field(description="Average reaction time in milliseconds")
     results: List[ScenarioResult] = Field(description="Detailed results of each scenario")
 
+class DomainCount(BaseModel):
+    """Count for a specific domain"""
+    domain: str = Field(description="Domain name")
+    count: int = Field(description="Pattern count")
+
 class ReflexiveSystemStats(BaseModel):
     """Statistics about the reflexive system"""
     total_patterns: int = Field(description="Total number of reflex patterns")
-    domain_counts: Dict[str, int] = Field(description="Pattern counts by domain")
+    domain_counts: List[DomainCount] = Field(description="Pattern counts by domain")
     response_mode: str = Field(description="Current response mode")
     overall_avg_reaction_time_ms: float = Field(description="Overall average reaction time in ms")
     min_reaction_time_ms: float = Field(description="Minimum reaction time in ms")
@@ -229,11 +272,16 @@ class OptimizationInfo(BaseModel):
     old_threshold: Optional[float] = Field(None, description="Old threshold")
     new_threshold: Optional[float] = Field(None, description="New threshold")
 
+class PatternOptimization(BaseModel):
+    """Optimization for a specific pattern"""
+    pattern_name: str = Field(description="Pattern name")
+    optimization: OptimizationInfo = Field(description="Optimization details")
+
 class OptimizeReflexesResult(BaseModel):
     """Result of optimizing reflexes"""
     success: bool = Field(description="Whether optimization was successful")
     error: Optional[str] = Field(None, description="Error message if failed")
-    optimizations: Dict[str, OptimizationInfo] = Field(default_factory=dict, description="Optimization details")
+    optimizations: List[PatternOptimization] = Field(default_factory=list, description="Optimization details")
     patterns_examined: Optional[int] = Field(None, description="Number of patterns examined")
     patterns_optimized: Optional[int] = Field(None, description="Number of patterns optimized")
 
@@ -242,7 +290,8 @@ class OptimizeReflexesResult(BaseModel):
 def pattern_dict_to_dict(pattern: PatternDict) -> Dict[str, Any]:
     """Convert PatternDict to regular dict for backward compatibility"""
     result = {}
-    for key, value in pattern.values.items():
+    for value in pattern.values:
+        key = value.key
         if value.type == "string":
             result[key] = value.string_value
         elif value.type == "number":
@@ -268,19 +317,20 @@ def pattern_dict_to_dict(pattern: PatternDict) -> Dict[str, Any]:
 
 def dict_to_pattern_dict(data: Dict[str, Any]) -> PatternDict:
     """Convert regular dict to PatternDict"""
-    values = {}
+    values = []
     for key, value in data.items():
         if isinstance(value, str):
-            values[key] = PatternValue(type="string", string_value=value)
+            values.append(PatternValue(key=key, type="string", string_value=value))
         elif isinstance(value, (int, float)):
-            values[key] = PatternValue(type="number", number_value=float(value))
+            values.append(PatternValue(key=key, type="number", number_value=float(value)))
         elif isinstance(value, bool):
-            values[key] = PatternValue(type="boolean", boolean_value=value)
+            values.append(PatternValue(key=key, type="boolean", boolean_value=value))
         elif isinstance(value, list):
-            values[key] = PatternValue(type="list", list_value=[str(v) for v in value])
+            values.append(PatternValue(key=key, type="list", list_value=[str(v) for v in value]))
         elif isinstance(value, dict):
             if "min" in value and "max" in value:
-                values[key] = PatternValue(
+                values.append(PatternValue(
+                    key=key,
                     type="range",
                     range_value=NumericRange(
                         min=value["min"],
@@ -289,16 +339,17 @@ def dict_to_pattern_dict(data: Dict[str, Any]) -> PatternDict:
                         weight=value.get("weight")
                     ),
                     required=value.get("required", False)
-                )
+                ))
             elif "primary" in value and "variants" in value:
-                values[key] = PatternValue(
+                values.append(PatternValue(
+                    key=key,
                     type="string",
                     string_value=value["primary"],
                     weight=value.get("weight")
-                )
+                ))
             else:
                 # Generic handling - convert to string
-                values[key] = PatternValue(type="string", string_value=str(value))
+                values.append(PatternValue(key=key, type="string", string_value=str(value)))
     
     return PatternDict(values=values)
 
@@ -325,9 +376,15 @@ def stimulus_dict_to_dict(stimulus: StimulusDict) -> Dict[str, Any]:
         result["distractors"] = [{"type": d.type, "intensity": d.intensity} for d in stimulus.distractors]
     
     # Add generic fields
-    result.update(stimulus.string_fields)
-    result.update({k: v for k, v in stimulus.number_fields.items()})
-    result.update({k: v for k, v in stimulus.list_fields.items()})
+    if stimulus.string_fields:
+        for kv in stimulus.string_fields:
+            result[kv.key] = kv.value
+    if stimulus.number_fields:
+        for kv in stimulus.number_fields:
+            result[kv.key] = kv.value
+    if stimulus.list_fields:
+        for kv in stimulus.list_fields:
+            result[kv.key] = kv.value
     
     return result
 
@@ -347,14 +404,25 @@ def dict_to_stimulus_dict(data: Dict[str, Any]) -> StimulusDict:
         stimulus.distractors = [DistractorInfo(**d) if isinstance(d, dict) else DistractorInfo(type=str(d), intensity=0.5) for d in data["distractors"]]
     
     # Handle other fields
+    string_fields = []
+    number_fields = []
+    list_fields = []
+    
     for key, value in data.items():
         if key not in ["text", "visual_clarity", "timing", "opponent", "distractors"]:
             if isinstance(value, str):
-                stimulus.string_fields[key] = value
+                string_fields.append(KeyValuePair(key=key, value=value))
             elif isinstance(value, (int, float)):
-                stimulus.number_fields[key] = float(value)
+                number_fields.append(KeyNumberPair(key=key, value=float(value)))
             elif isinstance(value, list) and all(isinstance(v, str) for v in value):
-                stimulus.list_fields[key] = value
+                list_fields.append(KeyListPair(key=key, value=value))
+    
+    if string_fields:
+        stimulus.string_fields = string_fields
+    if number_fields:
+        stimulus.number_fields = number_fields
+    if list_fields:
+        stimulus.list_fields = list_fields
     
     return stimulus
 
@@ -428,17 +496,19 @@ class ReflexPattern:
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary representation"""
+        stats = ReflexStats(
+            execution_count=self.execution_count,
+            success_rate=self.get_success_rate(),
+            avg_response_time_ms=self.get_avg_response_time(),
+            last_executed=self.last_executed.isoformat() if self.last_executed else None
+        )
+        
         return {
             "name": self.name,
             "procedure_name": self.procedure_name,
             "threshold": self.threshold,
             "priority": self.priority,
-            "stats": {
-                "execution_count": self.execution_count,
-                "success_rate": self.get_success_rate(),
-                "avg_response_time_ms": self.get_avg_response_time(),
-                "last_executed": self.last_executed.isoformat() if self.last_executed else None
-            }
+            "stats": stats
         }
 
 # =============== Pattern Recognition Agent and Tools ===============
@@ -963,14 +1033,23 @@ class ReflexiveSystem:
             
             # Convert PatternDict to regular dict for ReflexPattern
             pattern_data = pattern_dict_to_dict(input_data.pattern_data)
-            context_template = {} if input_data.context_template is None else {
-                "game": input_data.context_template.game,
-                "action_type": input_data.context_template.action_type,
-                "gaming_reflex": input_data.context_template.gaming_reflex,
-                **input_data.context_template.string_fields,
-                **input_data.context_template.number_fields,
-                **input_data.context_template.boolean_fields
-            }
+            context_template = {}
+            if input_data.context_template is not None:
+                if input_data.context_template.game:
+                    context_template["game"] = input_data.context_template.game
+                if input_data.context_template.action_type:
+                    context_template["action_type"] = input_data.context_template.action_type
+                if input_data.context_template.gaming_reflex is not None:
+                    context_template["gaming_reflex"] = input_data.context_template.gaming_reflex
+                if input_data.context_template.string_fields:
+                    for kv in input_data.context_template.string_fields:
+                        context_template[kv.key] = kv.value
+                if input_data.context_template.number_fields:
+                    for kv in input_data.context_template.number_fields:
+                        context_template[kv.key] = kv.value
+                if input_data.context_template.boolean_fields:
+                    for kv in input_data.context_template.boolean_fields:
+                        context_template[kv.key] = kv.value
             
             # Create reflex pattern
             reflex = ReflexPattern(
@@ -993,7 +1072,18 @@ class ReflexiveSystem:
             
             return RegisterReflexResult(
                 success=True,
-                reflex=ReflexInfo(**reflex.to_dict())
+                reflex=ReflexInfo(
+                    name=reflex.name,
+                    procedure_name=reflex.procedure_name,
+                    threshold=reflex.threshold,
+                    priority=reflex.priority,
+                    stats=ReflexStats(
+                        execution_count=reflex.execution_count,
+                        success_rate=reflex.get_success_rate(),
+                        avg_response_time_ms=reflex.get_avg_response_time(),
+                        last_executed=reflex.last_executed.isoformat() if reflex.last_executed else None
+                    )
+                )
             )
     
     class ProcessStimulusInput(BaseModel):
@@ -1071,11 +1161,16 @@ class ReflexiveSystem:
             # Prepare execution context
             execution_context = matched_pattern.context_template.copy() if matched_pattern.context_template else {}
             if input_data.context:
-                context_dict = {
-                    **input_data.context.string_fields,
-                    **input_data.context.number_fields,
-                    **input_data.context.boolean_fields
-                }
+                context_dict = {}
+                if input_data.context.string_fields:
+                    for kv in input_data.context.string_fields:
+                        context_dict[kv.key] = kv.value
+                if input_data.context.number_fields:
+                    for kv in input_data.context.number_fields:
+                        context_dict[kv.key] = kv.value
+                if input_data.context.boolean_fields:
+                    for kv in input_data.context.boolean_fields:
+                        context_dict[kv.key] = kv.value
                 if input_data.context.simulation is not None:
                     context_dict["simulation"] = input_data.context.simulation
                 if input_data.context.difficulty is not None:
@@ -1171,7 +1266,7 @@ class ReflexiveSystem:
                 return TrainingResult(
                     success=False,
                     iterations=0,
-                    improvements={},
+                    improvements=[],
                     training_accuracy=0.0,
                     avg_reaction_time=0.0
                 )
@@ -1188,7 +1283,7 @@ class ReflexiveSystem:
                     return TrainingResult(
                         success=False,
                         iterations=0,
-                        improvements={},
+                        improvements=[],
                         training_accuracy=0.0,
                         avg_reaction_time=0.0
                     )
@@ -1248,23 +1343,26 @@ class ReflexiveSystem:
                 self.response_mode = original_mode
                 
                 # Calculate improvements
-                improvements = {}
+                improvements = []
                 for name, pattern in patterns_to_train.items():
-                    current_stats = {
-                        "avg_response_time": pattern.get_avg_response_time(),
-                        "success_rate": pattern.get_success_rate()
-                    }
+                    current_stats = CurrentStats(
+                        avg_response_time=pattern.get_avg_response_time(),
+                        success_rate=pattern.get_success_rate()
+                    )
                     
                     # Calculate improvements
                     if name in original_stats:
-                        time_improvement = original_stats[name]["avg_response_time"] - current_stats["avg_response_time"]
-                        success_improvement = current_stats["success_rate"] - original_stats[name]["success_rate"]
+                        time_improvement = original_stats[name]["avg_response_time"] - current_stats.avg_response_time
+                        success_improvement = current_stats.success_rate - original_stats[name]["success_rate"]
                         
-                        improvements[name] = ImprovementData(
-                            response_time_improvement_ms=time_improvement,
-                            success_rate_improvement=success_improvement,
-                            current_stats=current_stats
-                        )
+                        improvements.append(PatternImprovement(
+                            pattern_name=name,
+                            improvement=ImprovementData(
+                                response_time_improvement_ms=time_improvement,
+                                success_rate_improvement=success_improvement,
+                                current_stats=current_stats
+                            )
+                        ))
                 
                 # Apply automatic threshold adjustments based on training
                 for name, pattern in patterns_to_train.items():
@@ -1295,7 +1393,7 @@ class ReflexiveSystem:
                 return TrainingResult(
                     success=False,
                     iterations=0,
-                    improvements={},
+                    improvements=[],
                     training_accuracy=0.0,
                     avg_reaction_time=0.0
                 )
@@ -1546,10 +1644,10 @@ class ReflexiveSystem:
         """Get statistics about reflexive system performance"""
         with custom_span("get_reflexive_stats"):
             # Calculate domain counts
-            domain_counts = {}
+            domain_counts = []
             for domain, patterns in self.domain_libraries.items():
                 if patterns:
-                    domain_counts[domain] = len(patterns)
+                    domain_counts.append(DomainCount(domain=domain, count=len(patterns)))
             
             # Get reaction time stats
             avg_reaction_time = sum(self.reaction_times) / len(self.reaction_times) if self.reaction_times else 0
@@ -1571,7 +1669,18 @@ class ReflexiveSystem:
                 min_reaction_time_ms=min_reaction_time,
                 max_reaction_time_ms=max_reaction_time,
                 active_status=self._is_active,
-                top_patterns=[ReflexInfo(**p.to_dict()) for p in top_patterns]
+                top_patterns=[ReflexInfo(
+                    name=p.name,
+                    procedure_name=p.procedure_name,
+                    threshold=p.threshold,
+                    priority=p.priority,
+                    stats=ReflexStats(
+                        execution_count=p.execution_count,
+                        success_rate=p.get_success_rate(),
+                        avg_response_time_ms=p.get_avg_response_time(),
+                        last_executed=p.last_executed.isoformat() if p.last_executed else None
+                    )
+                ) for p in top_patterns]
             )
     
     @function_tool
@@ -1586,7 +1695,7 @@ class ReflexiveSystem:
             if not self.reflex_patterns:
                 return OptimizeReflexesResult(success=False, error="No reflex patterns to optimize")
             
-            optimization_results = {}
+            optimization_results = []
             
             # Sort patterns by execution count to focus on most used
             sorted_patterns = sorted(
@@ -1628,11 +1737,14 @@ class ReflexiveSystem:
                             
                             if opt_result:
                                 pattern.pattern_data = pattern_dict_to_dict(opt_result.data)
-                                optimization_results[pattern.name] = OptimizationInfo(
-                                    status="optimized",
-                                    original_success_rate=success_rate,
-                                    optimization_type="pattern_refinement"
-                                )
+                                optimization_results.append(PatternOptimization(
+                                    pattern_name=pattern.name,
+                                    optimization=OptimizationInfo(
+                                        status="optimized",
+                                        original_success_rate=success_rate,
+                                        optimization_type="pattern_refinement"
+                                    )
+                                ))
                                 
                                 logger.info(f"Optimized pattern '{pattern.name}' with success rate {success_rate:.2f}")
                         else:
@@ -1644,12 +1756,15 @@ class ReflexiveSystem:
                                 pattern.threshold = min(0.9, pattern.threshold + 0.05)
                             
                             if old_threshold != pattern.threshold:
-                                optimization_results[pattern.name] = OptimizationInfo(
-                                    status="threshold_adjusted",
-                                    original_success_rate=success_rate,
-                                    old_threshold=old_threshold,
-                                    new_threshold=pattern.threshold
-                                )
+                                optimization_results.append(PatternOptimization(
+                                    pattern_name=pattern.name,
+                                    optimization=OptimizationInfo(
+                                        status="threshold_adjusted",
+                                        original_success_rate=success_rate,
+                                        old_threshold=old_threshold,
+                                        new_threshold=pattern.threshold
+                                    )
+                                ))
                                 
                                 logger.info(f"Adjusted threshold for pattern '{pattern.name}' from {old_threshold:.2f} to {pattern.threshold:.2f}")
                     
@@ -1668,11 +1783,14 @@ class ReflexiveSystem:
                             
                             if simp_result and pattern_dict_to_dict(simp_result.data) != old_pattern:
                                 pattern.pattern_data = pattern_dict_to_dict(simp_result.data)
-                                optimization_results[pattern.name] = OptimizationInfo(
-                                    status="simplified",
-                                    original_avg_response_time=pattern.get_avg_response_time(),
-                                    optimization_type="pattern_simplification"
-                                )
+                                optimization_results.append(PatternOptimization(
+                                    pattern_name=pattern.name,
+                                    optimization=OptimizationInfo(
+                                        status="simplified",
+                                        original_avg_response_time=pattern.get_avg_response_time(),
+                                        optimization_type="pattern_simplification"
+                                    )
+                                ))
                                 
                                 logger.info(f"Simplified pattern '{pattern.name}' for faster reaction time")
                 except Exception as e:
