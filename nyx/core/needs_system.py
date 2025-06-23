@@ -939,32 +939,21 @@ class NeedsSystem:
         Your primary functions are to update need states, satisfy or decrease needs based on requests,
         and provide information about needs.
         
-        IMPORTANT: Each tool returns a specific type. Make sure to return the exact object type that each tool produces:
-        - update_needs_tool_impl: Returns DriveStrengthsResponse
-        - satisfy_need_tool_impl: Returns NeedSatisfactionResult
-        - decrease_need_tool_impl: Returns DecreaseNeedResult
-        - get_needs_state_tool_impl: Returns NeedsStateResponse
-        - get_needs_by_category_tool_impl: Returns NeedsByCategoryResponse
-        - get_most_unfulfilled_need_tool_impl: Returns MostUnfulfilledNeedResponse
-        - get_need_history_tool_impl: Returns List[NeedHistoryEntry]
-        - get_total_drive_tool_impl: Returns float
-        - reset_need_to_default_tool_impl: Returns ResetNeedResponse or ErrorResponse
-        
-        Available tools:
-        - update_needs_tool_impl: Call this to update all needs and trigger goals if necessary.
-        - satisfy_need_tool_impl: Call this to increase the satisfaction of a specific need. Requires 'name', 'amount', and optional 'context'.
-        - decrease_need_tool_impl: Call this to decrease the satisfaction of a specific need. Requires 'need_name', 'amount', and optional 'reason'.
-        - get_needs_state_tool_impl: Call this to get the current state of all needs.
-        - get_needs_by_category_tool_impl: Call this to get needs organized by category.
-        - get_most_unfulfilled_need_tool_impl: Call this to find the most urgent need.
-        - get_need_history_tool_impl: Call this to get history for a specific need. Requires 'need_name' and optional 'limit'.
-        - get_total_drive_tool_impl: Call this to get the sum of all need drives.
-        - reset_need_to_default_tool_impl: Call this to reset a specific need. Requires 'need_name'.
-        
-        When asked to perform an action like "decrease need X", identify the correct tool (e.g., 'decrease_need_tool_impl') and extract the necessary arguments from the request to call the tool.
-        For example, if the request is "Decrease need 'pleasure_indulgence' by 0.3 because of 'denied_gratification'", you should call 'decrease_need_tool_impl' with need_name='pleasure_indulgence', amount=0.3, and reason='denied_gratification'.
-        
-        Always return the exact response object from the tool without modification.""",
+        IMPORTANT: You MUST use the appropriate tool for each request. DO NOT format responses as text - always call the relevant tool and return its exact output.
+        Available tools and when to use them:
+        - "Get the current state" or "get needs state" → use get_needs_state_tool_impl
+        - "Update all needs" → use update_needs_tool_impl
+        - "Satisfy need" → use satisfy_need_tool_impl
+        - "Decrease need" → use decrease_need_tool_impl
+        - "Get needs by category" → use get_needs_by_category_tool_impl
+        - "Most unfulfilled need" or "most urgent need" → use get_most_unfulfilled_need_tool_impl
+        - "Get history" → use get_need_history_tool_impl
+        - "Total drive" or "sum of drives" → use get_total_drive_tool_impl
+        - "Reset need" → use reset_need_to_default_tool_impl
+
+        Each tool returns a specific type. Return the exact object that each tool produces without modification.
+
+        Example: If asked to "Get the current state of all needs", you should call get_needs_state_tool_impl and return its NeedsStateResponse object directly.""",
             tools=[
                 update_needs_tool_impl,
                 satisfy_need_tool_impl,
@@ -976,7 +965,8 @@ class NeedsSystem:
                 get_total_drive_tool_impl,
                 reset_need_to_default_tool_impl
             ],
-            model_settings=ModelSettings(temperature=0.0)
+            model_settings=ModelSettings(temperature=0.0),
+            model="gpt-4.1-nano"
         )
         logger.info("NeedsSystem initialized with Agent SDK and refactored tools")
 
