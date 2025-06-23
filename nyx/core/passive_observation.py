@@ -39,7 +39,6 @@ class _GenObsFromActionParams(BaseModel):
     action: Any = Field(default_factory=dict)
     context: Any = Field(default_factory=dict)
     is_action_driven: Optional[bool] = False   # ← NEW
-    model_config = {"extra": "forbid"}
 
 
 class _GenObsFromSourceParams(BaseModel):
@@ -48,7 +47,6 @@ class _GenObsFromSourceParams(BaseModel):
     template_options: Optional[List[str]] = None
     is_environment_scan: Optional[bool] = False   # ← NEW
     hint: Optional[str] = None                    # ← NEW
-    model_config = {"extra": "forbid"}
 
 
 class _EvalObsParams(BaseModel):
@@ -56,21 +54,15 @@ class _EvalObsParams(BaseModel):
     current_context: Any = Field(default_factory=dict)
     source: Optional[str] = None
 
-    model_config = {"extra": "forbid"}
-
 
 class _FilterObsParams(BaseModel):
     observations: List[Any]                          # list of opaque dicts
     filter_criteria: Any                             # free-shape dict
 
-    model_config = {"extra": "forbid"}
-
 
 class _PatternCheckParams(BaseModel):
     recent_observations: List[Any] = Field(default_factory=list)
     current_context: Any = Field(default_factory=dict)
-
-    model_config = {"extra": "forbid"}
 
 class ObservationSource(str, Enum):
     """Enum for tracking the source of an observation"""
@@ -699,8 +691,8 @@ async def validate_observation_content(
     Validate the INPUT data being sent to the observation generation agent.
 
     For string inputs, we:
-      1. Ensure it’s valid JSON with a required 'source' field.
-      2. Check that the raw text is non-empty, has “I notice/observe” framing,
+      1. Ensure it's valid JSON with a required 'source' field.
+      2. Check that the raw text is non-empty, has "I notice/observe" framing,
          and is at least 5 words long.
 
     For list inputs, we flag as invalid by default (customize as needed).
@@ -743,7 +735,7 @@ async def validate_observation_content(
             is_valid = False
             reasoning = "Observation content is empty or too short."
 
-        # b) “I notice/observe” framing
+        # b) "I notice/observe" framing
         elif not any(w in content_to_validate.lower() for w in
                      ["notice", "observ", "aware", "sense", "perceive", "feel"]):
             is_valid = False
