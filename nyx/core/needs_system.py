@@ -971,7 +971,7 @@ class NeedsSystem:
                 reset_need_to_default_tool_impl
             ],
             model_settings=ModelSettings(temperature=0.0),
-            model="gpt-4.1-nano"  # Changed from gpt-4.1-nano for better instruction following
+            model="gpt-4.1-mini"  # Changed from gpt-4.1-nano for better instruction following
         )
 
         logger.info("NeedsSystem initialized with Agent SDK and refactored tools")
