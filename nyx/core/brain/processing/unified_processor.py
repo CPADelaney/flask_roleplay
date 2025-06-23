@@ -9,7 +9,6 @@ from agents import (
     handoff, input_guardrail, output_guardrail,
     GuardrailFunctionOutput, RunContextWrapper
 )
-from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +34,7 @@ class InputAnalysis(BaseModel):
     suggested_approach: str
 
 class ProcessingResult(BaseModel):
+    """Result of unified processing"""
     user_input: str
     response: str
     emotional_state: Dict[str, float]
@@ -46,17 +46,46 @@ class ProcessingResult(BaseModel):
     image_prompt: Optional[str] = None
     error: Optional[str] = None
 
-    model_config = {
-        "json_schema_extra": {
-            "required": [  # every key **exactly once**, no defaults except the truly optional ones
-                "user_input", "response", "emotional_state",
-                "memories_used", "processing_approach",
-                "response_time", "confidence", "generate_image"
-            ],
-            "additionalProperties": False,
-        }
-    }
-    
+# Models for tool inputs/outputs
+class EmotionProcessingInput(BaseModel):
+    """Input for emotion processing"""
+    text: str
+
+class MemoryRetrievalInput(BaseModel):
+    """Input for memory retrieval"""
+    query: str
+    limit: int = 5
+
+class MemoryData(BaseModel):
+    """Single memory item"""
+    id: str
+    text: str
+    type: str
+    significance: float
+    timestamp: str
+    tags: List[str] = []
+
+class InteractionStorageInput(BaseModel):
+    """Input for storing interactions"""
+    user_input: str
+    response: str
+    significance: int = 5
+
+class ProceduralCheckInput(BaseModel):
+    """Input for procedural knowledge check"""
+    query: str
+
+class ProcedureData(BaseModel):
+    """Procedural knowledge data"""
+    id: str
+    name: str
+    description: str
+    relevance: float
+
+class ProceduralCheckResult(BaseModel):
+    """Result of procedural knowledge check"""
+    found: bool
+    procedures: List[ProcedureData] = []
 
 class UnifiedProcessor:
     """Single processor that dynamically handles all input types"""
@@ -104,7 +133,8 @@ class UnifiedProcessor:
                 self._create_emotional_agent(),
                 self._create_memory_agent()
             ],
-            output_type=ProcessingResult
+            output_type=ProcessingResult,
+            output_schema_strict=False  # Disable strict mode for this agent due to complex output
         )
         
         self._initialized = True
@@ -172,7 +202,7 @@ class UnifiedProcessor:
         @function_tool
         async def retrieve_memories(ctx: RunContextWrapper[ProcessingContext], 
                                   query: str, 
-                                  limit: int = 5) -> List[Dict[str, Any]]:
+                                  limit: int = 5) -> List[MemoryData]:
             """Retrieve relevant memories"""
             brain = ctx.context.brain
             if hasattr(brain, 'memory_orchestrator') and brain.memory_orchestrator:
@@ -184,7 +214,19 @@ class UnifiedProcessor:
                     memory_types=["observation", "experience", "reflection", "abstraction"],
                     limit=limit
                 )
-                return memories
+                
+                # Convert to MemoryData objects
+                memory_objects = []
+                for mem in memories:
+                    memory_objects.append(MemoryData(
+                        id=mem.get("id", ""),
+                        text=mem.get("text", ""),
+                        type=mem.get("type", "unknown"),
+                        significance=mem.get("significance", 0.5),
+                        timestamp=mem.get("timestamp", ""),
+                        tags=mem.get("tags", [])
+                    ))
+                return memory_objects
             return []
         
         @function_tool
@@ -211,16 +253,27 @@ class UnifiedProcessor:
         
         @function_tool
         async def check_procedural_knowledge(ctx: RunContextWrapper[ProcessingContext], 
-                                           query: str) -> Dict[str, Any]:
+                                           query: str) -> ProceduralCheckResult:
             """Check for relevant procedural knowledge"""
             brain = ctx.context.brain
             if hasattr(brain, 'agent_enhanced_memory'):
                 procedures = await brain.agent_enhanced_memory.find_similar_procedures(query)
-                return {
-                    "found": len(procedures) > 0,
-                    "procedures": procedures
-                }
-            return {"found": False, "procedures": []}
+                
+                # Convert to ProcedureData objects
+                procedure_objects = []
+                for proc in procedures:
+                    procedure_objects.append(ProcedureData(
+                        id=proc.get("id", ""),
+                        name=proc.get("name", ""),
+                        description=proc.get("description", ""),
+                        relevance=proc.get("relevance", 0.5)
+                    ))
+                
+                return ProceduralCheckResult(
+                    found=len(procedure_objects) > 0,
+                    procedures=procedure_objects
+                )
+            return ProceduralCheckResult(found=False, procedures=[])
         
         # Store tools
         self._tools = {
@@ -370,7 +423,7 @@ class UnifiedProcessor:
                     "user_input": processed.user_input,
                     "message": processed.response,
                     "emotional_state": processed.emotional_state,
-                    "memories": processed.memories_used,
+                    "memories": [mem.dict() for mem in processed.memories_used],
                     "memory_count": len(processed.memories_used),
                     "has_experience": len(processed.memories_used) > 0,
                     "response_time": processed.response_time,
@@ -406,4 +459,3 @@ class UnifiedProcessor:
             "generate_image": processing_result.get("generate_image", False),
             "image_prompt": processing_result.get("image_prompt")
         }
-
