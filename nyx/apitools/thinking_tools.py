@@ -9,10 +9,16 @@ from agents import function_tool, RunContextWrapper
 logger = logging.getLogger(__name__)
 
 # Pydantic models for function tool inputs/outputs
+
+class PreviousResponse(BaseModel):
+    """Previous response information"""
+    confidence: float = 1.0
+    # Add other fields as they are discovered in actual usage
+
 class ThinkingContext(BaseModel):
     """Context information for thinking tools"""
-    previous_response: Optional[Dict[str, float]] = None
-    # Add other fields as needed based on actual usage
+    previous_response: Optional[PreviousResponse] = None
+    # Since we don't know all possible fields, we'll add them as we discover them
 
 class DecisionFactors(BaseModel):
     """Factors used in deciding whether to use extended thinking"""
@@ -111,7 +117,7 @@ async def should_use_extended_thinking(ctx, user_input: str,
     
     # 4. Previous response lacked confidence (if available in context)
     if context and context.previous_response:
-        confidence = context.previous_response.get("confidence", 1.0)
+        confidence = context.previous_response.confidence
         decision_factors["previous_low_confidence"] = confidence < 0.5
     
     # 5. Query involves critical domains
@@ -195,8 +201,18 @@ async def generate_reasoned_response(ctx, user_input: str,
         confidence = thinking_result.confidence
     else:
         # Generate response using standard method but with thinking context
-        enhanced_context = context.model_dump() if context else {}
-        enhanced_context["thinking_steps"] = [step.model_dump() for step in thinking_result.thinking_steps]
+        # Convert to dict for internal use (not part of function signature)
+        enhanced_context = {}
+        if context:
+            # Manually extract known fields
+            if context.previous_response:
+                enhanced_context["previous_response"] = {
+                    "confidence": context.previous_response.confidence
+                }
+        enhanced_context["thinking_steps"] = [
+            {"step": step.step, "content": step.content} 
+            for step in thinking_result.thinking_steps
+        ]
         
         base_response = await brain.generate_response(user_input, enhanced_context)
         message = base_response.get("message", "")
@@ -235,10 +251,17 @@ async def _basic_thinking(brain, user_input: str, context: Optional[ThinkingCont
     # Use internal feedback if available for critique
     if hasattr(brain, 'internal_feedback'):
         try:
+            # Convert context to dict for internal method
+            context_dict = {}
+            if context and context.previous_response:
+                context_dict["previous_response"] = {
+                    "confidence": context.previous_response.confidence
+                }
+            
             critique = await brain.internal_feedback.critic_evaluate(
                 aspect="effectiveness",
                 content=user_input,
-                context=context.model_dump() if context else {}
+                context=context_dict
             )
             
             # Add critique step
