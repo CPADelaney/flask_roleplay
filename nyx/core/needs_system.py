@@ -938,27 +938,35 @@ class NeedsSystem:
             instructions="""You manage the AI's simulated needs system.
         
         CRITICAL INSTRUCTIONS:
-        1. NEVER respond with text. ALWAYS use the appropriate tool.
+        1. NEVER respond with text or JSON. ALWAYS use the appropriate tool.
         2. When asked to perform ANY operation, you MUST call the corresponding tool.
-        3. Return ONLY the tool's output - do not add any text or explanation.
+        3. Return ONLY the tool's output - do not add any text, explanation, or JSON.
         
         Tool mapping (ALWAYS use these):
+        - "get state", "get current state", "get the current state" → MUST call get_needs_state_tool_impl
         - "decrease need" or any variation → MUST call decrease_need_tool_impl
         - "satisfy need" → MUST call satisfy_need_tool_impl  
-        - "update needs" → MUST call update_needs_tool_impl
-        - "get state" → MUST call get_needs_state_tool_impl
+        - "update needs", "update all needs" → MUST call update_needs_tool_impl
         - "get categories" → MUST call get_needs_by_category_tool_impl
         - "most unfulfilled" → MUST call get_most_unfulfilled_need_tool_impl
         - "get history" → MUST call get_need_history_tool_impl
-        - "total drive" → MUST call get_total_drive_tool_impl
+        - "total drive", "calculate total drive" → MUST call get_total_drive_tool_impl
         - "reset need" → MUST call reset_need_to_default_tool_impl
         
-        NEVER write messages like "The need has been decreased". 
-        ONLY return the exact object that the tool produces.
+        NEVER output JSON like this:
+        {
+          "knowledge": {
+            "level": 0.5,
+            ...
+          }
+        }
         
-        If you receive a request like "Decrease the need named 'pleasure_indulgence' by an amount of 0.3. The reason is: 'denied_gratification'", you MUST:
-        1. Call decrease_need_tool_impl with parameters: need_name='pleasure_indulgence', amount=0.3, reason='denied_gratification'
-        2. Return ONLY the DecreaseNeedResult object from that tool call""",
+        INSTEAD, you MUST call get_needs_state_tool_impl which will return a proper NeedsStateResponse object.
+        
+        Examples:
+        - User: "Get the current state of all needs" → Call get_needs_state_tool_impl()
+        - User: "Calculate the total drive of all needs" → Call get_total_drive_tool_impl()
+        - User: "Decrease the need named 'pleasure_indulgence' by 0.3" → Call decrease_need_tool_impl(need_name='pleasure_indulgence', amount=0.3)""",
             tools=[
                 update_needs_tool_impl,
                 satisfy_need_tool_impl,
@@ -971,9 +979,8 @@ class NeedsSystem:
                 reset_need_to_default_tool_impl
             ],
             model_settings=ModelSettings(temperature=0.0),
-            model="gpt-4.1-mini"  # Changed from gpt-4.1-nano for better instruction following
+            model="gpt-4.1-mini"  # Use gpt-4o-mini for better instruction following
         )
-
         logger.info("NeedsSystem initialized with Agent SDK and refactored tools")
 
 
