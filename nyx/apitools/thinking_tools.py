@@ -3,13 +3,58 @@
 import logging
 import json
 from typing import Dict, List, Any, Optional
+from pydantic import BaseModel
 from agents import function_tool, RunContextWrapper
 
 logger = logging.getLogger(__name__)
 
+# Pydantic models for function tool inputs/outputs
+class ThinkingContext(BaseModel):
+    """Context information for thinking tools"""
+    previous_response: Optional[Dict[str, float]] = None
+    # Add other fields as needed based on actual usage
+
+class DecisionFactors(BaseModel):
+    """Factors used in deciding whether to use extended thinking"""
+    query_complexity: float
+    contains_reasoning_keywords: bool
+    explicit_request: bool
+    critical_domain: bool
+    previous_low_confidence: bool
+    ambiguous_query: bool
+    reasoning_keywords_found: Optional[List[str]] = None
+
+class ExtendedThinkingDecision(BaseModel):
+    """Result of should_use_extended_thinking"""
+    should_think: bool
+    thinking_level: int
+    decision_factors: DecisionFactors
+
+class ThinkingStep(BaseModel):
+    """A single step in the thinking process"""
+    step: str
+    content: str
+
+class ThinkingResult(BaseModel):
+    """Result of think_before_responding"""
+    reasoning_complete: bool
+    thinking_steps: List[ThinkingStep]
+    thinking_level: int
+    confidence: float
+    reasoned_output: Optional[str] = None
+
+class ReasonedResponse(BaseModel):
+    """Result of generate_reasoned_response"""
+    message: str
+    response_type: str
+    thinking_applied: bool
+    thinking_level: int
+    thinking_steps: List[ThinkingStep]
+    confidence: float
+
 @function_tool
 async def should_use_extended_thinking(ctx, user_input: str, 
-                                  context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+                                  context: Optional[ThinkingContext] = None) -> ExtendedThinkingDecision:
     """
     Determine if the query requires extended thinking before responding
     
@@ -65,8 +110,8 @@ async def should_use_extended_thinking(ctx, user_input: str,
     decision_factors["explicit_request"] = explicit_request
     
     # 4. Previous response lacked confidence (if available in context)
-    if context and "previous_response" in context:
-        confidence = context["previous_response"].get("confidence", 1.0)
+    if context and context.previous_response:
+        confidence = context.previous_response.get("confidence", 1.0)
         decision_factors["previous_low_confidence"] = confidence < 0.5
     
     # 5. Query involves critical domains
@@ -93,16 +138,16 @@ async def should_use_extended_thinking(ctx, user_input: str,
     elif complexity_score > 0.7:
         thinking_level = 2  # Moderate thinking
     
-    return {
-        "should_think": should_think,
-        "thinking_level": thinking_level,
-        "decision_factors": decision_factors
-    }
+    return ExtendedThinkingDecision(
+        should_think=should_think,
+        thinking_level=thinking_level,
+        decision_factors=DecisionFactors(**decision_factors)
+    )
 
 @function_tool
 async def think_before_responding(ctx, user_input: str, 
                              thinking_level: int = 1, 
-                             context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+                             context: Optional[ThinkingContext] = None) -> ThinkingResult:
     """
     Engage in extended reasoning before generating a response
     
@@ -129,8 +174,8 @@ async def think_before_responding(ctx, user_input: str,
 
 @function_tool
 async def generate_reasoned_response(ctx, user_input: str, 
-                                 thinking_result: Dict[str, Any],
-                                 context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+                                 thinking_result: ThinkingResult,
+                                 context: Optional[ThinkingContext] = None) -> ReasonedResponse:
     """
     Generate a response after thinking process
     
@@ -145,19 +190,19 @@ async def generate_reasoned_response(ctx, user_input: str,
     brain = ctx.context
     
     # If reasoned output was directly generated, use it
-    if thinking_result.get("reasoned_output"):
-        message = thinking_result["reasoned_output"]
-        confidence = thinking_result.get("confidence", 0.7)
+    if thinking_result.reasoned_output:
+        message = thinking_result.reasoned_output
+        confidence = thinking_result.confidence
     else:
         # Generate response using standard method but with thinking context
-        enhanced_context = context.copy() if context else {}
-        enhanced_context["thinking_steps"] = thinking_result.get("thinking_steps", [])
+        enhanced_context = context.model_dump() if context else {}
+        enhanced_context["thinking_steps"] = [step.model_dump() for step in thinking_result.thinking_steps]
         
         base_response = await brain.generate_response(user_input, enhanced_context)
         message = base_response.get("message", "")
         confidence = base_response.get("confidence", 0.5)
     
-    thinking_level = thinking_result.get("thinking_level", 1)
+    thinking_level = thinking_result.thinking_level
     
     # Update response type based on thinking level
     response_type_map = {
@@ -167,24 +212,24 @@ async def generate_reasoned_response(ctx, user_input: str,
     }
     response_type = response_type_map.get(thinking_level, "reasoned")
     
-    return {
-        "message": message,
-        "response_type": response_type,
-        "thinking_applied": True,
-        "thinking_level": thinking_level,
-        "thinking_steps": thinking_result.get("thinking_steps", []),
-        "confidence": max(confidence, thinking_result.get("confidence", 0.5))
-    }
+    return ReasonedResponse(
+        message=message,
+        response_type=response_type,
+        thinking_applied=True,
+        thinking_level=thinking_level,
+        thinking_steps=thinking_result.thinking_steps,
+        confidence=max(confidence, thinking_result.confidence)
+    )
 
 # Helper functions for different thinking approaches
 
-async def _basic_thinking(brain, user_input: str, context: Dict[str, Any]) -> Dict[str, Any]:
+async def _basic_thinking(brain, user_input: str, context: Optional[ThinkingContext]) -> ThinkingResult:
     """Basic structured thinking process"""
     thinking_steps = [
-        {"step": "Understand query", "content": f"Analyzing: {user_input[:100]}..."},
-        {"step": "Identify key elements", "content": "Extracting core components of the request"},
-        {"step": "Retrieve relevant information", "content": "Accessing knowledge and contextual information"},
-        {"step": "Formulate response", "content": "Developing clear and helpful response"}
+        ThinkingStep(step="Understand query", content=f"Analyzing: {user_input[:100]}..."),
+        ThinkingStep(step="Identify key elements", content="Extracting core components of the request"),
+        ThinkingStep(step="Retrieve relevant information", content="Accessing knowledge and contextual information"),
+        ThinkingStep(step="Formulate response", content="Developing clear and helpful response")
     ]
     
     # Use internal feedback if available for critique
@@ -193,26 +238,26 @@ async def _basic_thinking(brain, user_input: str, context: Dict[str, Any]) -> Di
             critique = await brain.internal_feedback.critic_evaluate(
                 aspect="effectiveness",
                 content=user_input,
-                context=context or {}
+                context=context.model_dump() if context else {}
             )
             
             # Add critique step
             if critique:
-                thinking_steps.append({
-                    "step": "Self-evaluate response", 
-                    "content": f"Quality assessment: {critique.get('weighted_score', 0.5):.2f}"
-                })
+                thinking_steps.append(ThinkingStep(
+                    step="Self-evaluate response", 
+                    content=f"Quality assessment: {critique.get('weighted_score', 0.5):.2f}"
+                ))
         except Exception as e:
             logger.error(f"Error in feedback-based thinking: {str(e)}")
     
-    return {
-        "reasoning_complete": True,
-        "thinking_steps": thinking_steps,
-        "thinking_level": 1,
-        "confidence": 0.6
-    }
+    return ThinkingResult(
+        reasoning_complete=True,
+        thinking_steps=thinking_steps,
+        thinking_level=1,
+        confidence=0.6
+    )
 
-async def _standard_reasoning_thinking(brain, user_input: str, context: Dict[str, Any]) -> Dict[str, Any]:
+async def _standard_reasoning_thinking(brain, user_input: str, context: Optional[ThinkingContext]) -> ThinkingResult:
     """Standard reasoning using reasoning agents"""
     try:
         # Use reasoning triage agent if available
@@ -236,25 +281,25 @@ async def _standard_reasoning_thinking(brain, user_input: str, context: Dict[str
         
         # Create structured thinking steps
         thinking_steps = [
-            {"step": "Initial analysis", "content": "Analyzing query for reasoning requirements"},
-            {"step": "Structured reasoning", "content": "Applying systematic reasoning approach"},
-            {"step": "Generate reasoned response", "content": "Producing well-reasoned answer"}
+            ThinkingStep(step="Initial analysis", content="Analyzing query for reasoning requirements"),
+            ThinkingStep(step="Structured reasoning", content="Applying systematic reasoning approach"),
+            ThinkingStep(step="Generate reasoned response", content="Producing well-reasoned answer")
         ]
         
-        return {
-            "reasoning_complete": True,
-            "thinking_steps": thinking_steps,
-            "reasoned_output": reasoned_output,
-            "thinking_level": 2,
-            "confidence": 0.7
-        }
+        return ThinkingResult(
+            reasoning_complete=True,
+            thinking_steps=thinking_steps,
+            reasoned_output=reasoned_output,
+            thinking_level=2,
+            confidence=0.7
+        )
     except Exception as e:
         logger.error(f"Error in reasoning agent thinking: {str(e)}")
         
         # Fallback to basic thinking
         return await _basic_thinking(brain, user_input, context)
 
-async def _deep_reasoning_thinking(brain, user_input: str, context: Dict[str, Any]) -> Dict[str, Any]:
+async def _deep_reasoning_thinking(brain, user_input: str, context: Optional[ThinkingContext]) -> ThinkingResult:
     """Deep thinking with thorough reasoning"""
     try:
         from agents import Runner
@@ -285,21 +330,21 @@ async def _deep_reasoning_thinking(brain, user_input: str, context: Dict[str, An
         
         # Create detailed thinking steps
         thinking_steps = [
-            {"step": "Comprehensive analysis", "content": "Thoroughly analyzing query requirements and implications"},
-            {"step": "Identify domains", "content": "Determining knowledge domains and expertise needed"},
-            {"step": "Consider approaches", "content": "Evaluating multiple potential response strategies"},
-            {"step": "Analyze nuances", "content": "Examining subtleties and complexities of the question"},
-            {"step": "Identify pitfalls", "content": "Recognizing potential misunderstandings or problematic areas"},
-            {"step": "Generate optimal response", "content": "Creating most helpful and accurate response"}
+            ThinkingStep(step="Comprehensive analysis", content="Thoroughly analyzing query requirements and implications"),
+            ThinkingStep(step="Identify domains", content="Determining knowledge domains and expertise needed"),
+            ThinkingStep(step="Consider approaches", content="Evaluating multiple potential response strategies"),
+            ThinkingStep(step="Analyze nuances", content="Examining subtleties and complexities of the question"),
+            ThinkingStep(step="Identify pitfalls", content="Recognizing potential misunderstandings or problematic areas"),
+            ThinkingStep(step="Generate optimal response", content="Creating most helpful and accurate response")
         ]
         
-        return {
-            "reasoning_complete": True,
-            "thinking_steps": thinking_steps,
-            "reasoned_output": reasoned_output,
-            "thinking_level": 3,
-            "confidence": 0.8
-        }
+        return ThinkingResult(
+            reasoning_complete=True,
+            thinking_steps=thinking_steps,
+            reasoned_output=reasoned_output,
+            thinking_level=3,
+            confidence=0.8
+        )
     except Exception as e:
         logger.error(f"Error in deep reasoning thinking: {str(e)}")
         
