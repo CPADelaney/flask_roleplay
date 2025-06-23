@@ -8689,9 +8689,16 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
 
         # --- 7. Internal State Activation (Needs, Mood) ---
         if hasattr(self, "needs_system") and self.needs_system:
-             try:
-                 needs_state = await self.needs_system.get_needs_state_async()
-                 for need, state_data in needs_state.items():
+            try:
+                needs_state_response = await self.needs_system.get_needs_state_async()
+                # Extract the needs dict from the response
+                if hasattr(needs_state_response, 'needs'):
+                    needs_state = needs_state_response.needs
+                else:
+                    # Fallback if it's already a dict
+                    needs_state = needs_state_response
+                    
+                for need, state_data in needs_state.items():
                      if isinstance(state_data, dict) and state_data.get('drive_strength', 0.0) > self.need_drive_threshold:
                          reason = f"high drive for need '{need}' ({state_data['drive_strength']:.2f})"
                          # --- Need-to-Module Mapping (EXPAND THIS) ---
