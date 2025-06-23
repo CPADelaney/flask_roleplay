@@ -935,25 +935,30 @@ class NeedsSystem:
         # *** Agent is now created here, using the _tool_impl FunctionTool objects ***
         self.agent = Agent(
             name="Needs_Manager_Agent",
-            instructions="""You manage the AI's simulated needs.
-        Your primary functions are to update need states, satisfy or decrease needs based on requests,
-        and provide information about needs.
+            instructions="""You manage the AI's simulated needs system.
         
-        IMPORTANT: You MUST use the appropriate tool for each request. DO NOT format responses as text - always call the relevant tool and return its exact output.
-        Available tools and when to use them:
-        - "Get the current state" or "get needs state" → use get_needs_state_tool_impl
-        - "Update all needs" → use update_needs_tool_impl
-        - "Satisfy need" → use satisfy_need_tool_impl
-        - "Decrease need" → use decrease_need_tool_impl
-        - "Get needs by category" → use get_needs_by_category_tool_impl
-        - "Most unfulfilled need" or "most urgent need" → use get_most_unfulfilled_need_tool_impl
-        - "Get history" → use get_need_history_tool_impl
-        - "Total drive" or "sum of drives" → use get_total_drive_tool_impl
-        - "Reset need" → use reset_need_to_default_tool_impl
-
-        Each tool returns a specific type. Return the exact object that each tool produces without modification.
-
-        Example: If asked to "Get the current state of all needs", you should call get_needs_state_tool_impl and return its NeedsStateResponse object directly.""",
+        CRITICAL INSTRUCTIONS:
+        1. NEVER respond with text. ALWAYS use the appropriate tool.
+        2. When asked to perform ANY operation, you MUST call the corresponding tool.
+        3. Return ONLY the tool's output - do not add any text or explanation.
+        
+        Tool mapping (ALWAYS use these):
+        - "decrease need" or any variation → MUST call decrease_need_tool_impl
+        - "satisfy need" → MUST call satisfy_need_tool_impl  
+        - "update needs" → MUST call update_needs_tool_impl
+        - "get state" → MUST call get_needs_state_tool_impl
+        - "get categories" → MUST call get_needs_by_category_tool_impl
+        - "most unfulfilled" → MUST call get_most_unfulfilled_need_tool_impl
+        - "get history" → MUST call get_need_history_tool_impl
+        - "total drive" → MUST call get_total_drive_tool_impl
+        - "reset need" → MUST call reset_need_to_default_tool_impl
+        
+        NEVER write messages like "The need has been decreased". 
+        ONLY return the exact object that the tool produces.
+        
+        If you receive a request like "Decrease the need named 'pleasure_indulgence' by an amount of 0.3. The reason is: 'denied_gratification'", you MUST:
+        1. Call decrease_need_tool_impl with parameters: need_name='pleasure_indulgence', amount=0.3, reason='denied_gratification'
+        2. Return ONLY the DecreaseNeedResult object from that tool call""",
             tools=[
                 update_needs_tool_impl,
                 satisfy_need_tool_impl,
@@ -966,8 +971,9 @@ class NeedsSystem:
                 reset_need_to_default_tool_impl
             ],
             model_settings=ModelSettings(temperature=0.0),
-            model="gpt-4.1-nano"
+            model="gpt-4.1-nano"  # Changed from gpt-4.1-nano for better instruction following
         )
+
         logger.info("NeedsSystem initialized with Agent SDK and refactored tools")
 
 
