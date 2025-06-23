@@ -14,23 +14,109 @@ from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
+# =============== Base Models for Structured Data ===============
+
+class NumericRange(BaseModel):
+    """Numeric range with min/max values"""
+    min: float = Field(description="Minimum value")
+    max: float = Field(description="Maximum value")
+    optimal: Optional[float] = Field(None, description="Optimal value")
+    weight: Optional[float] = Field(None, description="Feature weight")
+
+class StringPattern(BaseModel):
+    """String pattern with variants"""
+    primary: str = Field(description="Primary string value")
+    variants: Optional[List[str]] = Field(None, description="String variants")
+    weight: Optional[float] = Field(None, description="Feature weight")
+
+class PatternValue(BaseModel):
+    """Generic pattern value that can be various types"""
+    type: str = Field(description="Type of value: string, number, range, list, boolean")
+    string_value: Optional[str] = Field(None, description="String value")
+    number_value: Optional[float] = Field(None, description="Numeric value")
+    range_value: Optional[NumericRange] = Field(None, description="Numeric range")
+    list_value: Optional[List[str]] = Field(None, description="List of strings")
+    boolean_value: Optional[bool] = Field(None, description="Boolean value")
+    required: Optional[bool] = Field(False, description="Whether this field is required")
+    weight: Optional[float] = Field(None, description="Feature weight")
+
+class PatternDict(BaseModel):
+    """Dictionary of pattern values"""
+    values: Dict[str, PatternValue] = Field(default_factory=dict, description="Pattern values by key")
+
+class TimingInfo(BaseModel):
+    """Timing information for gaming stimuli"""
+    frame_number: int = Field(description="Current frame number")
+    time_to_impact: int = Field(description="Time to impact in milliseconds")
+    frame_window: int = Field(description="Frame window for reaction")
+
+class OpponentState(BaseModel):
+    """Opponent state information"""
+    state: str = Field(description="Opponent state")
+    position: str = Field(description="Opponent position")
+    orientation: str = Field(description="Opponent orientation")
+
+class DistractorInfo(BaseModel):
+    """Distractor information"""
+    type: str = Field(description="Type of distractor")
+    intensity: float = Field(description="Distractor intensity")
+
+class StimulusDict(BaseModel):
+    """Dictionary of stimulus values"""
+    text: Optional[str] = Field(None, description="Text content")
+    visual_clarity: Optional[float] = Field(None, description="Visual clarity score")
+    timing: Optional[TimingInfo] = Field(None, description="Timing information")
+    opponent: Optional[OpponentState] = Field(None, description="Opponent state")
+    distractors: Optional[List[DistractorInfo]] = Field(None, description="Distractor elements")
+    # Generic fields for other stimulus data
+    string_fields: Dict[str, str] = Field(default_factory=dict, description="Additional string fields")
+    number_fields: Dict[str, float] = Field(default_factory=dict, description="Additional numeric fields")
+    list_fields: Dict[str, List[str]] = Field(default_factory=dict, description="Additional list fields")
+
+class ContextDict(BaseModel):
+    """Context dictionary"""
+    game: Optional[str] = Field(None, description="Game name")
+    action_type: Optional[str] = Field(None, description="Action type")
+    gaming_reflex: Optional[bool] = Field(None, description="Whether this is a gaming reflex")
+    simulation: Optional[bool] = Field(None, description="Whether this is a simulation")
+    difficulty: Optional[float] = Field(None, description="Difficulty level")
+    domain: Optional[str] = Field(None, description="Domain")
+    # Generic fields for additional context
+    string_fields: Dict[str, str] = Field(default_factory=dict, description="Additional string fields")
+    number_fields: Dict[str, float] = Field(default_factory=dict, description="Additional numeric fields")
+    boolean_fields: Dict[str, bool] = Field(default_factory=dict, description="Additional boolean fields")
+
+class ExecutionResult(BaseModel):
+    """Result from procedure execution"""
+    success: bool = Field(description="Whether execution was successful")
+    error: Optional[str] = Field(None, description="Error message if failed")
+    data: Optional[Dict[str, str]] = Field(None, description="Result data")
+
+class ReflexInfo(BaseModel):
+    """Information about a reflex"""
+    name: str = Field(description="Reflex name")
+    procedure_name: str = Field(description="Procedure name")
+    threshold: float = Field(description="Matching threshold")
+    priority: int = Field(description="Priority level")
+    stats: Dict[str, Union[int, float, str, None]] = Field(description="Reflex statistics")
+
 # =============== Pydantic Models ===============
 
 class ReflexPatternData(BaseModel):
     """Pattern data for a reflex pattern"""
     name: str = Field(description="Unique name for this pattern")
-    pattern_data: Dict[str, Any] = Field(description="Pattern definition (features that should trigger this reflex)")
+    pattern_data: PatternDict = Field(description="Pattern definition")
     procedure_name: str = Field(description="Name of procedure to execute when triggered")
     threshold: float = Field(0.7, description="Matching threshold (0.0-1.0)")
     priority: int = Field(1, description="Priority level (higher values take precedence)")
-    context_template: Dict[str, Any] = Field(default_factory=dict, description="Template for context to pass to procedure")
+    context_template: ContextDict = Field(default_factory=ContextDict, description="Template for context to pass to procedure")
     domain: Optional[str] = Field(None, description="Optional domain for specialized responses")
 
 class StimulusInput(BaseModel):
     """Input for stimulus processing"""
-    stimulus: Dict[str, Any] = Field(description="The stimulus data requiring reaction")
+    stimulus: StimulusDict = Field(description="The stimulus data requiring reaction")
     domain: Optional[str] = Field(None, description="Optional domain to limit reflex patterns")
-    context: Optional[Dict[str, Any]] = Field(None, description="Additional context information")
+    context: Optional[ContextDict] = Field(None, description="Additional context information")
 
 class ReactionResult(BaseModel):
     """Result of a reaction to stimulus"""
@@ -39,7 +125,7 @@ class ReactionResult(BaseModel):
     reaction_time_ms: float = Field(description="Reaction time in milliseconds")
     match_score: Optional[float] = Field(None, description="Match score for the pattern")
     error: Optional[str] = Field(None, description="Error message if reaction failed")
-    procedure_result: Optional[Dict[str, Any]] = Field(None, description="Result from the executed procedure")
+    procedure_result: Optional[ExecutionResult] = Field(None, description="Result from the executed procedure")
 
 class PatternMatchResult(BaseModel):
     """Result of pattern matching"""
@@ -50,25 +136,39 @@ class PatternMatchResult(BaseModel):
 
 class PatternRecognitionInput(BaseModel):
     """Input for pattern recognition"""
-    stimulus: Dict[str, Any] = Field(description="The stimulus data")
-    patterns: List[Dict[str, Any]] = Field(description="Patterns to match against")
+    stimulus: StimulusDict = Field(description="The stimulus data")
+    patterns: List[PatternDict] = Field(description="Patterns to match against")
     domain: Optional[str] = Field(None, description="Optional domain to limit matching")
 
 class GamingReflexInput(BaseModel):
     """Input for creating a gaming reflex"""
     game_name: str = Field(description="Name of the game")
     action_type: str = Field(description="Type of action (e.g., 'block', 'attack', 'dodge')")
-    trigger_pattern: Dict[str, Any] = Field(description="Pattern to recognize")
+    trigger_pattern: PatternDict = Field(description="Pattern to recognize")
     response_procedure: str = Field(description="Procedure to execute")
     reaction_threshold: float = Field(0.7, description="Recognition threshold")
+
+class ImprovementData(BaseModel):
+    """Improvement data for a pattern"""
+    response_time_improvement_ms: float = Field(description="Response time improvement in ms")
+    success_rate_improvement: float = Field(description="Success rate improvement")
+    current_stats: Dict[str, float] = Field(description="Current statistics")
 
 class TrainingResult(BaseModel):
     """Result of reflex training"""
     success: bool = Field(description="Whether training was successful")
     iterations: int = Field(description="Number of training iterations performed")
-    improvements: Dict[str, Dict[str, float]] = Field(description="Improvements by pattern")
+    improvements: Dict[str, ImprovementData] = Field(description="Improvements by pattern")
     training_accuracy: float = Field(description="Overall training accuracy")
     avg_reaction_time: float = Field(description="Average reaction time in milliseconds")
+
+class ScenarioResult(BaseModel):
+    """Result of a single scenario"""
+    scenario: int = Field(description="Scenario number")
+    pattern_tested: str = Field(description="Pattern that was tested")
+    reaction_time_ms: float = Field(description="Reaction time in milliseconds")
+    success: bool = Field(description="Whether the scenario was successful")
+    matched_pattern: Optional[str] = Field(None, description="Pattern that was matched")
 
 class SimulationResult(BaseModel):
     """Result of gaming scenario simulation"""
@@ -77,7 +177,7 @@ class SimulationResult(BaseModel):
     scenarios_run: int = Field(description="Number of scenarios run")
     success_rate: float = Field(description="Success rate of the simulations")
     avg_reaction_time_ms: float = Field(description="Average reaction time in milliseconds")
-    results: List[Dict[str, Any]] = Field(description="Detailed results of each scenario")
+    results: List[ScenarioResult] = Field(description="Detailed results of each scenario")
 
 class ReflexiveSystemStats(BaseModel):
     """Statistics about the reflexive system"""
@@ -88,33 +188,21 @@ class ReflexiveSystemStats(BaseModel):
     min_reaction_time_ms: float = Field(description="Minimum reaction time in ms")
     max_reaction_time_ms: float = Field(description="Maximum reaction time in ms")
     active_status: bool = Field(description="Whether the system is active")
-    top_patterns: List[Dict[str, Any]] = Field(description="Top patterns by execution count")
+    top_patterns: List[ReflexInfo] = Field(description="Top patterns by execution count")
 
 # =============== New Models for Function Tools ===============
-
-class PatternData(BaseModel):
-    """Pattern data structure for matching"""
-    min: Optional[float] = Field(None, description="Minimum value for numeric range")
-    max: Optional[float] = Field(None, description="Maximum value for numeric range")
-    primary: Optional[str] = Field(None, description="Primary string value")
-    variants: Optional[List[str]] = Field(None, description="String variants")
-    weight: Optional[float] = Field(None, description="Feature weight")
-    optimal: Optional[float] = Field(None, description="Optimal value for numeric range")
-    required: Optional[bool] = Field(None, description="Whether this field is required")
-
-class StimulusData(BaseModel):
-    """Stimulus data structure"""
-    text: Optional[Union[str, Dict[str, Any]]] = Field(None, description="Text content or structured data")
-    visual_clarity: Optional[float] = Field(None, description="Visual clarity score")
-    opponent: Optional[Dict[str, str]] = Field(None, description="Opponent state information")
-    distractors: Optional[List[Dict[str, float]]] = Field(None, description="Distractor elements")
-    timing: Optional[Dict[str, int]] = Field(None, description="Timing information")
 
 class RegisterReflexResult(BaseModel):
     """Result of registering a reflex"""
     success: bool = Field(description="Whether registration was successful")
     error: Optional[str] = Field(None, description="Error message if failed")
-    reflex: Optional[Dict[str, Any]] = Field(None, description="Registered reflex details")
+    reflex: Optional[ReflexInfo] = Field(None, description="Registered reflex details")
+
+class ReactionInfo(BaseModel):
+    """Reaction information"""
+    pattern_name: str = Field(description="Pattern name")
+    reaction_time_ms: float = Field(description="Reaction time in milliseconds")
+    match_score: float = Field(description="Match score")
 
 class ProcessStimulusResult(BaseModel):
     """Result of processing a stimulus"""
@@ -124,7 +212,7 @@ class ProcessStimulusResult(BaseModel):
     pattern_name: Optional[str] = Field(None, description="Name of matched pattern")
     reaction_time_ms: Optional[float] = Field(None, description="Reaction time in milliseconds")
     match_score: Optional[float] = Field(None, description="Pattern match score")
-    reaction: Optional[Dict[str, Any]] = Field(None, description="Reaction metadata")
+    reaction: Optional[ReactionInfo] = Field(None, description="Reaction metadata")
 
 class SetResponseModeResult(BaseModel):
     """Result of setting response mode"""
@@ -132,13 +220,143 @@ class SetResponseModeResult(BaseModel):
     error: Optional[str] = Field(None, description="Error message if failed")
     mode: Optional[str] = Field(None, description="New response mode")
 
+class OptimizationInfo(BaseModel):
+    """Information about a pattern optimization"""
+    status: str = Field(description="Optimization status")
+    original_success_rate: Optional[float] = Field(None, description="Original success rate")
+    original_avg_response_time: Optional[float] = Field(None, description="Original avg response time")
+    optimization_type: Optional[str] = Field(None, description="Type of optimization")
+    old_threshold: Optional[float] = Field(None, description="Old threshold")
+    new_threshold: Optional[float] = Field(None, description="New threshold")
+
 class OptimizeReflexesResult(BaseModel):
     """Result of optimizing reflexes"""
     success: bool = Field(description="Whether optimization was successful")
     error: Optional[str] = Field(None, description="Error message if failed")
-    optimizations: Optional[Dict[str, Any]] = Field(None, description="Optimization details")
+    optimizations: Dict[str, OptimizationInfo] = Field(default_factory=dict, description="Optimization details")
     patterns_examined: Optional[int] = Field(None, description="Number of patterns examined")
     patterns_optimized: Optional[int] = Field(None, description="Number of patterns optimized")
+
+# =============== Helper Functions ===============
+
+def pattern_dict_to_dict(pattern: PatternDict) -> Dict[str, Any]:
+    """Convert PatternDict to regular dict for backward compatibility"""
+    result = {}
+    for key, value in pattern.values.items():
+        if value.type == "string":
+            result[key] = value.string_value
+        elif value.type == "number":
+            result[key] = value.number_value
+        elif value.type == "range":
+            result[key] = {"min": value.range_value.min, "max": value.range_value.max}
+            if value.range_value.optimal is not None:
+                result[key]["optimal"] = value.range_value.optimal
+            if value.range_value.weight is not None:
+                result[key]["weight"] = value.range_value.weight
+        elif value.type == "list":
+            result[key] = value.list_value
+        elif value.type == "boolean":
+            result[key] = value.boolean_value
+        
+        if value.required:
+            if isinstance(result[key], dict):
+                result[key]["required"] = True
+            else:
+                result[key] = {"value": result[key], "required": True}
+    
+    return result
+
+def dict_to_pattern_dict(data: Dict[str, Any]) -> PatternDict:
+    """Convert regular dict to PatternDict"""
+    values = {}
+    for key, value in data.items():
+        if isinstance(value, str):
+            values[key] = PatternValue(type="string", string_value=value)
+        elif isinstance(value, (int, float)):
+            values[key] = PatternValue(type="number", number_value=float(value))
+        elif isinstance(value, bool):
+            values[key] = PatternValue(type="boolean", boolean_value=value)
+        elif isinstance(value, list):
+            values[key] = PatternValue(type="list", list_value=[str(v) for v in value])
+        elif isinstance(value, dict):
+            if "min" in value and "max" in value:
+                values[key] = PatternValue(
+                    type="range",
+                    range_value=NumericRange(
+                        min=value["min"],
+                        max=value["max"],
+                        optimal=value.get("optimal"),
+                        weight=value.get("weight")
+                    ),
+                    required=value.get("required", False)
+                )
+            elif "primary" in value and "variants" in value:
+                values[key] = PatternValue(
+                    type="string",
+                    string_value=value["primary"],
+                    weight=value.get("weight")
+                )
+            else:
+                # Generic handling - convert to string
+                values[key] = PatternValue(type="string", string_value=str(value))
+    
+    return PatternDict(values=values)
+
+def stimulus_dict_to_dict(stimulus: StimulusDict) -> Dict[str, Any]:
+    """Convert StimulusDict to regular dict"""
+    result = {}
+    if stimulus.text is not None:
+        result["text"] = stimulus.text
+    if stimulus.visual_clarity is not None:
+        result["visual_clarity"] = stimulus.visual_clarity
+    if stimulus.timing is not None:
+        result["timing"] = {
+            "frame_number": stimulus.timing.frame_number,
+            "time_to_impact": stimulus.timing.time_to_impact,
+            "frame_window": stimulus.timing.frame_window
+        }
+    if stimulus.opponent is not None:
+        result["opponent"] = {
+            "state": stimulus.opponent.state,
+            "position": stimulus.opponent.position,
+            "orientation": stimulus.opponent.orientation
+        }
+    if stimulus.distractors is not None:
+        result["distractors"] = [{"type": d.type, "intensity": d.intensity} for d in stimulus.distractors]
+    
+    # Add generic fields
+    result.update(stimulus.string_fields)
+    result.update({k: v for k, v in stimulus.number_fields.items()})
+    result.update({k: v for k, v in stimulus.list_fields.items()})
+    
+    return result
+
+def dict_to_stimulus_dict(data: Dict[str, Any]) -> StimulusDict:
+    """Convert regular dict to StimulusDict"""
+    stimulus = StimulusDict()
+    
+    if "text" in data:
+        stimulus.text = str(data["text"])
+    if "visual_clarity" in data:
+        stimulus.visual_clarity = float(data["visual_clarity"])
+    if "timing" in data and isinstance(data["timing"], dict):
+        stimulus.timing = TimingInfo(**data["timing"])
+    if "opponent" in data and isinstance(data["opponent"], dict):
+        stimulus.opponent = OpponentState(**data["opponent"])
+    if "distractors" in data and isinstance(data["distractors"], list):
+        stimulus.distractors = [DistractorInfo(**d) if isinstance(d, dict) else DistractorInfo(type=str(d), intensity=0.5) for d in data["distractors"]]
+    
+    # Handle other fields
+    for key, value in data.items():
+        if key not in ["text", "visual_clarity", "timing", "opponent", "distractors"]:
+            if isinstance(value, str):
+                stimulus.string_fields[key] = value
+            elif isinstance(value, (int, float)):
+                stimulus.number_fields[key] = float(value)
+            elif isinstance(value, list) and all(isinstance(v, str) for v in value):
+                stimulus.list_fields[key] = value
+    
+    return stimulus
 
 # =============== Pattern Recognition ===============
 
@@ -227,8 +445,8 @@ class ReflexPattern:
 
 class FastMatchInput(BaseModel):
     """Input for fast pattern matching"""
-    stimulus: Dict[str, Any] = Field(description="Stimulus data")
-    pattern: Dict[str, Any] = Field(description="Pattern to match against")
+    stimulus: StimulusDict = Field(description="Stimulus data")
+    pattern: PatternDict = Field(description="Pattern to match against")
 
 @function_tool
 async def fast_match(ctx: RunContextWrapper[Any], input_data: FastMatchInput) -> float:
@@ -241,8 +459,8 @@ async def fast_match(ctx: RunContextWrapper[Any], input_data: FastMatchInput) ->
     Returns:
         Match score (0.0-1.0)
     """
-    stimulus = input_data.stimulus
-    pattern = input_data.pattern
+    stimulus = stimulus_dict_to_dict(input_data.stimulus)
+    pattern = pattern_dict_to_dict(input_data.pattern)
     
     with custom_span("fast_match"):
         # Handle empty cases
@@ -317,11 +535,11 @@ async def fast_match(ctx: RunContextWrapper[Any], input_data: FastMatchInput) ->
 
 class GenerateSimilarStimulusInput(BaseModel):
     """Input for generating similar stimulus"""
-    pattern: Dict[str, Any] = Field(description="Pattern to generate similar stimulus for")
+    pattern: PatternDict = Field(description="Pattern to generate similar stimulus for")
 
 class GeneratedStimulus(BaseModel):
     """Generated stimulus data"""
-    data: Dict[str, Any] = Field(description="Generated stimulus data")
+    data: StimulusDict = Field(description="Generated stimulus data")
 
 @function_tool
 async def generate_similar_stimulus(ctx: RunContextWrapper[Any], input_data: GenerateSimilarStimulusInput) -> GeneratedStimulus:
@@ -334,7 +552,7 @@ async def generate_similar_stimulus(ctx: RunContextWrapper[Any], input_data: Gen
     Returns:
         Generated stimulus
     """
-    pattern = input_data.pattern
+    pattern = pattern_dict_to_dict(input_data.pattern)
     
     with custom_span("generate_similar_stimulus"):
         stimulus = {}
@@ -370,11 +588,11 @@ async def generate_similar_stimulus(ctx: RunContextWrapper[Any], input_data: Gen
             else:
                 stimulus[key] = value
         
-        return GeneratedStimulus(data=stimulus)
+        return GeneratedStimulus(data=dict_to_stimulus_dict(stimulus))
 
 class GenerateGamingStimulusInput(BaseModel):
     """Input for generating gaming stimulus"""
-    pattern: Dict[str, Any] = Field(description="Base pattern")
+    pattern: PatternDict = Field(description="Base pattern")
     difficulty: float = Field(0.5, description="Difficulty level (0.0-1.0)")
 
 @function_tool
@@ -396,35 +614,35 @@ async def generate_gaming_stimulus(ctx: RunContextWrapper[Any],
         # Start with base stimulus
         base_input = GenerateSimilarStimulusInput(pattern=pattern)
         base_result = await generate_similar_stimulus(ctx, base_input)
-        stimulus = base_result.data
+        stimulus_dict = base_result.data
         
-        # Add gaming-specific elements with proper field name (no leading underscore)
-        stimulus["timing"] = {
-            "frame_number": random.randint(1, 1000),
-            "time_to_impact": max(100, 500 - int(300 * difficulty)),  # ms, less time at higher difficulty
-            "frame_window": max(3, 10 - int(difficulty * 7))  # Fewer frames at higher difficulty
-        }
+        # Add gaming-specific elements
+        stimulus_dict.timing = TimingInfo(
+            frame_number=random.randint(1, 1000),
+            time_to_impact=max(100, 500 - int(300 * difficulty)),
+            frame_window=max(3, 10 - int(difficulty * 7))
+        )
         
         # Add visual elements
-        visual_noise = difficulty * 0.5  # More visual noise at higher difficulty
-        stimulus["visual_clarity"] = max(0.2, 1.0 - visual_noise)
+        visual_noise = difficulty * 0.5
+        stimulus_dict.visual_clarity = max(0.2, 1.0 - visual_noise)
         
         # Add opponent state
-        stimulus["opponent"] = {
-            "state": random.choice(["attacking", "defending", "neutral", "special"]),
-            "position": random.choice(["close", "mid", "far"]),
-            "orientation": random.choice(["facing", "side", "away"])
-        }
+        stimulus_dict.opponent = OpponentState(
+            state=random.choice(["attacking", "defending", "neutral", "special"]),
+            position=random.choice(["close", "mid", "far"]),
+            orientation=random.choice(["facing", "side", "away"])
+        )
         
-        return GeneratedStimulus(data=stimulus)
+        return GeneratedStimulus(data=stimulus_dict)
 
 class OptimizePatternInput(BaseModel):
     """Input for optimizing a pattern"""
-    pattern: Dict[str, Any] = Field(description="Pattern to optimize")
+    pattern: PatternDict = Field(description="Pattern to optimize")
 
 class OptimizedPattern(BaseModel):
     """Optimized pattern data"""
-    data: Dict[str, Any] = Field(description="Optimized pattern data")
+    data: PatternDict = Field(description="Optimized pattern data")
 
 @function_tool
 async def optimize_pattern(ctx: RunContextWrapper[Any], input_data: OptimizePatternInput) -> OptimizedPattern:
@@ -437,7 +655,7 @@ async def optimize_pattern(ctx: RunContextWrapper[Any], input_data: OptimizePatt
     Returns:
         Optimized pattern
     """
-    pattern = input_data.pattern
+    pattern = pattern_dict_to_dict(input_data.pattern)
     
     with custom_span("optimize_pattern"):
         optimized = pattern.copy()
@@ -471,15 +689,15 @@ async def optimize_pattern(ctx: RunContextWrapper[Any], input_data: OptimizePatt
                     'weight': 1.5
                 }
         
-        return OptimizedPattern(data=optimized)
+        return OptimizedPattern(data=dict_to_pattern_dict(optimized))
 
 class SimplifyPatternInput(BaseModel):
     """Input for simplifying a pattern"""
-    pattern: Dict[str, Any] = Field(description="Pattern to simplify")
+    pattern: PatternDict = Field(description="Pattern to simplify")
 
 class SimplifiedPattern(BaseModel):
     """Simplified pattern data"""
-    data: Dict[str, Any] = Field(description="Simplified pattern data")
+    data: PatternDict = Field(description="Simplified pattern data")
 
 @function_tool
 async def simplify_pattern(ctx: RunContextWrapper[Any], input_data: SimplifyPatternInput) -> SimplifiedPattern:
@@ -492,7 +710,7 @@ async def simplify_pattern(ctx: RunContextWrapper[Any], input_data: SimplifyPatt
     Returns:
         Simplified pattern
     """
-    pattern = input_data.pattern
+    pattern = pattern_dict_to_dict(input_data.pattern)
     
     with custom_span("simplify_pattern"):
         simplified = {}
@@ -527,7 +745,7 @@ async def simplify_pattern(ctx: RunContextWrapper[Any], input_data: SimplifyPatt
             if key.startswith('_'):
                 simplified[key] = value
         
-        return SimplifiedPattern(data=simplified)
+        return SimplifiedPattern(data=dict_to_pattern_dict(simplified))
 
 # =============== Reflexive System Class ===============
 
@@ -652,8 +870,6 @@ class ReflexiveSystem:
             model_settings=ModelSettings(temperature=0.4)
         )
 
-    # Add this method to the ReflexiveSystem class in nyx/core/reflexive_system.py
-
     async def should_use_reflex(self, stimulus: Dict[str, Any], context: Dict[str, Any] = None, pattern: Any = None) -> Tuple[bool, float]:
         """
         Determine whether to use reflexive response or deliberate thinking
@@ -718,12 +934,12 @@ class ReflexiveSystem:
     class RegisterReflexInput(BaseModel):
         """Input for registering a reflex"""
         name: str = Field(description="Unique name for this pattern")
-        pattern_data: Dict[str, Any] = Field(description="Pattern definition")
+        pattern_data: PatternDict = Field(description="Pattern definition")
         procedure_name: str = Field(description="Name of procedure to execute")
         threshold: float = Field(0.7, description="Matching threshold (0.0-1.0)")
         priority: int = Field(1, description="Priority level")
         domain: Optional[str] = Field(None, description="Optional domain")
-        context_template: Optional[Dict[str, Any]] = Field(None, description="Context template")
+        context_template: Optional[ContextDict] = Field(None, description="Context template")
     
     @function_tool
     async def register_reflex(self, input_data: RegisterReflexInput) -> RegisterReflexResult:
@@ -745,14 +961,25 @@ class ReflexiveSystem:
                     error=f"Procedure '{input_data.procedure_name}' not found"
                 )
             
+            # Convert PatternDict to regular dict for ReflexPattern
+            pattern_data = pattern_dict_to_dict(input_data.pattern_data)
+            context_template = {} if input_data.context_template is None else {
+                "game": input_data.context_template.game,
+                "action_type": input_data.context_template.action_type,
+                "gaming_reflex": input_data.context_template.gaming_reflex,
+                **input_data.context_template.string_fields,
+                **input_data.context_template.number_fields,
+                **input_data.context_template.boolean_fields
+            }
+            
             # Create reflex pattern
             reflex = ReflexPattern(
                 name=input_data.name,
-                pattern_data=input_data.pattern_data,
+                pattern_data=pattern_data,
                 procedure_name=input_data.procedure_name,
                 threshold=input_data.threshold,
                 priority=input_data.priority,
-                context_template=input_data.context_template or {}
+                context_template=context_template
             )
             
             # Store in main registry
@@ -766,14 +993,14 @@ class ReflexiveSystem:
             
             return RegisterReflexResult(
                 success=True,
-                reflex=reflex.to_dict()
+                reflex=ReflexInfo(**reflex.to_dict())
             )
     
     class ProcessStimulusInput(BaseModel):
         """Input for processing stimulus"""
-        stimulus: Dict[str, Any] = Field(description="The stimulus data")
+        stimulus: StimulusDict = Field(description="The stimulus data")
         domain: Optional[str] = Field(None, description="Optional domain")
-        context: Optional[Dict[str, Any]] = Field(None, description="Additional context")
+        context: Optional[ContextDict] = Field(None, description="Additional context")
     
     @function_tool
     async def process_stimulus_fast(self, input_data: ProcessStimulusInput) -> ProcessStimulusResult:
@@ -806,14 +1033,14 @@ class ReflexiveSystem:
             tool_context = {
                 "stimulus": input_data.stimulus,
                 "domain": input_data.domain,
-                "context": input_data.context or {}
+                "context": input_data.context or ContextDict()
             }
             
             # Fast pattern matching
             for name, pattern in patterns_to_check.items():
                 match_input = FastMatchInput(
                     stimulus=input_data.stimulus,
-                    pattern=pattern.pattern_data
+                    pattern=dict_to_pattern_dict(pattern.pattern_data)
                 )
                 match_score = await fast_match(
                     RunContextWrapper(tool_context),
@@ -844,10 +1071,19 @@ class ReflexiveSystem:
             # Prepare execution context
             execution_context = matched_pattern.context_template.copy() if matched_pattern.context_template else {}
             if input_data.context:
-                execution_context.update(input_data.context)
+                context_dict = {
+                    **input_data.context.string_fields,
+                    **input_data.context.number_fields,
+                    **input_data.context.boolean_fields
+                }
+                if input_data.context.simulation is not None:
+                    context_dict["simulation"] = input_data.context.simulation
+                if input_data.context.difficulty is not None:
+                    context_dict["difficulty"] = input_data.context.difficulty
+                execution_context.update(context_dict)
             
             # Add stimulus data and match details
-            execution_context["stimulus"] = input_data.stimulus
+            execution_context["stimulus"] = stimulus_dict_to_dict(input_data.stimulus)
             execution_context["match_score"] = highest_match
             execution_context["reflexive"] = True
             execution_context["reaction_start_time"] = start_time
@@ -878,7 +1114,7 @@ class ReflexiveSystem:
                 # For training purposes
                 if self.response_mode == "learning":
                     self.training_data.append({
-                        "stimulus": input_data.stimulus,
+                        "stimulus": stimulus_dict_to_dict(input_data.stimulus),
                         "pattern_name": matched_pattern.name,
                         "reaction_time_ms": reaction_time_ms,
                         "success": result.get("success", False)
@@ -890,11 +1126,11 @@ class ReflexiveSystem:
                     pattern_name=matched_pattern.name,
                     reaction_time_ms=reaction_time_ms,
                     match_score=highest_match,
-                    reaction={
-                        "pattern_name": matched_pattern.name,
-                        "reaction_time_ms": reaction_time_ms,
-                        "match_score": highest_match
-                    }
+                    reaction=ReactionInfo(
+                        pattern_name=matched_pattern.name,
+                        reaction_time_ms=reaction_time_ms,
+                        match_score=highest_match
+                    )
                 )
                 
             except Exception as e:
@@ -977,7 +1213,7 @@ class ReflexiveSystem:
                 for _ in range(input_data.training_iterations):
                     # Generate stimulus similar to patterns we're training
                     pattern = random.choice(list(patterns_to_train.values()))
-                    gen_input = GenerateSimilarStimulusInput(pattern=pattern.pattern_data)
+                    gen_input = GenerateSimilarStimulusInput(pattern=dict_to_pattern_dict(pattern.pattern_data))
                     gen_result = await generate_similar_stimulus(
                         RunContextWrapper(tool_context),
                         gen_input
@@ -1024,11 +1260,11 @@ class ReflexiveSystem:
                         time_improvement = original_stats[name]["avg_response_time"] - current_stats["avg_response_time"]
                         success_improvement = current_stats["success_rate"] - original_stats[name]["success_rate"]
                         
-                        improvements[name] = {
-                            "response_time_improvement_ms": time_improvement,
-                            "success_rate_improvement": success_improvement,
-                            "current_stats": current_stats
-                        }
+                        improvements[name] = ImprovementData(
+                            response_time_improvement_ms=time_improvement,
+                            success_rate_improvement=success_improvement,
+                            current_stats=current_stats
+                        )
                 
                 # Apply automatic threshold adjustments based on training
                 for name, pattern in patterns_to_train.items():
@@ -1071,7 +1307,7 @@ class ReflexiveSystem:
         """Input for adding a gaming reflex"""
         game_name: str = Field(description="Name of the game")
         action_type: str = Field(description="Type of action")
-        trigger_pattern: Dict[str, Any] = Field(description="Pattern to recognize")
+        trigger_pattern: PatternDict = Field(description="Pattern to recognize")
         response_procedure: str = Field(description="Procedure to execute")
         reaction_threshold: float = Field(0.7, description="Recognition threshold")
     
@@ -1090,11 +1326,11 @@ class ReflexiveSystem:
             reflex_name = f"gaming_{input_data.game_name}_{input_data.action_type}_{len(self.domain_libraries['gaming'])+1}"
             
             # Add game-specific context to template
-            context_template = {
-                "game": input_data.game_name,
-                "action_type": input_data.action_type,
-                "gaming_reflex": True
-            }
+            context_template = ContextDict(
+                game=input_data.game_name,
+                action_type=input_data.action_type,
+                gaming_reflex=True
+            )
             
             # Gaming reflexes get high priority
             priority = 3
@@ -1103,7 +1339,7 @@ class ReflexiveSystem:
             agent_context = {
                 "game_name": input_data.game_name,
                 "action_type": input_data.action_type,
-                "trigger_pattern": input_data.trigger_pattern,
+                "trigger_pattern": pattern_dict_to_dict(input_data.trigger_pattern),
                 "response_procedure": input_data.response_procedure,
                 "reaction_threshold": input_data.reaction_threshold
             }
@@ -1133,7 +1369,7 @@ class ReflexiveSystem:
                 # Check if we got an optimized pattern
                 optimized_pattern = input_data.trigger_pattern
                 if isinstance(result.final_output, dict) and "optimized_pattern" in result.final_output:
-                    optimized_pattern = result.final_output["optimized_pattern"]
+                    optimized_pattern = dict_to_pattern_dict(result.final_output["optimized_pattern"])
                 
                 # Register the reflex
                 reg_input = self.RegisterReflexInput(
@@ -1208,7 +1444,7 @@ class ReflexiveSystem:
                 difficulty = min(1.0, 0.5 + (i/input_data.scenario_count))  # Increase difficulty gradually
                 
                 gen_input = GenerateGamingStimulusInput(
-                    pattern=pattern.pattern_data,
+                    pattern=dict_to_pattern_dict(pattern.pattern_data),
                     difficulty=difficulty
                 )
                 gen_result = await generate_gaming_stimulus(
@@ -1219,32 +1455,33 @@ class ReflexiveSystem:
                 
                 # Add some distractor elements
                 if random.random() < 0.3:
-                    stimulus["distractors"] = [
-                        {"type": "visual", "intensity": random.random()},
-                        {"type": "audio", "intensity": random.random() * 0.5}
+                    stimulus.distractors = [
+                        DistractorInfo(type="visual", intensity=random.random()),
+                        DistractorInfo(type="audio", intensity=random.random() * 0.5)
                     ]
                 
                 # Process stimulus
                 start_time = time.time()
+                process_context = ContextDict(simulation=True, difficulty=difficulty)
                 process_input = ProcessStimulusInput(
                     stimulus=stimulus,
                     domain="gaming",
-                    context={"simulation": True, "difficulty": difficulty}
+                    context=process_context
                 )
                 reaction = await self.process_stimulus_fast(process_input)
                 reaction_time = (time.time() - start_time) * 1000  # ms
                 
-                results.append({
-                    "scenario": i+1,
-                    "pattern_tested": pattern_name,
-                    "reaction_time_ms": reaction_time,
-                    "success": reaction.success,
-                    "matched_pattern": reaction.pattern_name
-                })
+                results.append(ScenarioResult(
+                    scenario=i+1,
+                    pattern_tested=pattern_name,
+                    reaction_time_ms=reaction_time,
+                    success=reaction.success,
+                    matched_pattern=reaction.pattern_name
+                ))
             
             # Calculate statistics
-            success_count = sum(1 for r in results if r["success"])
-            avg_reaction_time = sum(r["reaction_time_ms"] for r in results) / len(results) if results else 0
+            success_count = sum(1 for r in results if r.success)
+            avg_reaction_time = sum(r.reaction_time_ms for r in results) / len(results) if results else 0
             
             return SimulationResult(
                 success=True,
@@ -1334,7 +1571,7 @@ class ReflexiveSystem:
                 min_reaction_time_ms=min_reaction_time,
                 max_reaction_time_ms=max_reaction_time,
                 active_status=self._is_active,
-                top_patterns=[p.to_dict() for p in top_patterns]
+                top_patterns=[ReflexInfo(**p.to_dict()) for p in top_patterns]
             )
     
     @function_tool
@@ -1383,19 +1620,19 @@ class ReflexiveSystem:
                         if can_optimize:
                             # Try to optimize pattern
                             old_pattern = pattern.pattern_data.copy()
-                            opt_input = OptimizePatternInput(pattern=pattern.pattern_data)
+                            opt_input = OptimizePatternInput(pattern=dict_to_pattern_dict(pattern.pattern_data))
                             opt_result = await optimize_pattern(
                                 RunContextWrapper(tool_context),
                                 opt_input
                             )
                             
                             if opt_result:
-                                pattern.pattern_data = opt_result.data
-                                optimization_results[pattern.name] = {
-                                    "status": "optimized",
-                                    "original_success_rate": success_rate,
-                                    "optimization_type": "pattern_refinement"
-                                }
+                                pattern.pattern_data = pattern_dict_to_dict(opt_result.data)
+                                optimization_results[pattern.name] = OptimizationInfo(
+                                    status="optimized",
+                                    original_success_rate=success_rate,
+                                    optimization_type="pattern_refinement"
+                                )
                                 
                                 logger.info(f"Optimized pattern '{pattern.name}' with success rate {success_rate:.2f}")
                         else:
@@ -1407,12 +1644,12 @@ class ReflexiveSystem:
                                 pattern.threshold = min(0.9, pattern.threshold + 0.05)
                             
                             if old_threshold != pattern.threshold:
-                                optimization_results[pattern.name] = {
-                                    "status": "threshold_adjusted",
-                                    "original_success_rate": success_rate,
-                                    "old_threshold": old_threshold,
-                                    "new_threshold": pattern.threshold
-                                }
+                                optimization_results[pattern.name] = OptimizationInfo(
+                                    status="threshold_adjusted",
+                                    original_success_rate=success_rate,
+                                    old_threshold=old_threshold,
+                                    new_threshold=pattern.threshold
+                                )
                                 
                                 logger.info(f"Adjusted threshold for pattern '{pattern.name}' from {old_threshold:.2f} to {pattern.threshold:.2f}")
                     
@@ -1423,19 +1660,19 @@ class ReflexiveSystem:
                         
                         if can_simplify:
                             old_pattern = pattern.pattern_data.copy()
-                            simp_input = SimplifyPatternInput(pattern=pattern.pattern_data)
+                            simp_input = SimplifyPatternInput(pattern=dict_to_pattern_dict(pattern.pattern_data))
                             simp_result = await simplify_pattern(
                                 RunContextWrapper(tool_context),
                                 simp_input
                             )
                             
-                            if simp_result and simp_result.data != old_pattern:
-                                pattern.pattern_data = simp_result.data
-                                optimization_results[pattern.name] = {
-                                    "status": "simplified",
-                                    "original_avg_response_time": pattern.get_avg_response_time(),
-                                    "optimization_type": "pattern_simplification"
-                                }
+                            if simp_result and pattern_dict_to_dict(simp_result.data) != old_pattern:
+                                pattern.pattern_data = pattern_dict_to_dict(simp_result.data)
+                                optimization_results[pattern.name] = OptimizationInfo(
+                                    status="simplified",
+                                    original_avg_response_time=pattern.get_avg_response_time(),
+                                    optimization_type="pattern_simplification"
+                                )
                                 
                                 logger.info(f"Simplified pattern '{pattern.name}' for faster reaction time")
                 except Exception as e:
