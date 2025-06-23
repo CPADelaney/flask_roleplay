@@ -214,3 +214,5 @@ class InputProcessingContext:
         for behavior, preference in self.behavior_preferences.items():
             if behavior in final_scores:
                 final_scores[behavior] = preference
+        
+        return final_scores  # ADD THIS LINE
