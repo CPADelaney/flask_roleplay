@@ -401,6 +401,8 @@ class InputProcessingAgentContext:
 # Helper function to convert dict to model
 def dict_to_mode_distribution(d: Dict[str, float]) -> ModeDistributionModel:
     """Convert a dictionary to ModeDistributionModel"""
+    if not d:  # Handle None or empty dict
+        return ModeDistributionModel()
     model = ModeDistributionModel()
     for key, value in d.items():
         if hasattr(model, key):
@@ -409,6 +411,8 @@ def dict_to_mode_distribution(d: Dict[str, float]) -> ModeDistributionModel:
 
 def dict_to_sensitivities(d: Dict[str, float]) -> SensitivitiesModel:
     """Convert a dictionary to SensitivitiesModel"""
+    if not d:  # Handle None or empty dict
+        return SensitivitiesModel()
     model = SensitivitiesModel()
     for key, value in d.items():
         if hasattr(model, key):
@@ -417,6 +421,8 @@ def dict_to_sensitivities(d: Dict[str, float]) -> SensitivitiesModel:
 
 def dict_to_behavior_scores(d: Dict[str, float]) -> BehaviorScoresModel:
     """Convert a dictionary to BehaviorScoresModel"""
+    if not d:  # Handle None or empty dict
+        return BehaviorScoresModel()
     model = BehaviorScoresModel()
     for key, value in d.items():
         if hasattr(model, key):
