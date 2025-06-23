@@ -1,8 +1,9 @@
-# nyx/core/integration/
+# nyx/core/integration/spatial_integration_bridge.py
 
 import logging
 import asyncio
 from typing import Dict, List, Any, Optional, Tuple, Union
+from pydantic import BaseModel, Field
 
 from agents import Agent, Runner, function_tool, handoff, trace, ModelSettings, RunContextWrapper
 from agents.tracing import custom_span
@@ -20,6 +21,49 @@ from nyx.core.spatial.spatial_schemas import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Create input models for function tools to avoid Dict[str, Any] issues
+# Note: No extra="forbid" needed - SDK injects additionalProperties:false automatically
+
+class Coordinates(BaseModel):
+    """Spatial coordinates"""
+    x: float = Field(description="X coordinate")
+    y: float = Field(description="Y coordinate") 
+    z: Optional[float] = Field(default=None, description="Z coordinate (optional)")
+
+class ObservationContent(BaseModel):
+    """Content of a spatial observation"""
+    name: str = Field(description="Name of the observed entity")
+    object_type: Optional[str] = Field(default=None, description="Type of object")
+    coordinates: Optional[Coordinates] = Field(default=None, description="Coordinates of the object")
+    description: Optional[str] = Field(default=None, description="Additional description")
+
+class SpatialObservationInput(BaseModel):
+    """Input model for spatial observations"""
+    observation_type: str = Field(default="object", description="Type of observation (object, region, connection, etc.)")
+    content: ObservationContent = Field(description="Observation content")
+    confidence: float = Field(default=1.0, description="Confidence in the observation")
+    timestamp: Optional[str] = Field(default=None, description="Timestamp of the observation")
+    observer_position: Optional[Coordinates] = Field(default=None, description="Position of the observer")
+
+class NavigationInput(BaseModel):
+    """Input model for navigation requests"""
+    location: str = Field(description="Name of the target location")
+    current_position: Optional[Coordinates] = Field(default=None, description="Current coordinates")
+
+class SpatialMemoryQuery(BaseModel):
+    """Input model for spatial memory queries"""
+    location_id: Optional[str] = Field(default=None, description="ID of a specific location")
+    coordinates: Optional[Coordinates] = Field(default=None, description="Coordinates to search around")
+    radius: float = Field(default=10.0, description="Search radius around coordinates")
+    limit: int = Field(default=5, description="Maximum number of memories to return")
+
+class MapVisualizationRequest(BaseModel):
+    """Input model for map visualization requests"""
+    map_id: Optional[str] = Field(default=None, description="ID of the map")
+    highlight_landmarks: Optional[List[str]] = Field(default=None, description="Landmark IDs to highlight")
+    highlight_route: Optional[str] = Field(default=None, description="Route ID to highlight")
+    format: str = Field(default="svg", description="Visualization format (svg, ascii, data)")
 
 class SpatialIntegrationBridge:
     """
@@ -113,7 +157,7 @@ class SpatialIntegrationBridge:
     
     @function_tool
     async def process_spatial_observation(self, 
-                                      observation: Dict[str, Any]) -> Dict[str, Any]:
+                                      observation: SpatialObservationInput) -> Dict[str, Any]:
         """
         Process a spatial observation and update cognitive maps.
         
@@ -124,14 +168,13 @@ class SpatialIntegrationBridge:
             Processing results
         """
         # Convert to proper spatial observation format
-        if not isinstance(observation, SpatialObservation):
-            # Convert dict to SpatialObservation
-            if "observation_type" not in observation:
-                observation["observation_type"] = "object"  # Default
-            
-            spatial_obs = SpatialObservation(**observation)
-        else:
-            spatial_obs = observation
+        spatial_obs = SpatialObservation(
+            observation_type=observation.observation_type,
+            content=observation.content.dict(),  # Convert to dict for SpatialObservation
+            confidence=observation.confidence,
+            timestamp=observation.timestamp,
+            observer_position=observation.observer_position.dict() if observation.observer_position else None
+        )
         
         # Process through spatial mapper
         result = await self.spatial_mapper.process_spatial_observation(spatial_obs)
@@ -174,29 +217,26 @@ class SpatialIntegrationBridge:
         return result
 
     @function_tool
-    async def navigate_to_location(self, 
-                               location: str,
-                               current_position: Optional[Dict[str, float]] = None) -> Dict[str, Any]:
+    async def navigate_to_location(self, navigation_request: NavigationInput) -> Dict[str, Any]:
         """
         Generate navigation instructions to a named location.
         
         Args:
-            location: Name of the target location
-            current_position: Optional current coordinates
+            navigation_request: Navigation request with location and optional current position
             
         Returns:
             Navigation instructions
         """
         # Delegate to navigator agent
         result = await self.navigator_agent.navigate_to_location(
-            location_name=location,
-            current_position=current_position
+            location_name=navigation_request.location,
+            current_position=navigation_request.current_position.dict() if navigation_request.current_position else None
         )
         
         # If successful and attention system is available, focus attention on navigation
         if result.success and self.attention_system and hasattr(self.attention_system, 'focus_attention'):
             await self.attention_system.focus_attention(
-                target=f"navigating to {location}",
+                target=f"navigating to {navigation_request.location}",
                 target_type="spatial_navigation",
                 attention_level=0.8,  # High attention for navigation
                 source="spatial_integration_bridge"
@@ -207,7 +247,7 @@ class SpatialIntegrationBridge:
             "directions": result.directions,
             "distance": result.distance,
             "estimated_time": result.estimated_time,
-            "location": location
+            "location": navigation_request.location
         }
 
     @function_tool
@@ -242,19 +282,12 @@ class SpatialIntegrationBridge:
         }
 
     @function_tool
-    async def retrieve_spatial_memories(self, 
-                                    location_id: Optional[str] = None,
-                                    coordinates: Optional[Dict[str, float]] = None,
-                                    radius: float = 10.0,
-                                    limit: int = 5) -> List[Dict[str, Any]]:
+    async def retrieve_spatial_memories(self, query: SpatialMemoryQuery) -> List[Dict[str, Any]]:
         """
         Retrieve memories associated with a location or area.
         
         Args:
-            location_id: Optional ID of a specific location
-            coordinates: Optional coordinates to search around
-            radius: Search radius around coordinates
-            limit: Maximum number of memories to return
+            query: Query parameters for spatial memory retrieval
             
         Returns:
             List of spatial memories
@@ -262,41 +295,35 @@ class SpatialIntegrationBridge:
         if not self.spatial_memory:
             return []
         
-        if location_id:
+        if query.location_id:
             # Retrieve memories for specific location
             return await self.spatial_memory.retrieve_memories_at_location(
-                location_id=location_id,
-                limit=limit
+                location_id=query.location_id,
+                limit=query.limit
             )
-        elif coordinates:
+        elif query.coordinates:
             # Retrieve memories near coordinates
             return await self.spatial_memory.retrieve_memories_near_coordinates(
-                coordinates=coordinates,
-                radius=radius,
-                limit=limit
+                coordinates=query.coordinates.dict(),
+                radius=query.radius,
+                limit=query.limit
             )
         
         return []
 
     @function_tool
-    async def generate_map_visualization(self, 
-                                     map_id: Optional[str] = None,
-                                     highlight_landmarks: List[str] = None,
-                                     highlight_route: Optional[str] = None,
-                                     format: str = "svg") -> Dict[str, Any]:
+    async def generate_map_visualization(self, request: MapVisualizationRequest) -> Dict[str, Any]:
         """
         Generate a visualization of a cognitive map.
         
         Args:
-            map_id: Optional ID of the map (uses active map if not provided)
-            highlight_landmarks: Optional list of landmark IDs to highlight
-            highlight_route: Optional route ID to highlight
-            format: Visualization format (svg, ascii, data)
+            request: Visualization request parameters
             
         Returns:
             Map visualization
         """
         # Use active map if not provided
+        map_id = request.map_id
         if not map_id:
             if not self.spatial_mapper.context.active_map_id:
                 return {"error": "No active map set"}
@@ -309,12 +336,12 @@ class SpatialIntegrationBridge:
         map_obj = self.spatial_mapper.maps[map_id]
         
         # Generate visualization
-        if format.lower() == "svg":
+        if request.format.lower() == "svg":
             # Generate SVG visualization
             svg = self.map_visualization.generate_svg(
                 cognitive_map=map_obj,
-                highlight_landmark_ids=highlight_landmarks,
-                highlight_route_id=highlight_route
+                highlight_landmark_ids=request.highlight_landmarks,
+                highlight_route_id=request.highlight_route
             )
             return {
                 "map_id": map_id,
@@ -322,7 +349,7 @@ class SpatialIntegrationBridge:
                 "visualization": svg
             }
         
-        elif format.lower() == "ascii":
+        elif request.format.lower() == "ascii":
             # Generate ASCII visualization
             ascii_map = self.map_visualization.generate_ascii_map(
                 cognitive_map=map_obj
@@ -333,7 +360,7 @@ class SpatialIntegrationBridge:
                 "visualization": ascii_map
             }
         
-        elif format.lower() == "data":
+        elif request.format.lower() == "data":
             # Generate data representation
             map_data = self.map_visualization.generate_map_data(
                 cognitive_map=map_obj
@@ -345,7 +372,7 @@ class SpatialIntegrationBridge:
             }
         
         else:
-            return {"error": f"Unsupported format: {format}"}
+            return {"error": f"Unsupported format: {request.format}"}
 
     async def _handle_sensory_input(self, event) -> None:
         """
@@ -367,15 +394,15 @@ class SpatialIntegrationBridge:
                     # Process detected objects as spatial observations
                     for obj in features.get("objects", []):
                         # Create observation for each object
-                        observation = {
-                            "observation_type": "object",
-                            "content": {
-                                "name": obj,
-                                "object_type": obj,
-                                # Estimate position if available
-                                "coordinates": features.get("coordinates", {}).get(obj, {"x": 0, "y": 0})
-                            }
-                        }
+                        coords = features.get("coordinates", {}).get(obj, {"x": 0, "y": 0})
+                        observation = SpatialObservationInput(
+                            observation_type="object",
+                            content=ObservationContent(
+                                name=obj,
+                                object_type=obj,
+                                coordinates=Coordinates(**coords) if coords else None
+                            )
+                        )
                         
                         # Process the observation
                         asyncio.create_task(self.process_spatial_observation(observation))
@@ -396,7 +423,8 @@ class SpatialIntegrationBridge:
             # For now, this is a placeholder for more sophisticated processing
             if "go to " in content.lower():
                 target = content.lower().split("go to ")[1].strip()
-                asyncio.create_task(self.navigate_to_location(target))
+                navigation_request = NavigationInput(location=target)
+                asyncio.create_task(self.navigate_to_location(navigation_request))
 
     async def _handle_attention_change(self, event) -> None:
         """
@@ -452,10 +480,8 @@ class SpatialIntegrationBridge:
                 
                 # Also retrieve other memories at this location
                 if self.spatial_memory:
-                    other_memories = await self.spatial_memory.retrieve_memories_at_location(
-                        location_id=location_id,
-                        limit=3  # Just a few related memories
-                    )
+                    query = SpatialMemoryQuery(location_id=location_id, limit=3)
+                    other_memories = await self.retrieve_spatial_memories(query)
                     
                     # These could be used to enhance the context
 
@@ -480,9 +506,8 @@ class SpatialIntegrationBridge:
             
             # Retrieve memories at this location
             if self.spatial_memory:
-                asyncio.create_task(
-                    self.retrieve_spatial_memories(coordinates=coordinates)
-                )
+                query = SpatialMemoryQuery(coordinates=Coordinates(**coordinates))
+                asyncio.create_task(self.retrieve_spatial_memories(query))
 
     async def process_spatial_request(self, request: str) -> str:
         """
@@ -538,7 +563,8 @@ class SpatialIntegrationBridge:
             
             if target_location:
                 # Get navigation plan
-                nav_plan = await self.navigate_to_location(target_location)
+                nav_request = NavigationInput(location=target_location)
+                nav_plan = await self.navigate_to_location(nav_request)
                 spatial_context["navigation_plan"] = nav_plan
                 
                 # Add path steps to goal if needed
