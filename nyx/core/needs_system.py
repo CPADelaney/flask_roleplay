@@ -1458,18 +1458,50 @@ class NeedsSystem:
     def get_needs_by_category(self) -> NeedsByCategoryResponse:
         logger.warning("Synchronous get_needs_by_category called; prefer async agent interaction or direct logic call if within NeedsSystem.")
         return self._get_needs_by_category_logic()
-
  
     async def get_needs_state_async(self) -> NeedsStateResponse:
         """Async method to get needs state."""
         prompt = "Get the current state of all needs."
-        result = await Runner.run(self.agent, prompt, context=self.context)
-        if isinstance(result.final_output, NeedsStateResponse):
-            return result.final_output
-        else:
-            logger.error(f"get_needs_state_async: Agent returned unexpected type {type(result.final_output)}")
-            return NeedsStateResponse(needs={})
-    
+        
+        try:
+            result = await Runner.run(self.agent, prompt, context=self.context)
+            
+            # Check if we got the expected response type
+            if isinstance(result.final_output, NeedsStateResponse):
+                return result.final_output
+            
+            # If agent returned a string (JSON), log error and fall back to direct logic
+            elif isinstance(result.final_output, str):
+                logger.error(f"Agent returned JSON string instead of using tools. Falling back to direct logic.")
+                logger.debug(f"Agent output was: {result.final_output[:200]}...")
+                # Use direct logic as fallback
+                return self._get_needs_state_logic()
+            
+            # If agent returned a dict, try to convert it
+            elif isinstance(result.final_output, dict):
+                try:
+                    # Try to construct NeedsStateResponse from dict
+                    needs_dict = {}
+                    for name, data in result.final_output.items():
+                        if isinstance(data, dict):
+                            needs_dict[name] = NeedStateInfo(**data)
+                        elif hasattr(data, '__dict__'):
+                            needs_dict[name] = NeedStateInfo(**data.__dict__)
+                    return NeedsStateResponse(needs=needs_dict)
+                except Exception as e:
+                    logger.error(f"Failed to convert agent dict output: {e}")
+                    return self._get_needs_state_logic()
+            
+            else:
+                logger.error(f"get_needs_state_async: Agent returned unexpected type {type(result.final_output)}")
+                # Fall back to direct logic
+                return self._get_needs_state_logic()
+                
+        except Exception as e:
+            logger.error(f"Error in get_needs_state_async: {e}")
+            # Fall back to direct logic
+            return self._get_needs_state_logic()
+        
     async def get_total_drive_async(self) -> float:
         """Async method to get total drive."""
         prompt = "Calculate the total drive of all needs."
