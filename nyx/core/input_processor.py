@@ -58,10 +58,64 @@ class ModificationDetail(BaseModel):
     description: str
     source_mode: Optional[str] = None
 
+# New explicit models for dictionary types
+class ModeDistributionModel(BaseModel):
+    """Mode distribution as a model"""
+    dominant: float = Field(default=0.0, ge=0.0, le=1.0)
+    friendly: float = Field(default=0.0, ge=0.0, le=1.0)
+    intellectual: float = Field(default=0.0, ge=0.0, le=1.0)
+    compassionate: float = Field(default=0.0, ge=0.0, le=1.0)
+    playful: float = Field(default=0.0, ge=0.0, le=1.0)
+    creative: float = Field(default=0.0, ge=0.0, le=1.0)
+    professional: float = Field(default=0.0, ge=0.0, le=1.0)
+    nurturing: float = Field(default=0.0, ge=0.0, le=1.0)
+
+class SensitivitiesModel(BaseModel):
+    """Pattern sensitivities model"""
+    submission_language: float = Field(default=0.5, ge=0.0, le=1.0)
+    defiance: float = Field(default=0.5, ge=0.0, le=1.0)
+    flattery: float = Field(default=0.5, ge=0.0, le=1.0)
+    disrespect: float = Field(default=0.5, ge=0.0, le=1.0)
+    embarrassment: float = Field(default=0.5, ge=0.0, le=1.0)
+
+class BehaviorScoresModel(BaseModel):
+    """Behavior scores model"""
+    dominant_response: float = Field(default=0.5, ge=0.0, le=1.0)
+    teasing_response: float = Field(default=0.5, ge=0.0, le=1.0)
+    nurturing_response: float = Field(default=0.5, ge=0.0, le=1.0)
+    direct_response: float = Field(default=0.5, ge=0.0, le=1.0)
+    playful_response: float = Field(default=0.5, ge=0.0, le=1.0)
+    strict_response: float = Field(default=0.5, ge=0.0, le=1.0)
+
+class StringListModel(BaseModel):
+    """Model for a list of strings"""
+    items: List[str] = Field(default_factory=list)
+
+class BlendedStyleModel(BaseModel):
+    """Blended style elements"""
+    add_elements: List[str] = Field(default_factory=list)
+    remove_elements: List[str] = Field(default_factory=list)
+    tone_elements: List[str] = Field(default_factory=list)
+    phrasing_examples: List[str] = Field(default_factory=list)
+    typical_pronouns: List[str] = Field(default_factory=list)
+
+class ElementSourceItem(BaseModel):
+    """Source item for an element"""
+    element: str
+    sources: List[str]
+
+class ElementSourcesModel(BaseModel):
+    """Element sources structure"""
+    add_elements: List[ElementSourceItem] = Field(default_factory=list)
+    remove_elements: List[ElementSourceItem] = Field(default_factory=list)
+    tone_elements: List[ElementSourceItem] = Field(default_factory=list)
+    phrasing_examples: List[ElementSourceItem] = Field(default_factory=list)
+    typical_pronouns: List[ElementSourceItem] = Field(default_factory=list)
+
 class BlendedResponseModification(BaseModel):
     """Output schema for blended response modification"""
     modified_text: str = Field(description="Modified response text")
-    mode_influences: Dict[str, float] = Field(description="Influence of each mode on the modification")
+    mode_influences: ModeDistributionModel = Field(description="Influence of each mode on the modification")
     modifications_made: List[ModificationDetail] = Field(description="List of modifications made to the response")
     coherence: float = Field(ge=0.0, le=1.0, description="Coherence of the modified response (0.0-1.0)")
     style_notes: Optional[str] = Field(default=None, description="Notes about the style of the modified response")
@@ -137,7 +191,7 @@ class ModePreferencesResult(BaseModel):
 
 class StyleElementsInput(BaseModel):
     """Input for calculating style elements"""
-    mode_distribution: Dict[str, float] = Field(default_factory=dict, description="Mode distribution")
+    mode_distribution: ModeDistributionModel = Field(default_factory=ModeDistributionModel, description="Mode distribution")
 
 class ElementSources(BaseModel):
     """Sources for style elements"""
@@ -146,9 +200,9 @@ class ElementSources(BaseModel):
 
 class StyleElementsResult(BaseModel):
     """Result of style elements calculation"""
-    blended_style: Dict[str, List[str]] = Field(description="Blended style elements")
-    influences: Dict[str, float] = Field(description="Mode influences")
-    element_sources: Dict[str, Dict[str, List[str]]] = Field(description="Sources for each element")
+    blended_style: BlendedStyleModel = Field(description="Blended style elements")
+    influences: ModeDistributionModel = Field(description="Mode influences")
+    element_sources: ElementSourcesModel = Field(description="Sources for each element")
 
 class CoherenceAnalysisInput(BaseModel):
     """Input for coherence analysis"""
@@ -176,9 +230,9 @@ class ProcessInputResult(BaseModel):
     recommended_behaviors: List[str] = Field(description="Recommended behaviors")
     avoided_behaviors: List[str] = Field(description="Behaviors to avoid")
     reinforcement_results: List[ProcessConditioningResult] = Field(description="Reinforcement results")
-    mode_distribution: Dict[str, float] = Field(description="Current mode distribution")
-    adjusted_sensitivities: Dict[str, float] = Field(description="Adjusted sensitivities")
-    behavior_scores: Dict[str, float] = Field(description="Behavior scores")
+    mode_distribution: ModeDistributionModel = Field(default_factory=ModeDistributionModel, description="Current mode distribution")
+    adjusted_sensitivities: SensitivitiesModel = Field(default_factory=SensitivitiesModel, description="Adjusted sensitivities")
+    behavior_scores: BehaviorScoresModel = Field(default_factory=BehaviorScoresModel, description="Behavior scores")
 
 class InputProcessingAgentContext:
     """Context for input processing agent operations"""
@@ -343,6 +397,31 @@ class InputProcessingAgentContext:
                 }
             }
         }
+
+# Helper function to convert dict to model
+def dict_to_mode_distribution(d: Dict[str, float]) -> ModeDistributionModel:
+    """Convert a dictionary to ModeDistributionModel"""
+    model = ModeDistributionModel()
+    for key, value in d.items():
+        if hasattr(model, key):
+            setattr(model, key, value)
+    return model
+
+def dict_to_sensitivities(d: Dict[str, float]) -> SensitivitiesModel:
+    """Convert a dictionary to SensitivitiesModel"""
+    model = SensitivitiesModel()
+    for key, value in d.items():
+        if hasattr(model, key):
+            setattr(model, key, value)
+    return model
+
+def dict_to_behavior_scores(d: Dict[str, float]) -> BehaviorScoresModel:
+    """Convert a dictionary to BehaviorScoresModel"""
+    model = BehaviorScoresModel()
+    for key, value in d.items():
+        if hasattr(model, key):
+            setattr(model, key, value)
+    return model
 
 class BlendedInputProcessor:
     """
@@ -792,31 +871,31 @@ class BlendedInputProcessor:
         processor_ctx = ctx.context
         mode_distribution = input_data.mode_distribution
         
+        # Convert ModeDistributionModel to dict for processing
+        mode_dict = mode_distribution.model_dump()
+        
         # Initialize style elements
-        blended_style = {
-            "add_elements": [],
-            "remove_elements": [],
-            "tone_elements": [],
-            "phrasing_examples": [],
-            "typical_pronouns": []
-        }
+        blended_style = BlendedStyleModel()
         
         # Track mode influences
-        influences = {}
-        element_sources = {
+        influences = ModeDistributionModel()
+        element_sources = ElementSourcesModel()
+        
+        # Get significant modes (weight >= 0.2)
+        significant_modes = {mode: weight for mode, weight in mode_dict.items() if weight >= 0.2}
+        
+        # Normalize significant mode weights
+        total_weight = sum(significant_modes.values())
+        normalized_weights = {mode: weight/total_weight for mode, weight in significant_modes.items()} if total_weight > 0 else {}
+        
+        # Temporary storage for element sources
+        temp_sources = {
             "add_elements": {},
             "remove_elements": {},
             "tone_elements": {},
             "phrasing_examples": {},
             "typical_pronouns": {}
         }
-        
-        # Get significant modes (weight >= 0.2)
-        significant_modes = {mode: weight for mode, weight in mode_distribution.items() if weight >= 0.2}
-        
-        # Normalize significant mode weights
-        total_weight = sum(significant_modes.values())
-        normalized_weights = {mode: weight/total_weight for mode, weight in significant_modes.items()} if total_weight > 0 else {}
         
         # For each significant mode
         for mode, norm_weight in normalized_weights.items():
@@ -828,7 +907,7 @@ class BlendedInputProcessor:
                 continue
                 
             # Record mode influence
-            influences[mode] = norm_weight
+            setattr(influences, mode, norm_weight)
             
             # Add weighted elements based on mode weight
             for element_type in ["add_elements", "remove_elements", "tone_elements"]:
@@ -839,13 +918,14 @@ class BlendedInputProcessor:
                     
                     # Select top elements
                     top_elements = elements[:num_elements]
-                    blended_style[element_type].extend(top_elements)
+                    current_list = getattr(blended_style, element_type)
+                    current_list.extend(top_elements)
                     
                     # Record sources
                     for element in top_elements:
-                        if element not in element_sources[element_type]:
-                            element_sources[element_type][element] = []
-                        element_sources[element_type][element].append(mode)
+                        if element not in temp_sources[element_type]:
+                            temp_sources[element_type][element] = []
+                        temp_sources[element_type][element].append(mode)
             
             # Add phrasing examples based on weight
             if preferences.phrasing_examples:
@@ -854,28 +934,37 @@ class BlendedInputProcessor:
                 
                 # Select top phrases
                 top_phrases = preferences.phrasing_examples[:num_phrases]
-                blended_style["phrasing_examples"].extend(top_phrases)
+                blended_style.phrasing_examples.extend(top_phrases)
                 
                 # Record sources
                 for phrase in top_phrases:
-                    if phrase not in element_sources["phrasing_examples"]:
-                        element_sources["phrasing_examples"][phrase] = []
-                    element_sources["phrasing_examples"][phrase].append(mode)
+                    if phrase not in temp_sources["phrasing_examples"]:
+                        temp_sources["phrasing_examples"][phrase] = []
+                    temp_sources["phrasing_examples"][phrase].append(mode)
             
             # Add pronouns
             if preferences.typical_pronouns:
-                blended_style["typical_pronouns"].extend(preferences.typical_pronouns)
+                blended_style.typical_pronouns.extend(preferences.typical_pronouns)
                 
                 # Record sources
                 for pronoun in preferences.typical_pronouns:
-                    if pronoun not in element_sources["typical_pronouns"]:
-                        element_sources["typical_pronouns"][pronoun] = []
-                    element_sources["typical_pronouns"][pronoun].append(mode)
+                    if pronoun not in temp_sources["typical_pronouns"]:
+                        temp_sources["typical_pronouns"][pronoun] = []
+                    temp_sources["typical_pronouns"][pronoun].append(mode)
         
         # Remove duplicates while preserving order
-        for element_type in blended_style:
+        for element_type in ["add_elements", "remove_elements", "tone_elements", "phrasing_examples", "typical_pronouns"]:
+            current_list = getattr(blended_style, element_type)
             seen = set()
-            blended_style[element_type] = [x for x in blended_style[element_type] if not (x in seen or seen.add(x))]
+            unique_list = [x for x in current_list if not (x in seen or seen.add(x))]
+            setattr(blended_style, element_type, unique_list)
+        
+        # Convert temp_sources to ElementSourcesModel
+        for element_type, sources_dict in temp_sources.items():
+            items = []
+            for element, sources in sources_dict.items():
+                items.append(ElementSourceItem(element=element, sources=sources))
+            setattr(element_sources, element_type, items)
         
         return StyleElementsResult(
             blended_style=blended_style,
@@ -1104,13 +1193,18 @@ class BlendedInputProcessor:
                 reinforcement_results.append(punishment)
             
             # Get current mode distribution if available
-            mode_distribution = {}
+            mode_distribution = ModeDistributionModel()
             if self.context.mode_manager and hasattr(self.context.mode_manager, 'context'):
                 try:
                     mode_dist = self.context.mode_manager.context.mode_distribution
-                    mode_distribution = mode_dist.model_dump() if hasattr(mode_dist, 'model_dump') else mode_dist.dict()
+                    mode_dict = mode_dist.model_dump() if hasattr(mode_dist, 'model_dump') else mode_dist.dict()
+                    mode_distribution = dict_to_mode_distribution(mode_dict)
                 except:
                     pass
+            
+            # Convert dicts to models
+            adjusted_sensitivities = dict_to_sensitivities(self.shared_context.get_adjusted_sensitivities())
+            behavior_scores = dict_to_behavior_scores(self.shared_context.get_behavior_scores())
             
             # Collect results
             return ProcessInputResult(
@@ -1122,8 +1216,8 @@ class BlendedInputProcessor:
                 avoided_behaviors=avoided_behaviors,
                 reinforcement_results=reinforcement_results,
                 mode_distribution=mode_distribution,
-                adjusted_sensitivities=self.shared_context.get_adjusted_sensitivities(),
-                behavior_scores=self.shared_context.get_behavior_scores()
+                adjusted_sensitivities=adjusted_sensitivities,
+                behavior_scores=behavior_scores
             )
     
     async def modify_response(self, response_text: str, input_processing_results: ProcessInputResult) -> str:
@@ -1139,13 +1233,14 @@ class BlendedInputProcessor:
         """
         with trace(workflow_name="modify_conditioned_response", group_id=getattr(self.brain, 'trace_group_id', 'default')):
             # Check if mode distribution is available
-            mode_distribution = input_processing_results.mode_distribution
+            mode_distribution = input_processing_results.mode_distribution.model_dump()
             
             # Fall back to current mode manager state if not in results
-            if not mode_distribution and self.context.mode_manager and hasattr(self.context.mode_manager, 'context'):
+            if not any(mode_distribution.values()) and self.context.mode_manager and hasattr(self.context.mode_manager, 'context'):
                 try:
                     mode_dist = self.context.mode_manager.context.mode_distribution
-                    mode_distribution = mode_dist.model_dump() if hasattr(mode_dist, 'model_dump') else mode_dist.dict()
+                    mode_dict = mode_dist.model_dump() if hasattr(mode_dist, 'model_dump') else mode_dist.dict()
+                    mode_distribution = mode_dict
                 except:
                     pass
             
@@ -1219,13 +1314,16 @@ class BlendedInputProcessor:
             Modified response information with details
         """
         with trace(workflow_name="modify_blended_response", group_id=getattr(self.brain, 'trace_group_id', 'default')):
+            # Convert dict to model
+            mode_dist_model = dict_to_mode_distribution(mode_distribution)
+            
             # Prepare the prompt
             blended_prompt = f"""
             Modify the following response based on the given mode distribution:
             
             ORIGINAL RESPONSE: {response_text}
             
-            MODE DISTRIBUTION: {mode_distribution}
+            MODE DISTRIBUTION: {mode_dist_model.model_dump()}
             
             Modify the response to proportionally reflect all active modes in the distribution,
             with higher-weighted modes having more influence on the final style and tone.
