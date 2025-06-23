@@ -592,13 +592,6 @@ class DominanceSystem:
                 logger.warning(f"Could not retrieve hormone levels for agent prompt: {e}")
         return levels
 
-# Update model forward references
-UserProfileResult.model_rebuild()
-GenerateIdeasResult.model_rebuild()
-GenerateAndEvaluateResult.model_rebuild()
-QualityEvaluation.model_rebuild()
-ComparisonResult.model_rebuild()
-
 # nyx/core/dominance.py - Part 2 (Methods)
 
     async def evaluate_dominance_step_appropriateness(self, 
@@ -1631,3 +1624,10 @@ def create_hard_dominance_ideation_agent():
         tools=[],  # Tools will be added by the calling code
         output_type=List[FemdomActivityIdea]
     )
+
+# Update model forward references
+UserProfileResult.model_rebuild()
+GenerateIdeasResult.model_rebuild()
+GenerateAndEvaluateResult.model_rebuild()
+QualityEvaluation.model_rebuild()
+ComparisonResult.model_rebuild()
