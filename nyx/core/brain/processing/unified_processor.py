@@ -33,12 +33,34 @@ class InputAnalysis(BaseModel):
     is_reflexive: bool
     suggested_approach: str
 
+# New explicit models for ProcessingResult fields
+class EmotionalStateModel(BaseModel):
+    """Emotional state representation"""
+    neutral: float = Field(default=0.0, ge=0.0, le=1.0)
+    joy: float = Field(default=0.0, ge=0.0, le=1.0)
+    sadness: float = Field(default=0.0, ge=0.0, le=1.0)
+    anger: float = Field(default=0.0, ge=0.0, le=1.0)
+    fear: float = Field(default=0.0, ge=0.0, le=1.0)
+    surprise: float = Field(default=0.0, ge=0.0, le=1.0)
+    disgust: float = Field(default=0.0, ge=0.0, le=1.0)
+    trust: float = Field(default=0.0, ge=0.0, le=1.0)
+    anticipation: float = Field(default=0.0, ge=0.0, le=1.0)
+
+class MemoryUsedModel(BaseModel):
+    """Memory used in processing"""
+    id: str
+    text: str
+    type: str
+    significance: float
+    timestamp: str
+    tags: List[str] = Field(default_factory=list)
+
 class ProcessingResult(BaseModel):
     """Result of unified processing"""
     user_input: str
     response: str
-    emotional_state: Dict[str, float]
-    memories_used: List[Dict[str, Any]]
+    emotional_state: EmotionalStateModel  # Changed from Dict[str, float]
+    memories_used: List[MemoryUsedModel]  # Changed from List[Dict[str, Any]]
     processing_approach: str
     response_time: float
     confidence: float
@@ -86,6 +108,19 @@ class ProceduralCheckResult(BaseModel):
     """Result of procedural knowledge check"""
     found: bool
     procedures: List[ProcedureData] = []
+
+# New model for emotion processing result
+class EmotionProcessingResult(BaseModel):
+    """Result of emotion processing"""
+    neutral: float = Field(default=1.0, ge=0.0, le=1.0)
+    joy: float = Field(default=0.0, ge=0.0, le=1.0)
+    sadness: float = Field(default=0.0, ge=0.0, le=1.0)
+    anger: float = Field(default=0.0, ge=0.0, le=1.0)
+    fear: float = Field(default=0.0, ge=0.0, le=1.0)
+    surprise: float = Field(default=0.0, ge=0.0, le=1.0)
+    disgust: float = Field(default=0.0, ge=0.0, le=1.0)
+    trust: float = Field(default=0.0, ge=0.0, le=1.0)
+    anticipation: float = Field(default=0.0, ge=0.0, le=1.0)
 
 class UnifiedProcessor:
     """Single processor that dynamically handles all input types"""
@@ -189,14 +224,20 @@ class UnifiedProcessor:
             )
         
         @function_tool
-        async def process_emotions(ctx: RunContextWrapper[ProcessingContext], text: str) -> Dict[str, float]:
+        async def process_emotions(ctx: RunContextWrapper[ProcessingContext], text: str) -> EmotionProcessingResult:
             """Process emotional aspects of input and context"""
             brain = ctx.context.brain
             if hasattr(brain, 'emotional_core') and brain.emotional_core:
                 stimuli = brain.emotional_core.analyze_text_sentiment(text)
                 state = brain.emotional_core.update_from_stimuli(stimuli)
-                return state
-            return {"neutral": 1.0}
+                
+                # Convert dict to EmotionProcessingResult
+                result = EmotionProcessingResult()
+                for emotion, value in state.items():
+                    if hasattr(result, emotion):
+                        setattr(result, emotion, value)
+                return result
+            return EmotionProcessingResult(neutral=1.0)
         
         @function_tool
         async def retrieve_memories(ctx: RunContextWrapper[ProcessingContext], 
@@ -421,8 +462,8 @@ class UnifiedProcessor:
                 return {
                     "user_input": processed.user_input,
                     "message": processed.response,
-                    "emotional_state": processed.emotional_state,
-                    "memories": [mem.dict() for mem in processed.memories_used],
+                    "emotional_state": processed.emotional_state.model_dump(),
+                    "memories": [mem.model_dump() for mem in processed.memories_used],
                     "memory_count": len(processed.memories_used),
                     "has_experience": len(processed.memories_used) > 0,
                     "response_time": processed.response_time,
