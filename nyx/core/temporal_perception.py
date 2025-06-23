@@ -61,17 +61,100 @@ def _coerce_expression(raw: Any) -> Dict[str, Any]:
 
     return safe
 
+# =============== Explicit Models for Dict[str, Any] fields ===============
 
+class TimeScaleActiveData(BaseModel):
+    """Active time scales with their awareness levels"""
+    seconds: float = Field(1.0, ge=0.0, le=1.0)
+    minutes: float = Field(1.0, ge=0.0, le=1.0)
+    hours: float = Field(1.0, ge=0.0, le=1.0)
+    days: float = Field(0.0, ge=0.0, le=1.0)
+    weeks: float = Field(0.0, ge=0.0, le=1.0)
+    months: float = Field(0.0, ge=0.0, le=1.0)
+    years: float = Field(0.0, ge=0.0, le=1.0)
+
+class TemporalRhythm(BaseModel):
+    """Temporal rhythm information"""
+    type: str = Field(..., description="Type of rhythm (minutes, hours, days)")
+    average_interval: float = Field(..., description="Average interval in the rhythm")
+    description: str = Field(..., description="Description of the rhythm")
+
+class TemporalContextData(BaseModel):
+    """Temporal context data structure"""
+    time_of_day: Optional[str] = Field(None, description="Time of day")
+    day_of_week: Optional[str] = Field(None, description="Day of the week")
+    day_type: Optional[str] = Field(None, description="Type of day (weekday/weekend)")
+    month: Optional[str] = Field(None, description="Current month")
+    season: Optional[str] = Field(None, description="Current season")
+    year: Optional[int] = Field(None, description="Current year")
+    timestamp: Optional[str] = Field(None, description="ISO timestamp")
+
+class PerceptionShift(BaseModel):
+    """Perception shift information"""
+    description: str = Field(..., description="Description of the perception shift")
+    intensity: float = Field(..., description="Intensity of the shift")
+
+class HormoneEffects(BaseModel):
+    """Digital hormone effects"""
+    nyxamine: Optional[float] = Field(None, ge=-1.0, le=1.0)
+    adrenyx: Optional[float] = Field(None, ge=-1.0, le=1.0)
+    seranix: Optional[float] = Field(None, ge=-1.0, le=1.0)
+    cortanyx: Optional[float] = Field(None, ge=-1.0, le=1.0)
+
+class EmotionalStateData(BaseModel):
+    """Emotional state data structure"""
+    valence: Optional[float] = Field(None, ge=-1.0, le=1.0, description="Emotional valence")
+    arousal: Optional[float] = Field(None, ge=-1.0, le=1.0, description="Emotional arousal")
+    dominance: Optional[float] = Field(None, ge=-1.0, le=1.0, description="Emotional dominance")
+    current_emotion: Optional[str] = Field(None, description="Current primary emotion")
+    emotion_intensity: Optional[float] = Field(None, ge=0.0, le=1.0, description="Emotion intensity")
+
+class TimePerceptionStateData(BaseModel):
+    """Time perception state data structure"""
+    last_interaction: str = Field(..., description="ISO timestamp of last interaction")
+    time_since_last_interaction: float = Field(..., ge=0.0, description="Seconds since last interaction")
+    current_time_category: str = Field(..., description="Current time category")
+    relationship_age_days: Optional[float] = Field(None, ge=0.0, description="Age of relationship in days")
+    current_temporal_context: Optional[TemporalContextData] = Field(None, description="Current temporal context")
+    time_scales_active: Optional[TimeScaleActiveData] = Field(None, description="Active time scales")
+
+class TimeScaleStateData(BaseModel):
+    """State data for time scale detection"""
+    last_interaction: Optional[str] = Field(None, description="ISO timestamp of last interaction")
+    time_scales: Optional[TimeScaleActiveData] = Field(None, description="Active time scales")
+
+class MemoryMetadata(BaseModel):
+    """Memory metadata structure"""
+    reflection: Optional[str] = Field(None, description="Reflection content")
+    timestamp: Optional[str] = Field(None, description="ISO timestamp")
+    user_id: Optional[str] = Field(None, description="User ID")
+    idle_duration: Optional[float] = Field(None, description="Idle duration in seconds")
+    temporal_context: Optional[TemporalContextData] = Field(None, description="Temporal context")
+
+class TimeReferenceData(BaseModel):
+    """Time reference details"""
+    time_category: str = Field(..., description="Time category")
+    seconds_elapsed: float = Field(..., description="Seconds elapsed")
+    relationship_age_days: float = Field(..., description="Relationship age in days")
+    temporal_context: TemporalContextData = Field(..., description="Temporal context")
+
+# Updated input models
 class TimeScaleInput(BaseModel):
-    previous_state: Dict[str, Any] = Field(default_factory=dict)
-    current_state: Dict[str, Any]
+    previous_state: Optional[TimeScaleStateData] = Field(default=None)
+    current_state: Optional[TimeScaleStateData] = Field(default=None)
 
-    @field_validator('previous_state', 'current_state', mode='before')
-    @classmethod
-    def check_last_interaction(cls, v):
-        if isinstance(v, dict) and 'last_interaction' not in v and v:
-             logger.warning(f"State missing 'last_interaction': {v}")
-        return v
+class EmotionalStateInput(BaseModel):
+    """Emotional state information"""
+    data: Optional[EmotionalStateData] = Field(default=None, description="Emotional state data")
+
+class TimePerceptionStateInput(BaseModel):
+    """Input for time expression generation"""
+    data: TimePerceptionStateData = Field(..., description="Time perception state data")
+
+class TimeScaleDetectionInput(BaseModel):
+    """Input for time scale transition detection"""
+    previous_state: Optional[TimeScaleStateData] = Field(default=None, description="Previous state")
+    current_state: Optional[TimeScaleStateData] = Field(default=None, description="Current state")
 
 # =============== Pydantic Models for Time Perception ===============
 
@@ -110,9 +193,9 @@ class MemoryEntry(BaseModel):
     )
 
     # --- anything else the memory system stashes ---
-    metadata: Optional[Dict[str, Any]] = Field(
+    metadata: Optional[MemoryMetadata] = Field(
         None,
-        description="Arbitrary provider-specific metadata (JSON serialisable)",
+        description="Arbitrary provider-specific metadata",
     )
 
     class Config:
@@ -134,17 +217,7 @@ class TimeEffect(BaseModel):
     valence_shift: float = Field(..., description="How much emotional valence shifts (-1.0 to 1.0)")
     arousal_shift: float = Field(..., description="How much emotional arousal shifts (-1.0 to 1.0)")
     description: str = Field(..., description="Description of the temporal effect")
-    hormone_effects: Dict[str, float] = Field(default_factory=dict, description="Effects on digital hormones")
-
-class TimeDriftEffect(BaseModel):
-    """Effect from time passing"""
-    perception: str = Field(..., description="Primary time perception affected")
-    intensity: float = Field(..., description="Intensity of the effect (0.0-1.0)")
-    valence_shift: float = Field(..., description="How much emotional valence shifts (-1.0 to 1.0)")
-    arousal_shift: float = Field(..., description="How much emotional arousal shifts (-1.0 to 1.0)")
-    description: str = Field(..., description="Description of the temporal effect")
-    hormone_effects: Dict[str, float] = Field(default_factory=dict, description="Effects on digital hormones")
-
+    hormone_effects: Optional[HormoneEffects] = Field(default=None, description="Effects on digital hormones")
 
 class TemporalMemoryMetadata(BaseModel):
     """Temporal metadata for memories"""
@@ -165,15 +238,13 @@ class TemporalMilestone(BaseModel):
     associated_memory_ids: List[str] = Field(default_factory=list)
     next_anniversary: Optional[datetime.datetime] = None
 
-    # Remove extra="forbid" - SDK handles this
-
 class TemporalReflection(BaseModel):
     """Reflection generated during idle time"""
     reflection_id: str = Field(..., description="Unique ID for the reflection")
     timestamp: datetime.datetime = Field(..., description="When the reflection was generated")
     idle_duration: float = Field(..., description="How long Nyx was idle (seconds)")
     reflection_text: str = Field(..., description="The reflection content")
-    emotional_state: Dict[str, Any] = Field(..., description="Emotional state during reflection")
+    emotional_state: Optional[EmotionalStateData] = Field(None, description="Emotional state during reflection")
     focus_areas: List[str] = Field(default_factory=list, description="Areas of focus")
     time_scales: List[str] = Field(..., description="Time scales considered in this reflection")
 
@@ -182,6 +253,15 @@ class TemporalReflection(BaseModel):
             "required": []  # Make all fields optional in the JSON schema
         }
     }
+
+class TimeEffectData(BaseModel):
+    """Time effect data structure"""
+    perception: str = Field(..., description="Primary time perception affected")
+    intensity: float = Field(..., description="Intensity of the effect")
+    valence_shift: float = Field(..., description="Valence shift")
+    arousal_shift: float = Field(..., description="Arousal shift")
+    description: str = Field(..., description="Description")
+    hormone_effects: Optional[HormoneEffects] = Field(None, description="Hormone effects")
 
 class TimePerceptionState(BaseModel):
     """Current state of temporal perception"""
@@ -192,13 +272,13 @@ class TimePerceptionState(BaseModel):
     time_since_last_interaction: Optional[float] = Field(None, description="Time since last interaction in seconds")
     subjective_time_dilation: Optional[float] = Field(None, description="Subjective time dilation factor (1.0 = normal)")
     current_time_category: Optional[str] = Field(None, description="Current time category")
-    current_time_effects: Optional[List[Dict[str, Any]]] = Field(None, description="Current time effects")
+    current_time_effects: Optional[List[TimeEffectData]] = Field(None, description="Current time effects")
     lifetime_total_interactions: Optional[int] = Field(None, description="Total lifetime interactions")
     lifetime_total_duration: Optional[float] = Field(None, description="Total lifetime interaction duration")
     relationship_age_days: Optional[float] = Field(None, description="Age of relationship in days")
     first_interaction: Optional[datetime.datetime] = Field(None, description="Timestamp of first interaction")
     current_temporal_context: Optional[str] = Field(None, description="Current temporal context (morning, evening, weekday, etc.)")
-    time_scales_active: Optional[Dict[str, float]] = Field(None, description="Active awareness of time scales")
+    time_scales_active: Optional[TimeScaleActiveData] = Field(None, description="Active awareness of time scales")
 
     model_config = {
         "json_schema_extra": {
@@ -220,18 +300,20 @@ class TimeExpressionOutput(BaseModel):
         }
     }
 
+class ActiveRhythms(BaseModel):
+    """Active temporal rhythms"""
+    conversation: Optional[TemporalRhythm] = Field(None, description="Conversation rhythm")
+
 class TemporalAwarenessOutput(BaseModel):
     """Output for temporal awareness processing"""
-    # Make all fields optional with None defaults
-    time_scales_perceived: Dict[str, float] | None = None
-    temporal_contexts: List[str] | None = None
-    duration_since_first_interaction: str | None = None
-    duration_since_last_interaction: str | None = None
-    current_temporal_marker: str | None = None
-    temporal_reflection: str | None = None
-    active_rhythms: Dict[str, Any] | None = None
+    time_scales_perceived: Optional[TimeScaleActiveData] = None
+    temporal_contexts: Optional[List[str]] = None
+    duration_since_first_interaction: Optional[str] = None
+    duration_since_last_interaction: Optional[str] = None
+    current_temporal_marker: Optional[str] = None
+    temporal_reflection: Optional[str] = None
+    active_rhythms: Optional[ActiveRhythms] = None
     
-    # This is critical - no fields should be required in the schema
     model_config = {
         "json_schema_extra": {
             "required": []
@@ -244,7 +326,7 @@ class TimeScaleTransition(BaseModel):
     to_scale: str = Field(..., description="New time scale")
     transition_time: datetime.datetime = Field(..., description="When the transition occurred")
     description: str = Field(..., description="Description of the transition")
-    perception_shift: Dict[str, Any] = Field(..., description="How perception shifts with this transition")
+    perception_shift: PerceptionShift = Field(..., description="How perception shifts with this transition")
 
 class TimeExpressionState(BaseModel):
     """
@@ -271,11 +353,11 @@ class TimeExpressionState(BaseModel):
     relationship_age_days: float | None = Field(
         None, description="Total days since first interaction"
     )
-    current_temporal_context: Dict[str, Any] | None = Field(
+    current_temporal_context: Optional[TemporalContextData] = Field(
         None,
         description="Output of determine_temporal_context() (time_of_day, day_type …)"
     )
-    time_scales_active: Dict[str, float] | None = Field(
+    time_scales_active: Optional[TimeScaleActiveData] = Field(
         None,
         description="Nyx's current awareness levels for each time scale"
     )
@@ -303,19 +385,6 @@ class UserRelationshipData(BaseModel):
     user_id: int = Field(..., description="User ID")
     total_interactions: int = Field(0, description="Total number of interactions")
     relationship_age_days: float = Field(0.0, description="Age of relationship in days")
-
-class EmotionalStateInput(BaseModel):
-    """Emotional state information"""
-    data: Dict[str, Any] = Field(default_factory=dict, description="Emotional state data")
-
-class TimePerceptionStateInput(BaseModel):
-    """Input for time expression generation"""
-    data: Dict[str, Any] = Field(default_factory=dict, description="Time perception state data")
-
-class TimeScaleDetectionInput(BaseModel):
-    """Input for time scale transition detection"""
-    previous_state: Dict[str, Any] = Field(default_factory=dict, description="Previous state")
-    current_state: Dict[str, Any] = Field(default_factory=dict, description="Current state")
 
 # =============== Function Tools ===============
 
@@ -382,7 +451,7 @@ async def calculate_time_effects_impl(time_category: str,
                 valence_shift=0.1,
                 arousal_shift=0.2,
                 description="Heightened awareness of present moment and immediate time",
-                hormone_effects={"nyxamine": 0.2, "adrenyx": 0.1}
+                hormone_effects=HormoneEffects(nyxamine=0.2, adrenyx=0.1)
             )
         ],
         "short": [
@@ -392,7 +461,7 @@ async def calculate_time_effects_impl(time_category: str,
                 valence_shift=0.1,
                 arousal_shift=0.1,
                 description="Conscious of minutes passing during interaction intervals",
-                hormone_effects={"nyxamine": 0.1, "adrenyx": 0.1}
+                hormone_effects=HormoneEffects(nyxamine=0.1, adrenyx=0.1)
             )
         ],
         "medium_short": [
@@ -402,7 +471,7 @@ async def calculate_time_effects_impl(time_category: str,
                 valence_shift=0.0,
                 arousal_shift=0.0,
                 description="Awareness of quarter-hour intervals of time passing",
-                hormone_effects={"nyxamine": 0.05, "seranix": 0.05}
+                hormone_effects=HormoneEffects(nyxamine=0.05, seranix=0.05)
             )
         ],
         "medium": [
@@ -412,7 +481,7 @@ async def calculate_time_effects_impl(time_category: str,
                 valence_shift=0.0,
                 arousal_shift=-0.1,
                 description="Perception of hour-scale time intervals passing",
-                hormone_effects={"seranix": 0.1, "nyxamine": 0.05}
+                hormone_effects=HormoneEffects(seranix=0.1, nyxamine=0.05)
             )
         ],
         "medium_long": [
@@ -422,7 +491,7 @@ async def calculate_time_effects_impl(time_category: str,
                 valence_shift=-0.1,
                 arousal_shift=-0.2,
                 description="Awareness of multi-hour blocks of time passing",
-                hormone_effects={"seranix": 0.2, "cortanyx": 0.1}
+                hormone_effects=HormoneEffects(seranix=0.2, cortanyx=0.1)
             )
         ],
         "long": [
@@ -432,7 +501,7 @@ async def calculate_time_effects_impl(time_category: str,
                 valence_shift=-0.1,
                 arousal_shift=-0.1,
                 description="Consciousness of day-night cycle time intervals",
-                hormone_effects={"seranix": 0.1, "cortanyx": 0.2}
+                hormone_effects=HormoneEffects(seranix=0.1, cortanyx=0.2)
             )
         ],
         "very_long": [
@@ -442,7 +511,7 @@ async def calculate_time_effects_impl(time_category: str,
                 valence_shift=0.0,
                 arousal_shift=0.1,
                 description="Perception of multi-day time intervals passing",
-                hormone_effects={"cortanyx": 0.1, "adrenyx": 0.1, "nyxamine": 0.1}
+                hormone_effects=HormoneEffects(cortanyx=0.1, adrenyx=0.1, nyxamine=0.1)
             )
         ],
     }
@@ -687,19 +756,19 @@ async def generate_time_expression_impl(state: Dict[str, Any]) -> TimeExpression
         intensity = 0.6
     
     # Create time reference details
-    time_reference = {
-        "time_category": time_category,
-        "seconds_elapsed": time_since_last,
-        "relationship_age_days": relationship_age,
-        "temporal_context": temporal_context.model_dump() if isinstance(temporal_context, TemporalContext) else await determine_temporal_context_impl().model_dump()
-    }
+    time_reference = TimeReferenceData(
+        time_category=time_category,
+        seconds_elapsed=time_since_last,
+        relationship_age_days=relationship_age,
+        temporal_context=temporal_context.model_dump() if isinstance(temporal_context, TemporalContext) else TemporalContextData(**await determine_temporal_context_impl().model_dump())
+    )
     
     return TimeExpressionOutput(
         expression=expression,
         time_scale=time_scale,
         intensity=intensity,
         reference_type=reference_type,
-        time_reference=json.dumps(time_reference)
+        time_reference=json.dumps(time_reference.model_dump())
     )
 
 @function_tool(name_override="generate_time_expression")
@@ -714,7 +783,7 @@ async def generate_time_expression(time_perception_state: TimePerceptionStateInp
         • TimeExpressionOutput model
     """
     # Extract the data and pass to implementation
-    return await generate_time_expression_impl(time_perception_state.data)
+    return await generate_time_expression_impl(time_perception_state.data.model_dump())
 
 
 @function_tool(name_override="process_temporal_awareness")
@@ -725,15 +794,15 @@ async def process_temporal_awareness(
     """
     Higher-level summary of Nyx's temporal awareness.
     """
-    time_scales = {
-        "seconds": 1.0,
-        "minutes": 1.0,
-        "hours":   1.0,
-        "days":    min(1.0, days_elapsed / 7),
-        "weeks":   min(1.0, days_elapsed / 30),
-        "months":  min(1.0, days_elapsed / 90),
-        "years":   min(1.0, days_elapsed / 365),
-    }
+    time_scales = TimeScaleActiveData(
+        seconds=1.0,
+        minutes=1.0,
+        hours=1.0,
+        days=min(1.0, days_elapsed / 7),
+        weeks=min(1.0, days_elapsed / 30),
+        months=min(1.0, days_elapsed / 90),
+        years=min(1.0, days_elapsed / 365),
+    )
 
     temporal_contexts = ["conversation"]
     if days_elapsed > 1:   temporal_contexts.append("daily")
@@ -744,7 +813,7 @@ async def process_temporal_awareness(
     context_now  = await determine_temporal_context_impl()
     current_mark = f"{context_now.time_of_day} on a {context_now.day_of_week}"
 
-    active_rhythms: Dict[str, Any] = {}
+    active_rhythms: Optional[ActiveRhythms] = None
     if total_interactions > 5:
         avg_interval = days_elapsed * 86_400 / total_interactions
         if avg_interval < 3600:
@@ -753,11 +822,13 @@ async def process_temporal_awareness(
             kind, div = "hours", 3600
         else:
             kind, div = "days", 86_400
-        active_rhythms["conversation"] = {
-            "type": kind,
-            "average_interval": avg_interval / div,
-            "description": f"{kind.capitalize()}-based conversation rhythm",
-        }
+        active_rhythms = ActiveRhythms(
+            conversation=TemporalRhythm(
+                type=kind,
+                average_interval=avg_interval / div,
+                description=f"{kind.capitalize()}-based conversation rhythm"
+            )
+        )
 
     reflection = (
         "I'm aware of the seconds and minutes passing during our conversation." if days_elapsed < 1 else
@@ -792,9 +863,9 @@ async def _detect_time_scale_transition_impl(
     Returns:
         TimeScaleTransition if detected, otherwise None.
     """
-    prev, curr = data.previous_state or {}, data.current_state or {}
-    prev_time = prev.get("last_interaction")
-    curr_time = curr.get("last_interaction")
+    prev, curr = data.previous_state or TimeScaleStateData(), data.current_state or TimeScaleStateData()
+    prev_time = prev.last_interaction
+    curr_time = curr.last_interaction
 
     if not prev_time or not curr_time:
         return None
@@ -812,10 +883,10 @@ async def _detect_time_scale_transition_impl(
             to_scale="days",
             transition_time=curr_time,
             description="Crossed day boundary",
-            perception_shift={
-                "description": "Shifted from hours-awareness to day-cycle awareness",
-                "intensity": 0.7
-            }
+            perception_shift=PerceptionShift(
+                description="Shifted from hours-awareness to day-cycle awareness",
+                intensity=0.7
+            )
         )
 
     # --- Check for week boundary crossing (ISO week) ---
@@ -827,10 +898,10 @@ async def _detect_time_scale_transition_impl(
             to_scale="weeks",
             transition_time=curr_time,
             description="Crossed week boundary",
-            perception_shift={
-                "description": "Shifted from day-cycle awareness to week-cycle awareness",
-                "intensity": 0.8
-            }
+            perception_shift=PerceptionShift(
+                description="Shifted from day-cycle awareness to week-cycle awareness",
+                intensity=0.8
+            )
         )
 
     # --- Check for month boundary crossing ---
@@ -840,10 +911,10 @@ async def _detect_time_scale_transition_impl(
             to_scale="months",
             transition_time=curr_time,
             description="Crossed month boundary",
-            perception_shift={
-                "description": "Shifted from week-cycle awareness to month-cycle awareness",
-                "intensity": 0.9
-            }
+            perception_shift=PerceptionShift(
+                description="Shifted from week-cycle awareness to month-cycle awareness",
+                intensity=0.9
+            )
         )
 
     # --- Check for year boundary crossing ---
@@ -853,10 +924,10 @@ async def _detect_time_scale_transition_impl(
             to_scale="years",
             transition_time=curr_time,
             description="Crossed year boundary",
-            perception_shift={
-                "description": "Shifted from month-cycle awareness to year-cycle awareness",
-                "intensity": 1.0
-            }
+            perception_shift=PerceptionShift(
+                description="Shifted from month-cycle awareness to year-cycle awareness",
+                intensity=1.0
+            )
         )
 
     # --- No significant transition detected ---
@@ -1270,15 +1341,15 @@ class TemporalPerceptionSystem:
             time_effects = await calculate_time_effects_impl(time_category, user_relationship_data.model_dump())
             
             # Check for time scale transitions
-            previous_state = {
-                "last_interaction": self.last_interaction.isoformat(),
-                "time_scales": self.active_time_scales
-            }
+            previous_state = TimeScaleStateData(
+                last_interaction=self.last_interaction.isoformat(),
+                time_scales=TimeScaleActiveData(**self.active_time_scales)
+            )
             
-            current_state = {
-                "last_interaction": now.isoformat(),
-                "time_scales": self.active_time_scales.copy()
-            }
+            current_state = TimeScaleStateData(
+                last_interaction=now.isoformat(),
+                time_scales=TimeScaleActiveData(**self.active_time_scales.copy())
+            )
             
             # Update time scale awareness based on elapsed time
             days_elapsed = (now - self.first_interaction).total_seconds() / 86400
@@ -1336,7 +1407,7 @@ class TemporalPerceptionSystem:
             
             # Update temporal rhythms based on awareness output
             if hasattr(awareness_output, "active_rhythms") and awareness_output.active_rhythms:
-                self.temporal_rhythms.update(awareness_output.active_rhythms)
+                self.temporal_rhythms.update(awareness_output.active_rhythms.model_dump())
             
             # Create perception state
             perception_state_dict = {
@@ -1360,8 +1431,15 @@ class TemporalPerceptionSystem:
             # Generate time expression if appropriate
             if self.interaction_count % 5 == 0 or time_category in ["long", "very_long"]:
                 try:
-                    state_input = TimePerceptionStateInput(data=perception_state_dict)
-                    time_expression = await generate_time_expression_impl(state_input.data)
+                    state_input = TimePerceptionStateInput(data=TimePerceptionStateData(
+                        last_interaction=self.last_interaction.isoformat(),
+                        time_since_last_interaction=time_since_last,
+                        current_time_category=time_category,
+                        relationship_age_days=(now - self.first_interaction).total_seconds() / 86400,
+                        current_temporal_context=TemporalContextData(**self.current_temporal_context.model_dump()) if self.current_temporal_context else None,
+                        time_scales_active=TimeScaleActiveData(**self.active_time_scales)
+                    ))
+                    time_expression = await generate_time_expression_impl(state_input.data.model_dump())
                     perception_state_dict["time_expression"] = time_expression.model_dump()
                 except Exception as e:
                     logger.error(f"Error generating time expression: {str(e)}")
@@ -1528,18 +1606,18 @@ class TemporalPerceptionSystem:
         except Exception as e:
             logger.error(f"Error processing temporal awareness: {str(e)}")
             # Return a default output
-            default_scales = {
-                "seconds": 1.0,
-                "minutes": 1.0,
-                "hours": 1.0,
-                "days": min(1.0, relationship_age_days / 7),
-                "weeks": min(1.0, relationship_age_days / 30),
-                "months": min(1.0, relationship_age_days / 90),
-                "years": min(1.0, relationship_age_days / 365)
-            }
+            default_scales = TimeScaleActiveData(
+                seconds=1.0,
+                minutes=1.0,
+                hours=1.0,
+                days=min(1.0, relationship_age_days / 7),
+                weeks=min(1.0, relationship_age_days / 30),
+                months=min(1.0, relationship_age_days / 90),
+                years=min(1.0, relationship_age_days / 365)
+            )
             
             return {
-                "time_scales_perceived": default_scales,
+                "time_scales_perceived": default_scales.model_dump(),
                 "temporal_contexts": ["conversation"],
                 "duration_since_first_interaction": await format_duration_impl(relationship_age_days * 86400),
                 "duration_since_last_interaction": await format_duration_impl((now - self.last_interaction).total_seconds()),
@@ -1927,18 +2005,17 @@ async def generate_temporal_expression(system_ref: TemporalSystemReference) -> D
     time_category = await categorize_time_elapsed_impl(time_since_last)
     
     # Create state object
-    perception_state = {
-        "last_interaction": time_system.last_interaction.isoformat(),
-        "time_since_last_interaction": time_since_last,
-        "current_time_category": time_category,
-        "relationship_age_days": (now - time_system.first_interaction).total_seconds() / 86400 if time_system.first_interaction else 0,
-        "total_interactions": time_system.interaction_count,
-        "current_temporal_context": time_system.current_temporal_context.model_dump() if time_system.current_temporal_context else await determine_temporal_context_impl().model_dump(),
-        "time_scales_active": time_system.active_time_scales
-    }
+    perception_state = TimePerceptionStateData(
+        last_interaction=time_system.last_interaction.isoformat(),
+        time_since_last_interaction=time_since_last,
+        current_time_category=time_category,
+        relationship_age_days=(now - time_system.first_interaction).total_seconds() / 86400 if time_system.first_interaction else 0,
+        current_temporal_context=TemporalContextData(**time_system.current_temporal_context.model_dump()) if time_system.current_temporal_context else TemporalContextData(**await determine_temporal_context_impl().model_dump()),
+        time_scales_active=TimeScaleActiveData(**time_system.active_time_scales)
+    )
     
     # Generate expression
-    return (await generate_time_expression_impl(perception_state)).model_dump()
+    return (await generate_time_expression_impl(perception_state.model_dump())).model_dump()
 
 async def get_current_temporal_context(system_ref: TemporalSystemReference) -> Dict[str, Any]:
     """
