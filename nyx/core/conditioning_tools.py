@@ -14,7 +14,7 @@ from nyx.core.reward_system import RewardSignal
 
 logger = logging.getLogger(__name__)
 
-class BehaviorAssociationInfo(BaseModel, extra="forbid"):
+class BehaviorAssociationInfo(BaseModel):
     key: str
     behavior: str
     consequence_type: str
@@ -23,11 +23,11 @@ class BehaviorAssociationInfo(BaseModel, extra="forbid"):
     reinforcement_count: int
     context_keys: List[str]
 
-class ContextRelevanceResult(BaseModel, extra="forbid"):
+class ContextRelevanceResult(BaseModel):
     relevance_scores: List[float]
     average_relevance: float = Field(..., ge=0.0, le=1.0)
 
-class TraitImbalance(BaseModel, extra="forbid"):
+class TraitImbalance(BaseModel):
     # Either a single trait OR an opposing-pair description is present
     trait: Optional[str] = None
     traits: Optional[List[str]] = None
@@ -41,7 +41,7 @@ class TraitImbalance(BaseModel, extra="forbid"):
     recommendation: str
 
 
-class TraitBalanceResult(BaseModel, extra="forbid"):
+class TraitBalanceResult(BaseModel):
     balanced: bool
     imbalances: List[TraitImbalance]
     trait_count: int
@@ -100,19 +100,47 @@ def _parse_context_json(ctx_json: Optional[str]) -> dict:
 
 # ==================== Classical Conditioning Tools ====================
 
+# Define proper models for function return types that are dicts
+class AssociationData(BaseModel):
+    stimulus: str
+    response: str
+    association_strength: float
+    formation_date: str
+    last_reinforced: str
+    reinforcement_count: int
+    valence: float
+    context_keys: List[str]
+    decay_rate: float
+
+class ClassicalUpdateResult(BaseModel):
+    association_key: str
+    type: str
+    old_strength: Optional[float] = None
+    new_strength: Optional[float] = None
+    strength: Optional[float] = None
+    reinforcement_count: int
+    valence: float
+
+class SimilarAssociation(BaseModel):
+    key: str
+    similarity: float
+    association: AssociationData
+
 @function_tool
 async def get_association(
     ctx: RunContextWrapper,
     key: str,
     association_type: str = "classical"
-) -> Optional[Dict[str, Any]]:
+) -> Optional[AssociationData]:
     """Get a specific association by key and type"""
     associations = (
         ctx.context.classical_associations
         if association_type == "classical"
         else ctx.context.operant_associations
     )
-    return associations[key].model_dump() if key in associations else None
+    if key in associations:
+        return AssociationData(**associations[key].model_dump())
+    return None
 
 @function_tool
 async def create_or_update_classical_association(
@@ -123,7 +151,7 @@ async def create_or_update_classical_association(
     intensity: float,
     valence: float,
     context_keys: Optional[List[str]] = None
-) -> Dict[str, Any]:
+) -> ClassicalUpdateResult:
     """Create or update a classical conditioning association"""
     context_keys = context_keys or []
     association_key = f"{conditioned_stimulus}-->{response}"
@@ -145,14 +173,14 @@ async def create_or_update_classical_association(
         
         ctx.context.total_reinforcements += 1
         
-        return {
-            "association_key": association_key,
-            "type": "reinforcement",
-            "old_strength": old_strength,
-            "new_strength": new_strength,
-            "reinforcement_count": association.reinforcement_count,
-            "valence": association.valence
-        }
+        return ClassicalUpdateResult(
+            association_key=association_key,
+            type="reinforcement",
+            old_strength=old_strength,
+            new_strength=new_strength,
+            reinforcement_count=association.reinforcement_count,
+            valence=association.valence
+        )
     else:
         # Create new
         association = ConditionedAssociation(
@@ -169,13 +197,13 @@ async def create_or_update_classical_association(
         ctx.context.classical_associations[association_key] = association
         ctx.context.total_associations += 1
         
-        return {
-            "association_key": association_key,
-            "type": "new_association",
-            "strength": association.association_strength,
-            "reinforcement_count": 1,
-            "valence": association.valence
-        }
+        return ClassicalUpdateResult(
+            association_key=association_key,
+            type="new_association",
+            strength=association.association_strength,
+            reinforcement_count=1,
+            valence=association.valence
+        )
 
 @function_tool
 async def calculate_association_strength(
@@ -200,7 +228,7 @@ async def check_similar_associations(
     ctx: RunContextWrapper,
     stimulus: str,
     association_type: str = "classical"
-) -> List[Dict[str, Any]]:
+) -> List[SimilarAssociation]:
     """Find associations similar to the given stimulus"""
     associations = (
         ctx.context.classical_associations
@@ -219,16 +247,33 @@ async def check_similar_associations(
             sim_score = len(s1_chars & s2_chars) / len(s1_chars | s2_chars) if len(s1_chars | s2_chars) > 0 else 0
             
             if sim_score > 0.3:
-                similar.append({
-                    "key": key,
-                    "similarity": sim_score,
-                    "association": assoc.model_dump()
-                })
+                similar.append(SimilarAssociation(
+                    key=key,
+                    similarity=sim_score,
+                    association=AssociationData(**assoc.model_dump())
+                ))
     
-    similar.sort(key=lambda x: x["similarity"], reverse=True)
+    similar.sort(key=lambda x: x.similarity, reverse=True)
     return similar
 
 # ==================== Operant Conditioning Tools ====================
+
+class OperantUpdateResult(BaseModel):
+    association_key: str
+    type: str
+    behavior: str
+    consequence_type: str
+    old_strength: Optional[float] = None
+    new_strength: Optional[float] = None
+    strength: Optional[float] = None
+    reinforcement_count: int
+    is_reinforcement: bool
+    is_positive: bool
+    valence: float
+
+class ValenceRewardResult(BaseModel):
+    valence: float
+    reward_value: float
 
 @function_tool
 async def create_or_update_operant_association(
@@ -238,7 +283,7 @@ async def create_or_update_operant_association(
     intensity: float,
     valence: float,
     context_keys: Optional[List[str]] = None
-) -> Dict[str, Any]:
+) -> OperantUpdateResult:
     """Create or update an operant conditioning association"""
     context_keys = context_keys or []
     association_key = f"{behavior}-->{consequence_type}"
@@ -267,18 +312,18 @@ async def create_or_update_operant_association(
         
         ctx.context.total_reinforcements += 1
         
-        return {
-            "association_key": association_key,
-            "type": "update",
-            "behavior": behavior,
-            "consequence_type": consequence_type,
-            "old_strength": old_strength,
-            "new_strength": new_strength,
-            "reinforcement_count": association.reinforcement_count,
-            "is_reinforcement": is_reinforcement,
-            "is_positive": is_positive,
-            "valence": association.valence
-        }
+        return OperantUpdateResult(
+            association_key=association_key,
+            type="update",
+            behavior=behavior,
+            consequence_type=consequence_type,
+            old_strength=old_strength,
+            new_strength=new_strength,
+            reinforcement_count=association.reinforcement_count,
+            is_reinforcement=is_reinforcement,
+            is_positive=is_positive,
+            valence=association.valence
+        )
     else:
         initial_strength = intensity * ctx.context.parameters.association_learning_rate
         if not is_reinforcement:
@@ -298,24 +343,24 @@ async def create_or_update_operant_association(
         ctx.context.operant_associations[association_key] = association
         ctx.context.total_associations += 1
         
-        return {
-            "association_key": association_key,
-            "type": "new_association",
-            "behavior": behavior,
-            "consequence_type": consequence_type,
-            "strength": association.association_strength,
-            "reinforcement_count": 1,
-            "is_reinforcement": is_reinforcement,
-            "is_positive": is_positive,
-            "valence": association.valence
-        }
+        return OperantUpdateResult(
+            association_key=association_key,
+            type="new_association",
+            behavior=behavior,
+            consequence_type=consequence_type,
+            strength=association.association_strength,
+            reinforcement_count=1,
+            is_reinforcement=is_reinforcement,
+            is_positive=is_positive,
+            valence=association.valence
+        )
 
 @function_tool
 async def calculate_valence_and_reward(
     ctx: RunContextWrapper,
     consequence_type: str,
     intensity: float
-) -> Dict[str, float]:
+) -> ValenceRewardResult:
     """Calculate valence and reward value for a consequence"""
     is_reinforcement = "reinforcement" in consequence_type.lower()
     
@@ -326,10 +371,10 @@ async def calculate_valence_and_reward(
         valence = -intensity
         reward_value = -intensity * 0.8
     
-    return {
-        "valence": valence,
-        "reward_value": reward_value
-    }
+    return ValenceRewardResult(
+        valence=valence,
+        reward_value=reward_value
+    )
 
 
 @function_tool  # ← SAFE: only primitives & JSON-string params ⇒ no additionalProperties
@@ -346,9 +391,9 @@ async def generate_reward_signal(                   # noqa: N802
     Parameters
     ----------
     behavior : str
-        Behaviour that triggered the consequence (“submits”, “asks_question”, …).
+        Behaviour that triggered the consequence ("submits", "asks_question", …).
     consequence_type : str
-        Kind of operant consequence (“positive_reinforcement”, “punishment”, …).
+        Kind of operant consequence ("positive_reinforcement", "punishment", …).
     reward_value : float
         Signed magnitude of the reward (-1.0 … +1.0 recommended, but any float is
         accepted).
@@ -397,6 +442,13 @@ async def generate_reward_signal(                   # noqa: N802
 
 # ==================== Behavior Evaluation Tools ====================
 
+class ExpectedValenceResult(BaseModel):
+    expected_valence: float
+    confidence: float
+    total_strength: Optional[float] = None
+    total_reinforcements: Optional[int] = None
+    error: Optional[str] = None
+
 @function_tool  # ← parameters are primitives / JSON strings  →  strict-schema OK
 async def get_behavior_associations(                    # noqa: N802
     ctx: RunContextWrapper,
@@ -419,7 +471,7 @@ async def get_behavior_associations(                    # noqa: N802
     Notes
     -----
     A JSON string is used instead of an arbitrary Python `dict` to avoid the
-    SDK’s `additionalProperties` restriction.
+    SDK's `additionalProperties` restriction.
     """
     mgr = getattr(ctx.context, "operant_associations", None)
     if mgr is None:
@@ -456,18 +508,18 @@ async def get_behavior_associations(                    # noqa: N802
 async def calculate_expected_valence(
     ctx: RunContextWrapper,
     associations_json: str
-) -> Dict[str, Any]:
+) -> ExpectedValenceResult:
     """Calculate expected valence from associations (JSON string input)"""
     try:
         associations = json.loads(associations_json) if associations_json else []
     except json.JSONDecodeError as e:
-        return {"expected_valence": 0.0, "confidence": 0.0, "error": f"Invalid JSON: {str(e)}"}
+        return ExpectedValenceResult(expected_valence=0.0, confidence=0.0, error=f"Invalid JSON: {str(e)}")
     
     if not isinstance(associations, list):
-        return {"expected_valence": 0.0, "confidence": 0.0, "error": "Associations must be a list"}
+        return ExpectedValenceResult(expected_valence=0.0, confidence=0.0, error="Associations must be a list")
     
     if not associations:
-        return {"expected_valence": 0.0, "confidence": 0.1}
+        return ExpectedValenceResult(expected_valence=0.0, confidence=0.1)
     
     total_strength = 0.0
     weighted_valence = 0.0
@@ -489,19 +541,19 @@ async def calculate_expected_valence(
                 continue
     
     if valid_count == 0:
-        return {"expected_valence": 0.0, "confidence": 0.0}
+        return ExpectedValenceResult(expected_valence=0.0, confidence=0.0)
     
     expected_valence = weighted_valence / total_strength if total_strength > 0 else 0.0
     
     avg_strength = total_strength / valid_count
     confidence = min(1.0, avg_strength * 0.7 + min(1.0, math.log1p(total_reinforcements) / math.log1p(100)) * 0.3)
     
-    return {
-        "expected_valence": round(expected_valence, 3),
-        "confidence": round(max(0.1, confidence), 3),
-        "total_strength": round(total_strength, 3),
-        "total_reinforcements": total_reinforcements
-    }
+    return ExpectedValenceResult(
+        expected_valence=round(expected_valence, 3),
+        confidence=round(max(0.1, confidence), 3),
+        total_strength=round(total_strength, 3),
+        total_reinforcements=total_reinforcements
+    )
 
 @function_tool  # ← all parameters are JSON-serialisable primitives
 async def check_context_relevance(                      # noqa: N802
@@ -550,23 +602,31 @@ async def check_context_relevance(                      # noqa: N802
         average_relevance=round(avg, 3),
     )
 
+class ConsequenceDetail(BaseModel):
+    consequence_type: str
+    strength: float
+    valence: float
+    last_reinforced: str
+    reinforcement_count: int
+
+class ReinforcementHistoryResult(BaseModel):
+    positive_reinforcement_count: int = 0
+    negative_reinforcement_count: int = 0
+    positive_punishment_count: int = 0
+    negative_punishment_count: int = 0
+    total_consequences_recorded: int = 0
+    total_reinforcements_overall: int = 0
+    average_strength_of_associations: float = 0.0
+    average_valence_of_associations: float = 0.0
+    recent_consequences_details: List[ConsequenceDetail] = Field(default_factory=list)
+
 @function_tool
 async def get_reinforcement_history(
     ctx: RunContextWrapper,
     behavior: str
-) -> Dict[str, Any]:
+) -> ReinforcementHistoryResult:
     """Get reinforcement history for a behavior"""
-    history = {
-        "positive_reinforcement_count": 0,
-        "negative_reinforcement_count": 0,
-        "positive_punishment_count": 0,
-        "negative_punishment_count": 0,
-        "total_consequences_recorded": 0,
-        "total_reinforcements_overall": 0,
-        "average_strength_of_associations": 0.0,
-        "average_valence_of_associations": 0.0,
-        "recent_consequences_details": []
-    }
+    history = ReinforcementHistoryResult()
     
     strength_sum = 0.0
     valence_sum = 0.0
@@ -579,34 +639,34 @@ async def get_reinforcement_history(
             consequence_type_lower = association.response.lower()
             
             if "positive_reinforcement" in consequence_type_lower:
-                history["positive_reinforcement_count"] += association.reinforcement_count
+                history.positive_reinforcement_count += association.reinforcement_count
             elif "negative_reinforcement" in consequence_type_lower:
-                history["negative_reinforcement_count"] += association.reinforcement_count
+                history.negative_reinforcement_count += association.reinforcement_count
             elif "positive_punishment" in consequence_type_lower:
-                history["positive_punishment_count"] += association.reinforcement_count
+                history.positive_punishment_count += association.reinforcement_count
             elif "negative_punishment" in consequence_type_lower:
-                history["negative_punishment_count"] += association.reinforcement_count
+                history.negative_punishment_count += association.reinforcement_count
             
-            history["total_reinforcements_overall"] += association.reinforcement_count
+            history.total_reinforcements_overall += association.reinforcement_count
             strength_sum += association.association_strength
             valence_sum += association.valence
             matched_count += 1
             
-            consequences_list.append({
-                "consequence_type": association.response,
-                "strength": association.association_strength,
-                "valence": association.valence,
-                "last_reinforced": association.last_reinforced,
-                "reinforcement_count": association.reinforcement_count
-            })
+            consequences_list.append(ConsequenceDetail(
+                consequence_type=association.response,
+                strength=association.association_strength,
+                valence=association.valence,
+                last_reinforced=association.last_reinforced,
+                reinforcement_count=association.reinforcement_count
+            ))
     
-    history["total_consequences_recorded"] = matched_count
+    history.total_consequences_recorded = matched_count
     if matched_count > 0:
-        history["average_strength_of_associations"] = round(strength_sum / matched_count, 3)
-        history["average_valence_of_associations"] = round(valence_sum / matched_count, 3)
+        history.average_strength_of_associations = round(strength_sum / matched_count, 3)
+        history.average_valence_of_associations = round(valence_sum / matched_count, 3)
     
-    consequences_list.sort(key=lambda x: x["last_reinforced"], reverse=True)
-    history["recent_consequences_details"] = consequences_list[:5]
+    consequences_list.sort(key=lambda x: x.last_reinforced, reverse=True)
+    history.recent_consequences_details = consequences_list[:5]
     
     return history
 
@@ -657,24 +717,30 @@ async def calculate_conditioning_trait_adjustment(
     
     return max(-max_adjustment, min(max_adjustment, round(adjustment, 4)))
 
+class UpdateIdentityResult(BaseModel):
+    success: bool
+    trait: str
+    adjustment_applied: float
+    new_value: float
+
 @function_tool
 async def update_identity_trait(
     ctx: RunContextWrapper,
     trait: str,
     adjustment: float
-) -> Dict[str, Any]:
+) -> UpdateIdentityResult:
     """Update a trait in the identity system"""
     # Simple implementation using context store
     current_val = ctx.context.identity_traits_store.get(trait, 0.5)
     new_val = max(0.0, min(1.0, current_val + adjustment))
     ctx.context.identity_traits_store[trait] = new_val
     
-    return {
-        "success": True,
-        "trait": trait,
-        "adjustment_applied": adjustment,
-        "new_value": new_val
-    }
+    return UpdateIdentityResult(
+        success=True,
+        trait=trait,
+        adjustment_applied=adjustment,
+        new_value=new_val
+    )
 
 @function_tool
 async def check_trait_balance(                         # noqa: N802
@@ -783,6 +849,21 @@ async def check_trait_balance(                         # noqa: N802
     )
 # ==================== Orchestration Tools ====================
 
+class PreparedConditioningData(BaseModel):
+    conditioning_type_confirmed: str
+    unconditioned_stimulus: Optional[str] = None
+    conditioned_stimulus: Optional[str] = None
+    response: Optional[str] = None
+    behavior: Optional[str] = None
+    consequence_type: Optional[str] = None
+    trait: Optional[str] = None
+    target_value: Optional[float] = None
+    intensity: Optional[float] = None
+    valence: Optional[float] = None
+    context_keys: Optional[List[str]] = None
+    context: Optional[Dict[str, Any]] = None
+    raw_input: Optional[Dict[str, Any]] = None
+
 @function_tool
 async def determine_conditioning_type(                    # noqa: N802
     ctx: RunContextWrapper,
@@ -856,7 +937,7 @@ async def prepare_conditioning_data(                           # noqa: N802
     ctx: RunContextWrapper,
     conditioning_type: str,
     raw_input_json: str | None = None,
-) -> Dict[str, Any]:
+) -> PreparedConditioningData:
     """
     Normalise *raw* conditioning payloads into a canonical structure.
 
@@ -875,55 +956,51 @@ async def prepare_conditioning_data(                           # noqa: N802
         logger.warning("prepare_conditioning_data: bad JSON – %s", exc)
         raw = {}
 
-    pd: dict[str, Any] = {"conditioning_type_confirmed": conditioning_type}
+    pd = PreparedConditioningData(conditioning_type_confirmed=conditioning_type)
 
     # ------------------------------------------------------------------ #
     # 2.  Branch per conditioning type                                   #
     # ------------------------------------------------------------------ #
     if conditioning_type == "classical":
-        pd.update(
-            unconditioned_stimulus=raw.get("unconditioned_stimulus"),
-            conditioned_stimulus=raw.get(
-                "conditioned_stimulus", raw.get("stimulus")
-            ),
-            response=raw.get("response"),
-            intensity=raw.get("intensity", 1.0),
-            valence=raw.get("valence", 0.0),
-            context_keys=raw.get("context_keys", []),
-        )
+        pd.unconditioned_stimulus = raw.get("unconditioned_stimulus")
+        pd.conditioned_stimulus = raw.get("conditioned_stimulus", raw.get("stimulus"))
+        pd.response = raw.get("response")
+        pd.intensity = raw.get("intensity", 1.0)
+        pd.valence = raw.get("valence", 0.0)
+        pd.context_keys = raw.get("context_keys", [])
 
     elif conditioning_type == "operant":
-        pd.update(
-            behavior=raw.get("behavior"),
-            consequence_type=raw.get("consequence_type"),
-            intensity=raw.get("intensity", 1.0),
-            valence=raw.get("valence", 0.0),
-            context_keys=raw.get("context_keys", []),
-        )
+        pd.behavior = raw.get("behavior")
+        pd.consequence_type = raw.get("consequence_type")
+        pd.intensity = raw.get("intensity", 1.0)
+        pd.valence = raw.get("valence", 0.0)
+        pd.context_keys = raw.get("context_keys", [])
 
     elif conditioning_type == "personality_trait":
-        pd.update(
-            trait=raw.get("trait"),
-            target_value=raw.get("target_value", raw.get("value")),
-        )
+        pd.trait = raw.get("trait")
+        pd.target_value = raw.get("target_value", raw.get("value"))
 
     elif conditioning_type == "behavior_evaluation":
-        pd.update(
-            behavior=raw.get("behavior"),
-            context=raw.get("context", {}),
-        )
+        pd.behavior = raw.get("behavior")
+        pd.context = raw.get("context", {})
 
     # 3.  Unknown / passthrough branch – retain raw for debugging
     else:
-        pd["raw_input"] = raw
+        pd.raw_input = raw
 
     return pd
+
+class ApplyEffectsResult(BaseModel):
+    effects_applied: List[Dict[str, Any]]
+    original_association_strength: float
+    original_valence: float
+    derived_effect_intensity: float
     
 @function_tool
 async def apply_association_effects(                         # noqa: N802
     ctx: RunContextWrapper,
     triggered_json: str | None = None,
-) -> Dict[str, Any]:
+) -> ApplyEffectsResult:
     """
     Translate a *triggered association* into concrete emotional / physiological
     effects and push them into the relevant subsystems.
@@ -937,7 +1014,7 @@ async def apply_association_effects(                         # noqa: N802
 
     Returns
     -------
-    dict
+    ApplyEffectsResult
         Summary of what was applied.
     """
     # ------------------------------------------------------------------ #
@@ -973,7 +1050,7 @@ async def apply_association_effects(                         # noqa: N802
             "intensity": intensity,
             "source": "conditioning_association",
         }
-        # Fire-and-forget: don’t let errors bubble up
+        # Fire-and-forget: don't let errors bubble up
         try:
             await ctx.context.emotional_core.apply_valence_shift(emo_payload)  # type: ignore[attr-defined]
             effects.append({"type": "emotional", **emo_payload})
@@ -994,9 +1071,9 @@ async def apply_association_effects(                         # noqa: N802
     # ------------------------------------------------------------------ #
     # 4.  Return consolidated summary                                    #
     # ------------------------------------------------------------------ #
-    return {
-        "effects_applied": effects,
-        "original_association_strength": round(strength, 4),
-        "original_valence": round(valence, 4),
-        "derived_effect_intensity": intensity,
-    }
+    return ApplyEffectsResult(
+        effects_applied=effects,
+        original_association_strength=round(strength, 4),
+        original_valence=round(valence, 4),
+        derived_effect_intensity=intensity,
+    )
