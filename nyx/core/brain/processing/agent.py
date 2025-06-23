@@ -1,6 +1,6 @@
 # nyx/core/brain/processing/agent.py
 import logging
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from agents import Agent, Runner, handoff, input_guardrail, output_guardrail, GuardrailFunctionOutput
 from pydantic import BaseModel
 
@@ -19,6 +19,20 @@ class SafetyCheck(BaseModel):
     """Safety check result"""
     is_safe: bool
     reason: str
+
+# New explicit models for Dict[str, Any] replacements
+class ExperienceData(BaseModel):
+    """Experience sharing data"""
+    has_experience: bool
+    experience_type: Optional[str] = None
+    confidence: Optional[float] = None
+    content: Optional[str] = None
+
+class ContextData(BaseModel):
+    """Context data for experience sharing"""
+    user_id: str
+    emotional_state: Dict[str, float]
+    conversation_id: str
 
 class AgentProcessor(BaseProcessor):
     """Agent-based processor using OpenAI Agents SDK"""
@@ -69,9 +83,9 @@ class AgentProcessor(BaseProcessor):
             input_guardrails=[safety_guardrail],
             output_type=AgentResponse,
             tools=[
-                function_tool(self._analyze_emotion_tool),
-                function_tool(self._retrieve_memories_tool),
-                function_tool(self._share_experience_tool)
+                self._analyze_emotion_tool,
+                self._retrieve_memories_tool,
+                self._share_experience_tool
             ]
         )
         
@@ -104,7 +118,7 @@ class AgentProcessor(BaseProcessor):
     
     @function_tool
     async def _share_experience_tool(ctx: RunContextWrapper[ProcessingContext], 
-                                   query: str) -> Dict[str, Any]:
+                                   query: str) -> ExperienceData:
         """Share relevant experiences"""
         if hasattr(ctx.context, 'metadata') and 'brain' in ctx.context.metadata:
             brain = ctx.context.metadata['brain']
@@ -117,8 +131,13 @@ class AgentProcessor(BaseProcessor):
                         "conversation_id": ctx.context.conversation_id
                     }
                 )
-                return result
-        return {"has_experience": False}
+                return ExperienceData(
+                    has_experience=result.get("has_experience", False),
+                    experience_type=result.get("experience_type"),
+                    confidence=result.get("confidence"),
+                    content=result.get("content")
+                )
+        return ExperienceData(has_experience=False)
     
     async def process_input(self, user_input: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
         """Process input using agents"""
