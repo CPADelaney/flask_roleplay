@@ -12,27 +12,27 @@ from nyx.core.conditioning_tools import check_trait_balance
 
 logger = logging.getLogger(__name__)
 
-class TraitPatch(BaseModel, extra="forbid"):
+class TraitPatch(BaseModel):
     name: str
     value: float
 
-class PreferencePatch(BaseModel, extra="forbid"):
+class PreferencePatch(BaseModel):
     stimulus: str
     pref_type: str   # e.g. "like" / "dislike"
     value: float
 
-class EmotionTriggerPatch(BaseModel, extra="forbid"):
+class EmotionTriggerPatch(BaseModel):
     stimulus: str
     emotion: str
     intensity: float
 
-class BehaviorPatch(BaseModel, extra="forbid"):
+class BehaviorPatch(BaseModel):
     category: str             # e.g. "coping", "learning"
     items: List[str]
 
 
 # Pydantic models for function parameters and returns
-class ParametersResult(BaseModel, extra="forbid"):
+class ParametersResult(BaseModel):
     """Result of getting parameters"""
     association_learning_rate: float = 0.01
     extinction_rate: float = 0.005
@@ -45,7 +45,7 @@ class ParametersResult(BaseModel, extra="forbid"):
     punishment_modifier: float = 0.8
     # Add other fields as they appear in ConditioningParameters
 
-class UpdateParametersParams(BaseModel, extra="forbid"):
+class UpdateParametersParams(BaseModel):
     """Parameters for updating conditioning parameters"""
     association_learning_rate: Optional[float] = None
     extinction_rate: Optional[float] = None
@@ -57,7 +57,7 @@ class UpdateParametersParams(BaseModel, extra="forbid"):
     reinforcement_threshold: Optional[float] = None
     punishment_modifier: Optional[float] = None
 
-class UpdateParametersResult(BaseModel, extra="forbid"):
+class UpdateParametersResult(BaseModel):
     """Result of updating parameters"""
     success: bool
     updated_keys: List[str] = Field(default_factory=list)
@@ -65,18 +65,18 @@ class UpdateParametersResult(BaseModel, extra="forbid"):
     new_values: Dict[str, float] = Field(default_factory=dict)
     message: Optional[str] = None
 
-class SaveResult(BaseModel, extra="forbid"):
+class SaveResult(BaseModel):
     """Result of save operation"""
     success: bool
     message: Optional[str] = None
     error: Optional[str] = None
 
-class ValidateParametersResult(BaseModel, extra="forbid"):
+class ValidateParametersResult(BaseModel):
     """Result of parameter validation"""
     valid: bool
     issues: Dict[str, str] = Field(default_factory=dict)
 
-class ResetResult(BaseModel, extra="forbid"):
+class ResetResult(BaseModel):
     """Result of reset operation"""
     success: bool
     message: str
@@ -84,50 +84,50 @@ class ResetResult(BaseModel, extra="forbid"):
     personality_profile: 'PersonalityProfileResult'
     error: Optional[str] = None
 
-class UpdatePersonalityProfileParams(BaseModel, extra="forbid"):
+class UpdatePersonalityProfileParams(BaseModel):
     """Parameters for updating personality profile (STRICT)."""
     traits: Optional[List[TraitPatch]] = None
     preferences: Optional[List[PreferencePatch]] = None
     emotion_triggers: Optional[List[EmotionTriggerPatch]] = None
     behaviors: Optional[List[BehaviorPatch]] = None
 
-class PersonalityTrait(BaseModel, extra="forbid"):
+class PersonalityTrait(BaseModel):
     name: str
     value: float
 
-class PreferenceDetailResult(BaseModel, extra="forbid"):
+class PreferenceDetailResult(BaseModel):
     stimulus: str
     pref_type: str
     value: float
 
-class EmotionTriggerDetailResult(BaseModel, extra="forbid"):
+class EmotionTriggerDetailResult(BaseModel):
     stimulus: str
     emotion: str
     intensity: float
 
-class BehaviorEntry(BaseModel, extra="forbid"):
+class BehaviorEntry(BaseModel):
     category: str
     items: List[str]
 
-class PersonalityProfileResult(BaseModel, extra="forbid"):
+class PersonalityProfileResult(BaseModel):
     traits: List[PersonalityTrait] = Field(default_factory=list)
     preferences: List[PreferenceDetailResult] = Field(default_factory=list)
     emotion_triggers: List[EmotionTriggerDetailResult] = Field(default_factory=list)
     behaviors: List[BehaviorEntry] = Field(default_factory=list)
 
-class UpdatePersonalityResult(BaseModel, extra="forbid"):
+class UpdatePersonalityResult(BaseModel):
     success: bool
     updated_keys: List[str] = Field(default_factory=list)
     message: Optional[str] = None
     error: Optional[str] = None
 
 
-class AdjustTraitParams(BaseModel, extra="forbid"):
+class AdjustTraitParams(BaseModel):
     """Parameters for adjusting a trait"""
     trait: str
     value: float
 
-class AdjustTraitResult(BaseModel, extra="forbid"):
+class AdjustTraitResult(BaseModel):
     """Result of adjusting a trait"""
     success: bool
     trait: str
@@ -135,13 +135,13 @@ class AdjustTraitResult(BaseModel, extra="forbid"):
     new_value: float
     error: Optional[str] = None
 
-class AdjustPreferenceParams(BaseModel, extra="forbid"):
+class AdjustPreferenceParams(BaseModel):
     """Parameters for adjusting a preference"""
     stimulus: str
     preference_type: str
     value: float
 
-class AdjustPreferenceResult(BaseModel, extra="forbid"):
+class AdjustPreferenceResult(BaseModel):
     """Result of adjusting a preference"""
     success: bool
     stimulus: str
@@ -480,7 +480,8 @@ class ConditioningConfiguration:
                 validate_parameters,
                 reset_to_defaults
             ],
-            model_settings=ModelSettings(temperature=0.1)
+            model_settings=ModelSettings(temperature=0.1),
+            model="gpt-4.1-nano"
         )
         
         self.personality_editor_agent = Agent(
@@ -498,7 +499,8 @@ class ConditioningConfiguration:
                 save_personality_profile,
                 check_trait_balance
             ],
-            model_settings=ModelSettings(temperature=0.2)
+            model_settings=ModelSettings(temperature=0.2),
+            model="gpt-4.1-nano"
         )
     
     # Public API methods
