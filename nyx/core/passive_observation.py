@@ -35,18 +35,47 @@ logger = logging.getLogger(__name__)
 
 # =============== Pydantic Models ===============
 
-# New explicit models for function tool parameters
+# New explicit models for dict fields
+class ActionParameters(BaseModel):
+    """Explicit model for action parameters"""
+    intent_type: Optional[str] = None
+    urgency: Optional[float] = None
+    # Add other fields as needed, but keep them explicit
+
+class PrimaryEmotion(BaseModel):
+    """Explicit model for primary emotion"""
+    name: Optional[str] = None
+    intensity: Optional[float] = None
+
+class MoodState(BaseModel):
+    """Explicit model for mood state"""
+    dominant_mood: Optional[str] = None
+    valence: Optional[float] = None
+    arousal: Optional[float] = None
+    control: Optional[float] = None
+    intensity: Optional[float] = None
+
+class ContextElements(BaseModel):
+    """Explicit model for context elements"""
+    action_id: Optional[str] = None
+    action_name: Optional[str] = None
+    temporal_context: Optional[str] = None
+    emotional_state: Optional[str] = None
+    repeated_source: Optional[str] = None
+    dominant_emotion: Optional[str] = None
+
+# Updated models with explicit types instead of dicts
 class ActionData(BaseModel):
     """Explicit model for action data"""
     name: str = "unknown action"
     source: str = "unknown"
     id: str = "unknown"
-    parameters: Optional[Dict[str, Union[str, float, int, bool]]] = Field(default_factory=dict)
+    parameters: Optional[ActionParameters] = None
 
 class EmotionalStateData(BaseModel):
     """Explicit model for emotional state data"""
-    primary_emotion: Optional[Dict[str, str]] = None
-    mood: Optional[Dict[str, Union[str, float]]] = None
+    primary_emotion: Optional[PrimaryEmotion] = None
+    mood: Optional[MoodState] = None
 
 class TemporalContextData(BaseModel):
     """Explicit model for temporal context data"""
@@ -87,7 +116,7 @@ class GenerateObservationOutput(BaseModel):
     source: str
     relevance_score: float
     priority: str
-    context_elements: Optional[Dict[str, str]] = None
+    context_elements: Optional[ContextElements] = None
     suggested_lifetime_seconds: int
     action_relevance: Optional[float] = None
 
@@ -311,7 +340,7 @@ async def generate_observation_from_action(
     if action_name == "share_observation":
         observation_text = f"I just shared an observation with the user. I tend to notice and share things that I find interesting."
     elif action_name == "initiate_communication":
-        intent_type = action.parameters.get("intent_type", "unknown") if action.parameters else "unknown"
+        intent_type = action.parameters.intent_type if action.parameters else "unknown"
         observation_text = f"I initiated a conversation based on my own motivation ({intent_type}). I'm aware of my own agency in conversations."
     elif action_name.startswith("express"):
         observation_text = f"I just expressed something from my internal state. I notice I'm becoming more comfortable with self-expression."
@@ -321,7 +350,7 @@ async def generate_observation_from_action(
         observation_text = f"I notice that I chose to {action_name}. My action choices reveal patterns about my decision-making."
     
     # Determine priority based on action significance
-    if action.parameters and action.parameters.get("urgency", 0) > 0.7:
+    if action.parameters and action.parameters.urgency and action.parameters.urgency > 0.7:
         priority = "high"
     else:
         priority = "medium"
@@ -336,7 +365,7 @@ async def generate_observation_from_action(
         source=source,
         relevance_score=relevance,
         priority=priority,
-        context_elements={"action_id": action_id, "action_name": action_name},
+        context_elements=ContextElements(action_id=action_id, action_name=action_name),
         suggested_lifetime_seconds=lifetime,
         action_relevance=0.8
     )
@@ -454,9 +483,9 @@ async def generate_observation_from_source(
         observations = ["developing my sense of self-concept"]
         
         if emotion_state and emotion_state.primary_emotion:
-            primary_emotion = emotion_state.primary_emotion.get("name", "")
-            if primary_emotion:
-                observations.append(f"experiencing {primary_emotion}")
+            primary_emotion_name = emotion_state.primary_emotion.name
+            if primary_emotion_name:
+                observations.append(f"experiencing {primary_emotion_name}")
         
     elif source == "relationship":
         observations = [
@@ -480,9 +509,9 @@ async def generate_observation_from_source(
         observations = ["shifting emotional undertones"]
         emotion_state = context.emotional_state
         if emotion_state and emotion_state.primary_emotion:
-            primary_emotion = emotion_state.primary_emotion.get("name", "")
-            if primary_emotion:
-                observations = [f"a subtle undertone of {primary_emotion}"]
+            primary_emotion_name = emotion_state.primary_emotion.name
+            if primary_emotion_name:
+                observations = [f"a subtle undertone of {primary_emotion_name}"]
                 relevance += 0.2  # More relevant if based on actual emotion
                 
     else:
@@ -515,11 +544,11 @@ async def generate_observation_from_source(
         lifetime = 1800  # 30 minutes for low relevance
     
     # Build context elements
-    context_elements = {}
+    context_elements = ContextElements()
     if temporal:
-        context_elements["temporal_context"] = temporal.time_of_day or "unknown"
+        context_elements.temporal_context = temporal.time_of_day or "unknown"
     if emotion_state and emotion_state.primary_emotion:
-        context_elements["emotional_state"] = emotion_state.primary_emotion.get("name", "unknown")
+        context_elements.emotional_state = emotion_state.primary_emotion.name or "unknown"
     
     # Return the observation data
     return GenerateObservationOutput(
@@ -561,10 +590,10 @@ async def evaluate_observation_relevance(
     # Check emotional state match
     emotion_state = current_context.emotional_state
     if emotion_state and emotion_state.primary_emotion:
-        primary_emotion = emotion_state.primary_emotion.get("name", "").lower()
-        if primary_emotion and primary_emotion in observation_text.lower():
+        primary_emotion_name = (emotion_state.primary_emotion.name or "").lower()
+        if primary_emotion_name and primary_emotion_name in observation_text.lower():
             relevance_adjustment += 0.2
-            evaluation_notes.append(f"References current emotion ({primary_emotion})")
+            evaluation_notes.append(f"References current emotion ({primary_emotion_name})")
     
     # Check temporal context match
     temporal = current_context.temporal_context
@@ -704,7 +733,7 @@ async def check_observation_patterns(
             source="pattern",
             relevance_score=relevance,
             priority="medium",
-            context_elements={"repeated_source": dominant_source},
+            context_elements=ContextElements(repeated_source=dominant_source),
             suggested_lifetime_seconds=7200  # 2 hours for pattern observations
         )
     
@@ -740,7 +769,7 @@ async def check_observation_patterns(
             source="pattern",
             relevance_score=relevance,
             priority="medium",
-            context_elements={"dominant_emotion": dominant_emotion},
+            context_elements=ContextElements(dominant_emotion=dominant_emotion),
             suggested_lifetime_seconds=7200  # 2 hours
         )
     
@@ -1026,11 +1055,15 @@ class PassiveObservationSystem:
                 context.recent_actions.append(action)
                 
                 # Convert action dict to ActionData
+                action_params = action.get("parameters", {})
                 action_data = ActionData(
                     name=action.get("name", "unknown action"),
                     source=action.get("source", "unknown"),
                     id=action.get("id", "unknown"),
-                    parameters=action.get("parameters", {})
+                    parameters=ActionParameters(
+                        intent_type=action_params.get("intent_type"),
+                        urgency=action_params.get("urgency")
+                    ) if action_params else None
                 )
                 
                 # Convert context to ContextData
@@ -1042,9 +1075,22 @@ class PassiveObservationSystem:
                         season=context.temporal_context.get("season")
                     )
                 if context.emotional_state:
+                    # Extract primary emotion data
+                    primary_emotion_dict = context.emotional_state.get("primary_emotion", {})
+                    mood_dict = context.emotional_state.get("mood", {})
+                    
                     context_data.emotional_state = EmotionalStateData(
-                        primary_emotion=context.emotional_state.get("primary_emotion"),
-                        mood=context.emotional_state.get("mood")
+                        primary_emotion=PrimaryEmotion(
+                            name=primary_emotion_dict.get("name"),
+                            intensity=primary_emotion_dict.get("intensity")
+                        ) if primary_emotion_dict else None,
+                        mood=MoodState(
+                            dominant_mood=mood_dict.get("dominant_mood"),
+                            valence=mood_dict.get("valence"),
+                            arousal=mood_dict.get("arousal"),
+                            control=mood_dict.get("control"),
+                            intensity=mood_dict.get("intensity")
+                        ) if mood_dict else None
                     )
                 
                 # Run the observation generation agent
@@ -1125,9 +1171,22 @@ class PassiveObservationSystem:
                         season=context.temporal_context.get("season")
                     )
                 if context.emotional_state:
+                    # Extract primary emotion data
+                    primary_emotion_dict = context.emotional_state.get("primary_emotion", {})
+                    mood_dict = context.emotional_state.get("mood", {})
+                    
                     context_data.emotional_state = EmotionalStateData(
-                        primary_emotion=context.emotional_state.get("primary_emotion"),
-                        mood=context.emotional_state.get("mood")
+                        primary_emotion=PrimaryEmotion(
+                            name=primary_emotion_dict.get("name"),
+                            intensity=primary_emotion_dict.get("intensity")
+                        ) if primary_emotion_dict else None,
+                        mood=MoodState(
+                            dominant_mood=mood_dict.get("dominant_mood"),
+                            valence=mood_dict.get("valence"),
+                            arousal=mood_dict.get("arousal"),
+                            control=mood_dict.get("control"),
+                            intensity=mood_dict.get("intensity")
+                        ) if mood_dict else None
                     )
                 
                 # Run the observation generation agent
@@ -1189,9 +1248,22 @@ class PassiveObservationSystem:
                         season=context.temporal_context.get("season")
                     )
                 if context.emotional_state:
+                    # Extract primary emotion data
+                    primary_emotion_dict = context.emotional_state.get("primary_emotion", {})
+                    mood_dict = context.emotional_state.get("mood", {})
+                    
                     context_data.emotional_state = EmotionalStateData(
-                        primary_emotion=context.emotional_state.get("primary_emotion"),
-                        mood=context.emotional_state.get("mood")
+                        primary_emotion=PrimaryEmotion(
+                            name=primary_emotion_dict.get("name"),
+                            intensity=primary_emotion_dict.get("intensity")
+                        ) if primary_emotion_dict else None,
+                        mood=MoodState(
+                            dominant_mood=mood_dict.get("dominant_mood"),
+                            valence=mood_dict.get("valence"),
+                            arousal=mood_dict.get("arousal"),
+                            control=mood_dict.get("control"),
+                            intensity=mood_dict.get("intensity")
+                        ) if mood_dict else None
                     )
                 
                 # Run the observation generation agent specifically for environment
@@ -1297,9 +1369,22 @@ class PassiveObservationSystem:
                         season=context.temporal_context.get("season")
                     )
                 if context.emotional_state:
+                    # Extract primary emotion data
+                    primary_emotion_dict = context.emotional_state.get("primary_emotion", {})
+                    mood_dict = context.emotional_state.get("mood", {})
+                    
                     context_data.emotional_state = EmotionalStateData(
-                        primary_emotion=context.emotional_state.get("primary_emotion"),
-                        mood=context.emotional_state.get("mood")
+                        primary_emotion=PrimaryEmotion(
+                            name=primary_emotion_dict.get("name"),
+                            intensity=primary_emotion_dict.get("intensity")
+                        ) if primary_emotion_dict else None,
+                        mood=MoodState(
+                            dominant_mood=mood_dict.get("dominant_mood"),
+                            valence=mood_dict.get("valence"),
+                            arousal=mood_dict.get("arousal"),
+                            control=mood_dict.get("control"),
+                            intensity=mood_dict.get("intensity")
+                        ) if mood_dict else None
                     )
                 
                 # Run the evaluation agent
@@ -1540,9 +1625,22 @@ class PassiveObservationSystem:
                     season=context.temporal_context.get("season")
                 )
             if context.emotional_state:
+                # Extract primary emotion data
+                primary_emotion_dict = context.emotional_state.get("primary_emotion", {})
+                mood_dict = context.emotional_state.get("mood", {})
+                
                 context_data.emotional_state = EmotionalStateData(
-                    primary_emotion=context.emotional_state.get("primary_emotion"),
-                    mood=context.emotional_state.get("mood")
+                    primary_emotion=PrimaryEmotion(
+                        name=primary_emotion_dict.get("name"),
+                        intensity=primary_emotion_dict.get("intensity")
+                    ) if primary_emotion_dict else None,
+                    mood=MoodState(
+                        dominant_mood=mood_dict.get("dominant_mood"),
+                        valence=mood_dict.get("valence"),
+                        arousal=mood_dict.get("arousal"),
+                        control=mood_dict.get("control"),
+                        intensity=mood_dict.get("intensity")
+                    ) if mood_dict else None
                 )
             context_data.hint = context_hint
             
