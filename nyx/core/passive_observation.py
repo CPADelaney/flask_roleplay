@@ -64,6 +64,12 @@ class ContextElements(BaseModel):
     repeated_source: Optional[str] = None
     dominant_emotion: Optional[str] = None
 
+class MemoryItem(BaseModel):
+    """Explicit model for memory items"""
+    memory_text: Optional[str] = None
+    memory_id: Optional[str] = None
+    memory_type: Optional[str] = None
+
 # Updated models with explicit types instead of dicts
 class ActionData(BaseModel):
     """Explicit model for action data"""
@@ -87,7 +93,7 @@ class ContextData(BaseModel):
     """Explicit model for context data"""
     temporal_context: Optional[TemporalContextData] = None
     emotional_state: Optional[EmotionalStateData] = None
-    recent_memories: Optional[List[Dict[str, str]]] = Field(default_factory=list)
+    recent_memories: Optional[List[MemoryItem]] = Field(default_factory=list)
     hint: Optional[str] = None
 
 class ObservationData(BaseModel):
@@ -498,7 +504,7 @@ async def generate_observation_from_source(
         # Check for memories in context
         memories = context.recent_memories or []
         if memories and len(memories) > 0:
-            memory_text = memories[0].get("memory_text", "")
+            memory_text = memories[0].memory_text
             if memory_text and len(memory_text) > 10:
                 if len(memory_text) > 100:
                     memory_text = memory_text[:97] + "..."
@@ -1188,6 +1194,16 @@ class PassiveObservationSystem:
                             intensity=mood_dict.get("intensity")
                         ) if mood_dict else None
                     )
+                
+                # Convert recent memories
+                if context.recent_memories:
+                    context_data.recent_memories = [
+                        MemoryItem(
+                            memory_text=mem.get("memory_text"),
+                            memory_id=mem.get("memory_id"),
+                            memory_type=mem.get("memory_type")
+                        ) for mem in context.recent_memories
+                    ]
                 
                 # Run the observation generation agent
                 logger.debug(f"Generating {source.value} observation")
