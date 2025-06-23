@@ -108,7 +108,7 @@ class StimulusData(BaseModel):
     visual_clarity: Optional[float] = Field(None, description="Visual clarity score")
     opponent: Optional[Dict[str, str]] = Field(None, description="Opponent state information")
     distractors: Optional[List[Dict[str, float]]] = Field(None, description="Distractor elements")
-    _timing: Optional[Dict[str, int]] = Field(None, description="Timing information", alias="_timing")
+    timing: Optional[Dict[str, int]] = Field(None, description="Timing information")
 
 class RegisterReflexResult(BaseModel):
     """Result of registering a reflex"""
@@ -398,8 +398,8 @@ async def generate_gaming_stimulus(ctx: RunContextWrapper[Any],
         base_result = await generate_similar_stimulus(ctx, base_input)
         stimulus = base_result.data
         
-        # Add gaming-specific elements
-        stimulus["_timing"] = {
+        # Add gaming-specific elements with proper field name (no leading underscore)
+        stimulus["timing"] = {
             "frame_number": random.randint(1, 1000),
             "time_to_impact": max(100, 500 - int(300 * difficulty)),  # ms, less time at higher difficulty
             "frame_window": max(3, 10 - int(difficulty * 7))  # Fewer frames at higher difficulty
@@ -591,8 +591,7 @@ class ReflexiveSystem:
                 function_tool(generate_similar_stimulus),
                 function_tool(generate_gaming_stimulus)
             ],
-            model_settings=ModelSettings(temperature=0.4),
-            model="gpt-4.1-nano"
+            model_settings=ModelSettings(temperature=0.4)
         )
         
         # Pattern Optimization Agent
@@ -605,8 +604,7 @@ class ReflexiveSystem:
                 function_tool(optimize_pattern),
                 function_tool(simplify_pattern)
             ],
-            model_settings=ModelSettings(temperature=0.4),
-            model="gpt-4.1-nano"
+            model_settings=ModelSettings(temperature=0.4)
         )
         
         # Gaming Reflex Agent
@@ -619,8 +617,7 @@ class ReflexiveSystem:
                 function_tool(generate_gaming_stimulus),
                 function_tool(fast_match)
             ],
-            model_settings=ModelSettings(temperature=0.4),
-            model="gpt-4.1-nano"
+            model_settings=ModelSettings(temperature=0.4)
         )
         
         # Decision System Agent
@@ -629,8 +626,7 @@ class ReflexiveSystem:
             instructions="""You are a specialized agent for the reflex decision system.
             Your job is to decide when to use reflexes vs. deliberate thinking based on context.
             Focus on analyzing stimuli and contexts to make appropriate reflex usage decisions.""",
-            model_settings=ModelSettings(temperature=0.5),
-            model="gpt-4.1-nano"
+            model_settings=ModelSettings(temperature=0.5)
         )
         
         # Main Reflexive Agent
@@ -653,8 +649,7 @@ class ReflexiveSystem:
                        tool_name_override="make_reflex_decision",
                        tool_description_override="Decide whether to use reflexes or deliberate thinking")
             ],
-            model_settings=ModelSettings(temperature=0.4),
-            model="gpt-4.1-nano"
+            model_settings=ModelSettings(temperature=0.4)
         )
 
     # Add this method to the ReflexiveSystem class in nyx/core/reflexive_system.py
