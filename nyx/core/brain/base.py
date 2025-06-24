@@ -497,6 +497,12 @@ class ExperienceSharingAdaptation(BaseModel):
     system_settings_updated: Optional[SystemSettingsUpdate] = None
     error: Optional[str] = None
 
+class ExperienceConsolidationResult(BaseModel):
+    """Result from running experience consolidation"""
+    status: str = "pending"  # "pending", "completed", "failed"
+    consolidations_created: int = 0
+    error: Optional[str] = None
+
 # Helper function
 def _dict_to_kv(d: dict[str, Any] | None) -> list[KVPair] | None:
     """
@@ -6578,7 +6584,6 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
         
         if not self.experience_consolidation:
             return ExperienceConsolidationResult(status="failed", error="Experience consolidation system not initialized")
-    
         
         try:
             # Run consolidation
@@ -6588,11 +6593,16 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             if consolidation_result.get("status") == "completed":
                 self.performance_metrics["experience_consolidations"] = self.performance_metrics.get("experience_consolidations", 0) + consolidation_result.get("consolidations_created", 0)
             
-            return consolidation_result
+            # Create proper result object
+            return ExperienceConsolidationResult(
+                status=consolidation_result.get("status", "completed"),
+                consolidations_created=consolidation_result.get("consolidations_created", 0),
+                error=consolidation_result.get("error")
+            )
             
         except Exception as e:
             logger.error(f"Error running experience consolidation: {str(e)}")
-            return {"error": str(e)}
+            return ExperienceConsolidationResult(status="failed", error=str(e))
 
     async def stop(self):
         """Stop all background processes and perform cleanup"""
