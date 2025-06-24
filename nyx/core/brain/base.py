@@ -85,6 +85,22 @@ class KVPair(BaseModel):
     key: str
     value: Union[str, int, float, bool, None]
 
+class MaintenanceUpdateResult(BaseModel):
+    """Generic maintenance update result"""
+    status: str = "completed"
+    items_processed: int = 0
+    errors: List[str] = Field(default_factory=list)
+
+class SystemSettingsUpdate(BaseModel):
+    """System settings that were updated"""
+    cross_user_enabled: bool
+    cross_user_sharing_threshold: float
+
+class UserProfile(BaseModel):
+    """User experience sharing profile"""
+    experience_sharing_preference: float = 0.5
+
+
 # Add these model definitions with the other Pydantic models at the top of the file:
 
 class PreferenceItem(BaseModel):
@@ -471,15 +487,15 @@ class LimitTestResult(BaseModel):
 class MaintenanceResult(BaseModel):
     """Result from running maintenance tasks"""
     maintenance_time: str
-    hormone_maintenance: Optional[Dict[str, Any]] = None
-    dss_maintenance_update: Optional[Dict[str, Any]] = None
-    memory_maintenance: Optional[Dict[str, Any]] = None
-    meta_maintenance: Optional[Dict[str, Any]] = None
-    knowledge_maintenance: Optional[Dict[str, Any]] = None
-    experience_consolidation: Optional[Dict[str, Any]] = None
-    user_clustering: Optional[Dict[str, Any]] = None
-    procedural_maintenance: Optional[Dict[str, Any]] = None
-    hierarchical_memory_maintenance: Optional[Dict[str, Any]] = None
+    hormone_maintenance: Optional[MaintenanceUpdateResult] = None
+    dss_maintenance_update: Optional[MaintenanceUpdateResult] = None
+    memory_maintenance: Optional[MaintenanceUpdateResult] = None
+    meta_maintenance: Optional[MaintenanceUpdateResult] = None
+    knowledge_maintenance: Optional[MaintenanceUpdateResult] = None
+    experience_consolidation: Optional[MaintenanceUpdateResult] = None
+    user_clustering: Optional[MaintenanceUpdateResult] = None
+    procedural_maintenance: Optional[MaintenanceUpdateResult] = None
+    hierarchical_memory_maintenance: Optional[MaintenanceUpdateResult] = None
     error: Optional[str] = None
 
 class SystemSettingsUpdate(BaseModel):
@@ -5006,79 +5022,79 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
     
             # New spatial subsystem tools
             spatial_functions = [
-                function_tool(self.create_cognitive_map),
-                function_tool(self.process_spatial_observation),
-                function_tool(self.navigate_to_location),
-                function_tool(self.visualize_map)
+                self.create_cognitive_map,
+                self.process_spatial_observation,
+                self.navigate_to_location,
+                self.visualize_map
             ]
             
             # New sync subsystem tools
             sync_functions = [
-                function_tool(self.process_synchronization),
-                function_tool(self.get_active_strategies),
-                function_tool(self.mark_strategy_for_review)
+                self.process_synchronization,
+                self.get_active_strategies,
+                self.mark_strategy_for_review
             ]
 
             femdom_tools = [
                 NyxBrain.process_dominance_action,
-                function_tool(self.assign_protocol),
-                function_tool(self.assign_service_task),
-                function_tool(self.process_orgasm_permission_request),
-                function_tool(self.recommend_dominance_persona),
-                function_tool(self.activate_dominance_persona),
-                function_tool(self.generate_sadistic_response)          
+                self.assign_protocol,
+                self.assign_service_task,
+                self.process_orgasm_permission_request,
+                self.recommend_dominance_persona,
+                self.activate_dominance_persona,
+                self.generate_sadistic_response)         
             ]            
             
             # New general tools functions
             tools_functions = [
-                function_tool(self.evaluate_response),
-                function_tool(self.execute_tools_in_parallel)
+                self.evaluate_response,
+                self.execute_tools_in_parallel
             ]
     
             all_tools = [
                 # Core processing tools
-                function_tool(process_user_message),
-                function_tool(generate_agent_response),
-                function_tool(run_cognitive_cycle),
-                function_tool(get_brain_stats),
-                function_tool(perform_maintenance),
-                function_tool(get_identity_state),
-                function_tool(adapt_experience_sharing),
-                function_tool(run_experience_consolidation),
+                process_user_message,
+                generate_agent_response,
+                run_cognitive_cycle,
+                get_brain_stats,
+                perform_maintenance,
+                get_identity_state,
+                adapt_experience_sharing,
+                run_experience_consolidation,
     
                 # Procedural memory tools
-                function_tool(add_procedural_knowledge),
-                function_tool(run_procedure),
-                function_tool(analyze_chunking),
+                add_procedural_knowledge,
+                run_procedure,
+                analyze_chunking,
 
-                function_tool(self.challenge_user_claim),
-                function_tool(self.intentionally_lie),                
+                self.challenge_user_claim,
+                self.intentionally_lie,                
     
                 # Reflexive system tools
-                function_tool(register_reflex),
-                function_tool(process_stimulus),
+                register_reflex,
+                process_stimulus,
     
                 # Self-configuration tools
-                function_tool(enable_self_configuration),
-                function_tool(evaluate_and_adjust_parameters),
-                function_tool(change_adaptation_strategy),
-                function_tool(get_self_configuration_status),
-                function_tool(reset_parameter_to_default),
-                function_tool(process_user_feedback_for_configuration),
+                enable_self_configuration,
+                evaluate_and_adjust_parameters,
+                change_adaptation_strategy,
+                get_self_configuration_status,
+                reset_parameter_to_default,
+                process_user_feedback_for_configuration,
     
                 # Processing mode tools
-                function_tool(set_processing_mode),
-                function_tool(get_processing_stats),
+                set_processing_mode,
+                get_processing_stats,
     
                 # Streaming tools
-                function_tool(initialize_streaming),
-                function_tool(process_streaming_event),
+                initialize_streaming,
+                process_streaming_event,
     
                 # Thinking tools
-                function_tool(run_thinking),
+                run_thinking,
 
-                function_tool(self.enter_character_roleplay),
-                function_tool(self.exit_character_roleplay),                
+                self.enter_character_roleplay,
+                self.exit_character_roleplay,                
     
                 # Additional new tools
                 *spatial_functions,
@@ -6297,10 +6313,15 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
                 if component and hasattr(component, method_name):
                     try:
                         method = getattr(component, method_name)
-                        setattr(stats, stat_key, await method())
+                        result = await method()
+                        if stat_key == "memory_stats":
+                            stats.memory_stats = MemoryStats(**result) if isinstance(result, dict) else result
+                        elif stat_key == "meta_stats":
+                            stats.meta_stats = MetaStats(**result) if isinstance(result, dict) else result
+                        elif stat_key == "knowledge_stats":
+                            stats.knowledge_stats = KnowledgeStats(**result) if isinstance(result, dict) else result
                     except Exception as e:
                         logger.error(f"Error getting {stat_key}: {str(e)}")
-                        setattr(stats, stat_key, {"error": str(e)})
             
             # Get emotional state if available
             if self.emotional_core:
@@ -6310,18 +6331,17 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
                         if hasattr(self.emotional_core, 'get_dominant_emotion'):
                             dominant_emotion, dominant_value = self.emotional_core.get_dominant_emotion()
                             
-                            stats.emotional_state = {
-                                "emotions": emotional_state,
-                                "dominant_emotion": dominant_emotion,
-                                "dominant_value": dominant_value,
-                                "valence": self.emotional_core.get_emotional_valence() 
+                            stats.emotional_state = EmotionalStateStats(
+                                emotions=emotional_state,
+                                dominant_emotion=dominant_emotion,
+                                dominant_value=dominant_value,
+                                valence=self.emotional_core.get_emotional_valence() 
                                     if hasattr(self.emotional_core, 'get_emotional_valence') else 0,
-                                "arousal": self.emotional_core.get_emotional_arousal()
+                                arousal=self.emotional_core.get_emotional_arousal()
                                     if hasattr(self.emotional_core, 'get_emotional_arousal') else 0
-                            }
+                            )
                 except Exception as e:
                     logger.error(f"Error getting emotional state: {str(e)}")
-                    stats.emotional_state = {"error": str(e)}
             
             # Get hormone stats if available
             if self.hormone_system:
@@ -6330,17 +6350,16 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
                     cycle_phases = {name: data["cycle_phase"] for name, data in self.hormone_system.hormones.items()}
                     dominant_hormone = max(hormone_levels.items(), key=lambda x: x[1])
                     
-                    stats.hormone_stats = {
-                        "hormone_levels": hormone_levels,
-                        "cycle_phases": cycle_phases,
-                        "dominant_hormone": {
+                    stats.hormone_stats = HormoneStats(
+                        hormone_levels=hormone_levels,
+                        cycle_phases=cycle_phases,
+                        dominant_hormone={
                             "name": dominant_hormone[0],
                             "value": dominant_hormone[1]
                         }
-                    }
+                    )
                 except Exception as e:
                     logger.error(f"Error getting hormone stats: {str(e)}")
-                    stats.hormone_stats = {"error": str(e)}
             
             # Get procedural memory stats if available
             if self.agent_enhanced_memory:
@@ -6348,46 +6367,43 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
                     procedures = []
                     if hasattr(self.agent_enhanced_memory, 'procedures'):
                         procedures = list(self.agent_enhanced_memory.procedures.keys())
-                    stats.procedural_stats = {
-                        "total_procedures": len(procedures),
-                        "available_procedures": procedures[:10] if len(procedures) > 10 else procedures,
-                        "procedure_domains": list(set(p.get("domain", "general") 
+                    stats.procedural_stats = ProceduralStats(
+                        total_procedures=len(procedures),
+                        available_procedures=procedures[:10] if len(procedures) > 10 else procedures,
+                        procedure_domains=list(set(p.get("domain", "general") 
                             for p in self.agent_enhanced_memory.procedures.values())),
-                        "execution_count": getattr(
+                        execution_count=getattr(
                             getattr(self.agent_enhanced_memory, "agents", None) and 
                             getattr(self.agent_enhanced_memory.agents, "agent_context", None), 
                             "run_stats", {}).get("total_runs", 0)
-                    }
+                    )
                 except Exception as e:
                     logger.error(f"Error getting procedural memory stats: {str(e)}")
-                    stats.procedural_stats = {"error": str(e)}
             
             # Get identity state if available
             if self.identity_evolution:
                 try:
                     if hasattr(self.identity_evolution, 'get_identity_profile'):
                         identity_profile = await self.identity_evolution.get_identity_profile()
-                        stats.identity_stats = {
-                            "trait_count": len(identity_profile.get("traits", {})),
-                            "preference_count": sum(len(prefs) for prefs in identity_profile.get("preferences", {}).values()),
-                            "dominant_traits": sorted(identity_profile.get("traits", {}).items(), key=lambda x: x[1], reverse=True)[:3]
-                        }
+                        stats.identity_stats = IdentityStats(
+                            trait_count=len(identity_profile.get("traits", {})),
+                            preference_count=sum(len(prefs) for prefs in identity_profile.get("preferences", {}).values()),
+                            dominant_traits=sorted(identity_profile.get("traits", {}).items(), key=lambda x: x[1], reverse=True)[:3]
+                        )
                 except Exception as e:
                     logger.error(f"Error getting identity stats: {str(e)}")
-                    stats.identity_stats = {"error": str(e)}
             
             # Get needs stats if available
             if self.needs_system:
                 try:
                     needs_state = await self.needs_system.get_needs_state_async()
-                    stats.needs_stats = {
-                        "current_levels": {n: s['level'] for n, s in needs_state.items()},
-                        "drive_strengths": {n: s['drive_strength'] for n, s in needs_state.items()},
-                        "total_drive": sum(s['drive_strength'] for s in needs_state.values()),
-                    }
+                    stats.needs_stats = NeedsStats(
+                        current_levels={n: s['level'] for n, s in needs_state.items()},
+                        drive_strengths={n: s['drive_strength'] for n, s in needs_state.items()},
+                        total_drive=sum(s['drive_strength'] for s in needs_state.values()),
+                    )
                 except Exception as e:
                     logger.error(f"Error getting needs stats: {e}")
-                    stats.needs_stats = {"error": str(e)}
     
             # Get goal stats if available
             if self.goal_manager:
@@ -6395,46 +6411,45 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
                     all_goals = await self.goal_manager.get_all_goals()
                     active_goals = await self.goal_manager.get_all_goals(status_filter=["active"])
                     pending_goals = await self.goal_manager.get_all_goals(status_filter=["pending"])
-                    stats.goal_stats = {
-                        "total_goals": len(getattr(self.goal_manager, "goals", {})),
-                        "active_goals_count": len(active_goals),
-                        "pending_goals_count": len(pending_goals),
-                        "completed_goals": self.performance_metrics["goals_completed"],
-                        "failed_goals": self.performance_metrics["goals_failed"],
-                        "active_goal_ids": [g['id'] for g in active_goals],
-                        "highest_priority_pending": pending_goals[0]['description'] if pending_goals else None,
-                    }
+                    stats.goal_stats = GoalStats(
+                        total_goals=len(getattr(self.goal_manager, "goals", {})),
+                        active_goals_count=len(active_goals),
+                        pending_goals_count=len(pending_goals),
+                        completed_goals=self.performance_metrics["goals_completed"],
+                        failed_goals=self.performance_metrics["goals_failed"],
+                        active_goal_ids=[g['id'] for g in active_goals],
+                        highest_priority_pending=pending_goals[0]['description'] if pending_goals else None,
+                    )
                 except Exception as e:
                     logger.error(f"Error getting goal stats: {e}")
-                    stats.goal_stats = {"error": str(e)}
                     
             # Get performance metrics
             avg_response_time = 0
             if self.performance_metrics["response_times"]:
                 avg_response_time = sum(self.performance_metrics["response_times"]) / len(self.performance_metrics["response_times"])
             
-            stats.performance_metrics = {
-                "memory_operations": self.performance_metrics["memory_operations"],
-                "emotion_updates": self.performance_metrics["emotion_updates"],
-                "reflections_generated": self.performance_metrics["reflections_generated"],
-                "experiences_shared": self.performance_metrics["experiences_shared"],
-                "cross_user_experiences_shared": self.performance_metrics.get("cross_user_experiences_shared", 0),
-                "avg_response_time": avg_response_time,
-                "goals_completed": self.performance_metrics["goals_completed"],
-                "goals_failed": self.performance_metrics["goals_failed"],
-                "steps_executed": self.performance_metrics["steps_executed"]
-            }
+            stats.performance_metrics = PerformanceMetrics(
+                memory_operations=self.performance_metrics["memory_operations"],
+                emotion_updates=self.performance_metrics["emotion_updates"],
+                reflections_generated=self.performance_metrics["reflections_generated"],
+                experiences_shared=self.performance_metrics["experiences_shared"],
+                cross_user_experiences_shared=self.performance_metrics.get("cross_user_experiences_shared", 0),
+                avg_response_time=avg_response_time,
+                goals_completed=self.performance_metrics["goals_completed"],
+                goals_failed=self.performance_metrics["goals_failed"],
+                steps_executed=self.performance_metrics["steps_executed"]
+            )
             
             # Get thinking stats if available
             if "thinking_config" in vars(self):
-                stats.thinking_stats = self.thinking_config["thinking_stats"]
+                stats.thinking_stats = ThinkingStats(**self.thinking_config["thinking_stats"])
             
             # Get processing stats if available
             if self.processing_manager:
-                stats.processing_stats = {
-                    "processor_type": "unified",
-                    "initialized": self.processing_manager._initialized
-                }
+                stats.processing_stats = ProcessingStats(
+                    processor_type="unified",
+                    initialized=self.processing_manager._initialized
+                )
             
             return stats
 
