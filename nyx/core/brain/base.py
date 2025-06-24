@@ -8096,46 +8096,59 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             # 5. Run Ideation Agent
             from agents import Runner
             
-            try:
-                result = await Runner.run(agent_to_use, prompt)
+            result = await Runner.run(agent_to_use, prompt)
+            
+            # 6. Process and validate results
+            if hasattr(result, "final_output") and isinstance(result.final_output, list):
+                generated_ideas = result.final_output
                 
-                # 6. Process and validate results
-                if hasattr(result, "final_output") and isinstance(result.final_output, list):
-                    generated_ideas = result.final_output
-                    
-                    # 7. Apply safety filter
-                    filtered_ideas = await instance._filter_activity_ideas_safety(
-                        generated_ideas, 
-                        user_profile, 
-                        relationship_state
+                # 7. Apply safety filter
+                filtered_ideas = await instance._filter_activity_ideas_safety(
+                    generated_ideas, 
+                    user_profile, 
+                    relationship_state
+                )
+                
+                if not filtered_ideas:
+                    logger.warning(f"All generated ideas were filtered out by safety checks")
+                    return FemdomIdeasResult(
+                        success=False, 
+                        error="No ideas passed safety filtering"
                     )
-                    
-                    if not filtered_ideas:
-                        logger.warning(f"All generated ideas were filtered out by safety checks")
-                        return FemdomIdeasResult(
-                            success=False, 
-                            error="No ideas passed safety filtering"
-                        )
-                    
-                    # Convert ideas to dicts for broader compatibility
-                    ideas_as_models = []
-                    for idea in filtered_ideas:
-                        if isinstance(idea, dict):
-                            ideas_as_models.append(FemdomActivityIdea(**idea))
-                        elif hasattr(idea, "model_dump"):
-                            ideas_as_models.append(FemdomActivityIdea(**idea.model_dump()))
-                        else:
-                            # Try to construct from attributes
-                            ideas_as_models.append(FemdomActivityIdea(
-                                id=getattr(idea, "id", f"idea_{len(ideas_as_models)}"),
-                                description=getattr(idea, "description", str(idea)),
-                                intensity=getattr(idea, "intensity", 5),
-                                category=getattr(idea, "category", "general"),
-                                required_trust=getattr(idea, "required_trust", 0.5),
-                                required_items=getattr(idea, "required_items", [])
-                            ))
-                    
-                    return FemdomIdeasResult(success=True, ideas=ideas_as_models)
+                
+                # Convert ideas to dicts for broader compatibility
+                ideas_as_models = []
+                for idea in filtered_ideas:
+                    if isinstance(idea, dict):
+                        ideas_as_models.append(FemdomActivityIdea(**idea))
+                    elif hasattr(idea, "model_dump"):
+                        ideas_as_models.append(FemdomActivityIdea(**idea.model_dump()))
+                    else:
+                        # Try to construct from attributes
+                        ideas_as_models.append(FemdomActivityIdea(
+                            id=getattr(idea, "id", f"idea_{len(ideas_as_models)}"),
+                            description=getattr(idea, "description", str(idea)),
+                            intensity=getattr(idea, "intensity", 5),
+                            category=getattr(idea, "category", "general"),
+                            required_trust=getattr(idea, "required_trust", 0.5),
+                            required_items=getattr(idea, "required_items", [])
+                        ))
+                
+                return FemdomIdeasResult(success=True, ideas=ideas_as_models)
+            
+            else:
+                logger.error(f"Invalid result from {agent_name}: {result}")
+                return FemdomIdeasResult(
+                    success=False,
+                    error=f"Invalid response format from {agent_name}"
+                )
+                
+        except Exception as e:
+            logger.error(f"Error in generate_femdom_activity_ideas: {e}")
+            return FemdomIdeasResult(
+                success=False,
+                error=f"Failed to generate ideas: {str(e)}"
+            )
     
     @staticmethod
     @function_tool
