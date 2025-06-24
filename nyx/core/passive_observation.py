@@ -547,6 +547,10 @@ async def generate_observation_from_source(
     observation_content = ""
     relevance = random.uniform(0.3, 0.8)  # Base relevance
     
+    # Initialize variables that might be used later
+    temporal = None
+    emotion_state = context.emotional_state
+    
     # Source-specific observation generation logic
     if source == "environment":
         # Extract temporal context safely
@@ -582,7 +586,6 @@ async def generate_observation_from_source(
         
     elif source == "self":
         # Use emotional state if available
-        emotion_state = context.emotional_state
         observations = ["developing my sense of self-concept"]
         
         if emotion_state and emotion_state.primary_emotion:
@@ -610,7 +613,6 @@ async def generate_observation_from_source(
                 
     elif source == "emotion":
         observations = ["shifting emotional undertones"]
-        emotion_state = context.emotional_state
         if emotion_state and emotion_state.primary_emotion:
             primary_emotion_name = emotion_state.primary_emotion.name
             if primary_emotion_name:
@@ -648,6 +650,8 @@ async def generate_observation_from_source(
     
     # Build context elements safely
     context_elements = ContextElements()
+    if not temporal:  # If temporal wasn't set, try to get it from context
+        temporal = context.temporal_context
     if temporal:
         if isinstance(temporal, dict):
             context_elements.temporal_context = temporal.get("time_of_day", "unknown")
