@@ -458,109 +458,92 @@ async def satisfy_need(
         return result
 
 @function_tool
-async def decrease_need(
-    ctx: RunContextWrapper[NeedsSystemContext],
-    need_name: str,
-    amount: float,
-    reason: Optional[str] = None
-) -> DecreaseNeedResult:
-    """
-    Decreases the satisfaction level of a need (increases deficit).
+async def decrease_need(self, name: str, amount: float, reason: Optional[str] = None) -> DecreaseNeedResult:
+    """Public API to decrease a need with robust error handling."""
+    reason_provided = reason if reason is not None else "generic_decrease_api_call"
     
-    Args:
-        need_name: Name of the need
-        amount: Amount to decrease by (0.0-1.0)
-        reason: Reason for the decrease
+    # Try multiple prompt strategies
+    prompts = [
+        f"Use the decrease_need_tool_impl tool with need_name='{name}', amount={amount}, reason='{reason_provided}'",
+        f"Call decrease_need_tool_impl(need_name='{name}', amount={amount}, reason='{reason_provided}')",
+        f"Decrease the need named '{name}' by an amount of {amount}. The reason is: '{reason_provided}'."
+    ]
+    
+    for i, prompt in enumerate(prompts):
+        logger.debug(f"Attempt {i+1}: Sending prompt to agent: {prompt}")
         
-    Returns:
-        Details about the need change
-    """
-    needs_ctx = ctx.context
+        try:
+            result = await Runner.run(
+                self.agent,
+                prompt,
+                context=self.context
+            )
+            
+            logger.debug(f"Agent returned type: {type(result.final_output)}")
+            
+            # Check if we got the expected type
+            if isinstance(result.final_output, DecreaseNeedResult):
+                logger.debug("Success: Agent returned DecreaseNeedResult")
+                return result.final_output
+            
+            # Fallback 1: Try to parse JSON string
+            elif isinstance(result.final_output, str):
+                logger.warning(f"Agent returned string instead of using tool. Attempting JSON parse...")
+                try:
+                    import json
+                    # Try to parse as JSON
+                    data = json.loads(result.final_output)
+                    logger.debug(f"Parsed JSON data: {data}")
+                    
+                    # Validate required fields
+                    required_fields = ['success', 'name', 'previous_level', 'new_level', 
+                                     'change', 'reason', 'deficit', 'drive_strength']
+                    if all(field in data for field in required_fields):
+                        return DecreaseNeedResult(**data)
+                    else:
+                        logger.error(f"JSON missing required fields. Has: {list(data.keys())}")
+                        
+                except json.JSONDecodeError as e:
+                    logger.error(f"Failed to parse as JSON: {e}")
+                except Exception as e:
+                    logger.error(f"Failed to create DecreaseNeedResult from JSON: {e}")
+            
+            # Fallback 2: Check if it's a dict
+            elif isinstance(result.final_output, dict):
+                logger.warning("Agent returned dict. Attempting to convert...")
+                try:
+                    return DecreaseNeedResult(**result.final_output)
+                except Exception as e:
+                    logger.error(f"Failed to create DecreaseNeedResult from dict: {e}")
+            
+            else:
+                logger.error(f"Agent returned unexpected type: {type(result.final_output)}")
+            
+        except Exception as e:
+            logger.error(f"Error during agent call attempt {i+1}: {e}")
+            
+        # If this attempt failed and it's not the last one, continue
+        if i < len(prompts) - 1:
+            logger.info(f"Retrying with different prompt...")
+            continue
     
-    # Handle None reason
-    reason_provided = reason if reason is not None else "unspecified_decrease"
-    
-    # Validate amount
-    if amount < 0:
-        logger.warning(f"Decrease amount must be positive, got: {amount}. Using absolute value.")
-        amount = abs(amount)
-    
-    if amount > 1.0:
-        logger.warning(f"Decrease amount exceeds 1.0: {amount}. Clamping to 1.0.")
-        amount = 1.0
-    
-    if need_name not in needs_ctx.needs:
-        logger.warning(f"Attempted to decrease non-existent need: {need_name}")
+    # Final fallback: Use direct logic
+    logger.warning("All agent attempts failed. Falling back to direct logic.")
+    try:
+        return await self._decrease_need_logic(name, amount, reason_provided)
+    except Exception as e:
+        logger.error(f"Direct logic also failed: {e}")
+        # Return error result
         return DecreaseNeedResult(
             success=False,
-            name=need_name,
+            name=name,
             previous_level=0.0,
             new_level=0.0,
             change=0.0,
-            reason=reason_provided,
+            reason="error_all_attempts_failed",
             deficit=0.0,
             drive_strength=0.0,
-            error=f"Need '{need_name}' not found"
-        )
-    
-    async with needs_ctx._lock:
-        need = needs_ctx.needs[need_name]
-        original_level = need.level
-        
-        # Special handling for certain needs and reasons
-        modified_amount = amount
-        
-        # Some needs decay faster with certain reasons
-        if need_name == "safety" and reason_provided in ["threat_detected", "uncertainty_increased"]:
-            modified_amount = amount * 1.5  # Safety decreases faster under threat
-            logger.info(f"Amplified safety decrease due to {reason_provided}")
-            
-        elif need_name == "coherence" and reason_provided == "conflicting_information":
-            modified_amount = amount * 1.3  # Coherence suffers more from conflicts
-            
-        elif need_name == "connection" and reason_provided in ["rejection", "misunderstanding"]:
-            modified_amount = amount * 1.2  # Social rejection hits harder
-            
-        elif need_name == "agency" and reason_provided in ["choice_overridden", "control_removed"]:
-            modified_amount = amount * 1.4  # Loss of agency is particularly impactful
-            
-        elif need_name == "pleasure_indulgence" and reason_provided == "denied_gratification":
-            modified_amount = amount * 1.1  # Denial has moderate impact
-        
-        # Apply the decrease
-        new_level = max(0.0, need.level - modified_amount)
-        actual_change = original_level - new_level  # Positive value for amount decreased
-        need.level = new_level
-        need.last_updated = datetime.datetime.now()
-        
-        # Calculate new deficit and drive
-        new_deficit = need.deficit
-        new_drive = need.drive_strength
-        
-        # Add to history with detailed reason
-        detailed_reason = f"{reason_provided}_decrease"
-        _add_history_entry(needs_ctx, need_name, need, detailed_reason)
-        
-        # Log based on severity
-        if actual_change > 0.2:
-            logger.warning(f"Significant decrease in need '{need_name}' by {actual_change:.3f} (Base: {amount:.3f}, Modified: {modified_amount:.3f}). Level: {original_level:.2f} -> {new_level:.2f}. Reason: {reason_provided}")
-        else:
-            logger.info(f"Need '{need_name}' decreased by {actual_change:.3f} (Base: {amount:.3f}, Modified: {modified_amount:.3f}). Level: {original_level:.2f} -> {new_level:.2f}. Reason: {reason_provided}")
-        
-        # Check if this decrease triggers any thresholds
-        if new_drive > 0.6 and original_level > 0.3 and new_level <= 0.3:
-            logger.warning(f"Need '{need_name}' has dropped below critical threshold (0.3). Drive strength: {new_drive:.2f}")
-        
-        return DecreaseNeedResult(
-            success=True,
-            name=need_name,
-            previous_level=original_level,
-            new_level=new_level,
-            change=-actual_change,  # Negative to indicate decrease
-            reason=detailed_reason,
-            deficit=new_deficit,
-            drive_strength=new_drive,
-            error=None
+            error=f"Failed to decrease need: {str(e)}"
         )
 
 @function_tool
@@ -937,37 +920,20 @@ class NeedsSystem:
             name="Needs_Manager_Agent",
             instructions="""You manage the AI's simulated needs system.
         
-        CRITICAL INSTRUCTIONS:
-        1. NEVER respond with text or JSON. ALWAYS use the appropriate tool.
-        2. When asked to perform ANY operation, you MUST call the corresponding tool.
-        3. Return ONLY the tool's output - do not add any text, explanation, or JSON.
-        
-        Tool mapping (ALWAYS use these):
-        - "get state", "get current state", "get the current state" → MUST call get_needs_state_tool_impl
-        - "decrease need" or any variation → MUST call decrease_need_tool_impl
-        - "satisfy need" → MUST call satisfy_need_tool_impl  
-        - "update needs", "update all needs" → MUST call update_needs_tool_impl
-        - "get categories" → MUST call get_needs_by_category_tool_impl
-        - "most unfulfilled" → MUST call get_most_unfulfilled_need_tool_impl
-        - "get history" → MUST call get_need_history_tool_impl
-        - "total drive", "calculate total drive" → MUST call get_total_drive_tool_impl
-        - "reset need" → MUST call reset_need_to_default_tool_impl
-        
-        NEVER output JSON like this:
-        {
-          "knowledge": {
-            "level": 0.5,
-            ...
-          }
-        }
-        
-        INSTEAD, you MUST call get_needs_state_tool_impl which will return a proper NeedsStateResponse object.
-        
-        Examples:
-        - User: "Get the current state of all needs" → Call get_needs_state_tool_impl()
-        - User: "Calculate the total drive of all needs" → Call get_total_drive_tool_impl()
-        - User: "Decrease the need named 'pleasure_indulgence' by 0.3" → Call decrease_need_tool_impl(need_name='pleasure_indulgence', amount=0.3)""",
-            tools=[
+CRITICAL RULE: You MUST use tools for EVERY operation. NEVER output raw JSON or text.
+
+When asked to:
+- decrease a need → use decrease_need_tool_impl
+- get state → use get_needs_state_tool_impl
+- satisfy need → use satisfy_need_tool_impl
+- update needs → use update_needs_tool_impl
+- get categories → use get_needs_by_category_tool_impl
+- most unfulfilled → use get_most_unfulfilled_need_tool_impl
+- get history → use get_need_history_tool_impl
+- total drive → use get_total_drive_tool_impl
+- reset need → use reset_need_to_default_tool_impl
+
+ALWAYS use the exact tool. NEVER output JSON like {"success": true, ...}""",
                 update_needs_tool_impl,
                 satisfy_need_tool_impl,
                 decrease_need_tool_impl,
