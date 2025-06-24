@@ -100,6 +100,54 @@ class UserProfile(BaseModel):
     """User experience sharing profile"""
     experience_sharing_preference: float = 0.5
 
+class EmotionMapping(BaseModel):
+    """Mapping of emotion names to values"""
+    joy: Optional[float] = 0.0
+    sadness: Optional[float] = 0.0
+    anger: Optional[float] = 0.0
+    fear: Optional[float] = 0.0
+    trust: Optional[float] = 0.0
+    surprise: Optional[float] = 0.0
+    anticipation: Optional[float] = 0.0
+    disgust: Optional[float] = 0.0
+
+class HormoneLevel(BaseModel):
+    """Individual hormone level"""
+    name: str
+    value: float
+
+class HormoneCyclePhase(BaseModel):
+    """Hormone cycle phase"""
+    name: str
+    phase: str
+
+class DominantHormone(BaseModel):
+    """Dominant hormone info"""
+    name: str
+    value: float
+
+class MemoryTypeCount(BaseModel):
+    """Memory counts by type"""
+    episodic: Optional[int] = 0
+    semantic: Optional[int] = 0
+    procedural: Optional[int] = 0
+    working: Optional[int] = 0
+
+class NeedLevel(BaseModel):
+    """Individual need level"""
+    name: str
+    level: float
+
+class DriveStrength(BaseModel):
+    """Individual drive strength"""
+    name: str
+    strength: float
+
+class TraitValue(BaseModel):
+    """Individual trait with value"""
+    name: str
+    value: float
+
 
 # Add these model definitions with the other Pydantic models at the top of the file:
 
@@ -150,7 +198,7 @@ class LieRecord(BaseModel):
 class MemoryStats(BaseModel):
     """Memory system statistics"""
     total_memories: int = 0
-    memories_by_type: Optional[Dict[str, int]] = None
+    memories_by_type: Optional[MemoryTypeCount] = None
     recent_retrievals: int = 0
     storage_used_mb: Optional[float] = None
 
@@ -168,7 +216,7 @@ class KnowledgeStats(BaseModel):
 
 class EmotionalStateStats(BaseModel):
     """Emotional state statistics"""
-    emotions: Optional[Dict[str, float]] = None
+    emotions: Optional[EmotionMapping] = None
     dominant_emotion: Optional[str] = None
     dominant_value: Optional[float] = None
     valence: float = 0.0
@@ -176,9 +224,21 @@ class EmotionalStateStats(BaseModel):
 
 class HormoneStats(BaseModel):
     """Hormone system statistics"""
-    hormone_levels: Optional[Dict[str, float]] = None
-    cycle_phases: Optional[Dict[str, str]] = None
-    dominant_hormone: Optional[Dict[str, Union[str, float]]] = None
+    hormone_levels: Optional[List[HormoneLevel]] = None
+    cycle_phases: Optional[List[HormoneCyclePhase]] = None
+    dominant_hormone: Optional[DominantHormone] = None
+
+class NeedsStats(BaseModel):
+    """Needs system statistics"""
+    current_levels: Optional[List[NeedLevel]] = None
+    drive_strengths: Optional[List[DriveStrength]] = None
+    total_drive: float = 0.0
+
+class IdentityStats(BaseModel):
+    """Identity statistics"""
+    trait_count: int = 0
+    preference_count: int = 0
+    dominant_traits: List[TraitValue] = Field(default_factory=list)
 
 class ProceduralStats(BaseModel):
     """Procedural memory statistics"""
@@ -186,18 +246,6 @@ class ProceduralStats(BaseModel):
     available_procedures: List[str] = Field(default_factory=list)
     procedure_domains: List[str] = Field(default_factory=list)
     execution_count: int = 0
-
-class IdentityStats(BaseModel):
-    """Identity statistics"""
-    trait_count: int = 0
-    preference_count: int = 0
-    dominant_traits: List[Tuple[str, float]] = Field(default_factory=list)
-
-class NeedsStats(BaseModel):
-    """Needs system statistics"""
-    current_levels: Optional[Dict[str, float]] = None
-    drive_strengths: Optional[Dict[str, float]] = None
-    total_drive: float = 0.0
 
 class GoalStats(BaseModel):
     """Goal system statistics"""
@@ -6301,38 +6349,43 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
         with trace(workflow_name="get_system_stats", group_id=self.trace_group_id):
             stats = SystemStats()
             
-            # Define stat gathering tasks
-            stats_tasks = [
-                ("memory_stats", self.memory_core, "get_memory_stats"),
-                ("meta_stats", self.meta_core, "get_feedback_stats"),
-                ("knowledge_stats", self.knowledge_core, "get_knowledge_statistics")
-            ]
+            # Memory stats
+            if self.memory_core and hasattr(self.memory_core, "get_memory_stats"):
+                try:
+                    result = await self.memory_core.get_memory_stats()
+                    if isinstance(result, dict):
+                        memory_by_type = result.get("memories_by_type", {})
+                        stats.memory_stats = MemoryStats(
+                            total_memories=result.get("total_memories", 0),
+                            memories_by_type=MemoryTypeCount(
+                                episodic=memory_by_type.get("episodic", 0),
+                                semantic=memory_by_type.get("semantic", 0),
+                                procedural=memory_by_type.get("procedural", 0),
+                                working=memory_by_type.get("working", 0)
+                            ) if memory_by_type else None,
+                            recent_retrievals=result.get("recent_retrievals", 0),
+                            storage_used_mb=result.get("storage_used_mb")
+                        )
+                except Exception as e:
+                    logger.error(f"Error getting memory stats: {str(e)}")
             
-            # Gather stats from various subsystems
-            for stat_key, component, method_name in stats_tasks:
-                if component and hasattr(component, method_name):
-                    try:
-                        method = getattr(component, method_name)
-                        result = await method()
-                        if stat_key == "memory_stats":
-                            stats.memory_stats = MemoryStats(**result) if isinstance(result, dict) else result
-                        elif stat_key == "meta_stats":
-                            stats.meta_stats = MetaStats(**result) if isinstance(result, dict) else result
-                        elif stat_key == "knowledge_stats":
-                            stats.knowledge_stats = KnowledgeStats(**result) if isinstance(result, dict) else result
-                    except Exception as e:
-                        logger.error(f"Error getting {stat_key}: {str(e)}")
-            
-            # Get emotional state if available
+            # Emotional state
             if self.emotional_core:
                 try:
                     if hasattr(self.emotional_core, 'get_emotional_state'):
                         emotional_state = self.emotional_core.get_emotional_state()
-                        if hasattr(self.emotional_core, 'get_dominant_emotion'):
-                            dominant_emotion, dominant_value = self.emotional_core.get_dominant_emotion()
+                        if emotional_state and isinstance(emotional_state, dict):
+                            emotion_mapping = EmotionMapping(**{k: v for k, v in emotional_state.items() 
+                                                               if k in ["joy", "sadness", "anger", "fear", 
+                                                                       "trust", "surprise", "anticipation", "disgust"]})
+                            
+                            dominant_emotion = None
+                            dominant_value = None
+                            if hasattr(self.emotional_core, 'get_dominant_emotion'):
+                                dominant_emotion, dominant_value = self.emotional_core.get_dominant_emotion()
                             
                             stats.emotional_state = EmotionalStateStats(
-                                emotions=emotional_state,
+                                emotions=emotion_mapping,
                                 dominant_emotion=dominant_emotion,
                                 dominant_value=dominant_value,
                                 valence=self.emotional_core.get_emotional_valence() 
@@ -6343,69 +6396,73 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
                 except Exception as e:
                     logger.error(f"Error getting emotional state: {str(e)}")
             
-            # Get hormone stats if available
+            # Hormone stats
             if self.hormone_system:
                 try:
-                    hormone_levels = {name: data["value"] for name, data in self.hormone_system.hormones.items()}
-                    cycle_phases = {name: data["cycle_phase"] for name, data in self.hormone_system.hormones.items()}
-                    dominant_hormone = max(hormone_levels.items(), key=lambda x: x[1])
+                    hormone_levels = []
+                    cycle_phases = []
+                    max_hormone = None
+                    max_value = -1
+                    
+                    for name, data in self.hormone_system.hormones.items():
+                        value = data["value"]
+                        hormone_levels.append(HormoneLevel(name=name, value=value))
+                        cycle_phases.append(HormoneCyclePhase(name=name, phase=data["cycle_phase"]))
+                        
+                        if value > max_value:
+                            max_value = value
+                            max_hormone = name
                     
                     stats.hormone_stats = HormoneStats(
                         hormone_levels=hormone_levels,
                         cycle_phases=cycle_phases,
-                        dominant_hormone={
-                            "name": dominant_hormone[0],
-                            "value": dominant_hormone[1]
-                        }
+                        dominant_hormone=DominantHormone(name=max_hormone, value=max_value) if max_hormone else None
                     )
                 except Exception as e:
                     logger.error(f"Error getting hormone stats: {str(e)}")
             
-            # Get procedural memory stats if available
-            if self.agent_enhanced_memory:
-                try:
-                    procedures = []
-                    if hasattr(self.agent_enhanced_memory, 'procedures'):
-                        procedures = list(self.agent_enhanced_memory.procedures.keys())
-                    stats.procedural_stats = ProceduralStats(
-                        total_procedures=len(procedures),
-                        available_procedures=procedures[:10] if len(procedures) > 10 else procedures,
-                        procedure_domains=list(set(p.get("domain", "general") 
-                            for p in self.agent_enhanced_memory.procedures.values())),
-                        execution_count=getattr(
-                            getattr(self.agent_enhanced_memory, "agents", None) and 
-                            getattr(self.agent_enhanced_memory.agents, "agent_context", None), 
-                            "run_stats", {}).get("total_runs", 0)
-                    )
-                except Exception as e:
-                    logger.error(f"Error getting procedural memory stats: {str(e)}")
-            
-            # Get identity state if available
-            if self.identity_evolution:
-                try:
-                    if hasattr(self.identity_evolution, 'get_identity_profile'):
-                        identity_profile = await self.identity_evolution.get_identity_profile()
-                        stats.identity_stats = IdentityStats(
-                            trait_count=len(identity_profile.get("traits", {})),
-                            preference_count=sum(len(prefs) for prefs in identity_profile.get("preferences", {}).values()),
-                            dominant_traits=sorted(identity_profile.get("traits", {}).items(), key=lambda x: x[1], reverse=True)[:3]
-                        )
-                except Exception as e:
-                    logger.error(f"Error getting identity stats: {str(e)}")
-            
-            # Get needs stats if available
+            # Needs stats
             if self.needs_system:
                 try:
                     needs_state = await self.needs_system.get_needs_state_async()
+                    current_levels = []
+                    drive_strengths = []
+                    total_drive = 0.0
+                    
+                    for need_name, need_data in needs_state.items():
+                        current_levels.append(NeedLevel(name=need_name, level=need_data['level']))
+                        drive_strengths.append(DriveStrength(name=need_name, strength=need_data['drive_strength']))
+                        total_drive += need_data['drive_strength']
+                    
                     stats.needs_stats = NeedsStats(
-                        current_levels={n: s['level'] for n, s in needs_state.items()},
-                        drive_strengths={n: s['drive_strength'] for n, s in needs_state.items()},
-                        total_drive=sum(s['drive_strength'] for s in needs_state.values()),
+                        current_levels=current_levels,
+                        drive_strengths=drive_strengths,
+                        total_drive=total_drive
                     )
                 except Exception as e:
                     logger.error(f"Error getting needs stats: {e}")
     
-            # Get goal stats if available
+            # Identity stats
+            if self.identity_evolution:
+                try:
+                    if hasattr(self.identity_evolution, 'get_identity_profile'):
+                        identity_profile = await self.identity_evolution.get_identity_profile()
+                        traits = identity_profile.get("traits", {})
+                        
+                        dominant_traits = []
+                        for trait_name, trait_value in sorted(traits.items(), key=lambda x: x[1], reverse=True)[:3]:
+                            dominant_traits.append(TraitValue(name=trait_name, value=trait_value))
+                        
+                        stats.identity_stats = IdentityStats(
+                            trait_count=len(traits),
+                            preference_count=sum(len(prefs) for prefs in identity_profile.get("preferences", {}).values()),
+                            dominant_traits=dominant_traits
+                        )
+                except Exception as e:
+                    logger.error(f"Error getting identity stats: {str(e)}")
+            
+            # Other stats remain the same...
+            # Goal stats
             if self.goal_manager:
                 try:
                     all_goals = await self.goal_manager.get_all_goals()
@@ -6422,8 +6479,8 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
                     )
                 except Exception as e:
                     logger.error(f"Error getting goal stats: {e}")
-                    
-            # Get performance metrics
+            
+            # Performance metrics
             avg_response_time = 0
             if self.performance_metrics["response_times"]:
                 avg_response_time = sum(self.performance_metrics["response_times"]) / len(self.performance_metrics["response_times"])
@@ -6440,11 +6497,50 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
                 steps_executed=self.performance_metrics["steps_executed"]
             )
             
-            # Get thinking stats if available
+            # Procedural stats
+            if self.agent_enhanced_memory:
+                try:
+                    procedures = []
+                    if hasattr(self.agent_enhanced_memory, 'procedures'):
+                        procedures = list(self.agent_enhanced_memory.procedures.keys())
+                    stats.procedural_stats = ProceduralStats(
+                        total_procedures=len(procedures),
+                        available_procedures=procedures[:10] if len(procedures) > 10 else procedures,
+                        procedure_domains=list(set(p.get("domain", "general") 
+                            for p in self.agent_enhanced_memory.procedures.values())),
+                        execution_count=0  # Simplified
+                    )
+                except Exception as e:
+                    logger.error(f"Error getting procedural memory stats: {str(e)}")
+            
+            # Other remaining stats...
+            if self.meta_core and hasattr(self.meta_core, "get_feedback_stats"):
+                try:
+                    result = await self.meta_core.get_feedback_stats()
+                    if isinstance(result, dict):
+                        stats.meta_stats = MetaStats(
+                            evaluation_cycles=result.get("evaluation_cycles", 0),
+                            adaptations_made=result.get("adaptations_made", 0),
+                            performance_score=result.get("performance_score")
+                        )
+                except Exception as e:
+                    logger.error(f"Error getting meta stats: {str(e)}")
+            
+            if self.knowledge_core and hasattr(self.knowledge_core, "get_knowledge_statistics"):
+                try:
+                    result = await self.knowledge_core.get_knowledge_statistics()
+                    if isinstance(result, dict):
+                        stats.knowledge_stats = KnowledgeStats(
+                            total_facts=result.get("total_facts", 0),
+                            domains=result.get("domains", []),
+                            recent_queries=result.get("recent_queries", 0)
+                        )
+                except Exception as e:
+                    logger.error(f"Error getting knowledge stats: {str(e)}")
+            
             if "thinking_config" in vars(self):
                 stats.thinking_stats = ThinkingStats(**self.thinking_config["thinking_stats"])
             
-            # Get processing stats if available
             if self.processing_manager:
                 stats.processing_stats = ProcessingStats(
                     processor_type="unified",
