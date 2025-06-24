@@ -944,9 +944,10 @@ ALWAYS use the exact tool. NEVER output JSON like {"success": true, ...}""",
                 get_need_history_tool_impl,
                 get_total_drive_tool_impl,
                 reset_need_to_default_tool_impl
-            ],
+            ]
             model_settings=ModelSettings(temperature=0.0),
-            model="gpt-4.1-mini"  # Use gpt-4o-mini for better instruction following
+            model="gpt-4.1-mini",
+            tool_choice="required" 
         )
         logger.info("NeedsSystem initialized with Agent SDK and refactored tools")
 
@@ -1326,9 +1327,8 @@ ALWAYS use the exact tool. NEVER output JSON like {"success": true, ...}""",
             )
     
     async def decrease_need(self, name: str, amount: float, reason: Optional[str] = None) -> DecreaseNeedResult:
-        """Public API to decrease a need."""
         reason_provided = reason if reason is not None else "generic_decrease_api_call"
-        prompt = f"Decrease the need named '{name}' by an amount of {amount}. The reason is: '{reason_provided}'."
+        prompt = f"decrease_need_tool_impl: {name}, {amount}, {reason_provided}"
         
         result = await Runner.run(
             self.agent,
