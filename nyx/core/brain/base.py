@@ -67,15 +67,6 @@ logger = logging.getLogger(__name__)
 
 # --- helper ---------------------------------------------------------------
 
-def _dict_to_kv(d: dict[str, Any] | None) -> list[KVPair] | None:
-    """
-    Convert an ordinary dict into a list-of-KVPair.
-    Returns None if the input is falsy.
-    """
-    if not d:
-        return None
-    return [KVPair(key=k, value=v) for k, v in d.items()]
-
 class TaskPurpose(Enum):
     ANALYZE = auto()
     WRITE = auto()
@@ -88,6 +79,12 @@ class TaskPurpose(Enum):
     VISUALIZATION = auto()
     OTHER = auto()
 
+# Base models
+class KVPair(BaseModel):
+    """Key-value pair for structured data"""
+    key: str
+    value: Union[str, int, float, bool, None]
+
 class ChallengeResponse(BaseModel):
     """Response from challenging a user claim"""
     challenge_text: str
@@ -98,28 +95,149 @@ class LieRecord(BaseModel):
     motivation: str
     timestamp: str
 
+# Stats sub-models (needed before SystemStats)
+class MemoryStats(BaseModel):
+    """Memory system statistics"""
+    total_memories: int = 0
+    memories_by_type: Optional[Dict[str, int]] = None
+    recent_retrievals: int = 0
+    storage_used_mb: Optional[float] = None
+
+class MetaStats(BaseModel):
+    """Meta-cognitive statistics"""
+    evaluation_cycles: int = 0
+    adaptations_made: int = 0
+    performance_score: Optional[float] = None
+
+class KnowledgeStats(BaseModel):
+    """Knowledge system statistics"""
+    total_facts: int = 0
+    domains: Optional[List[str]] = None
+    recent_queries: int = 0
+
+class EmotionalStateStats(BaseModel):
+    """Emotional state statistics"""
+    emotions: Optional[Dict[str, float]] = None
+    dominant_emotion: Optional[str] = None
+    dominant_value: Optional[float] = None
+    valence: float = 0.0
+    arousal: float = 0.0
+
+class HormoneStats(BaseModel):
+    """Hormone system statistics"""
+    hormone_levels: Optional[Dict[str, float]] = None
+    cycle_phases: Optional[Dict[str, str]] = None
+    dominant_hormone: Optional[Dict[str, Union[str, float]]] = None
+
+class ProceduralStats(BaseModel):
+    """Procedural memory statistics"""
+    total_procedures: int = 0
+    available_procedures: List[str] = Field(default_factory=list)
+    procedure_domains: List[str] = Field(default_factory=list)
+    execution_count: int = 0
+
+class IdentityStats(BaseModel):
+    """Identity statistics"""
+    trait_count: int = 0
+    preference_count: int = 0
+    dominant_traits: List[Tuple[str, float]] = Field(default_factory=list)
+
+class NeedsStats(BaseModel):
+    """Needs system statistics"""
+    current_levels: Optional[Dict[str, float]] = None
+    drive_strengths: Optional[Dict[str, float]] = None
+    total_drive: float = 0.0
+
+class GoalStats(BaseModel):
+    """Goal system statistics"""
+    total_goals: int = 0
+    active_goals_count: int = 0
+    pending_goals_count: int = 0
+    completed_goals: int = 0
+    failed_goals: int = 0
+    active_goal_ids: List[str] = Field(default_factory=list)
+    highest_priority_pending: Optional[str] = None
+
+class ThinkingStats(BaseModel):
+    """Thinking system statistics"""
+    thoughts_generated: int = 0
+    thinking_depth: int = 0
+    epistemic_confidence: float = 1.0
+
+class PerformanceMetrics(BaseModel):
+    """Performance metrics"""
+    memory_operations: int = 0
+    emotion_updates: int = 0
+    reflections_generated: int = 0
+    experiences_shared: int = 0
+    cross_user_experiences_shared: int = 0
+    avg_response_time: float = 0.0
+    goals_completed: int = 0
+    goals_failed: int = 0
+    steps_executed: int = 0
+
+class ProcessingStats(BaseModel):
+    """Processing system statistics"""
+    processor_type: str = "unified"
+    initialized: bool = False
+
+# Main stats model (after sub-models)
+class SystemStats(BaseModel):
+    """Comprehensive system statistics"""
+    memory_stats: Optional[MemoryStats] = None
+    meta_stats: Optional[MetaStats] = None
+    knowledge_stats: Optional[KnowledgeStats] = None
+    emotional_state: Optional[EmotionalStateStats] = None
+    hormone_stats: Optional[HormoneStats] = None
+    procedural_stats: Optional[ProceduralStats] = None
+    identity_stats: Optional[IdentityStats] = None
+    needs_stats: Optional[NeedsStats] = None
+    goal_stats: Optional[GoalStats] = None
+    performance_metrics: Optional[PerformanceMetrics] = None
+    thinking_stats: Optional[ThinkingStats] = None
+    processing_stats: Optional[ProcessingStats] = None
+
+# Cognitive cycle models
 class NeedsUpdate(BaseModel):
     """Needs system update result"""
-    drive_strengths: list[KVPair] | None = None   # ← no Dict!
-    error: str | None = None
+    drive_strengths: Optional[List[KVPair]] = None
+    error: Optional[str] = None
 
-class StepDetail(BaseModel):                      # replaces free-form dict
+class StepDetail(BaseModel):
+    """Step execution detail"""
     name: str
     status: str
-    meta: list[KVPair] | None = None
+    meta: Optional[List[KVPair]] = None
 
 class GoalExecutionResult(BaseModel):
     """Goal execution result"""
-    goal_id: str | None = None
-    executed_step: StepDetail | None = None
-    status: str | None = None
-    error: str | None = None
+    goal_id: Optional[str] = None
+    executed_step: Optional[StepDetail] = None
+    status: Optional[str] = None
+    error: Optional[str] = None
 
 class MetaCoreResult(BaseModel):
     """Meta core cycle result"""
     evaluation_completed: bool = False
     adjustments_made: List[str] = Field(default_factory=list)
     error: Optional[str] = None
+
+class EmotionalContext(BaseModel):
+    """Emotional context"""
+    primary: Optional[str] = None
+    intensity: Optional[float] = None
+    valence: Optional[float] = None  # -1 to 1
+
+class EnvironmentFactor(BaseModel):
+    """Environmental factor"""
+    name: str
+    value: Union[str, int, float, bool]
+
+class CognitiveCycleContext(BaseModel):
+    """Context data for cognitive cycle"""
+    user_input: Optional[str] = None
+    emotional_context: Optional[EmotionalContext] = None
+    environmental_factors: Optional[List[EnvironmentFactor]] = None
 
 class CognitiveCycleResult(BaseModel):
     """Result from running a cognitive cycle"""
@@ -130,20 +248,23 @@ class CognitiveCycleResult(BaseModel):
     meta_core_cycle: Optional[MetaCoreResult] = None
     error: Optional[str] = None
 
-class EmotionalContext(BaseModel):
-    primary: str | None = None
-    intensity: float | None = None
-    valence: float | None = None         # –1 … 1
+# Action result models
+class DominanceActionResult(BaseModel):
+    """Result from processing a dominance action"""
+    success: bool
+    reason: Optional[str] = None
+    message: Optional[str] = None
+    action_taken: Optional[str] = None
+    intensity_applied: Optional[float] = None
 
-class EnvironmentFactor(BaseModel):
-    name: str
-    value: Any
-
-class CognitiveCycleContext(BaseModel):
-    """Context data for cognitive cycle"""
-    user_input: str | None = None
-    emotional_context: EmotionalContext | None = None
-    environmental_factors: list[EnvironmentFactor] | None = None
+class ServiceTaskAssignmentResult(BaseModel):
+    """Result from assigning a service task"""
+    success: bool
+    message: str
+    task_id: Optional[str] = None
+    task_type: Optional[str] = None
+    duration_minutes: Optional[float] = None
+    user_id: Optional[str] = None
 
 class DesireExpression(BaseModel):
     """Result of expressing desire"""
@@ -178,21 +299,7 @@ class GratificationResult(BaseModel):
     status: str
     reason: Optional[str] = None
 
-class SystemStats(BaseModel):
-    """Comprehensive system statistics"""
-    memory_stats: Optional[Dict[str, Any]] = None
-    meta_stats: Optional[Dict[str, Any]] = None
-    knowledge_stats: Optional[Dict[str, Any]] = None
-    emotional_state: Optional[Dict[str, Any]] = None
-    hormone_stats: Optional[Dict[str, Any]] = None
-    procedural_stats: Optional[Dict[str, Any]] = None
-    identity_stats: Optional[Dict[str, Any]] = None
-    needs_stats: Optional[Dict[str, Any]] = None
-    goal_stats: Optional[Dict[str, Any]] = None
-    performance_metrics: Optional[Dict[str, Any]] = None
-    thinking_stats: Optional[Dict[str, Any]] = None
-    processing_stats: Optional[Dict[str, Any]] = None
-
+# Dominance-related models
 class UserInputAnalysis(BaseModel):
     """Analysis of user input for dominance"""
     submissive_score: float = 0.0
@@ -247,7 +354,6 @@ class IntensityRange(BaseModel):
     min: int
     max: int
 
-
 class FemdomActivityIdea(BaseModel):
     """A single femdom activity idea"""
     id: str
@@ -260,9 +366,8 @@ class FemdomActivityIdea(BaseModel):
 class FemdomIdeasResult(BaseModel):
     """Result of generating femdom ideas"""
     success: bool
-    ideas: List[Dict[str, Any]] = Field(default_factory=list)
+    ideas: List[FemdomActivityIdea] = Field(default_factory=list)  # Fixed to use proper model
     error: Optional[str] = None
-
 
 class ProtocolAssignment(BaseModel):
     """Result of protocol assignment"""
@@ -327,6 +432,16 @@ class LimitTestResult(BaseModel):
     status: Optional[str] = None
     planned_action: Optional[str] = None
     reason: Optional[str] = None
+
+# Helper function
+def _dict_to_kv(d: dict[str, Any] | None) -> list[KVPair] | None:
+    """
+    Convert an ordinary dict into a list-of-KVPair.
+    Returns None if the input is falsy.
+    """
+    if not d:
+        return None
+    return [KVPair(key=k, value=v) for k, v in d.items()]
 
 
 class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin):
@@ -2660,30 +2775,51 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             
     @staticmethod
     @function_tool
-    async def process_dominance_action(ctx: RunContextWrapper, instance, action_type: str, user_id: str, intensity: float) -> Dict:
+    async def process_dominance_action(ctx: RunContextWrapper, instance, action_type: str, user_id: str, intensity: float) -> DominanceActionResult:
         """Process a dominance action."""
         # Use femdom_coordinator if available
         if instance.femdom_coordinator:
-            return await instance.femdom_coordinator.process_dominance_action(action_type, user_id, intensity)
+            result = await instance.femdom_coordinator.process_dominance_action(action_type, user_id, intensity)
+            return DominanceActionResult(
+                success=result.get("success", False),
+                reason=result.get("reason"),
+                message=result.get("message"),
+                action_taken=result.get("action_taken"),
+                intensity_applied=result.get("intensity_applied")
+            )
         
         # Fallback to dominance_integration_manager if available
         if hasattr(instance, "dominance_integration_manager") and instance.dominance_integration_manager:
-            return await instance.dominance_integration_manager.process_dominance_action(
+            result = await instance.dominance_integration_manager.process_dominance_action(
                 action_type=action_type, 
                 user_id=user_id,
                 intensity=intensity
             )
+            return DominanceActionResult(
+                success=result.get("success", False),
+                reason=result.get("reason"),
+                message=result.get("message"),
+                action_taken=result.get("action_taken"),
+                intensity_applied=result.get("intensity_applied")
+            )
             
         # Another fallback if needed
         if instance.dominance_system:
-            return await instance.dominance_system.process_dominance_action(action_type, user_id, intensity)
+            result = await instance.dominance_system.process_dominance_action(action_type, user_id, intensity)
+            return DominanceActionResult(
+                success=result.get("success", False),
+                reason=result.get("reason"),
+                message=result.get("message"),
+                action_taken=result.get("action_taken"),
+                intensity_applied=result.get("intensity_applied")
+            )
             
-        return {"success": False, "reason": "No dominance systems available"}
+        return DominanceActionResult(success=False, reason="No dominance systems available")
 
     @staticmethod
     @function_tool
     async def assign_service_task(ctx: RunContextWrapper, instance, user_id: str, task_type: Optional[str] = None, 
-                             duration: Optional[float] = None) -> Dict[str, Any]:
+                             duration: Optional[float] = None) -> ServiceTaskAssignmentResult:
         """
         Assigns a service task to a user.
         
@@ -2698,14 +2834,23 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             Assignment result
         """
         if not instance.body_service_system:
-            return {"success": False, "message": "Body service system not initialized"}
+            return ServiceTaskAssignmentResult(success=False, message="Body service system not initialized")
         
-        return await instance.body_service_system.assign_service_task(
+        result = await instance.body_service_system.assign_service_task(
             user_id=user_id,
             task_type=task_type,
             duration=duration
         )
-
+        
+        return ServiceTaskAssignmentResult(
+            success=result.get("success", False),
+            message=result.get("message", ""),
+            task_id=result.get("task_id"),
+            task_type=result.get("task_type"),
+            duration_minutes=result.get("duration_minutes"),
+            user_id=user_id
+        )
+                             
     @classmethod
     async def restore_from_checkpoint(self, checkpoint_data: dict):
         """
@@ -5954,18 +6099,13 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
                 return claim_text
         return None
 
-    async def run_maintenance(self) -> Dict[str, Any]:
-        """
-        Run maintenance on all systems.
-        
-        Returns:
-            Maintenance results
-        """
+    async def run_maintenance(self) -> MaintenanceResult:
+        """Run maintenance on all systems."""
         if not self.initialized:
             await self.initialize()
         
         with trace(workflow_name="run_maintenance", group_id=self.trace_group_id):
-            results = {}
+            result = MaintenanceResult(maintenance_time=datetime.datetime.now().isoformat())
 
             try:
                 # Run summarization every N maintenance cycles
@@ -6243,18 +6383,13 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             
         return None
 
-    async def get_identity_state(self) -> Dict[str, Any]:
-        """
-        Get the current state of Nyx's identity.
-        
-        Returns:
-            Identity state information
-        """
+    async def get_identity_state(self) -> IdentityStateResult:
+        """Get the current state of Nyx's identity."""
         if not self.initialized:
             await self.initialize()
         
         if not self.identity_evolution:
-            return {"error": "Identity evolution system not initialized"}
+            return IdentityStateResult(error="Identity evolution system not initialized")
         
         try:
             # Get identity profile
@@ -6324,22 +6459,13 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             logger.error(f"Error getting identity state: {str(e)}")
             return {"error": str(e)}
 
-    async def adapt_experience_sharing(self, user_id: str, feedback: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Adapt experience sharing parameters based on user feedback.
-        
-        Args:
-            user_id: User ID
-            feedback: Feedback data about experience sharing
-            
-        Returns:
-            Adaptation results
-        """
+    async def adapt_experience_sharing(self, user_id: str, feedback: Dict[str, Any]) -> ExperienceSharingAdaptation:
+        """Adapt experience sharing parameters based on user feedback."""
         if not self.initialized:
             await self.initialize()
         
         if not self.experience_interface:
-            return {"error": "Experience interface not initialized"}
+            return ExperienceSharingAdaptation(error="Experience interface not initialized")
         
         try:
             # Update user preference profile based on feedback
@@ -6373,18 +6499,14 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             logger.error(f"Error adapting experience sharing: {str(e)}")
             return {"error": str(e)}
 
-    async def run_experience_consolidation(self) -> Dict[str, Any]:
-        """
-        Run the experience consolidation process.
-        
-        Returns:
-            Consolidation results
-        """
+    async def run_experience_consolidation(self) -> ExperienceConsolidationResult:
+        """Run the experience consolidation process."""
         if not self.initialized:
             await self.initialize()
         
         if not self.experience_consolidation:
-            return {"error": "Experience consolidation system not initialized"}
+            return ExperienceConsolidationResult(status="failed", error="Experience consolidation system not initialized")
+    
         
         try:
             # Run consolidation
@@ -7996,28 +8118,24 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
                         )
                     
                     # Convert ideas to dicts for broader compatibility
-                    ideas_as_dicts = []
+                    ideas_as_models = []
                     for idea in filtered_ideas:
-                        if hasattr(idea, "model_dump"):
-                            ideas_as_dicts.append(idea.model_dump())
+                        if isinstance(idea, dict):
+                            ideas_as_models.append(FemdomActivityIdea(**idea))
+                        elif hasattr(idea, "model_dump"):
+                            ideas_as_models.append(FemdomActivityIdea(**idea.model_dump()))
                         else:
-                            ideas_as_dicts.append(idea)
+                            # Try to construct from attributes
+                            ideas_as_models.append(FemdomActivityIdea(
+                                id=getattr(idea, "id", f"idea_{len(ideas_as_models)}"),
+                                description=getattr(idea, "description", str(idea)),
+                                intensity=getattr(idea, "intensity", 5),
+                                category=getattr(idea, "category", "general"),
+                                required_trust=getattr(idea, "required_trust", 0.5),
+                                required_items=getattr(idea, "required_items", [])
+                            ))
                     
-                    return FemdomIdeasResult(success=True, ideas=ideas_as_dicts)
-                else:
-                    logger.error(f"Unexpected output format from ideation agent: {type(result.final_output)}")
-                    return FemdomIdeasResult(
-                        success=False, 
-                        error="Invalid output from ideation agent"
-                    )
-                    
-            except Exception as e:
-                logger.exception(f"Error running DominanceIdeationAgent: {e}")
-                return FemdomIdeasResult(success=False, error=f"Idea generation failed: {e}")
-                
-        except Exception as e:
-            logger.exception(f"Error in generate_femdom_activity_ideas: {e}")
-            return FemdomIdeasResult(success=False, error=f"Error: {str(e)}")
+                    return FemdomIdeasResult(success=True, ideas=ideas_as_models)
     
     @staticmethod
     @function_tool
