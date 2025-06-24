@@ -482,13 +482,6 @@ class ProtocolAssignment(BaseModel):
     user_id: Optional[str] = None
     reason: Optional[str] = None
 
-class RoleplayResult(BaseModel):
-    """Result of roleplay mode changes"""
-    success: bool
-    character_name: Optional[str] = None
-    context: Optional[str] = None
-    reason: Optional[str] = None
-
 class IntimateInteractionResult(BaseModel):
     """Result of intimate interaction initiation"""
     success: bool
@@ -573,6 +566,83 @@ class ExperienceConsolidationResult(BaseModel):
     status: str = "pending"  # "pending", "completed", "failed"
     consolidations_created: int = 0
     error: Optional[str] = None
+
+class CognitiveMapResult(BaseModel):
+    """Result of creating a cognitive map"""
+    map_id: Optional[str] = None
+    name: Optional[str] = None
+    description: Optional[str] = None
+    success: bool = True
+    error: Optional[str] = None
+
+class SynchronizationResult(BaseModel):
+    """Result of synchronization process"""
+    success: bool = True
+    strategies_processed: int = 0
+    errors: List[str] = Field(default_factory=list)
+    cycle_number: Optional[int] = None
+
+class SpatialObservation(BaseModel):
+    """Spatial observation input"""
+    observation_type: str
+    content: str
+    location: Optional[str] = None
+    metadata: Optional[dict] = None
+
+class SpatialObservationResult(BaseModel):
+    """Result of processing spatial observation"""
+    success: bool = True
+    map_updated: bool = False
+    location_added: Optional[str] = None
+    error: Optional[str] = None
+
+
+class Position(BaseModel):
+    """Spatial position"""
+    x: float
+    y: float
+    z: Optional[float] = None
+
+class NavigationResult(BaseModel):
+    """Result of navigation"""
+    success: bool = True
+    path: Optional[List[str]] = None
+    distance: Optional[float] = None
+    error: Optional[str] = None
+
+class Strategy(BaseModel):
+    """Active strategy"""
+    strategy_id: int
+    name: str
+    description: Optional[str] = None
+    priority: float = 0.5
+    active: bool = True
+
+class AgentOutput(BaseModel):
+    """Agent output to evaluate"""
+    content: str
+    metadata: Optional[dict] = None
+
+class EvaluationResult(BaseModel):
+    """Response evaluation result"""
+    score: float
+    feedback: Optional[str] = None
+    errors: List[str] = Field(default_factory=list)
+    success: bool = True
+
+class ToolInfo(BaseModel):
+    """Tool execution info"""
+    tool_name: str
+    parameters: dict = Field(default_factory=dict)
+    timeout: Optional[float] = None
+
+class ToolResult(BaseModel):
+    """Tool execution result"""
+    tool_name: str
+    success: bool = True
+    result: Optional[dict] = None
+    error: Optional[str] = None
+    execution_time: Optional[float] = None
 
 # Helper function
 def _dict_to_kv(d: dict[str, Any] | None) -> list[KVPair] | None:
@@ -8473,32 +8543,55 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
                 logger.warning(f"Filtered out unsafe/inappropriate idea: '{description[:50]}...' Reason: {rejection_reason}")
     
         return safe_ideas
-
-    async def create_cognitive_map(self, name: str, description: Optional[str] = None) -> Dict[str, Any]:
+    
+    async def create_cognitive_map(self, name: str, description: Optional[str] = None) -> CognitiveMapResult:
         """Create a new cognitive map"""
         if not self.spatial_mapper:
-            return {"error": "Spatial mapper not initialized"}
+            return CognitiveMapResult(success=False, error="Spatial mapper not initialized")
         
-        return await self.spatial_mapper.create_cognitive_map(
+        result = await self.spatial_mapper.create_cognitive_map(
             name=name,
             description=description
         )
+        
+        return CognitiveMapResult(
+            map_id=result.get("map_id"),
+            name=result.get("name", name),
+            description=result.get("description", description),
+            success=result.get("success", True),
+            error=result.get("error")
+        )
     
-    async def process_spatial_observation(self, observation: Any) -> Dict[str, Any]:
+    async def process_spatial_observation(self, observation: SpatialObservation) -> SpatialObservationResult:
         """Process a spatial observation"""
         if not self.spatial_mapper:
-            return {"error": "Spatial mapper not initialized"}
+            return SpatialObservationResult(success=False, error="Spatial mapper not initialized")
         
-        return await self.spatial_mapper.process_spatial_observation(observation)
+        result = await self.spatial_mapper.process_spatial_observation(observation.model_dump())
+        
+        return SpatialObservationResult(
+            success=result.get("success", True),
+            map_updated=result.get("map_updated", False),
+            location_added=result.get("location_added"),
+            error=result.get("error")
+        )
     
-    async def navigate_to_location(self, location_name: str, current_position: Optional[Dict[str, float]] = None) -> Dict[str, Any]:
+    async def navigate_to_location(self, location_name: str, current_position: Optional[Position] = None) -> NavigationResult:
         """Navigate to a named location"""
         if not self.navigator_agent:
-            return {"error": "Navigator agent not initialized"}
+            return NavigationResult(success=False, error="Navigator agent not initialized")
         
-        return await self.navigator_agent.navigate_to_location(
+        pos_dict = current_position.model_dump() if current_position else None
+        result = await self.navigator_agent.navigate_to_location(
             location_name=location_name,
-            current_position=current_position
+            current_position=pos_dict
+        )
+        
+        return NavigationResult(
+            success=result.get("success", True),
+            path=result.get("path"),
+            distance=result.get("distance"),
+            error=result.get("error")
         )
     
     async def visualize_map(self, map_id: Optional[str] = None, format: str = "svg") -> str:
@@ -8521,22 +8614,29 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
         else:
             return self.map_visualization.generate_map_data(cognitive_map)    
 
-    async def process_synchronization(self) -> Dict[str, Any]:
+    async def process_synchronization(self) -> SynchronizationResult:
         """Run a sync cycle to process strategies and other synchronization tasks"""
         if not self.sync_daemon:
-            return {"error": "Sync daemon not initialized"}
+            return SynchronizationResult(success=False, errors=["Sync daemon not initialized"])
         
         try:
-            return await self.sync_daemon.run_sync_cycle()
+            result = await self.sync_daemon.run_sync_cycle()
+            return SynchronizationResult(
+                success=result.get("success", True),
+                strategies_processed=result.get("strategies_processed", 0),
+                errors=result.get("errors", []),
+                cycle_number=result.get("cycle_number")
+            )
         except Exception as e:
             logger.error(f"Error during sync cycle: {e}")
-            return {"error": str(e)}
+            return SynchronizationResult(success=False, errors=[str(e)])
     
-    async def get_active_strategies(self) -> List[Dict[str, Any]]:
+    async def get_active_strategies(self) -> List[Strategy]:
         """Get currently active strategies"""
         try:
             async with get_db_connection_context() as conn:
-                return await get_active_strategies(conn)
+                strategies = await get_active_strategies(conn)
+                return [Strategy(**s) for s in strategies]
         except Exception as e:
             logger.error(f"Error getting active strategies: {e}")
             return []
@@ -8553,23 +8653,33 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             logger.error(f"Error marking strategy for review: {e}")
             return False    
 
-    async def evaluate_response(self, agent_name: str, user_input: str, agent_output: Any) -> Dict[str, Any]:
+    async def evaluate_response(self, agent_name: str, user_input: str, agent_output: AgentOutput) -> EvaluationResult:
         """Evaluate an agent's response"""
         if not self.agent_evaluator:
-            return {"error": "Agent evaluator not initialized"}
+            return EvaluationResult(success=False, score=0.0, errors=["Agent evaluator not initialized"])
         
-        return await self.agent_evaluator.evaluate_response(
+        result = await self.agent_evaluator.evaluate_response(
             agent_name=agent_name,
             user_input=user_input,
-            agent_output=agent_output
+            agent_output=agent_output.model_dump()
+        )
+        
+        return EvaluationResult(
+            score=result.get("score", 0.0),
+            feedback=result.get("feedback"),
+            errors=result.get("errors", []),
+            success=result.get("success", True)
         )
     
-    async def execute_tools_in_parallel(self, tools_info: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    async def execute_tools_in_parallel(self, tools_info: List[ToolInfo]) -> List[ToolResult]:
         """Execute multiple tools in parallel"""
         if not self.parallel_executor:
-            return [{"error": "Parallel executor not initialized"}]
+            return [ToolResult(tool_name="unknown", success=False, error="Parallel executor not initialized")]
         
-        return await self.parallel_executor.execute_tools(tools_info)    
+        tool_dicts = [t.model_dump() for t in tools_info]
+        results = await self.parallel_executor.execute_tools(tool_dicts)
+        
+        return [ToolResult(**r) for r in results]
 
     @staticmethod
     @function_tool
