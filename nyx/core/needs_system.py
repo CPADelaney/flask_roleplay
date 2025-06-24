@@ -934,6 +934,7 @@ When asked to:
 - reset need → use reset_need_to_default_tool_impl
 
 ALWAYS use the exact tool. NEVER output JSON like {"success": true, ...}""",
+            tools=[
                 update_needs_tool_impl,
                 satisfy_need_tool_impl,
                 decrease_need_tool_impl,
