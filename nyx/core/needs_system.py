@@ -945,9 +945,11 @@ ALWAYS use the exact tool. NEVER output JSON like {"success": true, ...}""",
                 get_total_drive_tool_impl,
                 reset_need_to_default_tool_impl
             ],
-            model_settings=ModelSettings(temperature=0.0),
-            model="gpt-4.1-mini",
-            tool_choice="required" 
+            model_settings=ModelSettings(
+                temperature=0.0,
+                tool_choice="required"  # Put it HERE, inside ModelSettings
+            ),
+            model="gpt-4.1-mini"
         )
         logger.info("NeedsSystem initialized with Agent SDK and refactored tools")
 
