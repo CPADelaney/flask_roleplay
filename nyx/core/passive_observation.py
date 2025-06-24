@@ -164,7 +164,7 @@ class GenerateObservationOutput(BaseModel):
     source: str
     relevance_score: float
     priority: str
-    context_elements: Optional[ContextElements] = None
+    context_elements: Optional[ContextElements] = None  # Fixed: use explicit model
     suggested_lifetime_seconds: int
     action_relevance: Optional[float] = None
 
@@ -235,6 +235,51 @@ class ObservationPriority(str, Enum):
     HIGH = "high"
     URGENT = "urgent"
 
+# New models for ObservationContext fields
+class UserRelationshipData(BaseModel):
+    """Explicit model for user relationship data"""
+    relationship_status: Optional[str] = None
+    trust_level: Optional[float] = None
+    interaction_count: Optional[int] = None
+
+class SensoryContextData(BaseModel):
+    """Explicit model for sensory context data"""
+    sensory_input_type: Optional[str] = None
+    sensory_intensity: Optional[float] = None
+
+class CurrentNeedsData(BaseModel):
+    """Explicit model for current needs data"""
+    primary_need: Optional[str] = None
+    need_intensity: Optional[float] = None
+
+class ConversationHistoryItem(BaseModel):
+    """Explicit model for conversation history items"""
+    message: Optional[str] = None
+    timestamp: Optional[str] = None
+    speaker: Optional[str] = None
+
+class EnvironmentalContextData(BaseModel):
+    """Explicit model for environmental context data"""
+    environment_type: Optional[str] = None
+    activity_level: Optional[float] = None
+
+class AttentionFocusData(BaseModel):
+    """Explicit model for attention focus data"""
+    focus_target: Optional[str] = None
+    focus_intensity: Optional[float] = None
+
+class RecentActionData(BaseModel):
+    """Explicit model for recent action data"""
+    action_name: Optional[str] = None
+    action_id: Optional[str] = None
+    timestamp: Optional[str] = None
+
+class ObservationContextData(BaseModel):
+    """Explicit model for observation context data"""
+    action_id: Optional[str] = None
+    action_name: Optional[str] = None
+    action_references: Optional[List[str]] = Field(default_factory=list)
+
 class Observation(BaseModel):
     """Model representing a passive observation"""
     observation_id: str = Field(default_factory=lambda: f"obs_{uuid.uuid4().hex[:8]}")
@@ -244,7 +289,7 @@ class Observation(BaseModel):
     priority: ObservationPriority = Field(ObservationPriority.MEDIUM, description="Priority level")
     created_at: datetime.datetime = Field(default_factory=datetime.datetime.now)
     expiration: Optional[datetime.datetime] = Field(None, description="When this observation becomes irrelevant")
-    context: Dict[str, Any] = Field(default_factory=dict, description="Context data related to observation")
+    context: ObservationContextData = Field(default_factory=ObservationContextData, description="Context data related to observation")  # Fixed: use explicit model
     relevance_score: float = Field(0.5, description="How relevant the observation is to current context")
     shared: bool = Field(False, description="Whether this observation has been shared")
     user_id: Optional[str] = Field(None, description="User ID if observation is user-specific")
@@ -267,16 +312,16 @@ class ObservationContext(BaseModel):
     current_user_id: Optional[str] = None
     current_conversation_id: Optional[str] = None
     current_topic: Optional[str] = None
-    emotional_state: Dict[str, Any] = Field(default_factory=dict)
-    user_relationship: Dict[str, Any] = Field(default_factory=dict)
-    temporal_context: Dict[str, Any] = Field(default_factory=dict)
-    sensory_context: Dict[str, Any] = Field(default_factory=dict)
-    current_needs: Dict[str, Any] = Field(default_factory=dict)
-    recent_memories: List[Dict[str, Any]] = Field(default_factory=list)
-    conversation_history: List[Dict[str, Any]] = Field(default_factory=list)
-    environmental_context: Dict[str, Any] = Field(default_factory=dict)
-    attention_focus: Dict[str, Any] = Field(default_factory=dict)
-    recent_actions: List[Dict[str, Any]] = Field(default_factory=list)
+    emotional_state: EmotionalStateData = Field(default_factory=EmotionalStateData)  # Fixed: use explicit model
+    user_relationship: UserRelationshipData = Field(default_factory=UserRelationshipData)  # Fixed: use explicit model
+    temporal_context: TemporalContextData = Field(default_factory=TemporalContextData)  # Fixed: use explicit model
+    sensory_context: SensoryContextData = Field(default_factory=SensoryContextData)  # Fixed: use explicit model
+    current_needs: CurrentNeedsData = Field(default_factory=CurrentNeedsData)  # Fixed: use explicit model
+    recent_memories: List[MemoryItem] = Field(default_factory=list)  # Fixed: use explicit model
+    conversation_history: List[ConversationHistoryItem] = Field(default_factory=list)  # Fixed: use explicit model
+    environmental_context: EnvironmentalContextData = Field(default_factory=EnvironmentalContextData)  # Fixed: use explicit model
+    attention_focus: AttentionFocusData = Field(default_factory=AttentionFocusData)  # Fixed: use explicit model
+    recent_actions: List[RecentActionData] = Field(default_factory=list)  # Fixed: use explicit model
 
 class ObservationFilter(BaseModel):
     """Filter criteria for selecting observations"""
@@ -321,7 +366,7 @@ class ObservationGenerationOutput(BaseModel):
     source: str = Field(..., description="Source of the observation")
     relevance_score: float = Field(..., description="How relevant the observation is (0.0-1.0)")
     priority: str = Field(..., description="Priority level (low, medium, high, urgent)")
-    context_elements: Optional[Dict[str, Any]] = Field(None, description="Key context elements used, if any")
+    context_elements: Optional[ContextElements] = Field(None, description="Key context elements used, if any")  # Fixed: use explicit model
     suggested_lifetime_seconds: int = Field(..., description="Suggested lifetime in seconds")
     action_relevance: Optional[float] = Field(None, description="Relevance to current actions (0.0-1.0)")
 
@@ -1182,7 +1227,11 @@ class PassiveObservationSystem:
                     priority=ObservationPriority(observation_output.priority),
                     relevance_score=observation_output.relevance_score,
                     expiration=expiration,
-                    context={k: v for k, v in context.dict().items() if v is not None and v != {}},
+                    context=ObservationContextData(
+                        action_id=action.get("id", "unknown"),
+                        action_name=action.get("name", "unknown action"),
+                        action_references=[action.get("id", "unknown")]
+                    ),
                     action_references=[action.get("id", "unknown")]
                 )
                 
@@ -1284,7 +1333,7 @@ class PassiveObservationSystem:
                     priority=ObservationPriority(observation_output.priority),
                     relevance_score=observation_output.relevance_score,
                     expiration=expiration,
-                    context={k: v for k, v in context.dict().items() if v is not None and v != {}}
+                    context=ObservationContextData()  # Empty context for now
                 )
                 
                 # Add to active observations
@@ -1358,7 +1407,7 @@ class PassiveObservationSystem:
                     priority=ObservationPriority(observation_output.priority),
                     relevance_score=observation_output.relevance_score,
                     expiration=expiration,
-                    context={k: v for k, v in context.dict().items() if v is not None and v != {}}
+                    context=ObservationContextData()  # Empty context for now
                 )
                 
                 # Add to active observations
@@ -1379,9 +1428,45 @@ class PassiveObservationSystem:
         if self.emotional_core:
             try:
                 if hasattr(self.emotional_core, "get_formatted_emotional_state"):
-                    context.emotional_state = self.emotional_core.get_formatted_emotional_state()
+                    emotional_state_dict = self.emotional_core.get_formatted_emotional_state()
+                    if emotional_state_dict:
+                        # Convert dict to EmotionalStateData
+                        primary_emotion_dict = emotional_state_dict.get("primary_emotion", {})
+                        mood_dict = emotional_state_dict.get("mood", {})
+                        
+                        context.emotional_state = EmotionalStateData(
+                            primary_emotion=PrimaryEmotion(
+                                name=primary_emotion_dict.get("name"),
+                                intensity=primary_emotion_dict.get("intensity")
+                            ) if primary_emotion_dict else None,
+                            mood=MoodState(
+                                dominant_mood=mood_dict.get("dominant_mood"),
+                                valence=mood_dict.get("valence"),
+                                arousal=mood_dict.get("arousal"),
+                                control=mood_dict.get("control"),
+                                intensity=mood_dict.get("intensity")
+                            ) if mood_dict else None
+                        )
                 elif hasattr(self.emotional_core, "get_current_emotion"):
-                    context.emotional_state = await self.emotional_core.get_current_emotion()
+                    emotional_state_dict = await self.emotional_core.get_current_emotion()
+                    if emotional_state_dict:
+                        # Convert dict to EmotionalStateData
+                        primary_emotion_dict = emotional_state_dict.get("primary_emotion", {})
+                        mood_dict = emotional_state_dict.get("mood", {})
+                        
+                        context.emotional_state = EmotionalStateData(
+                            primary_emotion=PrimaryEmotion(
+                                name=primary_emotion_dict.get("name"),
+                                intensity=primary_emotion_dict.get("intensity")
+                            ) if primary_emotion_dict else None,
+                            mood=MoodState(
+                                dominant_mood=mood_dict.get("dominant_mood"),
+                                valence=mood_dict.get("valence"),
+                                arousal=mood_dict.get("arousal"),
+                                control=mood_dict.get("control"),
+                                intensity=mood_dict.get("intensity")
+                            ) if mood_dict else None
+                        )
             except Exception as e:
                 logger.error(f"Error getting emotional state: {str(e)}")
         
@@ -1392,13 +1477,15 @@ class PassiveObservationSystem:
                 if hasattr(self.mood_manager, "current_mood"):
                     mood = self.mood_manager.current_mood
                     if mood:
-                        context.emotional_state["mood"] = {
-                            "dominant_mood": mood.dominant_mood,
-                            "valence": mood.valence,
-                            "arousal": mood.arousal,
-                            "control": mood.control,
-                            "intensity": mood.intensity
-                        }
+                        if not context.emotional_state:
+                            context.emotional_state = EmotionalStateData()
+                        context.emotional_state.mood = MoodState(
+                            dominant_mood=mood.dominant_mood,
+                            valence=mood.valence,
+                            arousal=mood.arousal,
+                            control=mood.control,
+                            intensity=mood.intensity
+                        )
                 # Don't try to call get_current_mood or run_get_current_mood
             except Exception as e:
                 logger.error(f"Error getting mood state: {str(e)}")
@@ -1407,9 +1494,29 @@ class PassiveObservationSystem:
         if self.temporal_perception:
             try:
                 if hasattr(self.temporal_perception, "get_current_temporal_context"):
-                    context.temporal_context = await self.temporal_perception.get_current_temporal_context()
+                    temporal_dict = await self.temporal_perception.get_current_temporal_context()
+                    if temporal_dict:
+                        context.temporal_context = TemporalContextData(
+                            time_of_day=temporal_dict.get("time_of_day"),
+                            day_type=temporal_dict.get("day_type"),
+                            season=temporal_dict.get("season"),
+                            day_of_week=temporal_dict.get("day_of_week"),
+                            month=temporal_dict.get("month"),
+                            year=temporal_dict.get("year"),
+                            timestamp=temporal_dict.get("timestamp")
+                        )
                 elif hasattr(self.temporal_perception, "current_temporal_context"):
-                    context.temporal_context = self.temporal_perception.current_temporal_context
+                    temporal_dict = self.temporal_perception.current_temporal_context
+                    if temporal_dict:
+                        context.temporal_context = TemporalContextData(
+                            time_of_day=temporal_dict.get("time_of_day"),
+                            day_type=temporal_dict.get("day_type"),
+                            season=temporal_dict.get("season"),
+                            day_of_week=temporal_dict.get("day_of_week"),
+                            month=temporal_dict.get("month"),
+                            year=temporal_dict.get("year"),
+                            timestamp=temporal_dict.get("timestamp")
+                        )
             except Exception as e:
                 logger.error(f"Error getting temporal context: {str(e)}")
         
@@ -1634,7 +1741,7 @@ class PassiveObservationSystem:
             priority=priority,
             relevance_score=relevance,
             expiration=expiration,
-            context=context or {}
+            context=ObservationContextData()  # Empty context for now
         )
         
         # Use the evaluation agent to refine relevance
@@ -1731,7 +1838,7 @@ class PassiveObservationSystem:
                     priority=ObservationPriority(observation_output.priority),
                     relevance_score=observation_output.relevance_score,
                     expiration=expiration,
-                    context={k: v for k, v in context.dict().items() if v is not None and v != {}},
+                    context=ObservationContextData(),  # Empty context for now
                     user_id=user_id
                 )
                 
