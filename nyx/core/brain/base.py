@@ -433,6 +433,20 @@ class LimitTestResult(BaseModel):
     planned_action: Optional[str] = None
     reason: Optional[str] = None
 
+class MaintenanceResult(BaseModel):
+    """Result from running maintenance tasks"""
+    maintenance_time: str
+    hormone_maintenance: Optional[Dict[str, Any]] = None
+    dss_maintenance_update: Optional[Dict[str, Any]] = None
+    memory_maintenance: Optional[Dict[str, Any]] = None
+    meta_maintenance: Optional[Dict[str, Any]] = None
+    knowledge_maintenance: Optional[Dict[str, Any]] = None
+    experience_consolidation: Optional[Dict[str, Any]] = None
+    user_clustering: Optional[Dict[str, Any]] = None
+    procedural_maintenance: Optional[Dict[str, Any]] = None
+    hierarchical_memory_maintenance: Optional[Dict[str, Any]] = None
+    error: Optional[str] = None
+
 # Helper function
 def _dict_to_kv(d: dict[str, Any] | None) -> list[KVPair] | None:
     """
@@ -6105,12 +6119,13 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             await self.initialize()
         
         with trace(workflow_name="run_maintenance", group_id=self.trace_group_id):
+            results = {}  # Initialize results dict
             result = MaintenanceResult(maintenance_time=datetime.datetime.now().isoformat())
-
+    
             try:
                 # Run summarization every N maintenance cycles
-                if instance.cognitive_cycles_executed % 10 == 0:  # Adjust frequency as needed
-                    summarization_result = await instance.trigger_memory_summarization()
+                if self.cognitive_cycles_executed % 10 == 0:  # Changed from instance to self
+                    summarization_result = await self.trigger_memory_summarization()
                     results["hierarchical_memory_maintenance"] = {
                         "summaries_created": summarization_result.get("summaries_created", 0),
                         "topics_summarized": summarization_result.get("topics_summarized", [])
