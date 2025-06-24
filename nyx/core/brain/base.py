@@ -482,6 +482,21 @@ class MaintenanceResult(BaseModel):
     hierarchical_memory_maintenance: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
 
+class SystemSettingsUpdate(BaseModel):
+    """System settings that were updated"""
+    cross_user_enabled: bool
+    cross_user_sharing_threshold: float
+
+class UserProfile(BaseModel):
+    """User experience sharing profile"""
+    experience_sharing_preference: float = 0.5
+
+class ExperienceSharingAdaptation(BaseModel):
+    """Result from adapting experience sharing"""
+    profile: Optional[UserProfile] = None
+    system_settings_updated: Optional[SystemSettingsUpdate] = None
+    error: Optional[str] = None
+
 # Helper function
 def _dict_to_kv(d: dict[str, Any] | None) -> list[KVPair] | None:
     """
@@ -6527,6 +6542,9 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
                 user_feedback=feedback
             )
             
+            # Create response object
+            result = ExperienceSharingAdaptation()
+            
             # Apply changes to brain settings
             if "profile" in adaptation_result:
                 profile = adaptation_result["profile"]
@@ -6540,17 +6558,18 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
                 # Adjust threshold based on preference
                 self.cross_user_sharing_threshold = max(0.5, 1.0 - (sharing_preference * 0.5))
                 
-                # Add these updates to the result
-                adaptation_result["system_settings_updated"] = {
-                    "cross_user_enabled": self.cross_user_enabled,
-                    "cross_user_sharing_threshold": self.cross_user_sharing_threshold
-                }
+                # Set result fields
+                result.profile = UserProfile(experience_sharing_preference=sharing_preference)
+                result.system_settings_updated = SystemSettingsUpdate(
+                    cross_user_enabled=self.cross_user_enabled,
+                    cross_user_sharing_threshold=self.cross_user_sharing_threshold
+                )
             
-            return adaptation_result
+            return result
             
         except Exception as e:
             logger.error(f"Error adapting experience sharing: {str(e)}")
-            return {"error": str(e)}
+            return ExperienceSharingAdaptation(error=str(e))
 
     async def run_experience_consolidation(self) -> ExperienceConsolidationResult:
         """Run the experience consolidation process."""
