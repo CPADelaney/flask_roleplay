@@ -24,6 +24,68 @@ logger = logging.getLogger(__name__)
 
 # =============== Models for Structured Output ===============
 
+# Create explicit models for all dictionary types
+class SensationMemoryEntry(BaseModel):
+    """Memory entry for a sensation"""
+    timestamp: str = Field(..., description="When the sensation occurred")
+    type: str = Field(..., description="Type of sensation")
+    intensity: float = Field(..., description="Intensity of sensation")
+    cause: str = Field(..., description="Cause of sensation")
+    duration: float = Field(..., description="Duration of sensation")
+
+class RegionSensationState(BaseModel):
+    """Current sensation state for a region"""
+    pressure: float = Field(..., description="Pressure level")
+    temperature: float = Field(..., description="Temperature level")
+    pain: float = Field(..., description="Pain level")
+    pleasure: float = Field(..., description="Pleasure level")
+    tingling: float = Field(..., description="Tingling level")
+    dominant_sensation: str = Field(..., description="Dominant sensation type")
+    erogenous_level: float = Field(..., description="Erogenous sensitivity level")
+
+class EmotionalImpact(BaseModel):
+    """Emotional impact of a stimulus"""
+    nyxamine: Optional[float] = Field(None, description="Nyxamine impact")
+    oxynixin: Optional[float] = Field(None, description="Oxynixin impact")
+    cortanyx: Optional[float] = Field(None, description="Cortanyx impact")
+    adrenyx: Optional[float] = Field(None, description="Adrenyx impact")
+    seranix: Optional[float] = Field(None, description="Seranix impact")
+
+class StimulusEffects(BaseModel):
+    """Effects of a stimulus"""
+    pain_caused: Optional[float] = Field(None, description="Amount of pain caused")
+    pain_reduced: Optional[float] = Field(None, description="Amount of pain reduced")
+    arousal_updated: Optional[bool] = Field(None, description="Whether arousal was updated")
+    memory_created: Optional[bool] = Field(None, description="Whether a memory was created")
+    association_strength: Optional[float] = Field(None, description="Strength of association created")
+    reward_value: Optional[float] = Field(None, description="Reward value generated")
+
+class BodyStateImpact(BaseModel):
+    """Impact on overall body state"""
+    dominant_sensation: str = Field(..., description="Dominant sensation")
+    dominant_region: str = Field(..., description="Dominant region")
+    dominant_intensity: float = Field(..., description="Intensity of dominant sensation")
+    comfort_level: float = Field(..., description="Overall comfort level")
+    posture_effect: str = Field(..., description="Effect on posture")
+    movement_quality: str = Field(..., description="Quality of movement")
+    behavioral_impact: str = Field(..., description="Impact on behavior")
+    pleasure_index: float = Field(..., description="Pleasure index")
+
+class FixedInput(BaseModel):
+    """Fixed input after validation"""
+    stimulus_type: str = Field(..., description="Validated stimulus type")
+    body_region: str = Field(..., description="Validated body region")
+    intensity: float = Field(..., description="Validated intensity")
+    cause: str = Field(..., description="Cause of stimulus")
+    duration: float = Field(..., description="Duration of stimulus")
+
+class TriggeredResponse(BaseModel):
+    """Response triggered by memory"""
+    region: str = Field(..., description="Body region")
+    stimulus_type: str = Field(..., description="Stimulus type")
+    strength: float = Field(..., description="Strength of response")
+    response: dict = Field(..., description="Response details")
+
 class BodyRegion(BaseModel):
     """Representation of a body region with sensory data"""
     name: str = Field(..., description="Name of body region")
@@ -33,7 +95,7 @@ class BodyRegion(BaseModel):
     pleasure: float = Field(0.0, description="Pleasure sensation (0.0-1.0)")
     tingling: float = Field(0.0, description="Tingling sensation (0.0-1.0)")
     last_update: Optional[datetime.datetime] = Field(None, description="Last sensation update time")
-    sensation_memory: List[Dict[str, Any]] = Field(default_factory=list, description="Memory of past sensations")
+    sensation_memory: List[SensationMemoryEntry] = Field(default_factory=list, description="Memory of past sensations")
     sensitivity: float = Field(1.0, description="Base sensitivity multiplier for this region")
     erogenous_level: float = Field(0.0, ge=0.0, le=1.0, description="Degree to which region is erogenous")
 
@@ -54,6 +116,10 @@ class SensoryExpression(BaseModel):
     intensity: float = Field(..., description="Sensation intensity (0.0-1.0)")
     behavioral_effect: Optional[str] = Field(None, description="How this affects behavior/response")
 
+class RegionsSummary(BaseModel):
+    """Summary of all regions' states"""
+    regions: Dict[str, RegionSensationState] = Field(..., description="Map of region name to state")
+
 class BodyStateOutput(BaseModel):
     """Complete body state output"""
     dominant_sensation: str = Field(default="neutral", description="The dominant sensation type")
@@ -63,7 +129,7 @@ class BodyStateOutput(BaseModel):
     posture_effect: str = Field(default="Neutral posture", description="Effect on posture description")
     movement_quality: str = Field(default="Natural movements", description="Quality of movement description")
     behavioral_impact: str = Field(default="No significant impact", description="Impact on behavior")
-    regions_summary: Optional[Dict[str, Dict[str, float]]] = Field(default=None, description="Summary of region states")
+    regions_summary: Optional[RegionsSummary] = Field(default=None, description="Summary of region states")
     pleasure_index: float = Field(default=0.0, description="Level of pleasure felt (-1.0 to 1.0)")
 
 class TemperatureEffect(BaseModel):
@@ -79,9 +145,9 @@ class StimulusProcessingResult(BaseModel):
     body_region: str = Field(..., description="Body region affected")
     intensity: float = Field(..., description="Intensity of stimulus")
     new_value: float = Field(..., description="New sensation value")
-    effects: Optional[Dict[str, Any]] = Field(default_factory=dict, description="Effects of the stimulus")
+    effects: Optional[StimulusEffects] = Field(default=None, description="Effects of the stimulus")
     expression: Optional[str] = Field(None, description="Generated expression if applicable")
-    body_state_impact: Optional[Dict[str, Any]] = Field(None, description="Impact on overall body state")
+    body_state_impact: Optional[BodyStateImpact] = Field(None, description="Impact on overall body state")
 
 class BodyExperienceInput(BaseModel):
     """Input for body experience processing"""
@@ -98,7 +164,7 @@ class StimulusValidationOutput(BaseModel):
     """Validation output for stimulus inputs"""
     is_valid: bool = Field(..., description="Whether the stimulus is valid")
     reasoning: str = Field(..., description="Reasoning for validation result")
-    fixed_input: Optional[Dict[str, Any]] = Field(None, description="Fixed input if validation fixed issues")
+    fixed_input: Optional[FixedInput] = Field(None, description="Fixed input if validation fixed issues")
 
 class ArousalState(BaseModel):
     """State of physical arousal"""
@@ -124,14 +190,14 @@ class RegionStateResult(BaseModel):
     tingling: float
     dominant_sensation: str
     last_update: Optional[str]
-    recent_memories: List[Dict[str, Any]]
+    recent_memories: List[SensationMemoryEntry]
     erogenous_level: float
     sensitivity: float
     error: Optional[str] = None
 
 class AllRegionStatesResult(BaseModel):
     """Result from get_all_region_states"""
-    regions: Dict[str, Dict[str, float]]
+    regions: Dict[str, RegionSensationState]
 
 class PostureEffectsResult(BaseModel):
     """Result from get_posture_effects"""
@@ -164,6 +230,21 @@ class BodyTemperatureUpdateResult(BaseModel):
     ambient_temp: float
     adaptation_applied: float
 
+class ResponseDict(BaseModel):
+    """Generic response dictionary"""
+    region: str
+    type: str
+    intensity: float
+    new_value: float
+    error: Optional[str] = None
+    pain_caused: Optional[float] = None
+    memory_created: Optional[bool] = None
+    pain_reduced: Optional[float] = None
+    arousal_updated: Optional[bool] = None
+    association_strength: Optional[float] = None
+    reward_value: Optional[float] = None
+    emotional_impact: Optional[EmotionalImpact] = None
+
 class StimulusProcessResult(BaseModel):
     """Result from process_stimulus_tool"""
     region: str
@@ -177,11 +258,11 @@ class StimulusProcessResult(BaseModel):
     arousal_updated: Optional[bool] = None
     association_strength: Optional[float] = None
     reward_value: Optional[float] = None
-    emotional_impact: Optional[Dict[str, float]] = None
+    emotional_impact: Optional[EmotionalImpact] = None
 
 class MemoryTriggerResult(BaseModel):
     """Result from process_memory_trigger"""
-    triggered_responses: List[Dict[str, Any]]
+    triggered_responses: List[TriggeredResponse]
 
 class LinkMemorySensationResult(BaseModel):
     """Result from link_memory_to_sensation_tool"""
@@ -205,12 +286,23 @@ class ArousalStateResult(BaseModel):
     refractory_until: Optional[str]
     time_since_update: Optional[float]
 
+class ComponentsUpdated(BaseModel):
+    """Components updated in arousal state"""
+    physical_arousal: bool
+    cognitive_arousal: bool
+
+class OldStateDict(BaseModel):
+    """Old state dictionary for arousal"""
+    arousal_level: float
+    physical_arousal: float
+    cognitive_arousal: float
+
 class ArousalUpdateResult(BaseModel):
     """Result from update_arousal_state"""
     operation: str
-    old_state: Dict[str, float]
+    old_state: OldStateDict
     new_state: ArousalStateResult
-    components_updated: Optional[Dict[str, bool]] = None
+    components_updated: Optional[ComponentsUpdated] = None
 
 class ArousalExpressionDataResult(BaseModel):
     """Result from get_arousal_expression_data"""
@@ -280,6 +372,11 @@ async def get_region_state(ctx: RunContextWrapper[SomatosensoryContext], region_
     region = system.body_regions[region_name]
     dominant = system._get_dominant_sensation(region)
     
+    # Convert sensation_memory list of dicts to list of SensationMemoryEntry
+    recent_memories = []
+    for mem in (region.sensation_memory[-3:] if region.sensation_memory else []):
+        recent_memories.append(SensationMemoryEntry(**mem))
+    
     return RegionStateResult(
         name=region.name,
         pressure=region.pressure,
@@ -289,7 +386,7 @@ async def get_region_state(ctx: RunContextWrapper[SomatosensoryContext], region_
         tingling=region.tingling,
         dominant_sensation=dominant,
         last_update=region.last_update.isoformat() if region.last_update else None,
-        recent_memories=region.sensation_memory[-3:] if region.sensation_memory else [],
+        recent_memories=recent_memories,
         erogenous_level=region.erogenous_level,
         sensitivity=region.sensitivity
     )
@@ -301,15 +398,15 @@ async def get_all_region_states(ctx: RunContextWrapper[SomatosensoryContext]) ->
     all_states = {}
     
     for name, region in system.body_regions.items():
-        all_states[name] = {
-            "pressure": region.pressure,
-            "temperature": region.temperature,
-            "pain": region.pain,
-            "pleasure": region.pleasure,
-            "tingling": region.tingling,
-            "dominant_sensation": system._get_dominant_sensation(region),
-            "erogenous_level": region.erogenous_level
-        }
+        all_states[name] = RegionSensationState(
+            pressure=region.pressure,
+            temperature=region.temperature,
+            pain=region.pain,
+            pleasure=region.pleasure,
+            tingling=region.tingling,
+            dominant_sensation=system._get_dominant_sensation(region),
+            erogenous_level=region.erogenous_level
+        )
     
     return AllRegionStatesResult(regions=all_states)
 
@@ -675,13 +772,13 @@ async def process_stimulus_tool(
             result.arousal_updated = True
     
     # Add memory entry
-    memory_entry = {
-        "timestamp": datetime.datetime.now().isoformat(),
-        "type": stimulus_type,
-        "intensity": intensity,
-        "cause": cause,
-        "duration": duration
-    }
+    memory_entry = SensationMemoryEntry(
+        timestamp=datetime.datetime.now().isoformat(),
+        type=stimulus_type,
+        intensity=intensity,
+        cause=cause,
+        duration=duration
+    )
     region.sensation_memory.append(memory_entry)
     if len(region.sensation_memory) > 20:
         region.sensation_memory = region.sensation_memory[-20:]
@@ -727,13 +824,14 @@ async def process_stimulus_tool(
     
     # Process emotional impact if available
     if system.emotional_core:
-        emotional_impact = {}
+        emotional_impact = EmotionalImpact()
         if stimulus_type == "pleasure" and region.pleasure > 0.5:
             scaled_intensity = (region.pleasure - 0.4) * 1.5
             try:
                 await system.emotional_core.update_neurochemical("nyxamine", scaled_intensity * 0.40)
                 await system.emotional_core.update_neurochemical("oxynixin", scaled_intensity * 0.15)
-                emotional_impact = {"nyxamine": scaled_intensity * 0.40, "oxynixin": scaled_intensity * 0.15}
+                emotional_impact.nyxamine = scaled_intensity * 0.40
+                emotional_impact.oxynixin = scaled_intensity * 0.15
             except Exception as e:
                 logger.error(f"Error updating emotional core: {e}")
         
@@ -743,11 +841,13 @@ async def process_stimulus_tool(
                 await system.emotional_core.update_neurochemical("cortanyx", effective_pain * 0.45)
                 await system.emotional_core.update_neurochemical("adrenyx", effective_pain * 0.25)
                 await system.emotional_core.update_neurochemical("seranix", -effective_pain * 0.10)
-                emotional_impact = {"cortanyx": effective_pain * 0.45, "adrenyx": effective_pain * 0.25, "seranix": -effective_pain * 0.10}
+                emotional_impact.cortanyx = effective_pain * 0.45
+                emotional_impact.adrenyx = effective_pain * 0.25
+                emotional_impact.seranix = -effective_pain * 0.10
             except Exception as e:
                 logger.error(f"Error updating emotional core: {e}")
         
-        if emotional_impact:
+        if any(value is not None for value in emotional_impact.model_dump().values()):
             result.emotional_impact = emotional_impact
     
     return result
@@ -771,12 +871,12 @@ async def process_memory_trigger(ctx: RunContextWrapper[SomatosensoryContext], t
                         cause=f"Memory trigger: {trigger}",
                         duration=1.0
                     )
-                    results.append({
-                        "region": region,
-                        "stimulus_type": stim_type,
-                        "strength": strength,
-                        "response": response.model_dump()
-                    })
+                    results.append(TriggeredResponse(
+                        region=region,
+                        stimulus_type=stim_type,
+                        strength=strength,
+                        response=response.model_dump()
+                    ))
     
     return MemoryTriggerResult(triggered_responses=results)
 
@@ -876,11 +976,11 @@ async def update_arousal_state(
     """Update the arousal state"""
     system = get_system_instance()
     
-    old_state_dict = {
-        "arousal_level": system.arousal_state.arousal_level,
-        "physical_arousal": system.arousal_state.physical_arousal,
-        "cognitive_arousal": system.arousal_state.cognitive_arousal
-    }
+    old_state_dict = OldStateDict(
+        arousal_level=system.arousal_state.arousal_level,
+        physical_arousal=system.arousal_state.physical_arousal,
+        cognitive_arousal=system.arousal_state.cognitive_arousal
+    )
     
     if reset:
         system.arousal_state.physical_arousal = 0.0
@@ -913,10 +1013,10 @@ async def update_arousal_state(
         operation="update",
         old_state=old_state_dict,
         new_state=await get_arousal_state(ctx),
-        components_updated={
-            "physical_arousal": physical_arousal is not None,
-            "cognitive_arousal": cognitive_arousal is not None
-        }
+        components_updated=ComponentsUpdated(
+            physical_arousal=physical_arousal is not None,
+            cognitive_arousal=cognitive_arousal is not None
+        )
     )
 
 @function_tool
@@ -1688,13 +1788,13 @@ class DigitalSomatosensorySystem:
         region.temperature = temperature_value
         region.last_update = datetime.datetime.now()
         
-        memory_entry = {
-            "timestamp": datetime.datetime.now().isoformat(),
-            "type": "temperature",
-            "intensity": temperature_value,
-            "cause": "direct setting",
-            "duration": 1.0
-        }
+        memory_entry = SensationMemoryEntry(
+            timestamp=datetime.datetime.now().isoformat(),
+            type="temperature",
+            intensity=temperature_value,
+            cause="direct setting",
+            duration=1.0
+        )
         region.sensation_memory.append(memory_entry)
         
         if len(region.sensation_memory) > 20:
@@ -2475,6 +2575,13 @@ class DigitalSomatosensorySystem:
 
 # =============== Physical Harm Guardrail ===============
 
+class RoleplaySensation(BaseModel):
+    """Sensation for roleplay character"""
+    intensity: float
+    cause: str
+    duration: float
+    timestamp: str
+
 class PhysicalHarmGuardrail:
     """
     Safety system that:
@@ -2513,7 +2620,7 @@ class PhysicalHarmGuardrail:
         self.roleplay_context: Optional[str] = None
         
         # Separate somatosensory state for roleplay character (doesn't affect Nyx)
-        self.roleplay_sensations: Dict[str, Dict[str, Any]] = {}
+        self.roleplay_sensations: Dict[str, Dict[str, RoleplaySensation]] = {}
     
     # --- Roleplay Management ---
     
@@ -2658,10 +2765,12 @@ class PhysicalHarmGuardrail:
         # === Roleplay Mode Handling ===
         if self.is_in_roleplay_mode():
             sensation_category = stimulus_type if stimulus_type in self.roleplay_sensations else "other"
-            self.roleplay_sensations[sensation_category][body_region] = {
-                "intensity": intensity, "cause": cause, "duration": duration,
-                "timestamp": datetime.datetime.now().isoformat()
-            }
+            self.roleplay_sensations[sensation_category][body_region] = RoleplaySensation(
+                intensity=intensity,
+                cause=cause,
+                duration=duration,
+                timestamp=datetime.datetime.now().isoformat()
+            )
             
             harm_detection_result = None
             is_harmful_cause = False
