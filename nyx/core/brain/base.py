@@ -5042,7 +5042,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
                 self.process_orgasm_permission_request,
                 self.recommend_dominance_persona,
                 self.activate_dominance_persona,
-                self.generate_sadistic_response)         
+                self.generate_sadistic_response         
             ]            
             
             # New general tools functions
