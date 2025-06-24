@@ -6295,9 +6295,28 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
                         logger.error(f"Error in {result_key}: {e}")
                         results[result_key] = {"error": str(e)}
             
-            results["maintenance_time"] = datetime.datetime.now().isoformat()
+            # Convert results dict to MaintenanceResult fields
+            if "hormone_maintenance" in results:
+                result.hormone_maintenance = MaintenanceUpdateResult(**results["hormone_maintenance"]) if isinstance(results["hormone_maintenance"], dict) else results["hormone_maintenance"]
+            if "dss_maintenance_update" in results:
+                result.dss_maintenance_update = MaintenanceUpdateResult(**results["dss_maintenance_update"]) if isinstance(results["dss_maintenance_update"], dict) else results["dss_maintenance_update"]
+            if "memory_maintenance" in results:
+                result.memory_maintenance = MaintenanceUpdateResult(**results["memory_maintenance"]) if isinstance(results["memory_maintenance"], dict) else results["memory_maintenance"]
+            if "meta_maintenance" in results:
+                result.meta_maintenance = MaintenanceUpdateResult(**results["meta_maintenance"]) if isinstance(results["meta_maintenance"], dict) else results["meta_maintenance"]
+            if "knowledge_maintenance" in results:
+                result.knowledge_maintenance = MaintenanceUpdateResult(**results["knowledge_maintenance"]) if isinstance(results["knowledge_maintenance"], dict) else results["knowledge_maintenance"]
+            if "experience_consolidation" in results:
+                result.experience_consolidation = MaintenanceUpdateResult(**results["experience_consolidation"]) if isinstance(results["experience_consolidation"], dict) else results["experience_consolidation"]
+            if "user_clustering" in results:
+                result.user_clustering = MaintenanceUpdateResult(**results["user_clustering"]) if isinstance(results["user_clustering"], dict) else results["user_clustering"]
+            if "procedural_maintenance" in results:
+                result.procedural_maintenance = MaintenanceUpdateResult(**results["procedural_maintenance"]) if isinstance(results["procedural_maintenance"], dict) else results["procedural_maintenance"]
+            if "hierarchical_memory_maintenance" in results:
+                result.hierarchical_memory_maintenance = MaintenanceUpdateResult(**results["hierarchical_memory_maintenance"]) if isinstance(results["hierarchical_memory_maintenance"], dict) else results["hierarchical_memory_maintenance"]
+            
             logger.info("System maintenance finished")
-            return results
+            return result
 
     def _calculate_memory_similarity(self, memory1: Dict[str, Any], memory2: Dict[str, Any]) -> float:
         """Calculate similarity between two memories for clustering."""
