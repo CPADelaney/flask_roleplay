@@ -85,6 +85,41 @@ class KVPair(BaseModel):
     key: str
     value: Union[str, int, float, bool, None]
 
+# Add these model definitions with the other Pydantic models at the top of the file:
+
+class PreferenceItem(BaseModel):
+    """A single preference with its score"""
+    name: str
+    score: float
+
+class TraitItem(BaseModel):
+    """A single trait with its value"""
+    name: str
+    value: float
+
+class ChangeItem(BaseModel):
+    """A single change with its magnitude"""
+    attribute: str
+    change: float
+
+class PreferenceSet(BaseModel):
+    """A set of preferences with scores"""
+    scenario_types: List[PreferenceItem] = Field(default_factory=list)
+    emotional_tones: List[PreferenceItem] = Field(default_factory=list)
+
+class IdentityEvolution(BaseModel):
+    """Identity evolution tracking data"""
+    total_updates: int = 0
+    recent_significant_changes: List[ChangeItem] = Field(default_factory=list)
+
+class IdentityStateResult(BaseModel):
+    """Result from getting identity state"""
+    top_preferences: Optional[PreferenceSet] = None
+    top_traits: List[TraitItem] = Field(default_factory=list)
+    identity_reflection: Optional[str] = None
+    identity_evolution: Optional[IdentityEvolution] = None
+    error: Optional[str] = None
+
 class ChallengeResponse(BaseModel):
     """Response from challenging a user claim"""
     challenge_text: str
@@ -6454,25 +6489,28 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
                                 
                             recent_changes[full_key] += change
             
-            # Format the identity state
-            result = {
-                "top_preferences": {
-                    "scenario_types": dict(top_scenario_prefs),
-                    "emotional_tones": dict(top_emotional_prefs)
-                },
-                "top_traits": dict(top_traits),
-                "identity_reflection": reflection,
-                "identity_evolution": {
-                    "total_updates": len(evolution_history),
-                    "recent_significant_changes": {k: round(v, 2) for k, v in sorted(recent_changes.items(), key=lambda x: abs(x[1]), reverse=True)[:5]}
-                }
-            }
+            # Format the identity state using the new models
+            result = IdentityStateResult(
+                top_preferences=PreferenceSet(
+                    scenario_types=[PreferenceItem(name=k, score=v) for k, v in top_scenario_prefs],
+                    emotional_tones=[PreferenceItem(name=k, score=v) for k, v in top_emotional_prefs]
+                ),
+                top_traits=[TraitItem(name=k, value=v) for k, v in top_traits],
+                identity_reflection=reflection,
+                identity_evolution=IdentityEvolution(
+                    total_updates=len(evolution_history),
+                    recent_significant_changes=[
+                        ChangeItem(attribute=k, change=round(v, 2)) 
+                        for k, v in sorted(recent_changes.items(), key=lambda x: abs(x[1]), reverse=True)[:5]
+                    ]
+                )
+            )
             
             return result
             
         except Exception as e:
             logger.error(f"Error getting identity state: {str(e)}")
-            return {"error": str(e)}
+            return IdentityStateResult(error=str(e))
 
     async def adapt_experience_sharing(self, user_id: str, feedback: Dict[str, Any]) -> ExperienceSharingAdaptation:
         """Adapt experience sharing parameters based on user feedback."""
