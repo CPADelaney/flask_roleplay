@@ -308,20 +308,20 @@ class Observation(BaseModel):
         return (datetime.datetime.now() - self.created_at).total_seconds()
 
 class ObservationContext(BaseModel):
-    """Context for generating observations"""
+    """Context for generating observations - internal use"""
     current_user_id: Optional[str] = None
     current_conversation_id: Optional[str] = None
     current_topic: Optional[str] = None
-    emotional_state: EmotionalStateData = Field(default_factory=EmotionalStateData)  # Fixed: use explicit model
-    user_relationship: UserRelationshipData = Field(default_factory=UserRelationshipData)  # Fixed: use explicit model
-    temporal_context: TemporalContextData = Field(default_factory=TemporalContextData)  # Fixed: use explicit model
-    sensory_context: SensoryContextData = Field(default_factory=SensoryContextData)  # Fixed: use explicit model
-    current_needs: CurrentNeedsData = Field(default_factory=CurrentNeedsData)  # Fixed: use explicit model
-    recent_memories: List[MemoryItem] = Field(default_factory=list)  # Fixed: use explicit model
-    conversation_history: List[ConversationHistoryItem] = Field(default_factory=list)  # Fixed: use explicit model
-    environmental_context: EnvironmentalContextData = Field(default_factory=EnvironmentalContextData)  # Fixed: use explicit model
-    attention_focus: AttentionFocusData = Field(default_factory=AttentionFocusData)  # Fixed: use explicit model
-    recent_actions: List[RecentActionData] = Field(default_factory=list)  # Fixed: use explicit model
+    emotional_state: Dict[str, Any] = Field(default_factory=dict)  # Keep as dict for internal use
+    user_relationship: Dict[str, Any] = Field(default_factory=dict)
+    temporal_context: Dict[str, Any] = Field(default_factory=dict)
+    sensory_context: Dict[str, Any] = Field(default_factory=dict)
+    current_needs: Dict[str, Any] = Field(default_factory=dict)
+    recent_memories: List[Dict[str, Any]] = Field(default_factory=list)
+    conversation_history: List[Dict[str, Any]] = Field(default_factory=list)
+    environmental_context: Dict[str, Any] = Field(default_factory=dict)
+    attention_focus: Dict[str, Any] = Field(default_factory=dict)
+    recent_actions: List[Dict[str, Any]] = Field(default_factory=list)
 
 class ObservationFilter(BaseModel):
     """Filter criteria for selecting observations"""
@@ -1174,27 +1174,11 @@ class PassiveObservationSystem:
                 
                 # Convert context to ContextData
                 context_data = ContextData()
-                # Use helper function for temporal context
-                context_data.temporal_context = _extract_temporal_context_data(context.temporal_context)
+                # Temporal context is already a TemporalContextData object
+                context_data.temporal_context = context.temporal_context
                 
-                if context.emotional_state:
-                    # Extract primary emotion data
-                    primary_emotion_dict = context.emotional_state.get("primary_emotion", {})
-                    mood_dict = context.emotional_state.get("mood", {})
-                    
-                    context_data.emotional_state = EmotionalStateData(
-                        primary_emotion=PrimaryEmotion(
-                            name=primary_emotion_dict.get("name"),
-                            intensity=primary_emotion_dict.get("intensity")
-                        ) if primary_emotion_dict else None,
-                        mood=MoodState(
-                            dominant_mood=mood_dict.get("dominant_mood"),
-                            valence=mood_dict.get("valence"),
-                            arousal=mood_dict.get("arousal"),
-                            control=mood_dict.get("control"),
-                            intensity=mood_dict.get("intensity")
-                        ) if mood_dict else None
-                    )
+                # Emotional state is already an EmotionalStateData object
+                context_data.emotional_state = context.emotional_state
                 
                 # Run the observation generation agent
                 logger.debug(f"Generating observation from action: {action.get('name')}")
@@ -1428,45 +1412,9 @@ class PassiveObservationSystem:
         if self.emotional_core:
             try:
                 if hasattr(self.emotional_core, "get_formatted_emotional_state"):
-                    emotional_state_dict = self.emotional_core.get_formatted_emotional_state()
-                    if emotional_state_dict:
-                        # Convert dict to EmotionalStateData
-                        primary_emotion_dict = emotional_state_dict.get("primary_emotion", {})
-                        mood_dict = emotional_state_dict.get("mood", {})
-                        
-                        context.emotional_state = EmotionalStateData(
-                            primary_emotion=PrimaryEmotion(
-                                name=primary_emotion_dict.get("name"),
-                                intensity=primary_emotion_dict.get("intensity")
-                            ) if primary_emotion_dict else None,
-                            mood=MoodState(
-                                dominant_mood=mood_dict.get("dominant_mood"),
-                                valence=mood_dict.get("valence"),
-                                arousal=mood_dict.get("arousal"),
-                                control=mood_dict.get("control"),
-                                intensity=mood_dict.get("intensity")
-                            ) if mood_dict else None
-                        )
+                    context.emotional_state = self.emotional_core.get_formatted_emotional_state()
                 elif hasattr(self.emotional_core, "get_current_emotion"):
-                    emotional_state_dict = await self.emotional_core.get_current_emotion()
-                    if emotional_state_dict:
-                        # Convert dict to EmotionalStateData
-                        primary_emotion_dict = emotional_state_dict.get("primary_emotion", {})
-                        mood_dict = emotional_state_dict.get("mood", {})
-                        
-                        context.emotional_state = EmotionalStateData(
-                            primary_emotion=PrimaryEmotion(
-                                name=primary_emotion_dict.get("name"),
-                                intensity=primary_emotion_dict.get("intensity")
-                            ) if primary_emotion_dict else None,
-                            mood=MoodState(
-                                dominant_mood=mood_dict.get("dominant_mood"),
-                                valence=mood_dict.get("valence"),
-                                arousal=mood_dict.get("arousal"),
-                                control=mood_dict.get("control"),
-                                intensity=mood_dict.get("intensity")
-                            ) if mood_dict else None
-                        )
+                    context.emotional_state = await self.emotional_core.get_current_emotion()
             except Exception as e:
                 logger.error(f"Error getting emotional state: {str(e)}")
         
@@ -1477,15 +1425,13 @@ class PassiveObservationSystem:
                 if hasattr(self.mood_manager, "current_mood"):
                     mood = self.mood_manager.current_mood
                     if mood:
-                        if not context.emotional_state:
-                            context.emotional_state = EmotionalStateData()
-                        context.emotional_state.mood = MoodState(
-                            dominant_mood=mood.dominant_mood,
-                            valence=mood.valence,
-                            arousal=mood.arousal,
-                            control=mood.control,
-                            intensity=mood.intensity
-                        )
+                        context.emotional_state["mood"] = {
+                            "dominant_mood": mood.dominant_mood,
+                            "valence": mood.valence,
+                            "arousal": mood.arousal,
+                            "control": mood.control,
+                            "intensity": mood.intensity
+                        }
                 # Don't try to call get_current_mood or run_get_current_mood
             except Exception as e:
                 logger.error(f"Error getting mood state: {str(e)}")
@@ -1494,29 +1440,9 @@ class PassiveObservationSystem:
         if self.temporal_perception:
             try:
                 if hasattr(self.temporal_perception, "get_current_temporal_context"):
-                    temporal_dict = await self.temporal_perception.get_current_temporal_context()
-                    if temporal_dict:
-                        context.temporal_context = TemporalContextData(
-                            time_of_day=temporal_dict.get("time_of_day"),
-                            day_type=temporal_dict.get("day_type"),
-                            season=temporal_dict.get("season"),
-                            day_of_week=temporal_dict.get("day_of_week"),
-                            month=temporal_dict.get("month"),
-                            year=temporal_dict.get("year"),
-                            timestamp=temporal_dict.get("timestamp")
-                        )
+                    context.temporal_context = await self.temporal_perception.get_current_temporal_context()
                 elif hasattr(self.temporal_perception, "current_temporal_context"):
-                    temporal_dict = self.temporal_perception.current_temporal_context
-                    if temporal_dict:
-                        context.temporal_context = TemporalContextData(
-                            time_of_day=temporal_dict.get("time_of_day"),
-                            day_type=temporal_dict.get("day_type"),
-                            season=temporal_dict.get("season"),
-                            day_of_week=temporal_dict.get("day_of_week"),
-                            month=temporal_dict.get("month"),
-                            year=temporal_dict.get("year"),
-                            timestamp=temporal_dict.get("timestamp")
-                        )
+                    context.temporal_context = self.temporal_perception.current_temporal_context
             except Exception as e:
                 logger.error(f"Error getting temporal context: {str(e)}")
         
