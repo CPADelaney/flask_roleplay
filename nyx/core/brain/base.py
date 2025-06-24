@@ -85,6 +85,13 @@ class KVPair(BaseModel):
     key: str
     value: Union[str, int, float, bool, None]
 
+class RoleplayResult(BaseModel):
+    """Result of roleplay mode changes"""
+    success: bool
+    character_name: Optional[str] = None
+    context: Optional[str] = None
+    reason: Optional[str] = None
+
 class MaintenanceUpdateResult(BaseModel):
     """Generic maintenance update result"""
     status: str = "completed"
@@ -6239,45 +6246,34 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             await self.initialize()
         
         with trace(workflow_name="run_maintenance", group_id=self.trace_group_id):
-            results = {}  # Initialize results dict
             result = MaintenanceResult(maintenance_time=datetime.datetime.now().isoformat())
     
             try:
                 # Run summarization every N maintenance cycles
-                if self.cognitive_cycles_executed % 10 == 0:  # Changed from instance to self
+                if self.cognitive_cycles_executed % 10 == 0:
                     summarization_result = await self.trigger_memory_summarization()
-                    results["hierarchical_memory_maintenance"] = {
-                        "summaries_created": summarization_result.get("summaries_created", 0),
-                        "topics_summarized": summarization_result.get("topics_summarized", [])
-                    }
+                    result.hierarchical_memory_maintenance = MaintenanceUpdateResult(
+                        status="completed",
+                        items_processed=summarization_result.get("summaries_created", 0),
+                        errors=[]
+                    )
             except Exception as e:
                 logger.error(f"Error in hierarchical memory maintenance: {e}")
-                results["hierarchical_memory_maintenance"] = {"error": str(e)}
+                result.hierarchical_memory_maintenance = MaintenanceUpdateResult(
+                    status="failed",
+                    items_processed=0,
+                    errors=[str(e)]
+                )
             
             # Define maintenance tasks
             maintenance_tasks = [
-                # Hormone maintenance
                 (self.hormone_system, "update_hormone_cycles", "hormone_maintenance"),
-                
-                # DSS update
                 (self.digital_somatosensory_system, "update", "dss_maintenance_update", {"ambient_temperature": None}),
-                
-                # Memory maintenance
                 (self.memory_orchestrator, "run_maintenance", "memory_maintenance"),
-                
-                # Meta core maintenance
                 (self.meta_core, "improve_meta_parameters", "meta_maintenance"),
-                
-                # Knowledge core maintenance
                 (self.knowledge_core, "run_integration_cycle", "knowledge_maintenance"),
-                
-                # Experience consolidation
                 (self.experience_consolidation, "run_consolidation_cycle", "experience_consolidation"),
-                
-                # Cross-user clusters
                 (self.cross_user_manager, "update_user_clusters", "user_clustering"),
-                
-                # Procedural memory maintenance
                 (self.agent_enhanced_memory and hasattr(self.agent_enhanced_memory, "memory_manager") and 
                  self.agent_enhanced_memory.memory_manager, "run_maintenance", "procedural_maintenance")
             ]
@@ -6289,31 +6285,29 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
                         method = getattr(component, method_name, None)
                         if method and callable(method):
                             kwargs = args_kwargs[0] if args_kwargs else {}
-                            results[result_key] = await method(RunContextWrapper(context=None), **kwargs) \
+                            task_result = await method(RunContextWrapper(context=None), **kwargs) \
                                 if "RunContextWrapper" in str(method) else await method(**kwargs)
+                            
+                            # Convert to MaintenanceUpdateResult
+                            if isinstance(task_result, dict):
+                                setattr(result, result_key, MaintenanceUpdateResult(
+                                    status=task_result.get("status", "completed"),
+                                    items_processed=task_result.get("items_processed", 0),
+                                    errors=task_result.get("errors", [])
+                                ))
+                            else:
+                                setattr(result, result_key, MaintenanceUpdateResult(
+                                    status="completed",
+                                    items_processed=0,
+                                    errors=[]
+                                ))
                     except Exception as e:
                         logger.error(f"Error in {result_key}: {e}")
-                        results[result_key] = {"error": str(e)}
-            
-            # Convert results dict to MaintenanceResult fields
-            if "hormone_maintenance" in results:
-                result.hormone_maintenance = MaintenanceUpdateResult(**results["hormone_maintenance"]) if isinstance(results["hormone_maintenance"], dict) else results["hormone_maintenance"]
-            if "dss_maintenance_update" in results:
-                result.dss_maintenance_update = MaintenanceUpdateResult(**results["dss_maintenance_update"]) if isinstance(results["dss_maintenance_update"], dict) else results["dss_maintenance_update"]
-            if "memory_maintenance" in results:
-                result.memory_maintenance = MaintenanceUpdateResult(**results["memory_maintenance"]) if isinstance(results["memory_maintenance"], dict) else results["memory_maintenance"]
-            if "meta_maintenance" in results:
-                result.meta_maintenance = MaintenanceUpdateResult(**results["meta_maintenance"]) if isinstance(results["meta_maintenance"], dict) else results["meta_maintenance"]
-            if "knowledge_maintenance" in results:
-                result.knowledge_maintenance = MaintenanceUpdateResult(**results["knowledge_maintenance"]) if isinstance(results["knowledge_maintenance"], dict) else results["knowledge_maintenance"]
-            if "experience_consolidation" in results:
-                result.experience_consolidation = MaintenanceUpdateResult(**results["experience_consolidation"]) if isinstance(results["experience_consolidation"], dict) else results["experience_consolidation"]
-            if "user_clustering" in results:
-                result.user_clustering = MaintenanceUpdateResult(**results["user_clustering"]) if isinstance(results["user_clustering"], dict) else results["user_clustering"]
-            if "procedural_maintenance" in results:
-                result.procedural_maintenance = MaintenanceUpdateResult(**results["procedural_maintenance"]) if isinstance(results["procedural_maintenance"], dict) else results["procedural_maintenance"]
-            if "hierarchical_memory_maintenance" in results:
-                result.hierarchical_memory_maintenance = MaintenanceUpdateResult(**results["hierarchical_memory_maintenance"]) if isinstance(results["hierarchical_memory_maintenance"], dict) else results["hierarchical_memory_maintenance"]
+                        setattr(result, result_key, MaintenanceUpdateResult(
+                            status="failed",
+                            items_processed=0,
+                            errors=[str(e)]
+                        ))
             
             logger.info("System maintenance finished")
             return result
