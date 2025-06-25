@@ -2147,6 +2147,38 @@ class KnowledgeCoreAgents:
             # Return empty list if we couldn't parse
             logger.error("Failed to parse related knowledge results")
             return []
+
+    async def add_pattern_from_schema(self, schema_data: Dict[str, Any]) -> str:
+        """Add a knowledge pattern from a memory schema"""
+        # Extract relevant information from the schema
+        schema_id = schema_data.get("schema_id", "")
+        schema_name = schema_data.get("schema_name", "Unknown Pattern")
+        description = schema_data.get("description", "Pattern detected from memories")
+        attributes = schema_data.get("attributes", {})
+        
+        # Create knowledge content
+        content = {
+            "pattern_name": schema_name,
+            "description": description,
+            "source_schema_id": schema_id,
+            **attributes  # Include all attributes from the schema
+        }
+        
+        # Add as knowledge using the implementation
+        result = await self._send_add_knowledge_prompt(
+            type="pattern",
+            content=content,
+            source=f"memory_schema_{schema_id}",
+            confidence=attributes.get("confidence", 0.7),
+            relations=[{
+                "type": "derived_from",
+                "target": f"schema_{schema_id}",
+                "weight": 1.0
+            }] if schema_id else None
+        )
+        
+        logger.info(f"Added knowledge pattern from schema: {schema_name}")
+        return result
     
     async def identify_knowledge_gaps(self) -> List[Dict[str, Any]]:
         """Identify gaps in the knowledge"""
