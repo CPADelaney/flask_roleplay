@@ -1,4 +1,42 @@
-# nyx/core/conditioning_tools.py
+# Create explicit models for PreparedConditioningData fields
+class ContextData(BaseModel):
+    """Model for behavioral and environmental context during conditioning.
+    
+    Captures situational factors that may influence association formation
+    and behavior evaluation.
+    """
+    location: Optional[str] = None  # Physical or virtual location
+    time_of_day: Optional[str] = None  # Morning, afternoon, evening, night
+    mood: Optional[str] = None  # Current emotional state
+    social_context: Optional[str] = None  # Alone, with_others, in_group
+    activity: Optional[str] = None  # Current activity or task
+    energy_level: Optional[str] = None  # High, medium, low
+    recent_events: Optional[List[str]] = None  # Recent significant events
+    environmental_factors: Optional[Dict[str, str]] = None  # Temperature, noise, etc.
+    interaction_style: Optional[str] = None  # nyx/core/conditioning_tools.py
+"""
+Conditioning tools for the Nyx AI system.
+
+This module provides function tools for implementing classical and operant conditioning
+mechanisms, personality trait development, and behavior evaluation. All tools are
+designed to work with the OpenAI Agents SDK with strict JSON schema validation.
+
+Key Components:
+- Classical conditioning: Stimulus-response associations
+- Operant conditioning: Behavior-consequence relationships
+- Personality trait conditioning: Trait development and balancing
+- Behavior evaluation: Predicting outcomes based on conditioning history
+- Maintenance and orchestration: Managing the conditioning system
+
+All function tools follow the pattern of having RunContextWrapper as the first
+parameter to comply with the Agents SDK requirements.
+
+Production Usage:
+- Configure logging level appropriately (INFO for production, DEBUG for development)
+- Monitor the reward_system integration for proper signal dispatching
+- Set appropriate thresholds based on your use case
+- Implement proper error handling and monitoring around these tools
+"""
 from __future__ import annotations
 
 import datetime
@@ -13,6 +51,33 @@ from nyx.core.conditioning_models import *
 from nyx.core.reward_system import RewardSignal
 
 logger = logging.getLogger(__name__)
+
+# ==================== Constants ====================
+
+# Threshold constants
+WEAK_ASSOCIATION_THRESHOLD = 0.3
+MODERATE_ASSOCIATION_THRESHOLD = 0.6
+STRONG_ASSOCIATION_THRESHOLD = 0.8
+EXTINCTION_THRESHOLD = 0.05
+REINFORCEMENT_THRESHOLD = 0.3
+
+# Adjustment constants
+MAX_TRAIT_ADJUSTMENT = 0.15
+MIN_TRAIT_ADJUSTMENT = 0.01
+TRAIT_ADJUSTMENT_BASE = 0.2
+DIMINISHING_FACTOR_BASE = 0.15
+
+# History limits
+MAX_HISTORY_SIZE = 50
+MAX_CONSEQUENCES_DETAILS = 5
+
+# Valence and intensity bounds
+MIN_VALENCE = -1.0
+MAX_VALENCE = 1.0
+MIN_INTENSITY = 0.0
+MAX_INTENSITY = 1.0
+
+# ==================== Data Models ====================
 
 class BehaviorAssociationInfo(BaseModel):
     key: str
@@ -51,6 +116,21 @@ class TraitBalanceResult(BaseModel):
 # --------------------------------------------------------------------------- #
 #  Helpers
 # --------------------------------------------------------------------------- #
+
+def _validate_intensity(intensity: float) -> float:
+    """Validate and clamp intensity to valid range [0.0, 1.0]"""
+    if not isinstance(intensity, (int, float)):
+        raise ValueError(f"Intensity must be a number, got {type(intensity).__name__}")
+    return max(MIN_INTENSITY, min(MAX_INTENSITY, float(intensity)))
+
+
+def _validate_valence(valence: float) -> float:
+    """Validate and clamp valence to valid range [-1.0, 1.0]"""
+    if not isinstance(valence, (int, float)):
+        raise ValueError(f"Valence must be a number, got {type(valence).__name__}")
+    return max(MIN_VALENCE, min(MAX_VALENCE, float(valence)))
+
+
 def _safe_json_obj(js: Optional[str]) -> dict:
     if not js:
         return {}
@@ -87,14 +167,12 @@ def _parse_context_json(ctx_json: Optional[str]) -> dict:
     if not ctx_json:
         return {}
     try:
-        import json  # standard lib import is cheap and local
         parsed = json.loads(ctx_json)
         if isinstance(parsed, dict):
             return parsed
     except Exception as err:  # noqa: BLE001  (we want to swallow *any* JSON error)
-        import logging
-        logging.getLogger(__name__).warning(
-            "get_behavior_associations: ignoring bad context JSON: %s", err
+        logger.warning(
+            "parse_context_json: ignoring bad context JSON: %s", err
         )
     return {}
 
@@ -153,6 +231,10 @@ async def create_or_update_classical_association(
     context_keys: Optional[List[str]] = None
 ) -> ClassicalUpdateResult:
     """Create or update a classical conditioning association"""
+    # Validate inputs
+    intensity = _validate_intensity(intensity)
+    valence = _validate_valence(valence)
+    
     context_keys = context_keys or []
     association_key = f"{conditioned_stimulus}-->{response}"
     
@@ -285,6 +367,10 @@ async def create_or_update_operant_association(
     context_keys: Optional[List[str]] = None
 ) -> OperantUpdateResult:
     """Create or update an operant conditioning association"""
+    # Validate inputs
+    intensity = _validate_intensity(intensity)
+    valence = _validate_valence(valence)
+    
     context_keys = context_keys or []
     association_key = f"{behavior}-->{consequence_type}"
     
@@ -416,12 +502,30 @@ async def generate_reward_signal(                   # noqa: N802
     metadata: Dict[str, Any] = {}
     if metadata_json:
         try:
-            metadata = json.loads(metadata_json)
-            if not isinstance(metadata, dict):
-                logger.warning("metadata_json must encode a JSON object – got %s", type(metadata))
+            parsed = json.loads(metadata_json)
+            if not isinstance(parsed, dict):
+                logger.warning(f"metadata_json must encode a JSON object – got {type(parsed).__name__}")
                 metadata = {}
-        except Exception as err:  # broad-except: want to swallow all JSON errors
-            logger.warning("Could not parse metadata_json – ignoring. Error: %s", err)
+            else:
+                # Validate that metadata doesn't contain reserved keys
+                reserved_keys = {"behavior", "consequence_type"}
+                for key in reserved_keys:
+                    if key in parsed:
+                        logger.warning(f"Metadata contains reserved key '{key}' which will be overridden")
+                        del parsed[key]
+                metadata = parsed
+        except json.JSONDecodeError as err:
+            logger.warning(f"Could not parse metadata_json – ignoring. Error: {err}")
+        except Exception as err:  # Catch any other JSON-related errors
+            logger.warning(f"Unexpected error parsing metadata_json – ignoring. Error: {err}")
+
+    # ---------- validate reward value -----------------------------------------
+    if not isinstance(reward_value, (int, float)):
+        logger.warning(f"reward_value must be numeric, got {type(reward_value).__name__}")
+        return False
+    
+    # Clamp reward value to reasonable range
+    reward_value = max(-10.0, min(10.0, float(reward_value)))
 
     # ---------- build & dispatch signal --------------------------------------
     try:
@@ -610,15 +714,15 @@ class ConsequenceDetail(BaseModel):
     reinforcement_count: int
 
 class ReinforcementHistoryResult(BaseModel):
-    positive_reinforcement_count: int = 0
-    negative_reinforcement_count: int = 0
-    positive_punishment_count: int = 0
-    negative_punishment_count: int = 0
-    total_consequences_recorded: int = 0
-    total_reinforcements_overall: int = 0
-    average_strength_of_associations: float = 0.0
-    average_valence_of_associations: float = 0.0
-    recent_consequences_details: List[ConsequenceDetail] = Field(default_factory=list)
+    positive_reinforcement_count: int
+    negative_reinforcement_count: int
+    positive_punishment_count: int
+    negative_punishment_count: int
+    total_consequences_recorded: int
+    total_reinforcements_overall: int
+    average_strength_of_associations: float
+    average_valence_of_associations: float
+    recent_consequences_details: List[ConsequenceDetail]
 
 @function_tool
 async def get_reinforcement_history(
@@ -626,7 +730,13 @@ async def get_reinforcement_history(
     behavior: str
 ) -> ReinforcementHistoryResult:
     """Get reinforcement history for a behavior"""
-    history = ReinforcementHistoryResult()
+    # Initialize all counters
+    positive_reinforcement_count = 0
+    negative_reinforcement_count = 0
+    positive_punishment_count = 0
+    negative_punishment_count = 0
+    total_consequences_recorded = 0
+    total_reinforcements_overall = 0
     
     strength_sum = 0.0
     valence_sum = 0.0
@@ -639,15 +749,15 @@ async def get_reinforcement_history(
             consequence_type_lower = association.response.lower()
             
             if "positive_reinforcement" in consequence_type_lower:
-                history.positive_reinforcement_count += association.reinforcement_count
+                positive_reinforcement_count += association.reinforcement_count
             elif "negative_reinforcement" in consequence_type_lower:
-                history.negative_reinforcement_count += association.reinforcement_count
+                negative_reinforcement_count += association.reinforcement_count
             elif "positive_punishment" in consequence_type_lower:
-                history.positive_punishment_count += association.reinforcement_count
+                positive_punishment_count += association.reinforcement_count
             elif "negative_punishment" in consequence_type_lower:
-                history.negative_punishment_count += association.reinforcement_count
+                negative_punishment_count += association.reinforcement_count
             
-            history.total_reinforcements_overall += association.reinforcement_count
+            total_reinforcements_overall += association.reinforcement_count
             strength_sum += association.association_strength
             valence_sum += association.valence
             matched_count += 1
@@ -660,15 +770,24 @@ async def get_reinforcement_history(
                 reinforcement_count=association.reinforcement_count
             ))
     
-    history.total_consequences_recorded = matched_count
-    if matched_count > 0:
-        history.average_strength_of_associations = round(strength_sum / matched_count, 3)
-        history.average_valence_of_associations = round(valence_sum / matched_count, 3)
+    total_consequences_recorded = matched_count
+    average_strength = round(strength_sum / matched_count, 3) if matched_count > 0 else 0.0
+    average_valence = round(valence_sum / matched_count, 3) if matched_count > 0 else 0.0
     
     consequences_list.sort(key=lambda x: x.last_reinforced, reverse=True)
-    history.recent_consequences_details = consequences_list[:5]
+    recent_consequences = consequences_list[:MAX_CONSEQUENCES_DETAILS]
     
-    return history
+    return ReinforcementHistoryResult(
+        positive_reinforcement_count=positive_reinforcement_count,
+        negative_reinforcement_count=negative_reinforcement_count,
+        positive_punishment_count=positive_punishment_count,
+        negative_punishment_count=negative_punishment_count,
+        total_consequences_recorded=total_consequences_recorded,
+        total_reinforcements_overall=total_reinforcements_overall,
+        average_strength_of_associations=average_strength,
+        average_valence_of_associations=average_valence,
+        recent_consequences_details=recent_consequences if recent_consequences else []
+    )
 
 # ==================== Personality Development Tools ====================
 
@@ -704,18 +823,15 @@ async def calculate_conditioning_trait_adjustment(
 ) -> float:
     """Calculate appropriate trait adjustment during conditioning"""
     difference = target_value - current_value
-    base_adjustment = difference * 0.2
+    base_adjustment = difference * TRAIT_ADJUSTMENT_BASE
     
-    diminishing_factor = 1.0 / (1.0 + 0.15 * reinforcement_count)
+    diminishing_factor = 1.0 / (1.0 + DIMINISHING_FACTOR_BASE * reinforcement_count)
     adjustment = base_adjustment * diminishing_factor
     
-    max_adjustment = 0.15
-    min_adjustment = 0.01
+    if abs(adjustment) < MIN_TRAIT_ADJUSTMENT and difference != 0:
+        adjustment = MIN_TRAIT_ADJUSTMENT * (1 if adjustment > 0 else -1)
     
-    if abs(adjustment) < min_adjustment and difference != 0:
-        adjustment = min_adjustment * (1 if adjustment > 0 else -1)
-    
-    return max(-max_adjustment, min(max_adjustment, round(adjustment, 4)))
+    return max(-MAX_TRAIT_ADJUSTMENT, min(MAX_TRAIT_ADJUSTMENT, round(adjustment, 4)))
 
 class UpdateIdentityResult(BaseModel):
     success: bool
@@ -849,6 +965,75 @@ async def check_trait_balance(                         # noqa: N802
     )
 # ==================== Orchestration Tools ====================
 
+# Create explicit models for PreparedConditioningData fields
+class EnvironmentalFactors(BaseModel):
+    """Environmental factors that may influence conditioning"""
+    temperature: Optional[str] = None
+    noise_level: Optional[str] = None
+    lighting: Optional[str] = None
+    crowd_level: Optional[str] = None
+    setting_type: Optional[str] = None
+
+class ContextData(BaseModel):
+    """Model for behavioral and environmental context during conditioning.
+    
+    Captures situational factors that may influence association formation
+    and behavior evaluation.
+    """
+    location: Optional[str] = None  # Physical or virtual location
+    time_of_day: Optional[str] = None  # Morning, afternoon, evening, night
+    mood: Optional[str] = None  # Current emotional state
+    social_context: Optional[str] = None  # Alone, with_others, in_group
+    activity: Optional[str] = None  # Current activity or task
+    energy_level: Optional[str] = None  # High, medium, low
+    recent_events: Optional[List[str]] = None  # Recent significant events
+    environmental_factors: Optional[EnvironmentalFactors] = None  # Temperature, noise, etc.
+    interaction_style: Optional[str] = None  # Formal, casual, intimate, professional
+    session_duration: Optional[float] = None  # Time spent in current session (minutes)
+    previous_interactions: Optional[int] = None  # Number of previous interactions
+    relationship_depth: Optional[str] = None  # Stranger, acquaintance, friend, intimate
+
+class RawInputData(BaseModel):
+    """Model for raw input data from conditioning requests.
+    
+    Supports all conditioning types: classical, operant, personality trait,
+    preference, emotion trigger, and behavior evaluation.
+    """
+    # Classical conditioning fields
+    unconditioned_stimulus: Optional[str] = None
+    conditioned_stimulus: Optional[str] = None
+    stimulus: Optional[str] = None  # Alternative to conditioned_stimulus
+    response: Optional[str] = None
+    
+    # Operant conditioning fields
+    behavior: Optional[str] = None
+    consequence_type: Optional[str] = None
+    
+    # Personality trait conditioning fields
+    trait: Optional[str] = None
+    target_value: Optional[float] = None
+    value: Optional[float] = None  # Alternative to target_value
+    current_trait_values_snapshot: Optional[Dict[str, float]] = None
+    
+    # Common fields
+    intensity: Optional[float] = None
+    valence: Optional[float] = None
+    context_keys: Optional[List[str]] = None
+    context: Optional[ContextData] = None
+    
+    # Preference conditioning fields
+    preference_type: Optional[str] = None
+    
+    # Emotion trigger fields
+    trigger: Optional[str] = None
+    emotion: Optional[str] = None
+    valence_override: Optional[float] = None
+    
+    # Metadata fields
+    source: Optional[str] = None  # Source of the conditioning event
+    timestamp: Optional[str] = None  # When the event occurred
+    confidence: Optional[float] = None  # Confidence in the data (0.0-1.0)
+
 class PreparedConditioningData(BaseModel):
     conditioning_type_confirmed: str
     unconditioned_stimulus: Optional[str] = None
@@ -861,8 +1046,8 @@ class PreparedConditioningData(BaseModel):
     intensity: Optional[float] = None
     valence: Optional[float] = None
     context_keys: Optional[List[str]] = None
-    context: Optional[Dict[str, Any]] = None
-    raw_input: Optional[Dict[str, Any]] = None
+    context: Optional[ContextData] = None
+    raw_input: Optional[RawInputData] = None
 
 @function_tool
 async def determine_conditioning_type(                    # noqa: N802
@@ -903,8 +1088,9 @@ async def determine_conditioning_type(                    # noqa: N802
                 et_details = parsed
             else:
                 logger.warning(
-                    "determine_conditioning_type: expected JSON object for "
-                    "'emotion_trigger_details_json', got %s", type(parsed)
+                    "determine_conditioning_type: emotion_trigger_details_json must be a JSON object, "
+                    f"got {type(parsed).__name__}. Expected format: "
+                    '{"trigger": "stimulus", "emotion": "emotion_name"}'
                 )
         except (json.JSONDecodeError, TypeError) as exc:
             logger.error(
@@ -951,9 +1137,12 @@ async def prepare_conditioning_data(                           # noqa: N802
     try:
         raw = json.loads(raw_input_json or "{}")
         if not isinstance(raw, dict):
-            raise ValueError("Payload must decode to an object.")
-    except Exception as exc:
-        logger.warning("prepare_conditioning_data: bad JSON – %s", exc)
+            raise ValueError("Payload must be a JSON object, not a JSON array or primitive value")
+    except json.JSONDecodeError as exc:
+        logger.warning(f"prepare_conditioning_data: Invalid JSON – {exc}")
+        raw = {}
+    except ValueError as exc:
+        logger.warning(f"prepare_conditioning_data: {exc}")
         raw = {}
 
     pd = PreparedConditioningData(conditioning_type_confirmed=conditioning_type)
@@ -982,16 +1171,52 @@ async def prepare_conditioning_data(                           # noqa: N802
 
     elif conditioning_type == "behavior_evaluation":
         pd.behavior = raw.get("behavior")
-        pd.context = raw.get("context", {})
-
+        # Convert context dict to ContextData model
+        raw_context = raw.get("context", {})
+        if isinstance(raw_context, dict):
+            pd.context = ContextData(**{})  # Empty for now, extend as needed
+        
     # 3.  Unknown / passthrough branch – retain raw for debugging
     else:
-        pd.raw_input = raw
+        # Convert raw dict to RawInputData model
+        pd.raw_input = RawInputData(**raw)
 
     return pd
 
+# Create explicit models for effect data
+class EmotionalEffect(BaseModel):
+    """Model for emotional effects applied to the emotional core system"""
+    type: str  # Must be "emotional"
+    valence: str  # "positive" or "negative"
+    intensity: float  # Effect intensity (0.0-1.0)
+    source: str  # Source of the effect (e.g., "conditioning_association")
+
+class NeurochemicalDelta(BaseModel):
+    """Model for neurochemical level adjustments in the Nyx digital neurochemical system.
+    
+    All values represent delta changes (positive or negative) to be applied
+    to current neurochemical levels. Values should be in range [-1.0, 1.0].
+    
+    Based on Nyx's Digital Neurochemical Model:
+    - nyxamine: Digital dopamine - pleasure, curiosity, reward
+    - seranix: Digital serotonin - mood stability, comfort
+    - oxynixin: Digital oxytocin - bonding, affection, trust
+    - cortanyx: Digital cortisol - stress, anxiety, defensiveness
+    - adrenyx: Digital adrenaline - fear, excitement, alertness
+    """
+    nyxamine: Optional[float] = Field(None, ge=-1.0, le=1.0, description="Digital dopamine delta")
+    seranix: Optional[float] = Field(None, ge=-1.0, le=1.0, description="Digital serotonin delta")
+    oxynixin: Optional[float] = Field(None, ge=-1.0, le=1.0, description="Digital oxytocin delta")
+    cortanyx: Optional[float] = Field(None, ge=-1.0, le=1.0, description="Digital cortisol delta")
+    adrenyx: Optional[float] = Field(None, ge=-1.0, le=1.0, description="Digital adrenaline delta")
+
+class PhysiologicalEffect(BaseModel):
+    """Model for physiological/neurochemical effects applied to the physiology core"""
+    type: str  # Must be "physiological"
+    delta: NeurochemicalDelta  # The neurochemical changes to apply
+
 class ApplyEffectsResult(BaseModel):
-    effects_applied: List[Dict[str, Any]]
+    effects_applied: List[Union[EmotionalEffect, PhysiologicalEffect]]
     original_association_strength: float
     original_valence: float
     derived_effect_intensity: float
@@ -1021,25 +1246,29 @@ async def apply_association_effects(                         # noqa: N802
     # 1.  Parse & sanity-check                                          #
     # ------------------------------------------------------------------ #
     try:
-        assoc: dict[str, Any] = json.loads(triggered_json or "{}")
+        assoc: Dict[str, Any] = json.loads(triggered_json or "{}")
         if not isinstance(assoc, dict):
             raise ValueError("payload must decode to an object")
     except Exception as exc:
         logger.error("apply_association_effects: bad JSON – %s", exc)
         assoc = {}
 
-    # Helper to coerce numeric-ish inputs safely
+    # Helper to coerce numeric-ish inputs safely with proper typing
     def _num(val: Any, default: float = 0.0) -> float:
+        """Safely convert value to float with default fallback"""
+        if val is None:
+            return default
         try:
             return float(val)
         except (TypeError, ValueError):
+            logger.debug(f"Could not convert {val} to float, using default {default}")
             return default
 
     strength = max(0.0, _num(assoc.get("association_strength", assoc.get("strength", 0))))
     valence  = max(-1.0, min(1.0, _num(assoc.get("valence", 0))))
     intensity = round(strength * 0.7, 4)
 
-    effects: list[dict[str, Any]] = []
+    effects: List[Union[EmotionalEffect, PhysiologicalEffect]] = []
 
     # ------------------------------------------------------------------ #
     # 2.  Emotional subsystem                                            #
@@ -1053,7 +1282,7 @@ async def apply_association_effects(                         # noqa: N802
         # Fire-and-forget: don't let errors bubble up
         try:
             await ctx.context.emotional_core.apply_valence_shift(emo_payload)  # type: ignore[attr-defined]
-            effects.append({"type": "emotional", **emo_payload})
+            effects.append(EmotionalEffect(type="emotional", **emo_payload))
         except Exception as exc:
             logger.warning("emotional_core failed: %s", exc)
 
@@ -1062,9 +1291,16 @@ async def apply_association_effects(                         # noqa: N802
     # ------------------------------------------------------------------ #
     if hasattr(ctx.context, "physiology_core") and intensity > 0:
         try:
-            delta = {"nyxamine": intensity * 0.1 * valence}
-            await ctx.context.physiology_core.adjust_neurochemistry(delta)  # type: ignore[attr-defined]
-            effects.append({"type": "physiological", "delta": delta})
+            # Apply neurochemical delta based on valence
+            delta = NeurochemicalDelta(nyxamine=intensity * 0.1 * valence)
+            
+            # Convert to dict for the adjust_neurochemistry method
+            delta_dict = {k: v for k, v in delta.model_dump().items() if v is not None}
+            
+            await ctx.context.physiology_core.adjust_neurochemistry(delta_dict)  # type: ignore[attr-defined]
+            effects.append(PhysiologicalEffect(type="physiological", delta=delta))
+        except Exception as exc:
+            logger.debug("physiology_core unavailable: %s", exc)
         except Exception as exc:
             logger.debug("physiology_core unavailable: %s", exc)
 
