@@ -947,8 +947,9 @@ ALWAYS use the exact tool. NEVER output JSON like {"success": true, ...}""",
             ],
             model_settings=ModelSettings(
                 temperature=0.0,
-                tool_choice="required"  # Put it HERE, inside ModelSettings
+                tool_choice="required"
             ),
+            tool_use_behavior="stop_on_first_tool",
             model="gpt-4.1-mini"
         )
         logger.info("NeedsSystem initialized with Agent SDK and refactored tools")
