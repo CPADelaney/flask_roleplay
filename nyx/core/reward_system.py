@@ -33,11 +33,63 @@ class RewardType(str, Enum):
     NEGATIVE = "negative"
     NEUTRAL = "neutral"
 
+# Create explicit models for context data
+class RewardContextData(BaseModel):
+    """Context information for reward signals"""
+    # Common fields
+    action: Optional[str] = None
+    state_key: Optional[str] = None
+    scenario_type: Optional[str] = None
+    interaction_type: Optional[str] = None
+    body_region: Optional[str] = None
+    
+    # Submission-specific fields
+    submission_type: Optional[str] = None
+    user_id: Optional[str] = None
+    novelty: Optional[float] = None
+    depravity_hint: Optional[float] = None
+    mood_snapshot: Optional['MoodSnapshot'] = None
+    
+    # Conditioning-specific fields
+    association_key: Optional[str] = None
+    association_type: Optional[str] = None
+    is_reinforcement: Optional[bool] = None
+    is_positive: Optional[bool] = None
+    intensity: Optional[float] = None
+    agent_analysis: Optional[str] = None
+    
+    # General fields
+    timestamp: Optional[str] = None
+    error: Optional[str] = None
+    original_data: Optional[str] = None  # JSON string for complex data
+    
+    # Computed fields
+    depravity_score: Optional[float] = None
+    amplified_depravity: Optional[float] = None
+
+class MoodSnapshot(BaseModel):
+    """Snapshot of mood state"""
+    arousal: float = 0.5
+    control: float = 0.0
+    valence: float = 0.0
+
+class StateData(BaseModel):
+    """State information for reward memories"""
+    state_type: str = "general"
+    state_id: Optional[str] = None
+    parameters: Optional[str] = None  # JSON string for complex state data
+
+class RewardMetadata(BaseModel):
+    """Additional metadata for reward memories"""
+    source: Optional[str] = None
+    tags: Optional[List[str]] = None
+    notes: Optional[str] = None
+
 class RewardSignal(BaseModel):
     """Schema for nyxaminergic reward signal"""
     value: float = Field(..., description="Reward value (-1.0 to 1.0)", ge=-1.0, le=1.0)
     source: str = Field(..., description="Source generating the reward (e.g., GoalManager, user_compliance)")
-    context: Dict[str, Any] = Field(default_factory=dict, description="Context info")
+    context: RewardContextData = Field(default_factory=RewardContextData, description="Context info")
     timestamp: str = Field(default_factory=lambda: datetime.datetime.now().isoformat())
     
     @property
@@ -52,13 +104,13 @@ class RewardSignal(BaseModel):
 
 class RewardMemory(BaseModel):
     """Schema for stored reward memory"""
-    state: Dict[str, Any] = Field(..., description="State that led to reward")
+    state: StateData = Field(..., description="State that led to reward")
     action: str = Field(..., description="Action that was taken")
     reward: float = Field(..., description="Reward value received")
-    next_state: Optional[Dict[str, Any]] = Field(None, description="Resulting state")
+    next_state: Optional[StateData] = Field(None, description="Resulting state")
     timestamp: str = Field(..., description="When this memory was created")
     source: str = Field("unknown", description="Source of reward")
-    metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
+    metadata: RewardMetadata = Field(default_factory=RewardMetadata, description="Additional metadata")
     novelty_index: float = Field(0.5, ge=0.0, le=1.0, description="Novelty or escalation of the action (higher = more novel)")
 
 class ActionValue(BaseModel):
@@ -76,12 +128,39 @@ class ActionValue(BaseModel):
         """Whether this action value has enough updates to be considered reliable."""
         return self.update_count >= 3 and self.confidence >= 0.5
 
+# Create explicit models for analysis output
+class PatternData(BaseModel):
+    """Identified pattern in reward system"""
+    pattern_type: str
+    description: str
+    frequency: Optional[float] = None
+    impact: Optional[float] = None
+
+class SuggestionData(BaseModel):
+    """Suggestion for reward system improvement"""
+    suggestion_type: str
+    description: str
+    priority: Optional[str] = None  # "high", "medium", "low"
+    expected_impact: Optional[str] = None
+
+class LearningParameters(BaseModel):
+    """Learning parameters for the reward system"""
+    learning_rate: float = Field(0.1, ge=0.01, le=1.0)
+    discount_factor: float = Field(0.9, ge=0.0, le=0.99)
+    exploration_rate: float = Field(0.2, ge=0.0, le=1.0)
+
+class EffectivenessMetrics(BaseModel):
+    """Metrics for reward system effectiveness"""
+    success_rate: float = Field(0.0, ge=0.0, le=1.0)
+    learning_efficiency: float = Field(0.0, ge=0.0, le=1.0)
+    adaptation_speed: float = Field(0.0, ge=0.0, le=1.0)
+
 class RewardAnalysisOutput(BaseModel):
     """Output schema for reward analysis agent"""
-    patterns: List[Dict[str, Any]] = Field(..., description="Identified reward patterns")
-    suggestions: List[Dict[str, Any]] = Field(..., description="Suggestions for improvement")
-    learning_params: Dict[str, float] = Field(..., description="Recommended learning parameters")
-    effectiveness: Dict[str, float] = Field(..., description="Effectiveness metrics")
+    patterns: List[PatternData] = Field(..., description="Identified reward patterns")
+    suggestions: List[SuggestionData] = Field(..., description="Suggestions for improvement")
+    learning_params: LearningParameters = Field(..., description="Recommended learning parameters")
+    effectiveness: EffectivenessMetrics = Field(..., description="Effectiveness metrics")
     insights: str = Field(..., description="Key insights about reward system")
 
 # Function tools for the reward system
@@ -97,11 +176,18 @@ async def _categorize_reward_logic(reward_value: float) -> RewardType:
     else:
         return RewardType.NEUTRAL
 
+# Create explicit model for nyxamine change result
+class NyxamineChangeResult(BaseModel):
+    nyxamine_change: float
+    old_nyxamine: float
+    new_nyxamine: float
+    is_significant: bool
+
 async def _calculate_nyxamine_change_logic(
     reward_value: float,
     current_nyxamine: float,
     baseline_nyxamine: float = 0.5
-) -> Dict[str, float]:
+) -> NyxamineChangeResult:
     """
     Core logic: Calculate the change in nyxamine based on a reward value
     """
@@ -110,12 +196,12 @@ async def _calculate_nyxamine_change_logic(
     else:
         nyxamine_change = reward_value * 0.2
     new_nyxamine = max(0.0, min(1.0, current_nyxamine + nyxamine_change))
-    return {
-        "nyxamine_change": nyxamine_change,
-        "old_nyxamine": current_nyxamine,
-        "new_nyxamine": new_nyxamine,
-        "is_significant": abs(nyxamine_change) > 0.1
-    }
+    return NyxamineChangeResult(
+        nyxamine_change=nyxamine_change,
+        old_nyxamine=current_nyxamine,
+        new_nyxamine=new_nyxamine,
+        is_significant=abs(nyxamine_change) > 0.1
+    )
 
 async def _calculate_submission_value_logic(
     submission_type: str,
@@ -160,6 +246,16 @@ calculate_submission_value_tool = function_tool(
     description_override="Calculate base reward value for submission types (integrates depravity/novelty)."
 )   
 
+# Import MoodState if it's not already defined
+try:
+    from nyx.core.emotions.mood import MoodState
+except ImportError:
+    # Define a simple placeholder if import fails
+    class MoodState(BaseModel):
+        arousal: float = 0.5
+        control: float = 0.0
+        valence: float = 0.0
+
 class RewardSignalProcessor:
     """
     Processes reward signals and implements reward-based learning.
@@ -174,8 +270,8 @@ class RewardSignalProcessor:
         self.needs_system = needs_system
 
         
-        # Reward signal history
-        self.reward_history: List[Dict[str, Any]] = []
+        # Reward signal history - store as JSON strings to avoid Dict[str, Any]
+        self.reward_history: List[str] = []  # JSON serialized history entries
         self.max_history_size = 1000
         
         # Reward learning data
@@ -301,15 +397,15 @@ class RewardSignalProcessor:
                 # 1. Update nyxamine levels
                 nyxamine_change = await self._update_nyxamine_level(reward.value)
                 
-                # 2. Store in history
+                # 2. Store in history as JSON string
                 history_entry = {
                     "value": reward.value,
                     "source": reward.source,
-                    "context": reward.context,
+                    "context": reward.context.model_dump(),
                     "timestamp": reward.timestamp,
                     "nyxamine_level": self.current_nyxamine
                 }
-                self.reward_history.append(history_entry)
+                self.reward_history.append(json.dumps(history_entry))
                 if len(self.reward_history) > self.max_history_size:
                     self.reward_history = self.reward_history[-self.max_history_size:]
                 
@@ -352,8 +448,8 @@ class RewardSignalProcessor:
                 amplified_depravity = min(1.0, depravity_score + mood_boost)
 
                 # Add to context for future prediction systems
-                reward.context["depravity_score"] = depravity_score
-                reward.context["amplified_depravity"] = amplified_depravity
+                reward.context.depravity_score = depravity_score
+                reward.context.amplified_depravity = amplified_depravity
                 adjusted_value_for_learning = reward.value + amplified_depravity * 0.1 # Use adjusted value for learning only?
 
                 # 6. Trigger learning if reward is significant
@@ -364,7 +460,7 @@ class RewardSignalProcessor:
                     reward_for_learning = reward # Pass the original reward object
                     learning_updates = await self._trigger_learning(reward_for_learning)
                     
-                action_name = reward.context.get("action")
+                action_name = reward.context.action
                 
                 if action_name:
                     old_decay = self.novelty_decay[action_name]
@@ -414,31 +510,33 @@ class RewardSignalProcessor:
         )
 
         mood_state_obj: Optional[MoodState] = None
-        mood_snapshot = {"arousal": 0.5, "control": 0.0, "valence": 0.0} # Defaults
+        mood_snapshot = MoodSnapshot()  # Use the model with defaults
         try:
             if self.mood_manager:
                  mood_state_obj = await self.mood_manager.get_current_mood() # Returns MoodState
                  if mood_state_obj:
-                     mood_snapshot = {
-                         "arousal": mood_state_obj.arousal,
-                         "control": mood_state_obj.control,
-                         "valence": mood_state_obj.valence
-                     }
+                     mood_snapshot = MoodSnapshot(
+                         arousal=mood_state_obj.arousal,
+                         control=mood_state_obj.control,
+                         valence=mood_state_obj.valence
+                     )
         except Exception as mood_err:
             logger.warning(f"Error getting mood state during submission reward: {mood_err}", exc_info=True)
     
+        context = RewardContextData(
+            submission_type=submission_type,
+            user_id=user_id,
+            action=action_key,
+            novelty=novelty_value,
+            depravity_hint=depravity,
+            mood_snapshot=mood_snapshot,
+            timestamp=datetime.datetime.now().isoformat()
+        )
+        
         return await self.process_reward_signal(RewardSignal(
             value=reward_value,
             source="user_submission",
-            context={
-                "submission_type": submission_type,
-                "user_id": user_id,
-                "action": action_key,
-                "novelty": novelty_value,
-                "depravity_hint": depravity,
-                "mood_snapshot": mood_snapshot,
-                "timestamp": datetime.datetime.now().isoformat()
-            }
+            context=context
         ))
 
     def estimate_depravity(self, submission_type: str) -> float:
@@ -461,7 +559,7 @@ class RewardSignalProcessor:
     def _estimate_depravity_level(self, reward: RewardSignal) -> float:
         """Estimate how depraved this reward is based on source/type."""
         source = reward.source.lower()
-        context = reward.context or {}
+        context = reward.context
         
         depravity_keywords = {
             "humiliation": 0.9,
@@ -476,7 +574,7 @@ class RewardSignalProcessor:
         }
     
         # Try to extract from submission_type or fallback to source
-        sub_type = context.get("submission_type", "").lower()
+        sub_type = (context.submission_type or "").lower()
         depravity_score = depravity_keywords.get(sub_type, depravity_keywords.get(source, 0.3))
     
         # Store recent depravity
@@ -558,28 +656,30 @@ class RewardSignalProcessor:
     
                 # 🧠 Mood snapshot
                 mood = await self.mood_manager.get_current_mood() if self.mood_manager else None
-                mood_snapshot = {
-                    "arousal": getattr(mood, "arousal", 0.5),
-                    "control": getattr(mood, "control", 0.0),
-                    "valence": getattr(mood, "valence", 0.0)
-                }
+                mood_snapshot = MoodSnapshot(
+                    arousal=getattr(mood, "arousal", 0.5),
+                    control=getattr(mood, "control", 0.0),
+                    valence=getattr(mood, "valence", 0.0)
+                )
     
                 # 🧾 Build full reward signal
+                context = RewardContextData(
+                    association_key=association_key,
+                    association_type=association_type,
+                    is_reinforcement=is_reinforcement,
+                    is_positive=is_positive,
+                    intensity=intensity,
+                    agent_analysis=str(analysis) if analysis else None,
+                    action=action_key,
+                    novelty=novelty_value,
+                    mood_snapshot=mood_snapshot,
+                    timestamp=datetime.datetime.now().isoformat()
+                )
+                
                 reward_signal = RewardSignal(
                     value=reward_value,
                     source="conditioning_system",
-                    context={
-                        "association_key": association_key,
-                        "association_type": association_type,
-                        "is_reinforcement": is_reinforcement,
-                        "is_positive": is_positive,
-                        "intensity": intensity,
-                        "agent_analysis": analysis,
-                        "action": action_key,
-                        "novelty": novelty_value,
-                        "mood_snapshot": mood_snapshot,
-                        "timestamp": datetime.datetime.now().isoformat()
-                    }
+                    context=context
                 )
     
                 return await self.process_reward_signal(reward_signal)
@@ -588,16 +688,18 @@ class RewardSignalProcessor:
                 logger.error(f"Error processing conditioning reward: {e}")
                 
                 # Fallback version
+                fallback_context = RewardContextData(
+                    error=str(e),
+                    original_data=json.dumps(conditioning_result),
+                    action="conditioning::fallback",
+                    novelty=0.5,
+                    timestamp=datetime.datetime.now().isoformat()
+                )
+                
                 return await self.process_reward_signal(RewardSignal(
                     value=0.1,
                     source="conditioning_system_fallback",
-                    context={
-                        "error": str(e),
-                        "original_data": conditioning_result,
-                        "action": "conditioning::fallback",
-                        "novelty": 0.5,
-                        "timestamp": datetime.datetime.now().isoformat()
-                    }
+                    context=fallback_context
                 ))
 
     async def _update_nyxamine_level(self, reward_value: float) -> float:
@@ -620,8 +722,8 @@ class RewardSignalProcessor:
                 baseline_nyxamine=self.baseline_nyxamine
             )
     
-            self.current_nyxamine = result["new_nyxamine"]
-            return result["nyxamine_change"]
+            self.current_nyxamine = result.new_nyxamine
+            return result.nyxamine_change
 
     # --- update_neurochemical method (previously refactored, keep the fixed version) ---
     async def update_neurochemical(self, chemical: str, value: float, source: str = "system") -> Dict[str, Any]:
@@ -870,8 +972,8 @@ class RewardSignalProcessor:
                 # General identity updates for significant rewards
                 elif abs(reward.value) >= self.identity_update_threshold:
                     # Extract context for tailored identity updates
-                    scenario_type = reward.context.get("scenario_type", "general")
-                    interaction_type = reward.context.get("interaction_type", "general")
+                    scenario_type = reward.context.scenario_type or "general"
+                    interaction_type = reward.context.interaction_type or "general"
                     
                     # Base impact strength on reward value (abs for magnitude)
                     base_impact_strength = abs(reward.value) * 0.4  # Base scaling factor for identity impact
@@ -942,7 +1044,7 @@ class RewardSignalProcessor:
                 # General significant reward somatic effects
                 elif abs(reward.value) >= self.significant_reward_threshold:
                     # Determine target region from context if possible, else default
-                    body_region = reward.context.get("body_region", "core")
+                    body_region = reward.context.body_region or "core"
                     
                     # For positive rewards
                     if reward.value > 0:  
@@ -992,28 +1094,35 @@ class RewardSignalProcessor:
         if abs(reward.value) >= habit_threshold:
             try:
                 # Extract action and state from context
-                action = reward.context.get("action")
-                state = reward.context.get("state")
+                action = reward.context.action
+                state_json = reward.context.original_data  # Assume state is in original_data
                 
-                if action and isinstance(state, dict):
-                    # Create or update habit strength
-                    state_key = self._create_state_key(state)
+                if action and state_json:
+                    # Parse state from JSON
+                    try:
+                        state = json.loads(state_json) if isinstance(state_json, str) else {}
+                    except:
+                        state = {}
                     
-                    # Current habit strength
-                    current_strength = self.habits[state_key].get(action, 0.0)
-                    
-                    # Learning rate increases with reward magnitude
-                    habit_learning_rate = 0.3
-                    if is_dominance_reward:
-                        habit_learning_rate = 0.5  # Faster habit formation for dominance
-                    
-                    # Update strength (positive rewards strengthen, negative weaken)
-                    new_strength = current_strength + (reward.value * habit_learning_rate)
-                    new_strength = max(0.0, min(1.0, new_strength))  # Constrain to 0-1
-                    
-                    self.habits[state_key][action] = new_strength
-                    effects["habit"] = True
-                    logger.debug(f"Updated habit strength for action '{action}': {current_strength:.2f} -> {new_strength:.2f}")
+                    if isinstance(state, dict):
+                        # Create or update habit strength
+                        state_key = self._create_state_key(state)
+                        
+                        # Current habit strength
+                        current_strength = self.habits[state_key].get(action, 0.0)
+                        
+                        # Learning rate increases with reward magnitude
+                        habit_learning_rate = 0.3
+                        if is_dominance_reward:
+                            habit_learning_rate = 0.5  # Faster habit formation for dominance
+                        
+                        # Update strength (positive rewards strengthen, negative weaken)
+                        new_strength = current_strength + (reward.value * habit_learning_rate)
+                        new_strength = max(0.0, min(1.0, new_strength))  # Constrain to 0-1
+                        
+                        self.habits[state_key][action] = new_strength
+                        effects["habit"] = True
+                        logger.debug(f"Updated habit strength for action '{action}': {current_strength:.2f} -> {new_strength:.2f}")
             except Exception as e:
                 logger.error(f"Error in habit formation: {e}")
         
@@ -1094,18 +1203,42 @@ class RewardSignalProcessor:
     
         try:
             # Extract state and action from context
-            current_state = reward.context.get("state")
-            action = reward.context.get("action")
-            next_state = reward.context.get("next_state")
-            current_novelty = reward.context.get("novelty", 0.5)
+            current_state_json = reward.context.original_data
+            action = reward.context.action
+            next_state_json = None  # Could be in context if available
+            current_novelty = reward.context.novelty or 0.5
     
+            # Parse states
+            current_state = None
+            next_state = None
+            
+            if current_state_json:
+                try:
+                    current_state = json.loads(current_state_json) if isinstance(current_state_json, str) else {}
+                except:
+                    current_state = {}
+                    
             if current_state and action:
                 # ✍️ Store memory (w/ novelty score)
+                state_data = StateData(
+                    state_type="reward_state",
+                    state_id=self._create_state_key(current_state),
+                    parameters=json.dumps(current_state)
+                )
+                
+                next_state_data = None
+                if next_state:
+                    next_state_data = StateData(
+                        state_type="reward_state",
+                        state_id=self._create_state_key(next_state),
+                        parameters=json.dumps(next_state)
+                    )
+                
                 memory = RewardMemory(
-                    state=current_state,
+                    state=state_data,
                     action=action,
                     reward=reward.value,
-                    next_state=next_state,
+                    next_state=next_state_data,
                     timestamp=datetime.datetime.now().isoformat(),
                     source=reward.source,
                     novelty_index=current_novelty
@@ -1189,11 +1322,19 @@ class RewardSignalProcessor:
         samples = random.sample(self.reward_memories, num_samples)
         
         for memory in samples:
-            # Extract data
-            state = memory.state
+            # Extract data - parse state from JSON
+            try:
+                state = json.loads(memory.state.parameters) if memory.state.parameters else {}
+            except:
+                state = {}
+                
             action = memory.action
             reward_value = memory.reward
-            next_state = memory.next_state
+            
+            try:
+                next_state = json.loads(memory.next_state.parameters) if memory.next_state and memory.next_state.parameters else None
+            except:
+                next_state = None
             
             # Create state keys
             state_key = self._create_state_key(state)
@@ -1371,11 +1512,11 @@ class RewardSignalProcessor:
         habit = habit_strengths.get(selected_action, 0.0)
         confidence = (q_value * 0.4) + (habit * 0.3) + (avg_confidence * 0.3)
     
-        mood_snapshot_for_return = { # Create dict for return value
-             "arousal": arousal,
-             "control": control,
-             "valence": valence
-        }
+        mood_snapshot_for_return = MoodSnapshot(
+            arousal=arousal,
+            control=control,
+            valence=valence
+        )
     
         return {
             "best_action": selected_action,
@@ -1385,7 +1526,7 @@ class RewardSignalProcessor:
             "confidence": confidence,
             "is_exploration": is_exploration,
             "selection_method": selection_method,
-            "mood_snapshot": mood_snapshot_for_return,
+            "mood_snapshot": mood_snapshot_for_return.model_dump(),
             "combined_score": combined_scores.get(selected_action)
         }
 
@@ -1469,11 +1610,17 @@ class RewardSignalProcessor:
             reward_value = -success_level
         # else reward_value stays 0.0 for neutral outcomes
         
+        # Convert dict context to RewardContextData
+        context_data = RewardContextData()
+        for key, value in context.items():
+            if hasattr(context_data, key):
+                setattr(context_data, key, value)
+        
         # Create reward signal
         return RewardSignal(
             value=reward_value,
             source=context.get("source", "internal_evaluation"),
-            context=context,
+            context=context_data,
             timestamp=datetime.datetime.now().isoformat()
         )
     
@@ -1508,8 +1655,14 @@ class RewardSignalProcessor:
             # Get statistics and prepare context
             stats = await self.get_reward_statistics()
             
-            # Sample recent rewards
-            recent_rewards = self.reward_history[-20:] if self.reward_history else []
+            # Sample recent rewards - parse from JSON strings
+            recent_reward_jsons = self.reward_history[-20:] if self.reward_history else []
+            recent_rewards = []
+            for rj in recent_reward_jsons:
+                try:
+                    recent_rewards.append(json.loads(rj))
+                except:
+                    pass
             
             # Sample action values (top and bottom performers)
             action_values = []
@@ -1559,21 +1712,21 @@ class RewardSignalProcessor:
                 # Apply any recommended parameter changes
                 if hasattr(analysis, "learning_params"):
                     recommended_params = analysis.learning_params
-                    if "learning_rate" in recommended_params:
-                        self.learning_rate = max(0.01, min(1.0, recommended_params["learning_rate"]))
-                    if "discount_factor" in recommended_params:
-                        self.discount_factor = max(0.0, min(0.99, recommended_params["discount_factor"]))
-                    if "exploration_rate" in recommended_params:
-                        self.exploration_rate = max(0.0, min(1.0, recommended_params["exploration_rate"]))
+                    if hasattr(recommended_params, "learning_rate"):
+                        self.learning_rate = max(0.01, min(1.0, recommended_params.learning_rate))
+                    if hasattr(recommended_params, "discount_factor"):
+                        self.discount_factor = max(0.0, min(0.99, recommended_params.discount_factor))
+                    if hasattr(recommended_params, "exploration_rate"):
+                        self.exploration_rate = max(0.0, min(1.0, recommended_params.exploration_rate))
                 
                 # Return the analysis
                 return {
                     "status": "success",
                     "analyzed_at": datetime.datetime.now().isoformat(),
-                    "patterns": analysis.patterns,
-                    "suggestions": analysis.suggestions,
-                    "learning_params": analysis.learning_params,
-                    "effectiveness": analysis.effectiveness,
+                    "patterns": [p.model_dump() for p in analysis.patterns],
+                    "suggestions": [s.model_dump() for s in analysis.suggestions],
+                    "learning_params": analysis.learning_params.model_dump(),
+                    "effectiveness": analysis.effectiveness.model_dump(),
                     "insights": analysis.insights,
                     "updated_parameters": {
                         "learning_rate": self.learning_rate,
