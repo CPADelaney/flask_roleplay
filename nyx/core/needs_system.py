@@ -907,6 +907,16 @@ async def get_total_drive_tool_impl(ctx: RunContextWrapper[NeedsSystemContext]) 
     needs_ctx = ctx.context
     return needs_ctx.needs_system_ref._get_total_drive_logic() # Call logic method
 
+AgentOutput = Union[
+    DecreaseNeedResult,
+    DriveStrengthsResponse,
+    NeedSatisfactionResult,
+    NeedsStateResponse,
+    NeedsByCategoryResponse,
+    MostUnfulfilledNeedResponse,
+    ResetNeedResponse
+]
+
 @function_tool
 async def reset_need_to_default_tool_impl(
     ctx: RunContextWrapper[NeedsSystemContext],
@@ -961,9 +971,10 @@ ALWAYS use the exact tool. NEVER output JSON like {"success": true, ...}""",
                 get_total_drive_tool_impl,
                 reset_need_to_default_tool_impl
             ],
+            output_type=AgentOutput,  
             model_settings=ModelSettings(
                 temperature=0.0,
-                tool_choice="required"
+                tool_choice="required",
             ),
             tool_use_behavior="stop_on_first_tool",
             model="gpt-4.1-mini"
