@@ -457,7 +457,6 @@ async def satisfy_need(
         
         return result
 
-@function_tool
 async def decrease_need(self, name: str, amount: float, reason: Optional[str] = None) -> DecreaseNeedResult:
     """Public API to decrease a need with robust error handling."""
     reason_provided = reason if reason is not None else "generic_decrease_api_call"
@@ -466,7 +465,7 @@ async def decrease_need(self, name: str, amount: float, reason: Optional[str] = 
     prompts = [
         f"Use the decrease_need_tool_impl tool with need_name='{name}', amount={amount}, reason='{reason_provided}'",
         f"Call decrease_need_tool_impl(need_name='{name}', amount={amount}, reason='{reason_provided}')",
-        f"Decrease the need named '{name}' by an amount of {amount}. The reason is: '{reason_provided}'."
+        f"decrease_need_tool_impl: {name}, {amount}, {reason_provided}"
     ]
     
     for i, prompt in enumerate(prompts):
@@ -479,7 +478,13 @@ async def decrease_need(self, name: str, amount: float, reason: Optional[str] = 
                 context=self.context
             )
             
-            logger.debug(f"Agent returned type: {type(result.final_output)}")
+            # Add detailed debugging
+            logger.debug(f"Result object: {result}")
+            logger.debug(f"Result type: {type(result)}")
+            logger.debug(f"Result final_output type: {type(result.final_output)}")
+            logger.debug(f"Result final_output value: {result.final_output}")
+            if hasattr(result, '__dict__'):
+                logger.debug(f"Result attributes: {list(result.__dict__.keys())}")
             
             # Check if we got the expected type
             if isinstance(result.final_output, DecreaseNeedResult):
@@ -488,7 +493,7 @@ async def decrease_need(self, name: str, amount: float, reason: Optional[str] = 
             
             # Fallback 1: Try to parse JSON string
             elif isinstance(result.final_output, str):
-                logger.warning(f"Agent returned string instead of using tool. Attempting JSON parse...")
+                logger.warning(f"Agent returned string instead of using tool. Content: {result.final_output[:200]}...")
                 try:
                     import json
                     # Try to parse as JSON
@@ -521,6 +526,8 @@ async def decrease_need(self, name: str, amount: float, reason: Optional[str] = 
             
         except Exception as e:
             logger.error(f"Error during agent call attempt {i+1}: {e}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
             
         # If this attempt failed and it's not the last one, continue
         if i < len(prompts) - 1:
@@ -836,9 +843,18 @@ async def decrease_need_tool_impl(
     need_name: str,
     amount: float,
     reason: Optional[str] = None
-) -> DecreaseNeedResult:  # Changed from Dict[str, Any]
+) -> DecreaseNeedResult:
     """
     Tool: Decreases the satisfaction level of a need (increases deficit).
+    
+    Args:
+        ctx: The context wrapper containing the needs system context
+        need_name: Name of the need to decrease
+        amount: Amount to decrease by (0.0-1.0)
+        reason: Optional reason for the decrease
+        
+    Returns:
+        DecreaseNeedResult with the outcome of the operation
     """
     needs_ctx = ctx.context
     reason_provided = reason if reason is not None else "tool_decrease_unspecified"
