@@ -1875,6 +1875,228 @@ class MemoryCoreAgents:
             storage=self.context.storage,
             topic=topic
         )
+
+    async def detect_schema_from_memories(self, topic: str = None) -> Dict[str, Any]:
+        """Detect schema from memories - compatibility wrapper"""
+        # Search for relevant memories using implementation
+        memories = await _search_memories_impl(
+            storage=self.context.storage,
+            query=topic if topic else "important memory",
+            limit=10
+        )
+        
+        if len(memories) < 3:
+            return {}
+        
+        # Convert back to Memory objects
+        memory_objects = []
+        storage = self.context.storage
+        for mem_dict in memories:
+            if memory := storage.get(mem_dict["id"]):
+                memory_objects.append(memory)
+        
+        # Detect pattern
+        pattern = _detect_memory_pattern(memory_objects)
+        
+        if not pattern:
+            return {}
+        
+        # Create schema
+        schema = MemorySchema(
+            name=pattern["name"],
+            description=pattern["description"],
+            category=pattern["category"],
+            attributes=pattern["attributes"],
+            example_memory_ids=[m["id"] for m in memories[:3]]
+        )
+        
+        storage.schemas[schema.id] = schema
+        
+        # Update memories with schema
+        for memory_id in schema.example_memory_ids:
+            if memory := storage.get(memory_id):
+                memory.metadata.schemas.append({
+                    "schema_id": schema.id,
+                    "relevance": 1.0
+                })
+                storage.update(memory)
+        
+        return {
+            "schema_id": schema.id,
+            "schema_name": schema.name,
+            "description": schema.description,
+            "memory_count": len(schema.example_memory_ids)
+        }
+    
+    async def crystallize_memory(self, memory_id: str, reason: str = "automatic",
+                               importance_data: Dict[str, Any] = None) -> Dict[str, Any]:
+        """Crystallize memory - compatibility wrapper"""
+        storage = self.context.storage
+        
+        memory = storage.get(memory_id)
+        if not memory:
+            return {"success": False}
+        
+        memory.metadata.is_crystallized = True
+        memory.metadata.crystallization_reason = reason
+        memory.metadata.crystallization_date = datetime.datetime.now().isoformat()
+        memory.metadata.decay_resistance = 8.0 if reason == "cognitive_importance" else 5.0
+        memory.significance = max(memory.significance, 8)
+        
+        storage.update(memory)
+        
+        return {"success": True, "memory": memory.dict()}
+    
+    async def check_for_crystallization(self, memory_id: str) -> bool:
+        """Check if memory should be crystallized - compatibility wrapper"""
+        storage = self.context.storage
+        
+        memory = storage.get(memory_id)
+        if not memory or memory.metadata.is_crystallized:
+            return False
+        
+        # Simple criteria: high recall count or high significance
+        should_crystallize = (
+            memory.times_recalled >= 5 or
+            memory.significance >= 9 or
+            (memory.times_recalled >= 3 and memory.significance >= 7)
+        )
+        
+        return should_crystallize
+    
+    async def assess_memory_importance(self, memory_id: str) -> Dict[str, Any]:
+        """Assess memory importance - compatibility wrapper"""
+        storage = self.context.storage
+        
+        memory = storage.get(memory_id)
+        if not memory:
+            return {"important": False}
+        
+        # Calculate importance based on various factors
+        importance_score = 0.0
+        
+        # Significance factor
+        importance_score += memory.significance / 10.0 * 0.3
+        
+        # Recall factor
+        importance_score += min(1.0, memory.times_recalled / 10.0) * 0.2
+        
+        # Identity relevance
+        if any(word in memory.memory_text.lower() 
+               for word in ["i am", "my nature", "defines me", "identity"]):
+            importance_score += 0.3
+        
+        # Emotional significance
+        if memory.metadata.emotional_context:
+            importance_score += memory.metadata.emotional_context.primary_intensity * 0.2
+        
+        # Schema connections
+        importance_score += min(0.1, len(memory.metadata.schemas) * 0.05)
+        
+        return {
+            "important": importance_score > 0.7,
+            "importance_score": importance_score,
+            "factors": {
+                "significance": memory.significance,
+                "recall_count": memory.times_recalled,
+                "has_identity_relevance": "identity" in memory.memory_text.lower(),
+                "emotional_intensity": memory.metadata.emotional_context.primary_intensity 
+                    if memory.metadata.emotional_context else 0.0,
+                "schema_count": len(memory.metadata.schemas)
+            }
+        }
+    
+    async def generate_conversational_recall(self, experience: Dict[str, Any], 
+                                           context: Dict[str, Any] = None) -> Dict[str, Any]:
+        """Generate conversational recall - compatibility wrapper"""
+        memory_id = experience.get("id")
+        if not memory_id:
+            return {"recall_text": "I recall an experience...", "tone": "standard", "confidence": 0.5}
+        
+        return await _generate_conversational_recall_impl(
+            self.context.storage,
+            memory_id,
+            context
+        )
+    
+    async def get_memory(self, memory_id: str) -> Optional[Dict[str, Any]]:
+        """Get memory by ID - compatibility wrapper"""
+        storage = self.context.storage
+        
+        memory = storage.get(memory_id)
+        if memory:
+            memory.times_recalled += 1
+            memory.metadata.last_recalled = datetime.datetime.now().isoformat()
+            storage.update(memory)
+            
+            result = memory.dict()
+            result["confidence_marker"] = _get_confidence_marker(storage, memory.relevance or 1.0)
+            return result
+        
+        return None
+    
+    async def update_memory(self, memory_id: str, updates: Dict[str, Any]) -> Dict[str, Any]:
+        """Update memory - compatibility wrapper"""
+        return await _update_memory_impl(self.context.storage, memory_id, updates)
+    
+    async def load_recent_memories(self, memories_data: List[Dict[str, Any]]):
+        """Load memories from checkpoint"""
+        for mem_data in memories_data:
+            # Extract all the data
+            memory_text = mem_data.get("memory_text", "")
+            memory_type = mem_data.get("memory_type", "observation")
+            memory_scope = mem_data.get("memory_scope", "game")
+            significance = mem_data.get("significance", 5)
+            tags = mem_data.get("tags", [])
+            metadata = mem_data.get("metadata", {})
+            
+            # If the memory has an ID and embedding, load it directly
+            if "id" in mem_data and "embedding" in mem_data:
+                memory = Memory(
+                    id=mem_data["id"],
+                    memory_text=memory_text,
+                    memory_type=memory_type,
+                    memory_scope=memory_scope,
+                    significance=significance,
+                    tags=tags,
+                    metadata=MemoryMetadata(**metadata) if metadata else MemoryMetadata(),
+                    embedding=mem_data.get("embedding", []),
+                    created_at=mem_data.get("created_at", datetime.datetime.now().isoformat()),
+                    times_recalled=mem_data.get("times_recalled", 0),
+                    is_archived=mem_data.get("is_archived", False),
+                    is_consolidated=mem_data.get("is_consolidated", False)
+                )
+                
+                # Add directly to storage
+                memory_id = memory.id
+                self.context.storage.memories[memory_id] = memory
+                if memory.embedding:
+                    self.context.storage.embeddings[memory_id] = memory.embedding
+                
+                # Manually update indices (don't use add() to avoid duplication)
+                storage = self.context.storage
+                storage.type_index[memory.memory_type].add(memory_id)
+                storage.scope_index[memory.memory_scope].add(memory_id)
+                storage.level_index[memory.metadata.memory_level].add(memory_id)
+                storage.significance_index[memory.significance].add(memory_id)
+                
+                for tag in memory.tags:
+                    storage.tag_index[tag].add(memory_id)
+                
+                if memory.is_archived:
+                    storage.archived_memories.add(memory_id)
+                if memory.is_consolidated:
+                    storage.consolidated_memories.add(memory_id)
+            else:
+                # Create new memory through normal process
+                await self.add_memory(
+                    memory_text=memory_text,
+                    memory_type=memory_type,
+                    memory_scope=memory_scope,
+                    significance=significance,
+                    tags=tags,
+                    metadata=metadata
+                )
     
     async def run_maintenance(self) -> Dict[str, Any]:
         """Run maintenance - compatibility wrapper"""
