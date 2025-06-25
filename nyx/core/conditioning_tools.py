@@ -32,8 +32,9 @@ from typing import Dict, List, Any, Optional, Union
 from pydantic import BaseModel, Field
 
 from agents import function_tool, RunContextWrapper
-from nyx.core.conditioning_models import *
-from nyx.core.reward_system import RewardSignal
+# TODO: Replace star import with explicit imports to avoid importing models with extra="forbid"
+# from nyx.core.conditioning_models import ConditionedAssociation
+# from nyx.core.reward_system import RewardSignal
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +64,14 @@ MIN_INTENSITY = 0.0
 MAX_INTENSITY = 1.0
 
 # ==================== Data Models ====================
+
+# Explicit model for trait values to replace Dict[str, float]
+class TraitValue(BaseModel):
+    name: str
+    value: float = Field(..., ge=0.0, le=1.0)
+
+class TraitValuesSnapshot(BaseModel):
+    traits: List[TraitValue]
 
 class BehaviorAssociationInfo(BaseModel):
     key: str
@@ -188,6 +197,18 @@ class SimilarAssociation(BaseModel):
     key: str
     similarity: float
     association: AssociationData
+
+# Temporary placeholder for ConditionedAssociation until proper import
+class ConditionedAssociation(BaseModel):
+    stimulus: str
+    response: str
+    association_strength: float
+    formation_date: str
+    last_reinforced: str
+    reinforcement_count: int
+    valence: float
+    context_keys: List[str]
+    decay_rate: float = 0.01
 
 @function_tool
 async def get_association(
@@ -447,15 +468,19 @@ async def calculate_valence_and_reward(
         reward_value=reward_value
     )
 
+# Create a wrapper result for generate_reward_signal to avoid RewardSignal issues
+class RewardSignalResult(BaseModel):
+    success: bool
+    message: str
 
-@function_tool  # ← SAFE: only primitives & JSON-string params ⇒ no additionalProperties
-async def generate_reward_signal(                   # noqa: N802
+@function_tool
+async def generate_reward_signal(
     ctx: RunContextWrapper,
     behavior: str,
     consequence_type: str,
     reward_value: float,
     metadata_json: Optional[str] = None,
-) -> bool:
+) -> RewardSignalResult:
     """
     Emit a RewardSignal to the global reward-system.
 
@@ -475,13 +500,13 @@ async def generate_reward_signal(                   # noqa: N802
 
     Returns
     -------
-    bool
-        *True* on success, *False* on failure or if the reward system is missing.
+    RewardSignalResult
+        Result with success status and message
     """
     rsys = getattr(ctx.context, "reward_system", None)
     if rsys is None:
         logger.warning("Reward system not available – skipping reward signal.")
-        return False
+        return RewardSignalResult(success=False, message="Reward system not available")
 
     # ---------- parse metadata ------------------------------------------------
     metadata: Dict[str, Any] = {}
@@ -507,13 +532,16 @@ async def generate_reward_signal(                   # noqa: N802
     # ---------- validate reward value -----------------------------------------
     if not isinstance(reward_value, (int, float)):
         logger.warning(f"reward_value must be numeric, got {type(reward_value).__name__}")
-        return False
+        return RewardSignalResult(success=False, message="Invalid reward value type")
     
     # Clamp reward value to reasonable range
     reward_value = max(-10.0, min(10.0, float(reward_value)))
 
     # ---------- build & dispatch signal --------------------------------------
     try:
+        # Import here to avoid circular imports and to handle missing module
+        from nyx.core.reward_system import RewardSignal
+        
         reward_signal = RewardSignal(
             value=reward_value,
             source="operant_conditioning",
@@ -524,10 +552,13 @@ async def generate_reward_signal(                   # noqa: N802
             },
         )
         await rsys.process_reward_signal(reward_signal)
-        return True
+        return RewardSignalResult(success=True, message="Reward signal sent successfully")
+    except ImportError:
+        logger.error("Could not import RewardSignal from nyx.core.reward_system")
+        return RewardSignalResult(success=False, message="RewardSignal import failed")
     except Exception as err:
         logger.error("Error while dispatching RewardSignal: %s", err)
-        return False
+        return RewardSignalResult(success=False, message=f"Error: {str(err)}")
 
 # ==================== Behavior Evaluation Tools ====================
 
@@ -998,7 +1029,7 @@ class RawInputData(BaseModel):
     trait: Optional[str] = None
     target_value: Optional[float] = None
     value: Optional[float] = None  # Alternative to target_value
-    current_trait_values_snapshot: Optional[Dict[str, float]] = None
+    current_trait_values_snapshot: Optional[TraitValuesSnapshot] = None  # Use explicit model
     
     # Common fields
     intensity: Optional[float] = None
@@ -1163,15 +1194,23 @@ async def prepare_conditioning_data(                           # noqa: N802
         
     # 3.  Unknown / passthrough branch – retain raw for debugging
     else:
-        # Convert raw dict to RawInputData model
-        pd.raw_input = RawInputData(**raw)
+        # Convert raw dict to RawInputData model, handling trait values snapshot
+        raw_data = {}
+        for k, v in raw.items():
+            if k == "current_trait_values_snapshot" and isinstance(v, dict):
+                # Convert dict to TraitValuesSnapshot
+                traits = [TraitValue(name=name, value=value) for name, value in v.items()]
+                raw_data[k] = TraitValuesSnapshot(traits=traits)
+            else:
+                raw_data[k] = v
+        pd.raw_input = RawInputData(**raw_data)
 
     return pd
 
-# Create explicit models for effect data
+# Create explicit models for effect data - avoid Union types
 class EmotionalEffect(BaseModel):
     """Model for emotional effects applied to the emotional core system"""
-    type: str  # Must be "emotional"
+    effect_type: str = "emotional"  # Renamed from 'type' to avoid confusion
     valence: str  # "positive" or "negative"
     intensity: float  # Effect intensity (0.0-1.0)
     source: str  # Source of the effect (e.g., "conditioning_association")
@@ -1197,11 +1236,19 @@ class NeurochemicalDelta(BaseModel):
 
 class PhysiologicalEffect(BaseModel):
     """Model for physiological/neurochemical effects applied to the physiology core"""
-    type: str  # Must be "physiological"
+    effect_type: str = "physiological"  # Renamed from 'type' to avoid confusion
     delta: NeurochemicalDelta  # The neurochemical changes to apply
 
+# Separate models to avoid Union types
+class AppliedEmotionalEffect(BaseModel):
+    effect: EmotionalEffect
+
+class AppliedPhysiologicalEffect(BaseModel):
+    effect: PhysiologicalEffect
+
 class ApplyEffectsResult(BaseModel):
-    effects_applied: List[Union[EmotionalEffect, PhysiologicalEffect]]
+    emotional_effects: List[EmotionalEffect]
+    physiological_effects: List[PhysiologicalEffect]
     original_association_strength: float
     original_valence: float
     derived_effect_intensity: float
@@ -1253,7 +1300,8 @@ async def apply_association_effects(                         # noqa: N802
     valence  = max(-1.0, min(1.0, _num(assoc.get("valence", 0))))
     intensity = round(strength * 0.7, 4)
 
-    effects: List[Union[EmotionalEffect, PhysiologicalEffect]] = []
+    emotional_effects: List[EmotionalEffect] = []
+    physiological_effects: List[PhysiologicalEffect] = []
 
     # ------------------------------------------------------------------ #
     # 2.  Emotional subsystem                                            #
@@ -1267,7 +1315,12 @@ async def apply_association_effects(                         # noqa: N802
         # Fire-and-forget: don't let errors bubble up
         try:
             await ctx.context.emotional_core.apply_valence_shift(emo_payload)  # type: ignore[attr-defined]
-            effects.append(EmotionalEffect(type="emotional", **emo_payload))
+            emotional_effects.append(EmotionalEffect(
+                effect_type="emotional", 
+                valence=emo_payload["valence"],
+                intensity=emo_payload["intensity"],
+                source=emo_payload["source"]
+            ))
         except Exception as exc:
             logger.warning("emotional_core failed: %s", exc)
 
@@ -1283,9 +1336,10 @@ async def apply_association_effects(                         # noqa: N802
             delta_dict = {k: v for k, v in delta.model_dump().items() if v is not None}
             
             await ctx.context.physiology_core.adjust_neurochemistry(delta_dict)  # type: ignore[attr-defined]
-            effects.append(PhysiologicalEffect(type="physiological", delta=delta))
-        except Exception as exc:
-            logger.debug("physiology_core unavailable: %s", exc)
+            physiological_effects.append(PhysiologicalEffect(
+                effect_type="physiological", 
+                delta=delta
+            ))
         except Exception as exc:
             logger.debug("physiology_core unavailable: %s", exc)
 
@@ -1293,7 +1347,8 @@ async def apply_association_effects(                         # noqa: N802
     # 4.  Return consolidated summary                                    #
     # ------------------------------------------------------------------ #
     return ApplyEffectsResult(
-        effects_applied=effects,
+        emotional_effects=emotional_effects,
+        physiological_effects=physiological_effects,
         original_association_strength=round(strength, 4),
         original_valence=round(valence, 4),
         derived_effect_intensity=intensity,
