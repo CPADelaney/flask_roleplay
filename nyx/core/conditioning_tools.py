@@ -1,19 +1,4 @@
-# Create explicit models for PreparedConditioningData fields
-class ContextData(BaseModel):
-    """Model for behavioral and environmental context during conditioning.
-    
-    Captures situational factors that may influence association formation
-    and behavior evaluation.
-    """
-    location: Optional[str] = None  # Physical or virtual location
-    time_of_day: Optional[str] = None  # Morning, afternoon, evening, night
-    mood: Optional[str] = None  # Current emotional state
-    social_context: Optional[str] = None  # Alone, with_others, in_group
-    activity: Optional[str] = None  # Current activity or task
-    energy_level: Optional[str] = None  # High, medium, low
-    recent_events: Optional[List[str]] = None  # Recent significant events
-    environmental_factors: Optional[Dict[str, str]] = None  # Temperature, noise, etc.
-    interaction_style: Optional[str] = None  # nyx/core/conditioning_tools.py
+# nyx/core/conditioning_tools.py
 """
 Conditioning tools for the Nyx AI system.
 
