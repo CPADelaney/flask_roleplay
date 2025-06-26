@@ -917,7 +917,7 @@ AgentOutput = Union[
     ResetNeedResponse
 ]
 
-@function_tool
+@function_tool(strict_mode='False')
 async def reset_need_to_default_tool_impl(
     ctx: RunContextWrapper[NeedsSystemContext],
     need_name: str
