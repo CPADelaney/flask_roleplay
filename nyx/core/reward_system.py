@@ -361,41 +361,53 @@ class RewardSignalProcessor:
         Returns:
             bool: True if successful, False otherwise
         """
+        logger.debug(f"process_reward_from_conditioning called with: value={value}, source={source}, behavior={behavior}, consequence_type={consequence_type}")
+        
         try:
             # Parse metadata if provided
             metadata = {}
             if metadata_json:
                 try:
                     metadata = json.loads(metadata_json)
-                except:
+                    logger.debug(f"Parsed metadata: {metadata}")
+                except Exception as e:
+                    logger.debug(f"Failed to parse metadata: {e}")
                     pass
             
             # Create context
+            logger.debug("Creating RewardContextData")
             context = RewardContextData(
                 action=behavior,
                 submission_type=consequence_type,
                 timestamp=datetime.datetime.now().isoformat()
             )
+            logger.debug(f"Created context: {context}")
             
             # Add any metadata fields that match the context model
             for key, value in metadata.items():
                 if hasattr(context, key):
                     setattr(context, key, value)
+                    logger.debug(f"Set context.{key} = {value}")
             
             # Create and process the reward signal
+            logger.debug("Creating RewardSignal")
             reward = RewardSignal(
                 value=value,
                 source=source,
                 context=context
             )
+            logger.debug(f"Created reward signal: {reward}")
             
-            await self.process_reward_signal(reward)
+            logger.debug("About to call process_reward_signal")
+            result = await self.process_reward_signal(reward)
+            logger.debug(f"process_reward_signal returned: {result} (type: {type(result)})")
+            
             return True
             
         except Exception as e:
-            logger.error(f"Error processing reward from conditioning: {e}")
+            logger.error(f"Error processing reward from conditioning: {e}", exc_info=True)
             return False
-    
+        
     def _create_learning_agent(self) -> Optional[Agent]:
         """Creates an agent to analyze reward patterns and improve learning."""
         try:
@@ -461,6 +473,9 @@ class RewardSignalProcessor:
         Process a reward signal, update nyxamine levels,
         and trigger learning and other effects.
         """
+        logger.debug(f"process_reward_signal called with reward: {reward} (type: {type(reward)})")
+        logger.debug(f"Return type annotation: {self.process_reward_signal.__annotations__.get('return')}")
+        
         async with self._main_lock:
             if not self.needs_system:
                  logger.warning("NeedsSystem not available for reward processing.")
