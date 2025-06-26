@@ -323,6 +323,55 @@ class RewardSignalProcessor:
         self.max_depravity_history = 50
 
         logger.info("RewardSignalProcessor initialized")
+
+    async def process_reward_from_conditioning(
+        self, 
+        value: float, 
+        source: str, 
+        behavior: str, 
+        consequence_type: str, 
+        metadata_json: Optional[str] = None
+    ) -> bool:
+        """
+        Simple method for conditioning system to send rewards without using strict models.
+        
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            # Parse metadata if provided
+            metadata = {}
+            if metadata_json:
+                try:
+                    metadata = json.loads(metadata_json)
+                except:
+                    pass
+            
+            # Create context
+            context = RewardContextData(
+                action=behavior,
+                submission_type=consequence_type,
+                timestamp=datetime.datetime.now().isoformat()
+            )
+            
+            # Add any metadata fields that match the context model
+            for key, value in metadata.items():
+                if hasattr(context, key):
+                    setattr(context, key, value)
+            
+            # Create and process the reward signal
+            reward = RewardSignal(
+                value=value,
+                source=source,
+                context=context
+            )
+            
+            await self.process_reward_signal(reward)
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error processing reward from conditioning: {e}")
+            return False
     
     def _create_learning_agent(self) -> Optional[Agent]:
         """Creates an agent to analyze reward patterns and improve learning."""
