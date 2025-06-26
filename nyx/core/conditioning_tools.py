@@ -481,81 +481,35 @@ async def generate_reward_signal(
     reward_value: float,
     metadata_json: Optional[str] = None,
 ) -> RewardSignalResult:
-    """
-    Emit a RewardSignal to the global reward-system.
-
-    Parameters
-    ----------
-    behavior : str
-        Behaviour that triggered the consequence ("submits", "asks_question", …).
-    consequence_type : str
-        Kind of operant consequence ("positive_reinforcement", "punishment", …).
-    reward_value : float
-        Signed magnitude of the reward (-1.0 … +1.0 recommended, but any float is
-        accepted).
-    metadata_json : str | None
-        **Optional** JSON string with arbitrary extra context.  Passing JSON keeps
-        the public schema free of open-ended objects, which would otherwise add
-        `additionalProperties` and break the strict validator.
-
-    Returns
-    -------
-    RewardSignalResult
-        Result with success status and message
-    """
+    """Emit a RewardSignal to the global reward-system."""
     rsys = getattr(ctx.context, "reward_system", None)
     if rsys is None:
         logger.warning("Reward system not available – skipping reward signal.")
         return RewardSignalResult(success=False, message="Reward system not available")
 
-    # ---------- parse metadata ------------------------------------------------
-    metadata: Dict[str, Any] = {}
-    if metadata_json:
-        try:
-            parsed = json.loads(metadata_json)
-            if not isinstance(parsed, dict):
-                logger.warning(f"metadata_json must encode a JSON object – got {type(parsed).__name__}")
-                metadata = {}
-            else:
-                # Validate that metadata doesn't contain reserved keys
-                reserved_keys = {"behavior", "consequence_type"}
-                for key in reserved_keys:
-                    if key in parsed:
-                        logger.warning(f"Metadata contains reserved key '{key}' which will be overridden")
-                        del parsed[key]
-                metadata = parsed
-        except json.JSONDecodeError as err:
-            logger.warning(f"Could not parse metadata_json – ignoring. Error: {err}")
-        except Exception as err:  # Catch any other JSON-related errors
-            logger.warning(f"Unexpected error parsing metadata_json – ignoring. Error: {err}")
-
-    # ---------- validate reward value -----------------------------------------
+    # Validate reward value
     if not isinstance(reward_value, (int, float)):
         logger.warning(f"reward_value must be numeric, got {type(reward_value).__name__}")
         return RewardSignalResult(success=False, message="Invalid reward value type")
     
-    # Clamp reward value to reasonable range
+    # Clamp reward value
     reward_value = max(-10.0, min(10.0, float(reward_value)))
 
-    # ---------- build & dispatch signal --------------------------------------
     try:
-        # Import here to avoid circular imports and to handle missing module
-        from nyx.core.reward_system import RewardSignal
-        
-        reward_signal = RewardSignal(
+        # Use the simple method that returns bool
+        success = await rsys.process_reward_from_conditioning(
             value=reward_value,
             source="operant_conditioning",
-            context={
-                "behavior": behavior,
-                "consequence_type": consequence_type,
-                **metadata,
-            },
+            behavior=behavior,
+            consequence_type=consequence_type,
+            metadata_json=metadata_json
         )
-        await rsys.process_reward_signal(reward_signal)
-        return RewardSignalResult(success=True, message="Reward signal sent successfully")
-    except ImportError:
-        logger.error("Could not import RewardSignal from nyx.core.reward_system")
-        return RewardSignalResult(success=False, message="RewardSignal import failed")
+        
+        if success:
+            return RewardSignalResult(success=True, message="Reward signal sent successfully")
+        else:
+            return RewardSignalResult(success=False, message="Failed to process reward signal")
+            
     except Exception as err:
         logger.error("Error while dispatching RewardSignal: %s", err)
         return RewardSignalResult(success=False, message=f"Error: {str(err)}")
