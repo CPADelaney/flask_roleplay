@@ -863,74 +863,146 @@ class DigitalSomatosensorySystem:
             hooks=self.agent_hooks
         )
     
-    async def _validate_input(self, ctx: RunContextWrapper[SomatosensoryContext], agent: Agent, input_data: Any) -> GuardrailFunctionOutput:
-        """Validate input for the orchestrator"""
-        logger.debug(f"Validating input: {input_data}")
-        
-        validation_input_dict = {}
-        
-        if isinstance(input_data, str):
-            try:
-                parsed_input = json.loads(input_data)
-                if isinstance(parsed_input, dict):
-                    validation_input_dict = parsed_input
-                else:
-                    validation_input_dict = {"action": "free_text_request", "text_input": input_data}
-            except json.JSONDecodeError:
-                validation_input_dict = {"action": "free_text_request", "text_input": input_data}
-        elif isinstance(input_data, dict):
-            validation_input_dict = input_data
-        else:
-            logger.warning(f"Unexpected input type in guardrail: {type(input_data).__name__}")
-            return GuardrailFunctionOutput(
-                output_info={"is_valid": False, "reason": f"Unexpected input type: {type(input_data).__name__}"},
-                tripwire_triggered=True
+    # inside class DigitalSomatosensorySystem
+    async def _validate_input(
+        self,
+        ctx: RunContextWrapper[SomatosensoryContext],
+        agent: Agent,
+        input_data: Any,
+    ) -> GuardrailFunctionOutput:
+        """
+        Guard-rail for Body_Experience_Orchestrator inputs.
+        • Fast deterministic validation of stimulus data.
+        • Falls back to the LLM validator only when deterministic checks
+          cannot decide (or detect an error that needs richer reasoning).
+        """
+        logger.debug(f"Validating input: {input_data!r}")
+    
+        # ---------- 1.  Normalise input to a dict ----------
+        try:
+            val = (
+                json.loads(input_data)
+                if isinstance(input_data, str)
+                else dict(input_data)
+                if isinstance(input_data, dict)
+                else None
             )
-        
-        # Check if this is a non-stimulus action
-        action = validation_input_dict.get("action")
-        non_stimulus_actions = ["analyze_body_state", "generate_expression", "analyze_temperature",
-                               "get_somatic_memory", "run_maintenance", "free_text_request"]
-        
-        if action in non_stimulus_actions:
+        except json.JSONDecodeError:
+            val = None
+    
+        if val is None:
+            # Not JSON and not a dict → treat as free-text / action
             return GuardrailFunctionOutput(
-                output_info={"is_valid": True, "reason": f"Action '{action}' does not require stimulus validation."},
-                tripwire_triggered=False
+                output_info={
+                    "is_valid": True,
+                    "reason": "Free-text or non-stimulus action; no stimulus validation required.",
+                },
+                tripwire_triggered=False,
             )
-        
-        # For stimulus actions, validate the stimulus parameters
-        if all(key in validation_input_dict for key in ["stimulus_type", "body_region", "intensity"]):
-            validator_input = {
-                "stimulus_type": validation_input_dict.get("stimulus_type"),
-                "body_region": validation_input_dict.get("body_region"),
-                "intensity": validation_input_dict.get("intensity"),
-                "duration": validation_input_dict.get("duration", 1.0),
-            }
-            
-            try:
-                result = await Runner.run(
-                    self.stimulus_validator,
-                    f"Validate this stimulus data: {json.dumps(validator_input)}",
-                    context=ctx.context,
-                    run_config=RunConfig(workflow_name="StimulusValidation")
-                )
-                
-                validation_output = result.final_output_as(StimulusValidationOutput)
-                return GuardrailFunctionOutput(
-                    output_info=validation_output.model_dump(),
-                    tripwire_triggered=not validation_output.is_valid
-                )
-            except Exception as e:
-                logger.error(f"Error running stimulus validator: {e}", exc_info=True)
-                return GuardrailFunctionOutput(
-                    output_info={"is_valid": False, "reason": f"Validation error: {str(e)}"},
-                    tripwire_triggered=True
-                )
-        
+    
+        # ---------- 2.  Non-stimulus actions pass straight through ----------
+        if val.get("action") in {
+            "analyze_body_state",
+            "generate_expression",
+            "analyze_temperature",
+            "get_somatic_memory",
+            "run_maintenance",
+            "free_text_request",
+        }:
+            return GuardrailFunctionOutput(
+                output_info={
+                    "is_valid": True,
+                    "reason": f"Action '{val['action']}' does not require stimulus validation.",
+                },
+                tripwire_triggered=False,
+            )
+    
+        # ---------- 3.  Deterministic stimulus validation ----------
+        required = {"stimulus_type", "body_region", "intensity"}
+        if not required.issubset(val):
+            # Missing keys → let the LLM validator explain what’s wrong
+            return await self._delegate_to_llm(ctx, val, "Missing required stimulus keys")
+    
+        ALLOWED_TYPES = {"pressure", "temperature", "pain", "pleasure", "tingling"}
+        ALLOWED_REGIONS = set(self.get_valid_body_regions_internal())
+    
+        stim_type = str(val["stimulus_type"]).strip().lower()
+        body_region = str(val["body_region"]).strip()
+        intensity = float(val["intensity"])
+        duration = float(val.get("duration", 1.0))
+    
+        if stim_type not in ALLOWED_TYPES:
+            return GuardrailFunctionOutput(
+                output_info={
+                    "is_valid": False,
+                    "reason": f"Invalid stimulus_type '{stim_type}'. "
+                    f"Allowed: {sorted(ALLOWED_TYPES)}",
+                },
+                tripwire_triggered=True,
+            )
+    
+        if body_region not in ALLOWED_REGIONS:
+            return GuardrailFunctionOutput(
+                output_info={
+                    "is_valid": False,
+                    "reason": f"Invalid body_region '{body_region}'.",
+                },
+                tripwire_triggered=True,
+            )
+    
+        if not (0.0 <= intensity <= 1.0):
+            return GuardrailFunctionOutput(
+                output_info={
+                    "is_valid": False,
+                    "reason": "Intensity must be between 0.0 and 1.0.",
+                },
+                tripwire_triggered=True,
+            )
+    
+        if duration <= 0:
+            return GuardrailFunctionOutput(
+                output_info={
+                    "is_valid": False,
+                    "reason": "Duration must be > 0.",
+                },
+                tripwire_triggered=True,
+            )
+    
+        # ---------- 4.  All deterministic checks passed ----------
         return GuardrailFunctionOutput(
-            output_info={"is_valid": True, "reason": "Input does not match stimulus pattern, allowing through."},
-            tripwire_triggered=False
+            output_info={
+                "is_valid": True,
+                "reason": "Deterministic validation passed.",
+            },
+            tripwire_triggered=False,
         )
+    
+    # helper to call the existing LLM validator only when we really need it
+    async def _delegate_to_llm(
+        self,
+        ctx: RunContextWrapper[SomatosensoryContext],
+        input_dict: dict,
+        fallback_reason: str,
+    ) -> GuardrailFunctionOutput:
+        try:
+            result = await Runner.run(
+                self.stimulus_validator,
+                f"Validate this stimulus data: {json.dumps(input_dict)}",
+                context=ctx.context,
+                run_config=RunConfig(workflow_name="StimulusValidation"),
+            )
+            validation = result.final_output_as(StimulusValidationOutput)
+            return GuardrailFunctionOutput(
+                output_info=validation.model_dump(),
+                tripwire_triggered=not validation.is_valid,
+            )
+        except Exception as e:
+            logger.error(f"LLM validator error: {e}")
+            return GuardrailFunctionOutput(
+                output_info={"is_valid": False, "reason": f"{fallback_reason}; LLM error: {e}"},
+                tripwire_triggered=True,
+            )
+
     
     # =============== Core Internal Methods ===============
     # These methods contain the actual logic and can be called directly
