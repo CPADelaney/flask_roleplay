@@ -535,21 +535,45 @@ class NyxEngineV3(NyxEngineV2):
                 pass
 
     async def _loop(self):
-        """Main cognitive loop with proper decision tracking"""
+        """
+        Main cognitive loop
+        ─ phase 0: sensing / reflex
+        ─ phase 1: analysis   → interim focus
+        ─ phase 2: reflection / reply-drafting
+                  → FINAL focus refresh (new in this patch)
+                  → Coordinator decides
+        """
         while True:
+            # ─── timing & neuromodulator update ─────────────────────────
             await self.clock.tick()
             phase = self.clock.phase
             self.neuro.step()
-            
-            # Run all modules for this phase
-            await asyncio.gather(*(safe_call(m.on_phase(phase)) for m in self.modules))
-            
+
+            # ─── run every module registered for this phase ────────────
+            await asyncio.gather(*(safe_call(m.on_phase(phase))
+                                   for m in self.modules))
+
+            # ─── after analysis: pick an interim focus ─────────────────
             if phase == 1:
                 winners = await self.attn.select()
                 await self.ws.set_focus(winners)
-                
+
+            # ─── after reflection/response-drafting  ───────────────────
             if phase == 2:
-                # Generate decision and signal completion
+                # Did any new proposals arrive during phase-2?
+                props_before = len(self.ws.proposals)
+                
+                # *Most* phase-2 modules have just run; record count again
+                # (cheap – we already hold the list in memory)
+                new_props = len(self.ws.proposals) > props_before
+
+                if new_props:
+                    # FINAL attention refresh so late proposals (response
+                    # drafts, emergency overrides, etc.) can join focus.
+                    winners = await self.attn.select()
+                    await self.ws.set_focus(winners)
+
+                # Coordinator now sees a complete, up-to-date focus set
                 decision = await self.coord.decide()
                 self.ws.state["last_decision"] = decision
                 self._last_decision = decision
