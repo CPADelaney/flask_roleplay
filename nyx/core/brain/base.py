@@ -5815,32 +5815,87 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             result["thinking_result"] = {}                 
         
         return result
+
+    def _ensure_dict_result(self, result: Any) -> Dict[str, Any]:
+        """
+        Ensure a result is a dictionary, converting from Pydantic models if needed.
+        
+        Args:
+            result: The result to convert (dict, Pydantic model, or other object)
+            
+        Returns:
+            Dict[str, Any]: The result as a dictionary
+        """
+        if hasattr(result, "model_dump"):
+            # Pydantic v2 model
+            return result.model_dump()
+        elif hasattr(result, "dict"):
+            # Pydantic v1 model
+            return result.dict()
+        elif hasattr(result, "__dict__") and not isinstance(result, dict):
+            # Regular object with __dict__
+            return result.__dict__
+        elif isinstance(result, dict):
+            # Already a dictionary
+            return result
+        else:
+            # Fallback - wrap in a dict
+            logger.warning(f"Unexpected result type: {type(result)}")
+            return {"result": result}
     
-    async def _apply_conditioning_phase(self, user_input: str, context: Dict[str, Any],
-                                      current_result: Dict[str, Any]) -> Dict[str, Any]:
-        """Apply conditioning phase if enabled"""
-        result = {}
-        
-        user_id = str(self.user_id) if hasattr(self, 'user_id') else None
-        
-        conditioning_result = await self.conditioned_input_processor.process_input(
+    async def _apply_conditioning_phase(
+        self,
+        user_input: str,
+        context: Dict[str, Any],
+        current_result: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """
+        Run the conditioning processor (if configured) and merge its output.
+        Always convert results to a plain dict before further use so that later
+        code can safely call .get() etc.
+        """
+        result: Dict[str, Any] = {}
+    
+        if not self.conditioned_input_processor:         # safety-guard
+            result["conditioning_applied"] = False
+            result["conditioning_result"] = {}
+            return result
+    
+        user_id = str(getattr(self, "user_id", "unknown"))
+    
+        # --- run the processor -------------------------------------------------
+        raw = await self.conditioned_input_processor.process_input(
             text=user_input,
             user_id=user_id,
-            context=context
+            context=context,
         )
-        
+    
+        # --- make sure it’s a dict --------------------------------------------
+        conditioning_dict = self._ensure_dict_result(raw)
+    
+        # --- record + log ------------------------------------------------------
         result["conditioning_applied"] = True
-        result["conditioning_result"] = conditioning_result
-
-        await orchestrator.log_and_score("conditioning_applied", {
-            "user_id": str(self.user_id),
-            "behaviors_detected": len(conditioning_result.get("detected_patterns", []))
-        })
-        
-        # Update context with conditioning results
-        if "stimulus_responses" in conditioning_result:
-            context["conditioning_stimuli"] = conditioning_result["stimulus_responses"]
-        
+        result["conditioning_result"] = conditioning_dict
+    
+        # NOTE: everything below now uses `conditioning_dict`, so no more
+        #       attribute-error when calling .get()
+        try:
+            await orchestrator.log_and_score(
+                "conditioning_applied",
+                {
+                    "user_id": user_id,
+                    "behaviors_detected": len(
+                        conditioning_dict.get("detected_patterns", [])
+                    ),
+                },
+            )
+        except Exception as e:
+            logger.warning(f"Conditioning log failed: {e}")
+    
+        # Pass any useful info back into the live context
+        if "stimulus_responses" in conditioning_dict:
+            context["conditioning_stimuli"] = conditioning_dict["stimulus_responses"]
+    
         return result
     
     
