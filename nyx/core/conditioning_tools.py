@@ -482,10 +482,14 @@ async def generate_reward_signal(
     metadata_json: Optional[str] = None,
 ) -> RewardSignalResult:
     """Emit a RewardSignal to the global reward-system."""
+    logger.debug(f"generate_reward_signal called with: behavior={behavior}, consequence_type={consequence_type}, reward_value={reward_value}")
+    
     rsys = getattr(ctx.context, "reward_system", None)
     if rsys is None:
         logger.warning("Reward system not available – skipping reward signal.")
         return RewardSignalResult(success=False, message="Reward system not available")
+
+    logger.debug(f"Reward system found: {type(rsys)}")
 
     # Validate reward value
     if not isinstance(reward_value, (int, float)):
@@ -494,8 +498,10 @@ async def generate_reward_signal(
     
     # Clamp reward value
     reward_value = max(-10.0, min(10.0, float(reward_value)))
+    logger.debug(f"Clamped reward value: {reward_value}")
 
     try:
+        logger.debug("About to call rsys.process_reward_from_conditioning")
         # Use the simple method that returns bool
         success = await rsys.process_reward_from_conditioning(
             value=reward_value,
@@ -505,13 +511,19 @@ async def generate_reward_signal(
             metadata_json=metadata_json
         )
         
+        logger.debug(f"process_reward_from_conditioning returned: {success} (type: {type(success)})")
+        
         if success:
-            return RewardSignalResult(success=True, message="Reward signal sent successfully")
+            result = RewardSignalResult(success=True, message="Reward signal sent successfully")
+            logger.debug(f"Returning success result: {result} (type: {type(result)})")
+            return result
         else:
-            return RewardSignalResult(success=False, message="Failed to process reward signal")
+            result = RewardSignalResult(success=False, message="Failed to process reward signal")
+            logger.debug(f"Returning failure result: {result} (type: {type(result)})")
+            return result
             
     except Exception as err:
-        logger.error("Error while dispatching RewardSignal: %s", err)
+        logger.error(f"Error while dispatching RewardSignal: {err}", exc_info=True)
         return RewardSignalResult(success=False, message=f"Error: {str(err)}")
 
 # ==================== Behavior Evaluation Tools ====================
