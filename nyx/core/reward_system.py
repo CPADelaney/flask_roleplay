@@ -163,6 +163,29 @@ class RewardAnalysisOutput(BaseModel):
     effectiveness: EffectivenessMetrics = Field(..., description="Effectiveness metrics")
     insights: str = Field(..., description="Key insights about reward system")
 
+class RewardEffects(BaseModel):
+    """Effects applied by reward signal"""
+    emotional: bool = False
+    identity: bool = False
+    learning: bool = False
+    habit: bool = False
+    somatic: Union[bool, str] = False  # Can be bool or description string
+
+class LearningUpdates(BaseModel):
+    """Learning updates from reward processing"""
+    reinforcement_learning: bool = False
+    memory_updates: int = 0
+    value_updates: int = 0
+
+class ProcessRewardResult(BaseModel):
+    """Result of processing a reward signal"""
+    nyxamine_change: float
+    current_nyxamine: float
+    effects: RewardEffects
+    learning: LearningUpdates
+    depravity_score: float
+    amplified_depravity: float
+
 # Function tools for the reward system
 
 async def _categorize_reward_logic(reward_value: float) -> RewardType:
@@ -433,7 +456,7 @@ class RewardSignalProcessor:
             logger.error(f"Error creating conditioning agent: {e}")
             return None
     
-    async def process_reward_signal(self, reward: RewardSignal) -> Dict[str, Any]:
+    async def process_reward_signal(self, reward: RewardSignal) -> ProcessRewardResult:
         """
         Process a reward signal, update nyxamine levels,
         and trigger learning and other effects.
@@ -526,14 +549,14 @@ class RewardSignalProcessor:
 
 
                 # 7. Return processing results
-                return {
-                    "nyxamine_change": nyxamine_change,
-                    "current_nyxamine": self.current_nyxamine,
-                    "effects": effects,
-                    "learning": learning_updates,
-                    "depravity_score": depravity_score,
-                    "amplified_depravity": amplified_depravity
-                }
+                return ProcessRewardResult(
+                    nyxamine_change=nyxamine_change,
+                    current_nyxamine=self.current_nyxamine,
+                    effects=RewardEffects(**effects),
+                    learning=LearningUpdates(**learning_updates),
+                    depravity_score=depravity_score,
+                    amplified_depravity=amplified_depravity
+                )
                 
 
     async def process_submission_reward(
@@ -657,7 +680,7 @@ class RewardSignalProcessor:
         await self.update_neurochemical("seranix", seranix_boost, source=f"{gratification_type}_satisfaction")
         await self.update_neurochemical("oxynixin", oxynixin_boost, source=f"{gratification_type}_aftermath")
 
-    async def process_conditioning_reward(self, conditioning_result: Dict[str, Any]) -> Dict[str, Any]:
+    async def process_conditioning_reward(self, conditioning_result: Dict[str, Any]) -> ProcessRewardResult:
         """
         Process rewards generated from conditioning events
         
