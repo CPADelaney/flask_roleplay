@@ -238,54 +238,83 @@ class EmotionalAdapter(EnhancedWorkspaceModule):
 @register_adapter("needs_system")
 class NeedsAdapter(EnhancedWorkspaceModule):
     name = "needs"
-    def __init__(self, ns, ws=None):
-        super().__init__(ws); self.ns = ns
-        self.register_unconscious("needs_homeostasis", self._homeo_bg, .6)
+
+    # --------------------------------------------------------------------- #
+    # INITIALISATION                                                        #
+    # --------------------------------------------------------------------- #
+    def __init__(self, ns, ws: Optional[GlobalWorkspace] = None):
+        super().__init__(ws)
+        self.ns = ns
+        # run every unconscious cycle; 0.6 = moderate attention bonus
+        self.register_unconscious("needs_homeostasis", self._homeo_bg, 0.6)
+
+    # --------------------------------------------------------------------- #
+    # HELPERS                                                               #
+    # --------------------------------------------------------------------- #
+    async def _call_ns(self, *attr_names, **kw):
+        """
+        Try the given attribute names in order (`foo_async`, then `foo`, …),
+        invoke the first one that exists, and await the result if necessary.
+        """
+        for attr in attr_names:
+            fn = getattr(self.ns, attr, None)
+            if fn:
+                return await maybe_async(fn, **kw)
+        return None
+
 
     async def on_phase(self, phase: int):
-        if phase or not self.ns:
+        # We only fire in the first (0) conscious phase so we don’t starve others
+        if phase != 0 or not self.ns:
             return
-        
-        # Get needs state - handle both ContextAwareNeedsSystem and regular NeedsSystem
-        st = await maybe_async(self.ns.get_needs_state_async)
-        
-        # Handle both NeedsStateResponse and dict formats
-        if hasattr(st, 'needs'):
-            # New format: NeedsStateResponse with list of needs
-            for need in st.needs:
+
+        state = await self._call_ns("get_needs_state_async", "get_needs_state")
+        if not state:
+            return
+
+        # ---- new schema: NeedsStateResponse.needs ---------------------- #
+        if hasattr(state, "needs"):
+            for need in state.needs:
                 if need.drive_strength > 0.8:
-                    await self.submit({"need": need.name, 
-                                       "drive": need.drive_strength,
-                                       "level": need.level},
-                                      salience=need.drive_strength,
-                                      context_tag="need_spike")
+                    await self.submit(
+                        {
+                            "need":  need.name,
+                            "drive": need.drive_strength,
+                            "level": need.level,
+                        },
+                        salience=need.drive_strength,
+                        context_tag="need_spike",
+                    )
+        # ---- legacy schema: {name: {...}} ------------------------------ #
         else:
-            # Legacy dict format
-            for need, data in (st or {}).items():
-                if data.get("drive", 0) > .8:
-                    await self.submit({"need": need, **data},
-                                      salience=data["drive"],
-                                      context_tag="need_spike")
+            for name, data in state.items():
+                drive = data.get("drive", 0)
+                if drive > 0.8:
+                    await self.submit(
+                        {"need": name, **data},
+                        salience=drive,
+                        context_tag="need_spike",
+                    )
+
 
     async def _homeo_bg(self, _):
-        if hasattr(self.ns, "update_needs"):
-            await maybe_async(self.ns.update_needs)
-        
-        # Get needs state - both ContextAwareNeedsSystem and NeedsSystem have get_needs_state_async
-        st = await maybe_async(self.ns.get_needs_state_async)
-        
-        # Handle both NeedsStateResponse and dict formats
-        if hasattr(st, 'needs'):
-            # New format: NeedsStateResponse with list of needs
-            moderate = [need.name for need in st.needs 
-                        if .4 < need.drive_strength < .7]
+        # 1) apply decay + goal integration ------------------------------ #
+        await self._call_ns("update_needs_async", "update_needs")
+
+        # 2) fetch state again ------------------------------------------- #
+        state = await self._call_ns("get_needs_state_async", "get_needs_state")
+        if not state:
+            return
+
+        # 3) collect moderately-urgent drives (.4 - .7) ------------------ #
+        if hasattr(state, "needs"):
+            moderate = [n.name for n in state.needs if 0.4 < n.drive_strength < 0.7]
         else:
-            # Legacy dict format
-            moderate = [n for n, d in (st or {}).items()
-                        if .4 < d.get("drive", 0) < .7]
-        
+            moderate = [n for n, d in state.items() if 0.4 < d.get("drive", 0) < 0.7]
+
+        # 4) publish summary note if multiple drives hover in the “itch” zone
         if len(moderate) >= 3:
-            return {"moderate_needs": moderate, "significance": .5}
+            return {"moderate_needs": moderate, "significance": 0.5}
 
 
 # ── GOALS ──────────────────────────────────────────────────────────────────
