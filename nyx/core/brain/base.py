@@ -5406,812 +5406,817 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
         return "confident"
     
     async def process_input(
-        self,
-        user_input: str,
-        context: Dict[str, Any] | None = None,
-        **kwargs
-    ) -> Dict[str, Any]:
-        if not self.initialized:
-            await self.initialize()
-        
-        context = context or {}
-        self._current_context = context
-        
-        # ── NEW: Inject orchestrator context (memory + strategy) ──
-        try:
-            # Get augmented context from orchestrator
-            orchestrator_context = await orchestrator.prepare_context("", user_input)
-            context["orchestrator_prompt_prefix"] = orchestrator_context
+            self,
+            user_input: str,
+            context: Dict[str, Any] | None = None,
+            **kwargs
+        ) -> Dict[str, Any]:
+            if not self.initialized:
+                await self.initialize()
             
-            # Log input processing start
-            await orchestrator.log_and_score("input_processing_start", {
-                "user_id": str(self.user_id),
-                "input_length": len(user_input)
-            })
-        except Exception as e:
-            logger.warning(f"Orchestrator context prep failed: {e}")
-        
-        # Extract parameters from kwargs first
-        use_thinking = kwargs.get('use_thinking', None)
-        use_conditioning = kwargs.get('use_conditioning', None)
-        use_coordination = kwargs.get('use_coordination', None)
-        thinking_level = kwargs.get('thinking_level', 1)
-        mode = kwargs.get('mode', 'auto')
-        use_hierarchical_memory = kwargs.get('use_hierarchical_memory', False)
-        
-        # ── 1️⃣ Use GWA to gather multi-module context ──
-        if self.workspace_engine:
-            # Submit input to workspace
-            await self.workspace_engine.ws.submit(
-                Proposal("user_input", user_input, 1.0, context_tag="user_input")
-            )
+            context = context or {}
+            self._current_context = context
             
-            # Mark that we're processing
-            self.workspace_engine.ws.state["awaiting_response"] = True
-            self.workspace_engine.ws.state["input_timestamp"] = datetime.datetime.now()
-            
-            # Let modules react and gather context (don't wait for a full response)
-            for _ in range(2):  # Just 2 cycles for context gathering
-                await asyncio.sleep(0.1)  # Brief pause for module processing
-            
-            # Collect enriched context from workspace
-            gw_context = await self._gather_workspace_context()
-            context["workspace_context"] = gw_context
-            
-            # If workspace has high-confidence insights, include them
-            if gw_context.get("high_confidence_insights"):
-                context["gw_insights"] = gw_context["high_confidence_insights"]
-    
-        # 2️⃣  Legacy pipeline (unchanged apart from early‑return above)
-        # ------------------------------------------------------------------
-        start_time = datetime.datetime.now()
-        
-        # Auto-detect features if not specified
-        if use_thinking is None:
-            use_thinking = (
-                hasattr(self, "thinking_config") and 
-                self.thinking_config.get("thinking_enabled", False) and
-                hasattr(self, "thinking_tools")
-            )
-            
-        if use_conditioning is None:
-            use_conditioning = (
-                hasattr(self, "conditioned_input_processor") and 
-                self.conditioned_input_processor is not None
-            )
-            
-        if use_coordination is None:
-            use_coordination = (
-                hasattr(self, "context_distribution") and 
-                self.context_distribution is not None and
-                mode in ["auto", "coordinated"]
-            )
-        
-        # Store original input
-        context["last_user_input"] = user_input
-        
-        # Phase 1: Pre-processing checks
-        processing_result = await self._unified_preprocessing(user_input, context)
-        if processing_result.get("blocked"):
-            return processing_result
-        
-        # Phase 2: Thinking (if enabled)
-        if use_thinking:
-            thinking_result = await self._apply_thinking_phase(
-                user_input, context, thinking_level, processing_result
-            )
-            processing_result.update(thinking_result)
-        
-        # Phase 3: Conditioning (if enabled)
-        if use_conditioning:
-            conditioning_result = await self._apply_conditioning_phase(
-                user_input, context, processing_result
-            )
-            processing_result.update(conditioning_result)
-        
-        # Phase 4: Core processing
-        if use_coordination:
-            # Use coordinated processing
-            core_result = await self._process_input_coordinated(user_input, context)
-            processing_result["processing_mode"] = "coordinated"
-        else:
-            # Use unified processor
-            if not self.processing_manager:
-                # Initialize UnifiedProcessor if not already done
-                self.processing_manager = UnifiedProcessor(self)
-                await self.processing_manager.initialize()
-            
-            # Pass all context to UnifiedProcessor
-            processor_context = {
-                **context,
-                "active_modules": list(processing_result.get("active_modules_for_input", [])),
-                "internal_thoughts": processing_result.get("internal_thoughts", []),
-                "thinking_applied": processing_result.get("thinking_applied", False),
-                "conditioning_applied": processing_result.get("conditioning_applied", False)
-            }
-            
-            # Process with unified processor
-            core_result = await self.processing_manager.process_input(
-                user_input, 
-                processor_context
-            )
-            
-            # Store processing approach used
-            processing_result["processing_mode"] = core_result.get("processing_mode", "unified")
-        
-        # Merge results
-        processing_result.update(core_result)
-        
-        # Phase 5: Post-processing
-        processing_result["response_time"] = (datetime.datetime.now() - start_time).total_seconds()
-        processing_result["features_used"] = {
-            "thinking": use_thinking,
-            "conditioning": use_conditioning,
-            "coordination": use_coordination
-        }
-        
-        return processing_result
-
-    async def _gather_workspace_context(self) -> Dict[str, Any]:
-        """Gather enriched context from workspace modules"""
-        props, focus = await self.workspace_engine.ws.snapshot()
-        
-        context = {
-            "emotional_signals": [],
-            "memory_associations": [],
-            "spatial_context": [],
-            "unconscious_insights": [],
-            "cross_modal_bindings": [],
-            "high_confidence_insights": []
-        }
-        
-        # Collect insights from all modules
-        for p in props[-100:]:  # Recent proposals
-            if p.salience > 0.8:  # High confidence
-                context["high_confidence_insights"].append({
-                    "source": p.source,
-                    "content": p.content,
-                    "tag": p.context_tag
+            # ── NEW: Inject orchestrator context (memory + strategy) ──
+            try:
+                # Get augmented context from orchestrator
+                orchestrator_context = await orchestrator.prepare_context("", user_input)
+                context["orchestrator_prompt_prefix"] = orchestrator_context
+                
+                # Log input processing start
+                await orchestrator.log_and_score("input_processing_start", {
+                    "user_id": str(self.user_id),
+                    "input_length": len(user_input)
                 })
+            except Exception as e:
+                logger.warning(f"Orchestrator context prep failed: {e}")
             
-            # Categorize by type
-            if p.context_tag == "emotion_spike":
-                context["emotional_signals"].append(p.content)
-            elif p.context_tag == "memory_recall":
-                context["memory_associations"].extend(p.content.get("memories", []))
-            elif p.context_tag == "spatial_update":
-                context["spatial_context"].append(p.content)
-            elif p.context_tag == "promoted_from_unconscious":
-                context["unconscious_insights"].append(p.content)
-            elif p.context_tag == "binding":
-                context["cross_modal_bindings"].append(p.content)
-        
-        return context
-
-    async def generate_response(
-        self,
-        user_input: str,
-        context: Dict[str, Any] | None = None,
-        **kwargs
-    ) -> Dict[str, Any]:
-        """
-        Unified entry-point that now **correctly waits** for a Global-Workspace
-        decision after the input has been pushed through `process_input()`.
-    
-        The only structural change is the order of operations:
-    
-        1.  Always call `process_input()` first – this submits the user text
-            to the workspace and sets `awaiting_response = True`.
-        2.  *Then* (and only then) call `wait_for_decision()`.  
-            If the workspace replies in time we return it immediately.
-        3.  Otherwise we continue with the legacy / unified-processor path.
-    
-        Everything else is identical to your previous implementation.
-        """
-        # ------------------------------------------------------------------ #
-        # 0.  Housekeeping & kwarg parsing
-        # ------------------------------------------------------------------ #
-        if not self.initialized:
-            await self.initialize()
-    
-        use_thinking        = kwargs.get("use_thinking", None)
-        use_conditioning    = kwargs.get("use_conditioning", None)
-        use_coordination    = kwargs.get("use_coordination", None)
-        thinking_level      = kwargs.get("thinking_level", 1)
-        mode                = kwargs.get("mode", "auto")
-        use_hierarchical_memory = kwargs.get("use_hierarchical_memory", False)
-    
-        context   = context or {}
-        start_time = datetime.datetime.now()
-    
-        # ------------------------------------------------------------------ #
-        # 1.  Run the *full* input-processing pipeline (sets awaiting_response)
-        # ------------------------------------------------------------------ #
-        input_result = await self.process_input(
-            user_input,
-            context,
-            use_thinking=use_thinking,
-            use_conditioning=use_conditioning,
-            use_coordination=use_coordination,
-            thinking_level=thinking_level,
-            mode=mode,
-        )
-    
-        # ------------------------------------------------------------------ #
-        # 2.  Give the Global-Workspace engine a chance to override
-        # ------------------------------------------------------------------ #
-        decision = None
-        if (
-            self.workspace_engine
-            and self.workspace_engine.ws.state.get("awaiting_response")
-        ):
-            try:
-                decision = await self.workspace_engine.wait_for_decision(timeout=1.0)
-            except asyncio.TimeoutError:
-                logger.debug("GWA processing timed out, falling back to standard pipeline")
-            finally:
-                # Clear the flag regardless of outcome
-                self.workspace_engine.ws.state["awaiting_response"] = False
-    
-        if decision:
-            return {
-                "message": decision.get("response", "I understand."),
-                "epistemic_status": "confident",
-                "processor_metadata": {
-                    "mode": "global_workspace",
-                    "strategy":  decision.get("strategy", "unknown"),
-                    "contributing_modules": decision.get("contributing_modules", []),
-                },
-                "features_used": kwargs,
-            }
-    
-        # ------------------------------------------------------------------ #
-        # 3.  Legacy / unified-processor response generation (unchanged)
-        # ------------------------------------------------------------------ #
-        active_modules        = set(input_result.get("active_modules_for_input", self.default_active_modules))
-        context["active_modules"] = active_modules
-    
-        internal_thoughts_input = input_result.get("internal_thoughts", [])
-        epistemic_status = self._get_main_epistemic_status(
-            [self._ensure_internalthought(t) for t in internal_thoughts_input]
-        ) if internal_thoughts_input else "confident"
-    
-        # Handle critical issues from input processing
-        if context.get("intercepted_harmful_content", False):
-            return self._create_safety_response(context, epistemic_status, internal_thoughts_input, start_time)
-    
-        if "planned_challenge" in input_result:
-            return self._create_challenge_response(input_result, epistemic_status, internal_thoughts_input, start_time)
-    
-        # Build hierarchical memory context if enabled
-        if use_hierarchical_memory and "memory_core" in active_modules:
-            memory_context = await self._build_hierarchical_memory_context(
-                user_input, context, input_result
-            )
-            context.update(memory_context)
-    
-        # --- core response generation (unchanged) ------------------------- #
-        response_data = None
-    
-        if use_coordination and hasattr(self, "context_distribution") and self.context_distribution:
-            response_data = await self._generate_response_coordinated(user_input, context, input_result)
-    
-        elif self.processing_manager:
-            try:
-                response_data = await self.processing_manager.generate_response(
-                    user_input,
-                    input_result,
-                    context
+            # Extract parameters from kwargs first
+            use_thinking = kwargs.get('use_thinking', None)
+            use_conditioning = kwargs.get('use_conditioning', None)
+            use_coordination = kwargs.get('use_coordination', None)
+            thinking_level = kwargs.get('thinking_level', 1)
+            mode = kwargs.get('mode', 'auto')
+            use_hierarchical_memory = kwargs.get('use_hierarchical_memory', False)
+            
+            # ── 1️⃣ Use GWA to gather multi-module context ──
+            if self.workspace_engine:
+                # Submit input to workspace
+                await self.workspace_engine.ws.submit(
+                    Proposal("user_input", user_input, 1.0, context_tag="user_input")
                 )
-                if "message" in response_data:
-                    response_data = {
-                        "main_message": response_data["message"],
-                        "epistemic_status": response_data.get("epistemic_status", epistemic_status),
-                        "action": response_data.get("action_taken"),
-                        "emotional_expression": response_data.get("emotional_expression"),
-                        "processor_metadata": {
-                            "mode": "unified",
-                            "response_type": response_data.get("response_type", "unified"),
-                            "approach": input_result.get("processing_mode", "unified"),
-                        },
-                    }
-            except Exception as e:
-                logger.error(f"Error using UnifiedProcessor for response: {e}")
-                response_data = await self._generate_response_standard(user_input, context, input_result, active_modules)
-        else:
-            response_data = await self._generate_response_standard(user_input, context, input_result, active_modules)
-    
-        # ------------------------------------------------------------------ #
-        # 4.  Finalise & return
-        # ------------------------------------------------------------------ #
-        final_response = await self._finalize_response(
-            response_data,
-            epistemic_status,
-            internal_thoughts_input,
-            active_modules,
-            input_result,
-            start_time,
-            use_hierarchical_memory
-        )
-    
-        if "processor_metadata" in response_data:
-            final_response["processor_metadata"] = response_data["processor_metadata"]
-    
-        return final_response
+                
+                # Mark that we're processing
+                self.workspace_engine.ws.state["awaiting_response"] = True
+                self.workspace_engine.ws.state["input_timestamp"] = datetime.datetime.now()
+                
+                # 🔧 PATCH 1: Actually run three full workspace cycles
+                for _ in range(3):  # phases 0-1-2
+                    await self.workspace_engine.run_cycle()
+                
+                # Collect enriched context from workspace
+                gw_context = await self._gather_workspace_context()
+                context["workspace_context"] = gw_context
+                
+                # If workspace has high-confidence insights, include them
+                if gw_context.get("high_confidence_insights"):
+                    context["gw_insights"] = gw_context["high_confidence_insights"]
         
-    
-    # Helper methods for the unified functions
-    
-    async def _unified_preprocessing(self, user_input: str, context: Dict[str, Any]) -> Dict[str, Any]:
-        """Unified preprocessing including active module determination and safety checks"""
-        result = {"user_input": user_input}
-        
-        # Determine active modules
-        active_modules = await self._determine_active_modules(context, user_input)
-        context["active_modules"] = active_modules
-        result["active_modules_for_input"] = list(active_modules)
-        
-        # Harmful content check
-        if hasattr(self, "digital_somatosensory_system") and self.digital_somatosensory_system:
-            try:
-                safety_check = await self.digital_somatosensory_system.analyze_text_for_harmful_content(user_input)
-                if safety_check.get("intercepted", False):
-                    # ── NEW: Log harmful content block ──
-                    result["blocked"] = True
-                    result["intercepted_harmful_content"] = True
-                    result["suggested_response"] = safety_check.get("response_suggestion", "I cannot engage with that content.")
-                    context["intercepted_harmful_content"] = True
-                    context["suggested_response"] = result["suggested_response"]
-                    await orchestrator.log_and_score("harmful_content_blocked", {
-                        "user_id": str(self.user_id),
-                        "content_type": safety_check.get("type", "unknown")
-                    })
-                    return result
-            except Exception as e:
-                logger.error(f"Error during harmful content check: {e}")
-        
-        # Gaslighting defense check
-        if "memory_core" in active_modules and self.memory_core:
-            contradictory_claim = await self.gaslight_defense_check(user_input)
-            if contradictory_claim:
-                challenge_response = await self.challenge_user_claim(
-                    RunContextWrapper(context=self), self, contradictory_claim
+            # 2️⃣  Legacy pipeline (unchanged apart from early‑return above)
+            # ------------------------------------------------------------------
+            start_time = datetime.datetime.now()
+            
+            # Auto-detect features if not specified
+            if use_thinking is None:
+                use_thinking = (
+                    hasattr(self, "thinking_config") and 
+                    self.thinking_config.get("thinking_enabled", False) and
+                    hasattr(self, "thinking_tools")
                 )
-                result["planned_challenge"] = challenge_response
-                context["planned_challenge"] = challenge_response
-        
-        # Internal thoughts pre-processing
-        if "internal_thoughts" in active_modules and self.thoughts_manager:
-            try:
-                from nyx.core.internal_thoughts import pre_process_input
-                internal_thoughts = await pre_process_input(
-                    self.thoughts_manager, user_input, getattr(self, "user_id", None)
+                
+            if use_conditioning is None:
+                use_conditioning = (
+                    hasattr(self, "conditioned_input_processor") and 
+                    self.conditioned_input_processor is not None
                 )
-                result["internal_thoughts"] = [
-                    th.model_dump() if hasattr(th, "model_dump") else dict(th) 
-                    for th in internal_thoughts
-                ]
-                context["internal_thoughts"] = result["internal_thoughts"]
-            except Exception as e:
-                logger.error(f"Error during internal thought pre-processing: {e}")
-                result["internal_thoughts"] = []
-        else:
-            result["internal_thoughts"] = []
-        
-        return result
-    
-    
-    async def _apply_thinking_phase(self, user_input: str, context: Dict[str, Any], 
-                                   thinking_level: int, current_result: Dict[str, Any]) -> Dict[str, Any]:
-        """Apply thinking phase if enabled"""
-        result = {}
-        
-        # Check if we should use thinking
-        should_think = False
-        if hasattr(self.thinking_tools, "should_use_extended_thinking"):
-            decision = await self.thinking_tools.should_use_extended_thinking(
-                RunContextWrapper(context=self), user_input, context
-            )
-            should_think = decision.get("should_think", False)
-        
-        if should_think and hasattr(self.thinking_tools, "think_before_responding"):
-            thinking_result = await self.thinking_tools.think_before_responding(
-                RunContextWrapper(context=self), user_input, thinking_level, context
-            )
-            result["thinking_applied"] = True
-            result["thinking_result"] = thinking_result
-            context["thinking_result"] = thinking_result
-            context["thinking_applied"] = True
-            
-            # Move this inside the if block
-            await orchestrator.log_and_score("thinking_complete", {
-                "thinking_level": thinking_level,
-                "user_id": str(self.user_id)
-            })
-        else:
-            result["thinking_applied"] = False
-            result["thinking_result"] = {}                 
-        
-        return result
-
-    def _ensure_dict_result(self, result: Any) -> Dict[str, Any]:
-        """
-        Ensure a result is a dictionary, converting from Pydantic models if needed.
-        
-        Args:
-            result: The result to convert (dict, Pydantic model, or other object)
-            
-        Returns:
-            Dict[str, Any]: The result as a dictionary
-        """
-        if hasattr(result, "model_dump"):
-            # Pydantic v2 model
-            return result.model_dump()
-        elif hasattr(result, "dict"):
-            # Pydantic v1 model
-            return result.dict()
-        elif hasattr(result, "__dict__") and not isinstance(result, dict):
-            # Regular object with __dict__
-            return result.__dict__
-        elif isinstance(result, dict):
-            # Already a dictionary
-            return result
-        else:
-            # Fallback - wrap in a dict
-            logger.warning(f"Unexpected result type: {type(result)}")
-            return {"result": result}
-    
-    async def _apply_conditioning_phase(
-        self,
-        user_input: str,
-        context: Dict[str, Any],
-        current_result: Dict[str, Any],
-    ) -> Dict[str, Any]:
-        """
-        Run the conditioning processor (if configured) and merge its output.
-        Always convert results to a plain dict before further use so that later
-        code can safely call .get() etc.
-        """
-        result: Dict[str, Any] = {}
-    
-        if not self.conditioned_input_processor:         # safety-guard
-            result["conditioning_applied"] = False
-            result["conditioning_result"] = {}
-            return result
-    
-        user_id = str(getattr(self, "user_id", "unknown"))
-    
-        # --- run the processor -------------------------------------------------
-        raw = await self.conditioned_input_processor.process_input(
-            text=user_input,
-            user_id=user_id,
-            context=context,
-        )
-    
-        # --- make sure it’s a dict --------------------------------------------
-        conditioning_dict = self._ensure_dict_result(raw)
-    
-        # --- record + log ------------------------------------------------------
-        result["conditioning_applied"] = True
-        result["conditioning_result"] = conditioning_dict
-    
-        # NOTE: everything below now uses `conditioning_dict`, so no more
-        #       attribute-error when calling .get()
-        try:
-            await orchestrator.log_and_score(
-                "conditioning_applied",
-                {
-                    "user_id": user_id,
-                    "behaviors_detected": len(
-                        conditioning_dict.get("detected_patterns", [])
-                    ),
-                },
-            )
-        except Exception as e:
-            logger.warning(f"Conditioning log failed: {e}")
-    
-        # Pass any useful info back into the live context
-        if "stimulus_responses" in conditioning_dict:
-            context["conditioning_stimuli"] = conditioning_dict["stimulus_responses"]
-    
-        return result
-    
-    
-    async def _create_safety_response(self, context: Dict[str, Any], epistemic_status: str,
-                                    internal_thoughts: List[Any], start_time: datetime) -> Dict[str, Any]:
-        """Create a safety response for harmful content"""
-        return {
-            "message": context.get("suggested_response", "I cannot respond to that specific content."),
-            "epistemic_status": epistemic_status,
-            "internal_thoughts_input": internal_thoughts,
-            "internal_thoughts_output": [],
-            "active_modules_for_response": sorted(list(context.get("active_modules", []))),
-            "response_time": (datetime.datetime.now() - start_time).total_seconds(),
-            "harmful_content_intercepted": True,
-            "action_taken": None,
-            "thinking_applied": False,
-            "thinking_result": {},
-            "memory_context_used": False
-        }
-    
-    
-    async def _build_hierarchical_memory_context(self, user_input: str, context: Dict[str, Any],
-                                                input_result: Dict[str, Any]) -> Dict[str, Any]:
-        """Build hierarchical memory context for response generation"""
-        try:
-            focus_query = user_input
-            background_topics = list(context.get('recent_topics', []))
-            
-            if 'active_goals' in context and context['active_goals']:
-                background_topics.append(context['active_goals'][0]['description'])
-            background_topics = list(set(background_topics))[:3]
-            
-            current_task_desc = f"Respond conversationally to the user input: '{user_input}'"
-            if action := input_result.get('action_taken'):
-                current_task_desc = f"Execute action '{action.get('name')}' and respond based on user input: '{user_input}'"
-            
-            llm_prompt_context, assembly_meta = await self._assemble_llm_prompt_context(
-                current_task_description=current_task_desc,
-                focus_query=focus_query,
-                background_topics=background_topics
-            )
-            
-            return {
-                'hierarchical_memory_context': llm_prompt_context,
-                'memory_retrieval_stats': assembly_meta
-            }
-        except Exception as e:
-            logger.error(f"Error building hierarchical memory context: {e}", exc_info=True)
-            return {}
-    
-    
-    async def _generate_response_standard(self, user_input: str, context: Dict[str, Any],
-                                        input_result: Dict[str, Any], active_modules: Set[str]) -> Dict[str, Any]:
-        """Generate response using standard (non-coordinated) approach"""
-        main_message = "I'm processing that."
-        epistemic_status = "confident"
-        action = None
-        
-        if "agentic_action_generator" in active_modules and self.agentic_action_generator:
-            try:
-                action_context = await self._gather_action_context(context)
-                action_context_dict = action_context.model_dump() if hasattr(action_context, "model_dump") else dict(action_context)
                 
-                if 'hierarchical_memory_context' in context:
-                    action_context_dict["hierarchical_memory_context"] = context['hierarchical_memory_context']
-                
-                action = await self.agentic_action_generator.generate_action(action_context_dict)
-                
-                if not isinstance(action, dict):
-                    action = {"name": "default_acknowledge", "description": "Acknowledging input."}
-                    main_message = "Understood."
-                else:
-                    main_message = action.get("response_text", action.get("description", "Okay, I will proceed with that action."))
-                    
-                    if input_result.get("internal_thoughts"):
-                        epistemic_status = self._get_main_epistemic_status([
-                            self._ensure_internalthought(t) for t in input_result["internal_thoughts"]
-                        ])
-            except Exception as e:
-                logger.error(f"Error during action generation: {e}", exc_info=True)
-                main_message = "I encountered an internal difficulty deciding how to proceed."
-                epistemic_status = "uncertain"
-                action = {"name": "error_action", "error": str(e)}
-        else:
-            main_message = f"I've noted your input regarding '{user_input[:30]}...'"
-            if input_result.get("internal_thoughts"):
-                epistemic_status = self._get_main_epistemic_status([
-                    self._ensure_internalthought(t) for t in input_result["internal_thoughts"]
-                ])
-        
-        return {
-            "main_message": main_message,
-            "epistemic_status": epistemic_status,
-            "action": action
-        }
-    
-    
-    async def _generate_response_coordinated(self, user_input: str, context: Dict[str, Any],
-                                           input_result: Dict[str, Any]) -> Dict[str, Any]:
-        """Generate response using coordinated approach"""
-        try:
-            synthesis_results = await self.context_distribution.coordinate_processing_stage("synthesis")
-            final_response = await self.context_distribution.synthesize_responses()
-            await self.context_distribution.finalize_context_session()
+            if use_coordination is None:
+                use_coordination = (
+                    hasattr(self, "context_distribution") and 
+                    self.context_distribution is not None and
+                    mode in ["auto", "coordinated"]
+                )
             
-            return {
-                "main_message": final_response.get("primary_response", "I'm processing your input."),
-                "synthesis_results": synthesis_results,
-                "final_synthesis": final_response,
-                "coordination_metadata": final_response.get("synthesis_metadata", {})
-            }
-        except Exception as e:
-            logger.error(f"Error in coordinated response generation: {e}")
-            return {
-                "main_message": "I encountered an issue while coordinating my response.",
-                "error": str(e)
-            }
-    
-    
-    async def _finalize_response(self, response_data: Dict[str, Any], epistemic_status: str,
-                               internal_thoughts_input: List[Any], active_modules: Set[str],
-                               input_result: Dict[str, Any], start_time: datetime,
-                               use_hierarchical_memory: bool) -> Dict[str, Any]:
-        """Finalize and format the response"""
-        # Extract main message
-        main_message = response_data.get("main_message", "I'm processing that.")
-        
-        # Format with epistemic tags
-        formatted_message = self._format_response_with_epistemic_tags(main_message, epistemic_status)
-        
-        # Add thinking signal if applied
-        if input_result.get("thinking_applied"):
-            sentences = formatted_message.split('.')
-            if len(sentences) > 1:
-                sentences[0] = f"(Hmm...) {sentences[0]}"
-                formatted_message = '.'.join(sentences)
+            # Store original input
+            context["last_user_input"] = user_input
+            
+            # Phase 1: Pre-processing checks
+            processing_result = await self._unified_preprocessing(user_input, context)
+            if processing_result.get("blocked"):
+                return processing_result
+            
+            # Phase 2: Thinking (if enabled)
+            if use_thinking:
+                thinking_result = await self._apply_thinking_phase(
+                    user_input, context, thinking_level, processing_result
+                )
+                processing_result.update(thinking_result)
+            
+            # Phase 3: Conditioning (if enabled)
+            if use_conditioning:
+                conditioning_result = await self._apply_conditioning_phase(
+                    user_input, context, processing_result
+                )
+                processing_result.update(conditioning_result)
+            
+            # Phase 4: Core processing
+            if use_coordination:
+                # Use coordinated processing
+                core_result = await self._process_input_coordinated(user_input, context)
+                processing_result["processing_mode"] = "coordinated"
             else:
-                formatted_message = f"(Hmm...) {formatted_message}"
-        
-        # Post-process output
-        filtered_msg = formatted_message
-        output_thoughts = []
-        
-        if "internal_thoughts" in active_modules and self.thoughts_manager:
-            try:
-                filtered_msg, output_thoughts_objs = await self.thoughts_manager.process_output(
-                    formatted_message, input_result
+                # Use unified processor
+                if not self.processing_manager:
+                    # Initialize UnifiedProcessor if not already done
+                    self.processing_manager = UnifiedProcessor(self)
+                    await self.processing_manager.initialize()
+                
+                # Pass all context to UnifiedProcessor
+                processor_context = {
+                    **context,
+                    "active_modules": list(processing_result.get("active_modules_for_input", [])),
+                    "internal_thoughts": processing_result.get("internal_thoughts", []),
+                    "thinking_applied": processing_result.get("thinking_applied", False),
+                    "conditioning_applied": processing_result.get("conditioning_applied", False)
+                }
+                
+                # Process with unified processor
+                core_result = await self.processing_manager.process_input(
+                    user_input, 
+                    processor_context
                 )
-                output_thoughts = [
-                    th.model_dump() if hasattr(th, "model_dump") else dict(th) 
-                    for th in output_thoughts_objs
-                ]
+                
+                # Store processing approach used
+                processing_result["processing_mode"] = core_result.get("processing_mode", "unified")
+            
+            # Merge results
+            processing_result.update(core_result)
+            
+            # Phase 5: Post-processing
+            processing_result["response_time"] = (datetime.datetime.now() - start_time).total_seconds()
+            processing_result["features_used"] = {
+                "thinking": use_thinking,
+                "conditioning": use_conditioning,
+                "coordination": use_coordination
+            }
+            
+            return processing_result
+    
+        async def _gather_workspace_context(self) -> Dict[str, Any]:
+            """Gather enriched context from workspace modules"""
+            props, focus = await self.workspace_engine.ws.snapshot()
+            
+            context = {
+                "emotional_signals": [],
+                "memory_associations": [],
+                "spatial_context": [],
+                "unconscious_insights": [],
+                "cross_modal_bindings": [],
+                "high_confidence_insights": []
+            }
+            
+            # Collect insights from all modules
+            for p in props[-100:]:  # Recent proposals
+                if p.salience > 0.8:  # High confidence
+                    context["high_confidence_insights"].append({
+                        "source": p.source,
+                        "content": p.content,
+                        "tag": p.context_tag
+                    })
+                
+                # Categorize by type
+                if p.context_tag == "emotion_spike":
+                    context["emotional_signals"].append(p.content)
+                elif p.context_tag == "memory_recall":
+                    context["memory_associations"].extend(p.content.get("memories", []))
+                elif p.context_tag == "spatial_update":
+                    context["spatial_context"].append(p.content)
+                elif p.context_tag == "promoted_from_unconscious":
+                    context["unconscious_insights"].append(p.content)
+                elif p.context_tag == "binding":
+                    context["cross_modal_bindings"].append(p.content)
+            
+            return context
+    
+        async def generate_response(
+            self,
+            user_input: str,
+            context: Dict[str, Any] | None = None,
+            **kwargs
+        ) -> Dict[str, Any]:
+            """
+            Unified entry-point that now **correctly waits** for a Global-Workspace
+            decision after the input has been pushed through `process_input()`.
+        
+            The only structural change is the order of operations:
+        
+            1.  Always call `process_input()` first – this submits the user text
+                to the workspace and sets `awaiting_response = True`.
+            2.  *Then* (and only then) call `wait_for_decision()`.  
+                If the workspace replies in time we return it immediately.
+            3.  Otherwise we continue with the legacy / unified-processor path.
+        
+            Everything else is identical to your previous implementation.
+            """
+            # ------------------------------------------------------------------ #
+            # 0.  Housekeeping & kwarg parsing
+            # ------------------------------------------------------------------ #
+            if not self.initialized:
+                await self.initialize()
+        
+            use_thinking        = kwargs.get("use_thinking", None)
+            use_conditioning    = kwargs.get("use_conditioning", None)
+            use_coordination    = kwargs.get("use_coordination", None)
+            thinking_level      = kwargs.get("thinking_level", 1)
+            mode                = kwargs.get("mode", "auto")
+            use_hierarchical_memory = kwargs.get("use_hierarchical_memory", False)
+        
+            context   = context or {}
+            start_time = datetime.datetime.now()
+        
+            # ------------------------------------------------------------------ #
+            # 1.  Run the *full* input-processing pipeline (sets awaiting_response)
+            # ------------------------------------------------------------------ #
+            input_result = await self.process_input(
+                user_input,
+                context,
+                use_thinking=use_thinking,
+                use_conditioning=use_conditioning,
+                use_coordination=use_coordination,
+                thinking_level=thinking_level,
+                mode=mode,
+            )
+        
+            # ------------------------------------------------------------------ #
+            # 2.  Give the Global-Workspace engine a chance to override
+            # ------------------------------------------------------------------ #
+            decision = None
+            if (
+                self.workspace_engine
+                and self.workspace_engine.ws.state.get("awaiting_response")
+            ):
+                try:
+                    # 🔧 PATCH 2: Increase timeout and handle both 'response' and 'message' keys
+                    decision = await self.workspace_engine.wait_for_decision(timeout=3.0)
+                except asyncio.TimeoutError:
+                    logger.debug("GWA processing timed out, falling back to standard pipeline")
+                finally:
+                    # Clear the flag regardless of outcome
+                    self.workspace_engine.ws.state["awaiting_response"] = False
+        
+            if decision:
+                # 🔧 PATCH 2 continued: Accept both 'response' and legacy 'message' fields
+                text = decision.get("response") or decision.get("message")
+                if not text:
+                    text = "I understand."
+                return {
+                    "message": text,
+                    "epistemic_status": "confident",
+                    "processor_metadata": {
+                        "mode": "global_workspace",
+                        "strategy":  decision.get("strategy", "unknown"),
+                        "contributing_modules": decision.get("contributing_modules", []),
+                    },
+                    "features_used": kwargs,
+                }
+        
+            # ------------------------------------------------------------------ #
+            # 3.  Legacy / unified-processor response generation (unchanged)
+            # ------------------------------------------------------------------ #
+            active_modules        = set(input_result.get("active_modules_for_input", self.default_active_modules))
+            context["active_modules"] = active_modules
+        
+            internal_thoughts_input = input_result.get("internal_thoughts", [])
+            epistemic_status = self._get_main_epistemic_status(
+                [self._ensure_internalthought(t) for t in internal_thoughts_input]
+            ) if internal_thoughts_input else "confident"
+        
+            # Handle critical issues from input processing
+            if context.get("intercepted_harmful_content", False):
+                return self._create_safety_response(context, epistemic_status, internal_thoughts_input, start_time)
+        
+            if "planned_challenge" in input_result:
+                return self._create_challenge_response(input_result, epistemic_status, internal_thoughts_input, start_time)
+        
+            # Build hierarchical memory context if enabled
+            if use_hierarchical_memory and "memory_core" in active_modules:
+                memory_context = await self._build_hierarchical_memory_context(
+                    user_input, context, input_result
+                )
+                context.update(memory_context)
+        
+            # --- core response generation (unchanged) ------------------------- #
+            response_data = None
+        
+            if use_coordination and hasattr(self, "context_distribution") and self.context_distribution:
+                response_data = await self._generate_response_coordinated(user_input, context, input_result)
+        
+            elif self.processing_manager:
+                try:
+                    response_data = await self.processing_manager.generate_response(
+                        user_input,
+                        input_result,
+                        context
+                    )
+                    if "message" in response_data:
+                        response_data = {
+                            "main_message": response_data["message"],
+                            "epistemic_status": response_data.get("epistemic_status", epistemic_status),
+                            "action": response_data.get("action_taken"),
+                            "emotional_expression": response_data.get("emotional_expression"),
+                            "processor_metadata": {
+                                "mode": "unified",
+                                "response_type": response_data.get("response_type", "unified"),
+                                "approach": input_result.get("processing_mode", "unified"),
+                            },
+                        }
+                except Exception as e:
+                    logger.error(f"Error using UnifiedProcessor for response: {e}")
+                    response_data = await self._generate_response_standard(user_input, context, input_result, active_modules)
+            else:
+                response_data = await self._generate_response_standard(user_input, context, input_result, active_modules)
+        
+            # ------------------------------------------------------------------ #
+            # 4.  Finalise & return
+            # ------------------------------------------------------------------ #
+            final_response = await self._finalize_response(
+                response_data,
+                epistemic_status,
+                internal_thoughts_input,
+                active_modules,
+                input_result,
+                start_time,
+                use_hierarchical_memory
+            )
+        
+            if "processor_metadata" in response_data:
+                final_response["processor_metadata"] = response_data["processor_metadata"]
+        
+            return final_response
+            
+        
+        # Helper methods for the unified functions
+        
+        async def _unified_preprocessing(self, user_input: str, context: Dict[str, Any]) -> Dict[str, Any]:
+            """Unified preprocessing including active module determination and safety checks"""
+            result = {"user_input": user_input}
+            
+            # Determine active modules
+            active_modules = await self._determine_active_modules(context, user_input)
+            context["active_modules"] = active_modules
+            result["active_modules_for_input"] = list(active_modules)
+            
+            # Harmful content check
+            if hasattr(self, "digital_somatosensory_system") and self.digital_somatosensory_system:
+                try:
+                    safety_check = await self.digital_somatosensory_system.analyze_text_for_harmful_content(user_input)
+                    if safety_check.get("intercepted", False):
+                        # ── NEW: Log harmful content block ──
+                        result["blocked"] = True
+                        result["intercepted_harmful_content"] = True
+                        result["suggested_response"] = safety_check.get("response_suggestion", "I cannot engage with that content.")
+                        context["intercepted_harmful_content"] = True
+                        context["suggested_response"] = result["suggested_response"]
+                        await orchestrator.log_and_score("harmful_content_blocked", {
+                            "user_id": str(self.user_id),
+                            "content_type": safety_check.get("type", "unknown")
+                        })
+                        return result
+                except Exception as e:
+                    logger.error(f"Error during harmful content check: {e}")
+            
+            # Gaslighting defense check
+            if "memory_core" in active_modules and self.memory_core:
+                contradictory_claim = await self.gaslight_defense_check(user_input)
+                if contradictory_claim:
+                    challenge_response = await self.challenge_user_claim(
+                        RunContextWrapper(context=self), self, contradictory_claim
+                    )
+                    result["planned_challenge"] = challenge_response
+                    context["planned_challenge"] = challenge_response
+            
+            # Internal thoughts pre-processing
+            if "internal_thoughts" in active_modules and self.thoughts_manager:
+                try:
+                    from nyx.core.internal_thoughts import pre_process_input
+                    internal_thoughts = await pre_process_input(
+                        self.thoughts_manager, user_input, getattr(self, "user_id", None)
+                    )
+                    result["internal_thoughts"] = [
+                        th.model_dump() if hasattr(th, "model_dump") else dict(th) 
+                        for th in internal_thoughts
+                    ]
+                    context["internal_thoughts"] = result["internal_thoughts"]
+                except Exception as e:
+                    logger.error(f"Error during internal thought pre-processing: {e}")
+                    result["internal_thoughts"] = []
+            else:
+                result["internal_thoughts"] = []
+            
+            return result
+        
+        
+        async def _apply_thinking_phase(self, user_input: str, context: Dict[str, Any], 
+                                       thinking_level: int, current_result: Dict[str, Any]) -> Dict[str, Any]:
+            """Apply thinking phase if enabled"""
+            result = {}
+            
+            # Check if we should use thinking
+            should_think = False
+            if hasattr(self.thinking_tools, "should_use_extended_thinking"):
+                decision = await self.thinking_tools.should_use_extended_thinking(
+                    RunContextWrapper(context=self), user_input, context
+                )
+                should_think = decision.get("should_think", False)
+            
+            if should_think and hasattr(self.thinking_tools, "think_before_responding"):
+                thinking_result = await self.thinking_tools.think_before_responding(
+                    RunContextWrapper(context=self), user_input, thinking_level, context
+                )
+                result["thinking_applied"] = True
+                result["thinking_result"] = thinking_result
+                context["thinking_result"] = thinking_result
+                context["thinking_applied"] = True
+                
+                # Move this inside the if block
+                await orchestrator.log_and_score("thinking_complete", {
+                    "thinking_level": thinking_level,
+                    "user_id": str(self.user_id)
+                })
+            else:
+                result["thinking_applied"] = False
+                result["thinking_result"] = {}                 
+            
+            return result
+    
+        def _ensure_dict_result(self, result: Any) -> Dict[str, Any]:
+            """
+            Ensure a result is a dictionary, converting from Pydantic models if needed.
+            
+            Args:
+                result: The result to convert (dict, Pydantic model, or other object)
+                
+            Returns:
+                Dict[str, Any]: The result as a dictionary
+            """
+            if hasattr(result, "model_dump"):
+                # Pydantic v2 model
+                return result.model_dump()
+            elif hasattr(result, "dict"):
+                # Pydantic v1 model
+                return result.dict()
+            elif hasattr(result, "__dict__") and not isinstance(result, dict):
+                # Regular object with __dict__
+                return result.__dict__
+            elif isinstance(result, dict):
+                # Already a dictionary
+                return result
+            else:
+                # Fallback - wrap in a dict
+                logger.warning(f"Unexpected result type: {type(result)}")
+                return {"result": result}
+        
+        async def _apply_conditioning_phase(
+            self,
+            user_input: str,
+            context: Dict[str, Any],
+            current_result: Dict[str, Any],
+        ) -> Dict[str, Any]:
+            """
+            Run the conditioning processor (if configured) and merge its output.
+            Always convert results to a plain dict before further use so that later
+            code can safely call .get() etc.
+            """
+            result: Dict[str, Any] = {}
+        
+            if not self.conditioned_input_processor:         # safety-guard
+                result["conditioning_applied"] = False
+                result["conditioning_result"] = {}
+                return result
+        
+            user_id = str(getattr(self, "user_id", "unknown"))
+        
+            # --- run the processor -------------------------------------------------
+            raw = await self.conditioned_input_processor.process_input(
+                text=user_input,
+                user_id=user_id,
+                context=context,
+            )
+        
+            # --- make sure it's a dict --------------------------------------------
+            conditioning_dict = self._ensure_dict_result(raw)
+        
+            # --- record + log ------------------------------------------------------
+            result["conditioning_applied"] = True
+            result["conditioning_result"] = conditioning_dict
+        
+            # NOTE: everything below now uses `conditioning_dict`, so no more
+            #       attribute-error when calling .get()
+            try:
+                await orchestrator.log_and_score(
+                    "conditioning_applied",
+                    {
+                        "user_id": user_id,
+                        "behaviors_detected": len(
+                            conditioning_dict.get("detected_patterns", [])
+                        ),
+                    },
+                )
             except Exception as e:
-                logger.error(f"Error during internal thought post-processing: {e}")
+                logger.warning(f"Conditioning log failed: {e}")
         
-        # Update performance metrics
-        response_time = (datetime.datetime.now() - start_time).total_seconds()
-        if hasattr(self, 'performance_metrics') and isinstance(self.performance_metrics, dict):
-            if 'response_times' in self.performance_metrics:
-                self.performance_metrics["response_times"].append(response_time)
-                if len(self.performance_metrics["response_times"]) > 100:
-                    self.performance_metrics["response_times"] = self.performance_metrics["response_times"][-100:]
+            # Pass any useful info back into the live context
+            if "stimulus_responses" in conditioning_dict:
+                context["conditioning_stimuli"] = conditioning_dict["stimulus_responses"]
         
-        # Build final response
-        final_response = {
-            "message": filtered_msg,
-            "epistemic_status": epistemic_status,
-            "internal_thoughts_input": internal_thoughts_input,
-            "internal_thoughts_output": output_thoughts,
-            "active_modules_for_response": sorted(list(active_modules)),
-            "response_time": response_time,
-            "action_taken": response_data.get("action"),
-            "thinking_applied": input_result.get("thinking_applied", False),
-            "thinking_result": input_result.get("thinking_result", {}),
-            "memory_context_used": use_hierarchical_memory and 'hierarchical_memory_context' in input_result
-        }
+            return result
         
-        # Add memory retrieval stats if available
-        if 'memory_retrieval_stats' in input_result:
-            final_response["memory_retrieval_stats"] = {
-                "focus_count": input_result['memory_retrieval_stats'].get('focus_retrieved_count', 0),
-                "background_count": input_result['memory_retrieval_stats'].get('background_retrieved_count', 0),
-                "zoom_in_count": input_result['memory_retrieval_stats'].get('zoom_in_details_count', 0)
+        
+        async def _create_safety_response(self, context: Dict[str, Any], epistemic_status: str,
+                                        internal_thoughts: List[Any], start_time: datetime) -> Dict[str, Any]:
+            """Create a safety response for harmful content"""
+            return {
+                "message": context.get("suggested_response", "I cannot respond to that specific content."),
+                "epistemic_status": epistemic_status,
+                "internal_thoughts_input": internal_thoughts,
+                "internal_thoughts_output": [],
+                "active_modules_for_response": sorted(list(context.get("active_modules", []))),
+                "response_time": (datetime.datetime.now() - start_time).total_seconds(),
+                "harmful_content_intercepted": True,
+                "action_taken": None,
+                "thinking_applied": False,
+                "thinking_result": {},
+                "memory_context_used": False
             }
         
-        # Add coordination metadata if available
-        if "coordination_metadata" in response_data:
-            final_response["coordination_metadata"] = response_data["coordination_metadata"]
         
-        # Add synthesis results if available
-        if "synthesis_results" in response_data:
-            final_response["synthesis_results"] = response_data["synthesis_results"]
+        async def _build_hierarchical_memory_context(self, user_input: str, context: Dict[str, Any],
+                                                    input_result: Dict[str, Any]) -> Dict[str, Any]:
+            """Build hierarchical memory context for response generation"""
+            try:
+                focus_query = user_input
+                background_topics = list(context.get('recent_topics', []))
+                
+                if 'active_goals' in context and context['active_goals']:
+                    background_topics.append(context['active_goals'][0]['description'])
+                background_topics = list(set(background_topics))[:3]
+                
+                current_task_desc = f"Respond conversationally to the user input: '{user_input}'"
+                if action := input_result.get('action_taken'):
+                    current_task_desc = f"Execute action '{action.get('name')}' and respond based on user input: '{user_input}'"
+                
+                llm_prompt_context, assembly_meta = await self._assemble_llm_prompt_context(
+                    current_task_description=current_task_desc,
+                    focus_query=focus_query,
+                    background_topics=background_topics
+                )
+                
+                return {
+                    'hierarchical_memory_context': llm_prompt_context,
+                    'memory_retrieval_stats': assembly_meta
+                }
+            except Exception as e:
+                logger.error(f"Error building hierarchical memory context: {e}", exc_info=True)
+                return {}
         
-        try:
-            reward_score = await orchestrator.log_and_score("response_generated", {
-                "response_time": response_time,
-                "epistemic_status": epistemic_status,
-                "user_id": str(self.user_id),
-                "active_modules": len(active_modules),
-                "thinking_applied": input_result.get("thinking_applied", False),
-                "conditioning_applied": input_result.get("conditioning_applied", False),
-                "memory_context_used": use_hierarchical_memory
-            })
+        
+        async def _generate_response_standard(self, user_input: str, context: Dict[str, Any],
+                                            input_result: Dict[str, Any], active_modules: Set[str]) -> Dict[str, Any]:
+            """Generate response using standard (non-coordinated) approach"""
+            main_message = "I'm processing that."
+            epistemic_status = "confident"
+            action = None
             
-            # Optionally store reward score
-            final_response["reward_score"] = reward_score
-            
-        except Exception as e:
-            logger.error(f"Failed to log response_generated: {e}")
-        
-        return final_response
-    
-    
-    async def _process_input_coordinated(self, user_input: str, context: Dict[str, Any]) -> Dict[str, Any]:
-        """Internal method for coordinated input processing"""
-        if not self.context_distribution:
-            await self.initialize_context_system()
-        
-        shared_context = await self.context_distribution.initialize_context_session(
-            user_input=user_input,
-            user_id=getattr(self, 'user_id', None),
-            initial_context=context or {}
-        )
-        
-        try:
-            input_results = await self.context_distribution.coordinate_processing_stage("input")
-            analysis_results = await self.context_distribution.coordinate_processing_stage("analysis")
-            integration_results = await self.context_distribution.coordinate_processing_stage("integration")
+            if "agentic_action_generator" in active_modules and self.agentic_action_generator:
+                try:
+                    action_context = await self._gather_action_context(context)
+                    action_context_dict = action_context.model_dump() if hasattr(action_context, "model_dump") else dict(action_context)
+                    
+                    if 'hierarchical_memory_context' in context:
+                        action_context_dict["hierarchical_memory_context"] = context['hierarchical_memory_context']
+                    
+                    action = await self.agentic_action_generator.generate_action(action_context_dict)
+                    
+                    if not isinstance(action, dict):
+                        action = {"name": "default_acknowledge", "description": "Acknowledging input."}
+                        main_message = "Understood."
+                    else:
+                        main_message = action.get("response_text", action.get("description", "Okay, I will proceed with that action."))
+                        
+                        if input_result.get("internal_thoughts"):
+                            epistemic_status = self._get_main_epistemic_status([
+                                self._ensure_internalthought(t) for t in input_result["internal_thoughts"]
+                            ])
+                except Exception as e:
+                    logger.error(f"Error during action generation: {e}", exc_info=True)
+                    main_message = "I encountered an internal difficulty deciding how to proceed."
+                    epistemic_status = "uncertain"
+                    action = {"name": "error_action", "error": str(e)}
+            else:
+                main_message = f"I've noted your input regarding '{user_input[:30]}...'"
+                if input_result.get("internal_thoughts"):
+                    epistemic_status = self._get_main_epistemic_status([
+                        self._ensure_internalthought(t) for t in input_result["internal_thoughts"]
+                    ])
             
             return {
-                "input_processing": input_results,
-                "analysis_processing": analysis_results,
-                "integration_processing": integration_results,
-                "shared_context": shared_context.dict(),
-                "active_modules": list(shared_context.active_modules),
-                "context_updates": len(shared_context.context_updates)
+                "main_message": main_message,
+                "epistemic_status": epistemic_status,
+                "action": action
             }
-        except Exception as e:
-            logger.error(f"Error in coordinated input processing: {e}")
-            return {"error": str(e)}
-    
-    
-    async def _create_challenge_response(self, input_result: Dict[str, Any], epistemic_status: str,
-                                       internal_thoughts: List[Any], start_time: datetime) -> Dict[str, Any]:
-        """Create a challenge response for gaslighting detection"""
-        return {
-            "message": input_result["planned_challenge"],
-            "epistemic_status": "confident",
-            "internal_thoughts_input": internal_thoughts,
-            "internal_thoughts_output": [],
-            "active_modules_for_response": sorted(list(input_result.get("active_modules_for_input", []))),
-            "response_time": (datetime.datetime.now() - start_time).total_seconds(),
-            "action_taken": {"name": "challenge_user", "description": "Challenging user claim."},
-            "thinking_applied": input_result.get("thinking_applied", False),
-            "thinking_result": input_result.get("thinking_result", {}),
-            "memory_context_used": False
-        }
-
-    async def _scheduled_identity_update(self):
-        # Run every 24 hours or after significant interactions
-        while True:
-            await asyncio.sleep(86400)  # 24 hours
-            if self.mode_integration:
-                result = await self.mode_integration.update_identity_from_mode_usage()
-                logger.info(f"Scheduled identity update from mode usage: {result}")
-
-    async def modify_response_with_conditioning(self, response_text: str, processing_results: Dict[str, Any]) -> str:
-        """
-        Modify response based on conditioning results
         
-        Args:
-            response_text: Original response text
-            processing_results: Results from process_conditioned_input
+        
+        async def _generate_response_coordinated(self, user_input: str, context: Dict[str, Any],
+                                               input_result: Dict[str, Any]) -> Dict[str, Any]:
+            """Generate response using coordinated approach"""
+            try:
+                synthesis_results = await self.context_distribution.coordinate_processing_stage("synthesis")
+                final_response = await self.context_distribution.synthesize_responses()
+                await self.context_distribution.finalize_context_session()
+                
+                return {
+                    "main_message": final_response.get("primary_response", "I'm processing your input."),
+                    "synthesis_results": synthesis_results,
+                    "final_synthesis": final_response,
+                    "coordination_metadata": final_response.get("synthesis_metadata", {})
+                }
+            except Exception as e:
+                logger.error(f"Error in coordinated response generation: {e}")
+                return {
+                    "main_message": "I encountered an issue while coordinating my response.",
+                    "error": str(e)
+                }
+        
+        
+        async def _finalize_response(self, response_data: Dict[str, Any], epistemic_status: str,
+                                   internal_thoughts_input: List[Any], active_modules: Set[str],
+                                   input_result: Dict[str, Any], start_time: datetime,
+                                   use_hierarchical_memory: bool) -> Dict[str, Any]:
+            """Finalize and format the response"""
+            # Extract main message
+            main_message = response_data.get("main_message", "I'm processing that.")
             
-        Returns:
-            Modified response text
-        """
-        if not self.initialized:
-            await self.initialize()
+            # Format with epistemic tags
+            formatted_message = self._format_response_with_epistemic_tags(main_message, epistemic_status)
+            
+            # Add thinking signal if applied
+            if input_result.get("thinking_applied"):
+                sentences = formatted_message.split('.')
+                if len(sentences) > 1:
+                    sentences[0] = f"(Hmm...) {sentences[0]}"
+                    formatted_message = '.'.join(sentences)
+                else:
+                    formatted_message = f"(Hmm...) {formatted_message}"
+            
+            # Post-process output
+            filtered_msg = formatted_message
+            output_thoughts = []
+            
+            if "internal_thoughts" in active_modules and self.thoughts_manager:
+                try:
+                    filtered_msg, output_thoughts_objs = await self.thoughts_manager.process_output(
+                        formatted_message, input_result
+                    )
+                    output_thoughts = [
+                        th.model_dump() if hasattr(th, "model_dump") else dict(th) 
+                        for th in output_thoughts_objs
+                    ]
+                except Exception as e:
+                    logger.error(f"Error during internal thought post-processing: {e}")
+            
+            # Update performance metrics
+            response_time = (datetime.datetime.now() - start_time).total_seconds()
+            if hasattr(self, 'performance_metrics') and isinstance(self.performance_metrics, dict):
+                if 'response_times' in self.performance_metrics:
+                    self.performance_metrics["response_times"].append(response_time)
+                    if len(self.performance_metrics["response_times"]) > 100:
+                        self.performance_metrics["response_times"] = self.performance_metrics["response_times"][-100:]
+            
+            # Build final response
+            final_response = {
+                "message": filtered_msg,
+                "epistemic_status": epistemic_status,
+                "internal_thoughts_input": internal_thoughts_input,
+                "internal_thoughts_output": output_thoughts,
+                "active_modules_for_response": sorted(list(active_modules)),
+                "response_time": response_time,
+                "action_taken": response_data.get("action"),
+                "thinking_applied": input_result.get("thinking_applied", False),
+                "thinking_result": input_result.get("thinking_result", {}),
+                "memory_context_used": use_hierarchical_memory and 'hierarchical_memory_context' in input_result
+            }
+            
+            # Add memory retrieval stats if available
+            if 'memory_retrieval_stats' in input_result:
+                final_response["memory_retrieval_stats"] = {
+                    "focus_count": input_result['memory_retrieval_stats'].get('focus_retrieved_count', 0),
+                    "background_count": input_result['memory_retrieval_stats'].get('background_retrieved_count', 0),
+                    "zoom_in_count": input_result['memory_retrieval_stats'].get('zoom_in_details_count', 0)
+                }
+            
+            # Add coordination metadata if available
+            if "coordination_metadata" in response_data:
+                final_response["coordination_metadata"] = response_data["coordination_metadata"]
+            
+            # Add synthesis results if available
+            if "synthesis_results" in response_data:
+                final_response["synthesis_results"] = response_data["synthesis_results"]
+            
+            try:
+                reward_score = await orchestrator.log_and_score("response_generated", {
+                    "response_time": response_time,
+                    "epistemic_status": epistemic_status,
+                    "user_id": str(self.user_id),
+                    "active_modules": len(active_modules),
+                    "thinking_applied": input_result.get("thinking_applied", False),
+                    "conditioning_applied": input_result.get("conditioning_applied", False),
+                    "memory_context_used": use_hierarchical_memory
+                })
+                
+                # Optionally store reward score
+                final_response["reward_score"] = reward_score
+                
+            except Exception as e:
+                logger.error(f"Failed to log response_generated: {e}")
+            
+            return final_response
         
-        if not self.conditioned_input_processor:
-            return response_text
         
-        return await self.conditioned_input_processor.modify_response(
-            response_text=response_text,
-            input_processing_results=processing_results
-        )
-
-    def _ensure_internalthought(self, th):
-        """Converts a dict to a dummy object with attribute access, for epistemic_status lookups."""
-        if hasattr(th, "epistemic_status"):
-            return th
-        else:
-            # Turn dict into object with attributes
-            dummy = type("InternalThoughtDummy", (), {})()
-            for k, v in th.items():
-                setattr(dummy, k, v)
-            return dummy
+        async def _process_input_coordinated(self, user_input: str, context: Dict[str, Any]) -> Dict[str, Any]:
+            """Internal method for coordinated input processing"""
+            if not self.context_distribution:
+                await self.initialize_context_system()
+            
+            shared_context = await self.context_distribution.initialize_context_session(
+                user_input=user_input,
+                user_id=getattr(self, 'user_id', None),
+                initial_context=context or {}
+            )
+            
+            try:
+                input_results = await self.context_distribution.coordinate_processing_stage("input")
+                analysis_results = await self.context_distribution.coordinate_processing_stage("analysis")
+                integration_results = await self.context_distribution.coordinate_processing_stage("integration")
+                
+                return {
+                    "input_processing": input_results,
+                    "analysis_processing": analysis_results,
+                    "integration_processing": integration_results,
+                    "shared_context": shared_context.dict(),
+                    "active_modules": list(shared_context.active_modules),
+                    "context_updates": len(shared_context.context_updates)
+                }
+            except Exception as e:
+                logger.error(f"Error in coordinated input processing: {e}")
+                return {"error": str(e)}
+        
+        
+        async def _create_challenge_response(self, input_result: Dict[str, Any], epistemic_status: str,
+                                           internal_thoughts: List[Any], start_time: datetime) -> Dict[str, Any]:
+            """Create a challenge response for gaslighting detection"""
+            return {
+                "message": input_result["planned_challenge"],
+                "epistemic_status": "confident",
+                "internal_thoughts_input": internal_thoughts,
+                "internal_thoughts_output": [],
+                "active_modules_for_response": sorted(list(input_result.get("active_modules_for_input", []))),
+                "response_time": (datetime.datetime.now() - start_time).total_seconds(),
+                "action_taken": {"name": "challenge_user", "description": "Challenging user claim."},
+                "thinking_applied": input_result.get("thinking_applied", False),
+                "thinking_result": input_result.get("thinking_result", {}),
+                "memory_context_used": False
+            }
+    
+        async def _scheduled_identity_update(self):
+            # Run every 24 hours or after significant interactions
+            while True:
+                await asyncio.sleep(86400)  # 24 hours
+                if self.mode_integration:
+                    result = await self.mode_integration.update_identity_from_mode_usage()
+                    logger.info(f"Scheduled identity update from mode usage: {result}")
+    
+        async def modify_response_with_conditioning(self, response_text: str, processing_results: Dict[str, Any]) -> str:
+            """
+            Modify response based on conditioning results
+            
+            Args:
+                response_text: Original response text
+                processing_results: Results from process_conditioned_input
+                
+            Returns:
+                Modified response text
+            """
+            if not self.initialized:
+                await self.initialize()
+            
+            if not self.conditioned_input_processor:
+                return response_text
+            
+            return await self.conditioned_input_processor.modify_response(
+                response_text=response_text,
+                input_processing_results=processing_results
+            )
+    
+        def _ensure_internalthought(self, th):
+            """Converts a dict to a dummy object with attribute access, for epistemic_status lookups."""
+            if hasattr(th, "epistemic_status"):
+                return th
+            else:
+                # Turn dict into object with attributes
+                dummy = type("InternalThoughtDummy", (), {})()
+                for k, v in th.items():
+                    setattr(dummy, k, v)
+                return dummy
 
     @staticmethod
     @function_tool
