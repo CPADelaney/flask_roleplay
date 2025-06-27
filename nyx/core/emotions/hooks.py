@@ -62,7 +62,7 @@ class EmotionalAgentHooks(AgentHooks[EmotionalContext]):
             data={
                 "event": "start",
                 "agent": agent.name,
-                "cycle": context.context.cycle_count,
+                "cycle": str(context.context.cycle_count),
                 "timestamp": datetime.datetime.now().isoformat(),
                 "agent_tools": [tool.name for tool in agent.tools] if hasattr(agent, "tools") else [],
                 "has_handoffs": hasattr(agent, "handoffs") and len(agent.handoffs) > 0
@@ -81,7 +81,7 @@ class EmotionalAgentHooks(AgentHooks[EmotionalContext]):
         context.context.record_agent_state(agent.name, {
             "status": "started",
             "start_time": datetime.datetime.now().isoformat(),
-            "cycle": context.context.cycle_count
+            "cycle": str(context.context.cycle_count)
         })
         
         # Keep track of last active agent for transitions
@@ -108,7 +108,7 @@ class EmotionalAgentHooks(AgentHooks[EmotionalContext]):
                     "agent": agent.name,
                     "action": "start",
                     "timestamp": datetime.datetime.now().isoformat(),
-                    "cycle": context.context.cycle_count,
+                    "cycle": str(context.context.cycle_count),
                     "data": {
                         "chemical_count": len(self.neurochemicals),
                     }
@@ -138,7 +138,7 @@ class EmotionalAgentHooks(AgentHooks[EmotionalContext]):
                 "agent": agent.name,
                 "action": "start",
                 "timestamp": datetime.datetime.now().isoformat(),
-                "cycle": context.context.cycle_count,
+                "cycle": str(context.context.cycle_count),
                 "data": {
                     "emotion_rules_indexed": bool(condition_map)
                 }
@@ -161,7 +161,7 @@ class EmotionalAgentHooks(AgentHooks[EmotionalContext]):
                 data={
                     "dominant_emotion": dominant[0] if dominant else "unknown",
                     "intensity": dominant[1] if dominant else 0,
-                    "cycle": context.context.cycle_count
+                    "cycle": str(context.context.cycle_count)
                 }
             )
             reflection_span.start()
@@ -191,7 +191,7 @@ class EmotionalAgentHooks(AgentHooks[EmotionalContext]):
                     "event": "end",
                     "output_type": type(output).__name__ if output else None,
                     "duration": context.context.get_elapsed_time(f"start_{agent.name}"),
-                    "cycle": context.context.cycle_count
+                    "cycle": str(context.context.cycle_count)
                 })
             
             # Finish and remove the span
@@ -207,7 +207,7 @@ class EmotionalAgentHooks(AgentHooks[EmotionalContext]):
             "status": "completed",
             "end_time": datetime.datetime.now().isoformat(),
             "duration": duration,
-            "cycle": context.context.cycle_count,
+            "cycle": str(context.context.cycle_count),
             "output_type": type(output).__name__ if output else None
         })
         
@@ -240,7 +240,7 @@ class EmotionalAgentHooks(AgentHooks[EmotionalContext]):
                     "agent": agent.name,
                     "action": "complete",
                     "timestamp": datetime.datetime.now().isoformat(),
-                    "cycle": context.context.cycle_count,
+                    "cycle": str(context.context.cycle_count),
                     "data": {
                         "updated_chemicals": list(updated_chemicals),
                         "duration": duration
@@ -267,7 +267,7 @@ class EmotionalAgentHooks(AgentHooks[EmotionalContext]):
                             "intensity": output.primary_emotion.intensity,
                             "valence": output.primary_emotion.valence,
                             "arousal": output.primary_emotion.arousal,
-                            "cycle": context.context.cycle_count,
+                            "cycle": str(context.context.cycle_count),
                             "timestamp": datetime.datetime.now().isoformat()
                         }
                     ):
@@ -276,7 +276,7 @@ class EmotionalAgentHooks(AgentHooks[EmotionalContext]):
                             "timestamp": datetime.datetime.now().isoformat(),
                             "from": previous_emotion,
                             "to": current_emotion,
-                            "cycle": context.context.cycle_count
+                            "cycle": str(context.context.cycle_count)
                         })
                 
                 # Update previous emotion for next transition tracking
@@ -290,7 +290,7 @@ class EmotionalAgentHooks(AgentHooks[EmotionalContext]):
                     "timestamp": datetime.datetime.now().isoformat(),
                     "emotion": output.source_emotion,
                     "insight_level": output.insight_level,
-                    "cycle": context.context.cycle_count,
+                    "cycle": str(context.context.cycle_count),
                     "thought": output.thought_text if hasattr(output, "thought_text") else ""
                 })
                 
@@ -329,7 +329,7 @@ class EmotionalAgentHooks(AgentHooks[EmotionalContext]):
                 "event": "start",
                 "tool": tool_name,
                 "agent": agent.name,
-                "cycle": context.context.cycle_count,
+                "cycle": str(context.context.cycle_count),
                 "timestamp": datetime.datetime.now().isoformat()
             }
         )
@@ -353,7 +353,7 @@ class EmotionalAgentHooks(AgentHooks[EmotionalContext]):
             "agent": agent.name,
             "action": "start",
             "timestamp": datetime.datetime.now().isoformat(),
-            "cycle": context.context.cycle_count
+            "cycle": str(context.context.cycle_count)
         })
         
         # Pre-warm cache for specific tools
@@ -413,7 +413,7 @@ class EmotionalAgentHooks(AgentHooks[EmotionalContext]):
                     "event": "end",
                     "result_length": len(str(result)),
                     "duration": duration,
-                    "cycle": context.context.cycle_count
+                    "cycle": str(context.context.cycle_count)
                 })
             
             # Finish and remove the span
@@ -435,7 +435,7 @@ class EmotionalAgentHooks(AgentHooks[EmotionalContext]):
                             "error": result_data["error"],
                             "error_type": result_data.get("error_type", "unknown"),
                             "agent": agent.name,
-                            "cycle": context.context.cycle_count
+                            "cycle": str(context.context.cycle_count)
                         }
                     ):
                         # Implement recovery strategies based on tool and error type
@@ -478,7 +478,7 @@ class EmotionalAgentHooks(AgentHooks[EmotionalContext]):
             "agent": agent.name,
             "action": "complete",
             "timestamp": datetime.datetime.now().isoformat(),
-            "cycle": context.context.cycle_count,
+            "cycle": str(context.context.cycle_count),
             "duration": duration
         })
         
@@ -499,7 +499,7 @@ class EmotionalAgentHooks(AgentHooks[EmotionalContext]):
                             "new_value": result_data.get("new_value", 0),
                             "change": result_data.get("new_value", 0) - result_data.get("old_value", 0),
                             "agent": agent.name,
-                            "cycle": context.context.cycle_count,
+                            "cycle": str(context.context.cycle_count),
                             "timestamp": datetime.datetime.now().isoformat(),
                             "type": "chemical_update"  # Type for analytics processor
                         }
@@ -534,7 +534,7 @@ class EmotionalAgentHooks(AgentHooks[EmotionalContext]):
             data={
                 "from_agent": source.name,
                 "to_agent": agent.name,
-                "cycle": context.context.cycle_count,
+                "cycle": str(context.context.cycle_count),
                 "timestamp": datetime.datetime.now().isoformat()
             }
         ) as handoff_span:
@@ -547,7 +547,7 @@ class EmotionalAgentHooks(AgentHooks[EmotionalContext]):
                 "timestamp": datetime.datetime.now().isoformat(),
                 "from": source.name,
                 "to": agent.name,
-                "cycle": context.context.cycle_count
+                "cycle": str(context.context.cycle_count)
             }
             
             handoffs.append(handoff_entry)
@@ -607,7 +607,7 @@ class EmotionalAgentHooks(AgentHooks[EmotionalContext]):
                         data={
                             "pattern": transfer_key,
                             "count": count,
-                            "cycle": context.context.cycle_count,
+                            "cycle": str(context.context.cycle_count),
                             "timestamp": datetime.datetime.now().isoformat()
                         }
                     ):
