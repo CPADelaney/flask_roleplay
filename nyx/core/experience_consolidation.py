@@ -392,6 +392,31 @@ class ExperienceConsolidationSystem:
             output_info={"valid": True},
             tripwire_triggered=False
         )
+    
+    # Helper method to safely run agents with list input
+    async def _run_agent(self, agent: Agent, payload: Any, **kwargs) -> Any:
+        """
+        Helper method to run an agent with guaranteed list input.
+        
+        Args:
+            agent: The agent to run
+            payload: The input payload (dict or list)
+            **kwargs: Additional arguments for Runner.run
+            
+        Returns:
+            The result from Runner.run
+        """
+        # Ensure payload is a list
+        if not isinstance(payload, list):
+            payload = [payload]
+        
+        # Set default kwargs
+        if 'context' not in kwargs:
+            kwargs['context'] = self.context
+        if 'hooks' not in kwargs:
+            kwargs['hooks'] = self.run_hooks
+            
+        return await Runner.run(agent, payload, **kwargs)
 
     # Tool functions with pydantic models for parameters
     @staticmethod  
@@ -1190,8 +1215,8 @@ class ExperienceConsolidationSystem:
             trace_metadata={"experience_count": len(experience_ids)}
         ):
             try:
-                # Use the candidate finder agent
-                result = await Runner.run(
+                # Use the candidate finder agent with list input
+                result = await self._run_agent(
                     self.candidate_finder_agent,
                     {
                         "experience_ids": experience_ids,
@@ -1199,8 +1224,6 @@ class ExperienceConsolidationSystem:
                         "max_group_size": self.max_group_size,
                         "min_group_size": self.min_group_size
                     },
-                    context=self.context,
-                    hooks=self.run_hooks,
                     run_config=RunConfig(
                         workflow_name="ConsolidationCandidateFinder",
                         trace_metadata={"experience_count": len(experience_ids)}
@@ -1236,8 +1259,8 @@ class ExperienceConsolidationSystem:
             }
         ):
             try:
-                # Use the consolidation agent
-                result = await Runner.run(
+                # Use the consolidation agent with list input
+                result = await self._run_agent(
                     self.consolidation_agent,
                     {
                         "source_ids": candidate.source_ids,
@@ -1246,8 +1269,6 @@ class ExperienceConsolidationSystem:
                         "scenario_type": candidate.scenario_type,
                         "similarity_score": candidate.similarity_score
                     },
-                    context=self.context,
-                    hooks=self.run_hooks,
                     run_config=RunConfig(
                         workflow_name="ConsolidationCreation",
                         trace_metadata={
@@ -1348,15 +1369,13 @@ class ExperienceConsolidationSystem:
             }
         ):
             try:
-                # Use the evaluation agent
-                result = await Runner.run(
+                # Use the evaluation agent with list input
+                result = await self._run_agent(
                     self.evaluation_agent,
                     {
                         "consolidated_id": consolidated_id,
                         "source_ids": source_ids
                     },
-                    context=self.context,
-                    hooks=self.run_hooks,
                     run_config=RunConfig(
                         workflow_name="ConsolidationEvaluation",
                         trace_metadata={
@@ -1396,14 +1415,13 @@ class ExperienceConsolidationSystem:
             total_memories_affected = 0
 
             try:
-                # 1. Find candidate groups
-                result = await Runner.run(
+                # 1. Find candidate groups - using list input
+                result = await self._run_agent(
                     self.candidate_finder_agent,
                     {"experience_ids": experience_ids or [], 
                      "similarity_threshold": self.similarity_threshold,
                      "max_group_size": self.max_group_size,
                      "min_group_size": self.min_group_size},
-                    context=self.context,
                     run_config=RunConfig(workflow_name="CandidateFinder")
                 )
                 raw = result.final_output or []
@@ -1440,16 +1458,15 @@ class ExperienceConsolidationSystem:
                         logger.error(f"Retrieval error for {cluster}: {e}")
                         continue
 
-                    # 2b. Generate consolidated text
+                    # 2b. Generate consolidated text - using list input
                     try:
-                        res = await Runner.run(
+                        res = await self._run_agent(
                             self.consolidation_agent,
                             {"source_ids": cluster,
                              "consolidation_type": cand.consolidation_type,
                              "theme": cand.theme,
                              "scenario_type": cand.scenario_type,
                              "similarity_score": cand.similarity_score},
-                            context=self.context,
                             run_config=RunConfig(workflow_name="Consolidator")
                         )
                         out: ConsolidationOutput = res.final_output
