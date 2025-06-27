@@ -271,9 +271,10 @@ class ExperienceConsolidationSystem:
                 )
             ],
             tools=[
-                function_tool(self._update_consolidation_history),
-                function_tool(self._get_consolidation_statistics)
+                self._update_consolidation_history,
+                self._get_consolidation_statistics
             ],
+            model="gpt-4.1-nano",
             input_guardrails=[
                 InputGuardrail(guardrail_function=self._consolidation_request_guardrail)
             ],
@@ -299,11 +300,12 @@ class ExperienceConsolidationSystem:
             Consider scenario types, emotional context, and common themes when grouping experiences.
             """,
             tools=[
-                function_tool(self._get_experience_details),
-                function_tool(self._calculate_similarity_score),
-                function_tool(self._find_common_theme),
-                function_tool(self._sort_candidate_groups)
+                self._get_experience_details,
+                self._calculate_similarity_score,
+                self._find_common_theme,
+                self._sort_candidate_groups
             ],
+            model="gpt-4.1-nano",
             output_type=List[ConsolidationCandidate]
         )
     
@@ -326,11 +328,12 @@ class ExperienceConsolidationSystem:
             Focus on revealing underlying principles, patterns, or insights across experiences.
             """,
             tools=[
-                function_tool(self._get_experience_details),
-                function_tool(self._extract_common_emotional_context),
-                function_tool(self._generate_consolidation_type),
-                function_tool(self._calculate_significance_score)
+                self._get_experience_details,
+                self._extract_common_emotional_context,
+                self._generate_consolidation_type,
+                self._calculate_significance_score
             ],
+            model="gpt-4.1-nano",
             output_type=ConsolidationOutput
         )
     
@@ -353,11 +356,12 @@ class ExperienceConsolidationSystem:
             provides genuine value beyond the individual experiences.
             """,
             tools=[
-                function_tool(self._get_experience_details),
-                function_tool(self._calculate_coverage_score),
-                function_tool(self._calculate_coherence_score),
-                function_tool(self._calculate_information_gain)
+                self._get_experience_details,
+                self._calculate_coverage_score,
+                self._calculate_coherence_score,
+                self._calculate_information_gain
             ],
+            model="gpt-4.1-nano",
             output_type=ConsolidationEvaluation
         )
     
