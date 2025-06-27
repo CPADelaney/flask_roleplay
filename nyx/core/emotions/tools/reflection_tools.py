@@ -95,7 +95,7 @@ class ReflectionTools:
                 trace_id=gen_trace_id(),
                 group_id=ctx.context.get_value("conversation_id", "default"),
                 metadata={
-                    "cycle": ctx.context.cycle_count if hasattr(ctx.context, "cycle_count") else 0
+                    "cycle": str(ctx.context.cycle_count) if hasattr(ctx.context, "cycle_count") else 0
                 }
             ):
                 # Get current emotional state matrix
@@ -129,7 +129,7 @@ class ReflectionTools:
                     data={
                         "primary_emotion": primary_emotion,
                         "intensity": intensity,
-                        "cycle": ctx.context.cycle_count if hasattr(ctx.context, "cycle_count") else 0
+                        "cycle": str(ctx.context.cycle_count) if hasattr(ctx.context, "cycle_count") else 0
                     }
                 ):
                     # Get possible reflection patterns for this emotion - use safe defaults
@@ -242,7 +242,7 @@ class ReflectionTools:
                                 "emotion": primary_emotion,
                                 "insight_level": insight_level,
                                 "has_adaptive_change": adaptive_change is not None,
-                                "cycle": ctx.context.cycle_count if hasattr(ctx.context, "cycle_count") else 0
+                                "cycle": str(ctx.context.cycle_count) if hasattr(ctx.context, "cycle_count") else 0
                             }
                         ):
                             # Create the thought output
@@ -293,7 +293,7 @@ class ReflectionTools:
                 trace_id=gen_trace_id(),
                 group_id=ctx.context.get_value("conversation_id", "default"),
                 metadata={
-                    "cycle": ctx.context.cycle_count if hasattr(ctx.context, "cycle_count") else 0
+                    "cycle": str(ctx.context.cycle_count) if hasattr(ctx.context, "cycle_count") else 0
                 }
             ):
                 # Get recent thoughts
@@ -317,7 +317,7 @@ class ReflectionTools:
                     "reflection_thought_analysis",
                     data={
                         "thought_count": len(recent_thoughts),
-                        "cycle": ctx.context.cycle_count if hasattr(ctx.context, "cycle_count") else 0
+                        "cycle": str(ctx.context.cycle_count) if hasattr(ctx.context, "cycle_count") else 0
                     }
                 ):
                     # Analyze thoughts
@@ -391,7 +391,7 @@ class ReflectionTools:
                             "dominant_emotion": max(emotion_frequencies.items(), key=lambda x: x[1])[0] if emotion_frequencies else "unknown",
                             "themes": [t for t, _ in dominant_themes],
                             "pattern_count": len(temporal_patterns),
-                            "cycle": ctx.context.cycle_count if hasattr(ctx.context, "cycle_count") else 0
+                            "cycle": str(ctx.context.cycle_count) if hasattr(ctx.context, "cycle_count") else 0
                         }
                     ):
                         return {
@@ -486,7 +486,7 @@ class ReflectionTools:
                 data={
                     "thought_count": len(recent_thoughts),
                     "limit": limit,
-                    "cycle": ctx.context.cycle_count if hasattr(ctx.context, "cycle_count") else 0
+                    "cycle": str(ctx.context.cycle_count) if hasattr(ctx.context, "cycle_count") else 0
                 }
             ):
                 # Get limited recent thoughts
@@ -551,7 +551,7 @@ class ReflectionTools:
                 trace_id=gen_trace_id(),
                 group_id=ctx.context.get_value("conversation_id", "default"),
                 metadata={
-                    "cycle": ctx.context.cycle_count if hasattr(ctx.context, "cycle_count") else 0
+                    "cycle": str(ctx.context.cycle_count) if hasattr(ctx.context, "cycle_count") else 0
                 }
             ):
                 # Get emotional history
@@ -571,7 +571,7 @@ class ReflectionTools:
                     "wisdom_emotional_analysis",
                     data={
                         "history_length": len(self.emotional_state_history),
-                        "cycle": ctx.context.cycle_count if hasattr(ctx.context, "cycle_count") else 0
+                        "cycle": str(ctx.context.cycle_count) if hasattr(ctx.context, "cycle_count") else 0
                     }
                 ):
                     # Use most recent 20 states for analysis
@@ -655,7 +655,7 @@ class ReflectionTools:
                             "dominant_emotions": [e for e, _ in dominant_emotions],
                             "valence_trend": valence_trend,
                             "wisdom_length": len(wisdom),
-                            "cycle": ctx.context.cycle_count if hasattr(ctx.context, "cycle_count") else 0
+                            "cycle": str(ctx.context.cycle_count) if hasattr(ctx.context, "cycle_count") else 0
                         }
                     ):
                         return {
