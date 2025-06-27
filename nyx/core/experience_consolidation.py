@@ -1,10 +1,10 @@
-# nyx/core/experience_consolidation.py - Part 1
+# nyx/core/experience_consolidation.py
 
 import logging
 import asyncio
 import random
 import math
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Any, Optional, Tuple, Union, Set
 import os
 from pydantic import BaseModel, Field
@@ -180,11 +180,15 @@ class ConsolidationRunHooks(RunHooks):
         
     async def on_tool_start(self, context: RunContextWrapper, agent: Agent, tool: Any):
         """Called before a tool is invoked"""
-        logger.info(f"Starting tool: {tool.name} from agent: {agent.name}")
+        # Handle tools that might not have a name attribute
+        tool_name = getattr(tool, 'name', None) or getattr(tool, '__name__', None) or str(tool)
+        logger.info(f"Starting tool: {tool_name} from agent: {agent.name}")
         
     async def on_tool_end(self, context: RunContextWrapper, agent: Agent, tool: Any, result: str):
         """Called after a tool is invoked"""
-        logger.info(f"Tool {tool.name} completed with result length: {len(str(result))}")
+        # Handle tools that might not have a name attribute
+        tool_name = getattr(tool, 'name', None) or getattr(tool, '__name__', None) or str(tool)
+        logger.info(f"Tool {tool_name} completed with result length: {len(str(result))}")
 
 class ExperienceConsolidationSystem:
     """
@@ -385,8 +389,6 @@ class ExperienceConsolidationSystem:
             tripwire_triggered=False
         )
 
-# nyx/core/experience_consolidation.py - Part 2 (Tool Functions)
-        
     # Tool functions with pydantic models for parameters
     @staticmethod  
     @function_tool
@@ -592,7 +594,7 @@ class ExperienceConsolidationSystem:
         • Returns a SortedGroups model, ready for the next agent step.
         """
         parent_system = ctx.context.parent_system
-        # sensible default in case the attribute isn’t present
+        # sensible default in case the attribute isn't present
         max_size = getattr(parent_system, "max_group_size", 10)
     
         def _score(group: Dict[str, Any]) -> float:
@@ -686,7 +688,6 @@ class ExperienceConsolidationSystem:
             logger.error(f"Error extracting emotional context: {e}")
             return EmotionalContextSummary()
 
-    # ---------------------------------------------------------------------------
     @staticmethod
     @function_tool
     async def _generate_consolidation_type(
@@ -694,13 +695,13 @@ class ExperienceConsolidationSystem:
         experiences: Any                      # <— was List[ExperienceDetails]
     ) -> ConsolidationType:
         """
-        Decide which consolidation strategy (“pattern”, “abstraction”, “trend”)
+        Decide which consolidation strategy ("pattern", "abstraction", "trend")
         best fits the supplied experiences.
         """
         if not experiences:
             return ConsolidationType(type="pattern")
     
-        # --- helper to safely unwrap attrs whether they’re Pydantic objects
+        # --- helper to safely unwrap attrs whether they're Pydantic objects
         #     or plain dicts -------------------------------------------------
         def _get(obj, key, default=None):
             return getattr(obj, key, obj.get(key, default) if isinstance(obj, dict) else default)
@@ -728,10 +729,7 @@ class ExperienceConsolidationSystem:
             return ConsolidationType(type="trend")
     
         return ConsolidationType(type="pattern")
-    # ---------------------------------------------------------------------------
 
-
-    # ---------------------------------------------------------------------------
     @staticmethod
     @function_tool
     async def _calculate_significance_score(
@@ -739,7 +737,7 @@ class ExperienceConsolidationSystem:
         experiences: Any                           # <— was List[ExperienceDetails]
     ) -> SignificanceScore:
         """
-        Compute a 0-10 “significance” rating for a prospective consolidation.
+        Compute a 0-10 "significance" rating for a prospective consolidation.
         """
     
         # helper – works for either Pydantic objects or dicts
@@ -761,10 +759,7 @@ class ExperienceConsolidationSystem:
         # -------------------------------------------------------------------------
     
         return SignificanceScore(score=min(10.0, score))
-    # ---------------------------------------------------------------------------
 
-
-    # ---------------------------------------------------------------------------
     @staticmethod
     @function_tool
     async def _calculate_coverage_score(
@@ -804,10 +799,7 @@ class ExperienceConsolidationSystem:
             return CoverageScore(score=0.0)
     
         return CoverageScore(score=sum(scores) / len(scores))
-    # ---------------------------------------------------------------------------
 
-
-    # ---------------------------------------------------------------------------
     @staticmethod
     @function_tool
     async def _calculate_coherence_score(
@@ -874,7 +866,7 @@ class ExperienceConsolidationSystem:
             sents  = [s for s in text.replace(";", ".").split(".") if s.strip()]
             flesch = _flesch_fallback(tokens, sents)
     
-        # Map roughly 0-100 to 0-1 where ≥ 60 is “good”
+        # Map roughly 0-100 to 0-1 where ≥ 60 is "good"
         readability = min(100.0, max(0.0, flesch)) / 100.0
     
         # -------- cohesion (lexical / semantic) -----------------------------------
@@ -927,9 +919,7 @@ class ExperienceConsolidationSystem:
         )
     
         return CoherenceScore(score=round(coherence_score, 4))
-    # ---------------------------------------------------------------------------
 
-    # ---------------------------------------------------------------------------
     @staticmethod
     @function_tool
     async def _calculate_information_gain(
@@ -941,7 +931,7 @@ class ExperienceConsolidationSystem:
         Estimate how much new / abstracted value the consolidation adds.
     
         Components (weights):
-          • 0.40 insight markers          (“pattern”, “trend”, …)
+          • 0.40 insight markers          ("pattern", "trend", …)
           • 0.40 compression_score        (shorter than sources)
           • 0.20 abstraction_score        (generalising adverbs)
         """
@@ -974,8 +964,6 @@ class ExperienceConsolidationSystem:
                 abstraction_score * 0.2)
     
         return InformationGain(score=gain)
-    # ---------------------------------------------------------------------------
-
     
     # New helper functions for orchestration
 
@@ -1027,11 +1015,10 @@ class ExperienceConsolidationSystem:
         if len(ps.consolidation_history) > ps.max_history_size:
             ps.consolidation_history = ps.consolidation_history[-ps.max_history_size :]
     
-        # keep convenience pointer to “last consolidation”
+        # keep convenience pointer to "last consolidation"
         ps.last_consolidation = datetime.now(timezone.utc)
     
         return UpdateHistoryResult(success=True)
-
 
     @staticmethod
     @function_tool
@@ -1075,13 +1062,12 @@ class ExperienceConsolidationSystem:
         )
 
     # Helper – very fast lexical Jaccard as a fallback
-    def _quick_jaccard(a: str, b: str) -> float:
+    def _quick_jaccard(self, a: str, b: str) -> float:
         a_set, b_set = set(a.lower().split()), set(b.lower().split())
         if not a_set or not b_set:
             return 0.0
         return len(a_set & b_set) / len(a_set | b_set)
     
-    # ---------------------------------------------------------------------------
     @staticmethod
     @function_tool
     async def _find_similar_experiences(                        # noqa: N802
@@ -1163,7 +1149,7 @@ class ExperienceConsolidationSystem:
                 if target_vec is not None and cand_vec is not None:
                     sim = interface._calculate_cosine_similarity(target_vec, cand_vec)  # pylint: disable=protected-access
                 else:
-                    sim = _quick_jaccard(target_text, cand_text)
+                    sim = ps._quick_jaccard(target_text, cand_text)
     
                 if sim < params.similarity_threshold:
                     return None
@@ -1182,8 +1168,6 @@ class ExperienceConsolidationSystem:
         scored.sort(key=lambda x: x["similarity"], reverse=True)
         return FindSimilarResult(experiences=scored[: params.max_similar])
 
-# nyx/core/experience_consolidation.py - Part 3 (Public Methods)
-    
     # Public methods with enhanced implementation
     
     async def find_consolidation_candidates(self, experience_ids: List[str]) -> List[ConsolidationCandidate]:
