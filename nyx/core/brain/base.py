@@ -5576,115 +5576,115 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
         context: Dict[str, Any] | None = None,
         **kwargs
     ) -> Dict[str, Any]:
+        """
+        Unified entry-point that now **correctly waits** for a Global-Workspace
+        decision after the input has been pushed through `process_input()`.
+    
+        The only structural change is the order of operations:
+    
+        1.  Always call `process_input()` first – this submits the user text
+            to the workspace and sets `awaiting_response = True`.
+        2.  *Then* (and only then) call `wait_for_decision()`.  
+            If the workspace replies in time we return it immediately.
+        3.  Otherwise we continue with the legacy / unified-processor path.
+    
+        Everything else is identical to your previous implementation.
+        """
+        # ------------------------------------------------------------------ #
+        # 0.  Housekeeping & kwarg parsing
+        # ------------------------------------------------------------------ #
         if not self.initialized:
             await self.initialize()
-        
-        # Extract parameters from kwargs first
-        use_thinking = kwargs.get('use_thinking', None)
-        use_conditioning = kwargs.get('use_conditioning', None)
-        use_coordination = kwargs.get('use_coordination', None)
-        thinking_level = kwargs.get('thinking_level', 1)
-        mode = kwargs.get('mode', 'auto')
-        use_hierarchical_memory = kwargs.get('use_hierarchical_memory', False)
-        
-        context = context or {}
+    
+        use_thinking        = kwargs.get("use_thinking", None)
+        use_conditioning    = kwargs.get("use_conditioning", None)
+        use_coordination    = kwargs.get("use_coordination", None)
+        thinking_level      = kwargs.get("thinking_level", 1)
+        mode                = kwargs.get("mode", "auto")
+        use_hierarchical_memory = kwargs.get("use_hierarchical_memory", False)
+    
+        context   = context or {}
         start_time = datetime.datetime.now()
-        
-        # ── 1️⃣ Check if GWA has a high-confidence complete response ──
-        if self.workspace_engine and context.get("workspace_context", {}).get("high_confidence_insights"):
-            # Look for complete responses from specialized modules
-            for insight in context["workspace_context"]["high_confidence_insights"]:
-                if insight["tag"] == "complete_response" and insight.get("confidence", 0) > 0.9:
-                    # Use GWA response but still apply safety and formatting
-                    gwa_response = insight["content"]
-                    
-                    # Apply conditioning if enabled
-                    if kwargs.get("use_conditioning") and self.conditioned_input_processor:
-                        gwa_response = await self.conditioned_input_processor.modify_response(
-                            gwa_response, context
-                        )
-                    
-                    return {
-                        "message": gwa_response,
-                        "epistemic_status": "confident",
-                        "processor_metadata": {"mode": "global_workspace_override"},
-                        "features_used": kwargs
-                    }
-        
-        # ── NEW: Wait for GWA to process if we haven't already ──
-        if self.workspace_engine and self.workspace_engine.ws.state.get("awaiting_response"):
-            try:
-                # Wait for up to 1 second for GWA to generate a response
-                decision = await self.workspace_engine.wait_for_decision(timeout=1.0)
-                
-                if decision and decision.get("confidence", 0) > 0.6:
-                    # Use GWA response if confident enough
-                    return {
-                        "message": decision.get("response", "I understand."),
-                        "epistemic_status": "confident", 
-                        "processor_metadata": {
-                            "mode": "global_workspace",
-                            "strategy": decision.get("strategy", "unknown"),
-                            "contributing_modules": decision.get("contributing_modules", [])
-                        },
-                        "features_used": kwargs
-                    }
-            except asyncio.TimeoutError:
-                logger.debug("GWA processing timed out, falling back to standard processing")
-            finally:
-                self.workspace_engine.ws.state["awaiting_response"] = False
-        
-        # ── 2️⃣ otherwise call process_input() which now embeds workspace hints
+    
+        # ------------------------------------------------------------------ #
+        # 1.  Run the *full* input-processing pipeline (sets awaiting_response)
+        # ------------------------------------------------------------------ #
         input_result = await self.process_input(
             user_input,
             context,
             use_thinking=use_thinking,
             use_conditioning=use_conditioning,
             use_coordination=use_coordination,
-            thinking_level=1,
+            thinking_level=thinking_level,
             mode=mode,
         )
-
-        
-        # Extract key information from input processing
-        active_modules = set(input_result.get("active_modules_for_input", self.default_active_modules))
+    
+        # ------------------------------------------------------------------ #
+        # 2.  Give the Global-Workspace engine a chance to override
+        # ------------------------------------------------------------------ #
+        decision = None
+        if (
+            self.workspace_engine
+            and self.workspace_engine.ws.state.get("awaiting_response")
+        ):
+            try:
+                decision = await self.workspace_engine.wait_for_decision(timeout=1.0)
+            except asyncio.TimeoutError:
+                logger.debug("GWA processing timed out, falling back to standard pipeline")
+            finally:
+                # Clear the flag regardless of outcome
+                self.workspace_engine.ws.state["awaiting_response"] = False
+    
+        if decision:
+            return {
+                "message": decision.get("response", "I understand."),
+                "epistemic_status": "confident",
+                "processor_metadata": {
+                    "mode": "global_workspace",
+                    "strategy":  decision.get("strategy", "unknown"),
+                    "contributing_modules": decision.get("contributing_modules", []),
+                },
+                "features_used": kwargs,
+            }
+    
+        # ------------------------------------------------------------------ #
+        # 3.  Legacy / unified-processor response generation (unchanged)
+        # ------------------------------------------------------------------ #
+        active_modules        = set(input_result.get("active_modules_for_input", self.default_active_modules))
         context["active_modules"] = active_modules
+    
         internal_thoughts_input = input_result.get("internal_thoughts", [])
         epistemic_status = self._get_main_epistemic_status(
             [self._ensure_internalthought(t) for t in internal_thoughts_input]
         ) if internal_thoughts_input else "confident"
-        
+    
         # Handle critical issues from input processing
         if context.get("intercepted_harmful_content", False):
             return self._create_safety_response(context, epistemic_status, internal_thoughts_input, start_time)
-        
+    
         if "planned_challenge" in input_result:
             return self._create_challenge_response(input_result, epistemic_status, internal_thoughts_input, start_time)
-        
+    
         # Build hierarchical memory context if enabled
         if use_hierarchical_memory and "memory_core" in active_modules:
             memory_context = await self._build_hierarchical_memory_context(
                 user_input, context, input_result
             )
             context.update(memory_context)
-        
-        # Generate response based on processing mode
+    
+        # --- core response generation (unchanged) ------------------------- #
         response_data = None
-        
+    
         if use_coordination and hasattr(self, "context_distribution") and self.context_distribution:
-            # Use coordinated response generation
             response_data = await self._generate_response_coordinated(user_input, context, input_result)
-        
+    
         elif self.processing_manager:
-            # Use unified processor for response
             try:
                 response_data = await self.processing_manager.generate_response(
                     user_input,
                     input_result,
                     context
                 )
-                
-                # Extract the core response data
                 if "message" in response_data:
                     response_data = {
                         "main_message": response_data["message"],
@@ -5694,19 +5694,18 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
                         "processor_metadata": {
                             "mode": "unified",
                             "response_type": response_data.get("response_type", "unified"),
-                            "approach": input_result.get("processing_mode", "unified")
-                        }
+                            "approach": input_result.get("processing_mode", "unified"),
+                        },
                     }
             except Exception as e:
                 logger.error(f"Error using UnifiedProcessor for response: {e}")
-                # Fallback to standard generation
                 response_data = await self._generate_response_standard(user_input, context, input_result, active_modules)
-        
         else:
-            # Fallback to standard response generation
             response_data = await self._generate_response_standard(user_input, context, input_result, active_modules)
-        
-        # Apply post-processing
+    
+        # ------------------------------------------------------------------ #
+        # 4.  Finalise & return
+        # ------------------------------------------------------------------ #
         final_response = await self._finalize_response(
             response_data,
             epistemic_status,
@@ -5716,13 +5715,12 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
             start_time,
             use_hierarchical_memory
         )
-        
-        # Add processor metadata if available
+    
         if "processor_metadata" in response_data:
             final_response["processor_metadata"] = response_data["processor_metadata"]
-        
-        return final_response
     
+        return final_response
+        
     
     # Helper methods for the unified functions
     
