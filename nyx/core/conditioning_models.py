@@ -59,6 +59,64 @@ class PersonalityProfile(BaseModel):
     emotion_triggers: Dict[str, EmotionTriggerDetail] = Field(default_factory=dict, description="Emotion triggers")
     behaviors: Dict[str, List[str]] = Field(default_factory=dict, description="Behaviors and associated traits")
 
+# ==================== Explicit Models for Strict Schema Compliance ====================
+
+# Models for BehaviorEvaluationOutput
+class RelevantAssociation(BaseModel):
+    """Model for relevant associations in behavior evaluation"""
+    key: str = Field(..., description="Association key")
+    stimulus: str = Field(..., description="Stimulus")
+    response: str = Field(..., description="Response")
+    strength: float = Field(..., description="Association strength")
+    valence: float = Field(..., description="Valence")
+    context_match: bool = Field(False, description="Whether context matches")
+
+# Models for MaintenanceSummaryOutput
+class MaintenanceTask(BaseModel):
+    """Model for maintenance tasks performed"""
+    task_type: str = Field(..., description="Type of maintenance task")
+    entity_type: str = Field(..., description="Type of entity maintained")
+    entity_id: str = Field(..., description="ID of entity")
+    action_taken: str = Field(..., description="Action that was taken")
+    result: str = Field(..., description="Result of the action")
+    timestamp: str = Field(..., description="When the task was performed")
+
+# Models for BalanceAnalysisOutput
+class TraitImbalanceInfo(BaseModel):
+    """Model for trait imbalance information"""
+    trait: Optional[str] = Field(None, description="Single trait name if applicable")
+    traits: Optional[List[str]] = Field(None, description="Multiple traits if applicable")
+    imbalance_type: str = Field(..., description="Type of imbalance")
+    severity: float = Field(..., description="Severity of imbalance (0.0-1.0)")
+    current_value: Optional[float] = Field(None, description="Current trait value")
+    recommended_value: Optional[float] = Field(None, description="Recommended trait value")
+    difference: Optional[float] = Field(None, description="Difference between traits")
+
+class TraitRecommendation(BaseModel):
+    """Model for trait adjustment recommendations"""
+    trait: str = Field(..., description="Trait to adjust")
+    current_value: float = Field(..., description="Current value")
+    recommended_adjustment: float = Field(..., description="Recommended adjustment")
+    reason: str = Field(..., description="Reason for recommendation")
+    priority: float = Field(..., description="Priority of adjustment (0.0-1.0)")
+
+class BehaviorRecommendation(BaseModel):
+    """Model for behavior conditioning recommendations"""
+    behavior: str = Field(..., description="Behavior to condition")
+    conditioning_type: str = Field(..., description="Type of conditioning to apply")
+    intensity: float = Field(..., description="Recommended intensity")
+    reason: str = Field(..., description="Reason for recommendation")
+
+# Models for AssociationConsolidationOutput
+class ConsolidationAction(BaseModel):
+    """Model for consolidation actions taken"""
+    action_type: str = Field(..., description="Type of consolidation action")
+    source_keys: List[str] = Field(..., description="Source association keys")
+    target_key: Optional[str] = Field(None, description="Target association key if merged")
+    strength_before: float = Field(..., description="Strength before consolidation")
+    strength_after: float = Field(..., description="Strength after consolidation")
+    reason: str = Field(..., description="Reason for consolidation")
+
 # ==================== Output Schema Models ====================
 
 class ClassicalConditioningOutput(BaseModel):
@@ -85,7 +143,7 @@ class BehaviorEvaluationOutput(BaseModel):
     confidence: float = Field(default=0.0, description="Confidence in the evaluation (0.0-1.0)")
     recommendation: str = Field(default="neutral", description="Recommendation (approach, avoid, neutral)")
     explanation: str = Field(default="", description="Explanation of the recommendation")
-    relevant_associations: Optional[List[Dict[str, Any]]] = Field(default=None, description="Relevant associations considered")
+    relevant_associations: Optional[List[RelevantAssociation]] = Field(default=None, description="Relevant associations considered")
 
 class TraitConditioningOutput(BaseModel):
     trait: str = Field(default="", description="The personality trait being conditioned")
@@ -94,13 +152,6 @@ class TraitConditioningOutput(BaseModel):
     conditioned_behaviors: List[str] = Field(default_factory=list, description="Behaviors conditioned for this trait")
     identity_impact: str = Field(default="", description="Description of impact on identity")
     conditioning_strategy: str = Field(default="", description="Strategy used for conditioning")
-
-class MaintenanceTask(BaseModel):
-    task_type: str = Field(..., description="Type of maintenance task")
-    priority: float = Field(..., description="Priority level (0.0-1.0)")
-    entity_id: str = Field(..., description="ID of entity to maintain")
-    scheduled_time: str = Field(..., description="Scheduled execution time")
-    parameters: Dict[str, Any] = Field(default_factory=dict, description="Task parameters")
 
 class MaintenanceRecommendation(BaseModel):
     recommendation_type: str = Field(..., description="Type of recommendation")
@@ -112,21 +163,21 @@ class MaintenanceRecommendation(BaseModel):
 
 class BalanceAnalysisOutput(BaseModel):
     is_balanced: bool = Field(default=False, description="Whether personality is balanced")
-    imbalances: List[Dict[str, Any]] = Field(default_factory=list, description="Detected imbalances")
-    trait_recommendations: List[Dict[str, Any]] = Field(default_factory=list, description="Trait recommendations")
-    behavior_recommendations: List[Dict[str, Any]] = Field(default_factory=list, description="Behavior recommendations")
+    imbalances: List[TraitImbalanceInfo] = Field(default_factory=list, description="Detected imbalances")
+    trait_recommendations: List[TraitRecommendation] = Field(default_factory=list, description="Trait recommendations")
+    behavior_recommendations: List[BehaviorRecommendation] = Field(default_factory=list, description="Behavior recommendations")
     balance_score: float = Field(default=0.0, description="Overall balance score (0.0-1.0)")
     analysis: str = Field(default="", description="Analysis of personality balance")
 
 class AssociationConsolidationOutput(BaseModel):
-    consolidations: List[Dict[str, Any]] = Field(default_factory=list, description="Consolidations performed")
+    consolidations: List[ConsolidationAction] = Field(default_factory=list, description="Consolidations performed")
     removed_keys: List[str] = Field(default_factory=list, description="Association keys removed")
     strengthened_keys: List[str] = Field(default_factory=list, description="Association keys strengthened")
     efficiency_gain: float = Field(default=0.0, description="Efficiency gain from consolidation (0.0-1.0)")
     reasoning: str = Field(default="", description="Reasoning for consolidations")
 
 class MaintenanceSummaryOutput(BaseModel):
-    tasks_performed: List[Dict[str, Any]] = Field(default_factory=list, description="Tasks performed during the maintenance run")
+    tasks_performed: List[MaintenanceTask] = Field(default_factory=list, description="Tasks performed during the maintenance run")
     time_taken_seconds: float = Field(default=0.0, description="Total time taken for the maintenance run in seconds")
     associations_modified: int = Field(default=0, description="Number of conditioning associations modified")
     traits_adjusted: int = Field(default=0, description="Number of personality traits adjusted")
