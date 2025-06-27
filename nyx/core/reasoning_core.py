@@ -12,6 +12,7 @@ import networkx as nx
 import random
 import re
 from collections import defaultdict
+import threading
 from nyx.core.multimodal_integrator import (
     MultimodalIntegrator, Modality, SensoryInput, ExpectationSignal, IntegratedPercept
 )
@@ -922,9 +923,143 @@ class ReasoningCore:
         self.next_space_id = 1
         self.next_blend_id = 1
     
+        self._stats_lock = threading.Lock()
+        self._monitoring_task = None
+        
+        # Auto-load general model if available
+        self._load_general_model()
+    
     # ==================================================================================
     # Causal Reasoning Methods
     # ==================================================================================
+
+    def _load_general_model(self):
+        """Load the general causal model on initialization"""
+        try:
+            from nyx.models.general_causal_model import GENERAL_CAUSAL_MODEL
+            self.add_causal_model("general", GENERAL_CAUSAL_MODEL)
+            logger.info("General causal model loaded successfully")
+        except ImportError:
+            logger.info("General causal model not found; skipping auto-load")
+
+    def sync_general_model(self):
+        """Sync the general model nodes with actual system values"""
+        # Find the general model
+        general_model = None
+        for model in self.causal_models.values():
+            if model.domain == "general":
+                general_model = model
+                break
+        
+        if not general_model:
+            return
+        
+        # Update control nodes from config
+        config_mappings = {
+            "min_relation_strength": self.causal_config["min_relation_strength"],
+            "max_model_depth": self.causal_config["max_model_depth"] / 10.0,
+            "default_confidence": self.causal_config["default_confidence"],
+            "enable_auto_discovery": 1.0 if self.causal_config["enable_auto_discovery"] else 0.0,
+            "discovery_threshold": self.causal_config["discovery_threshold"],
+            "min_data_points": self.causal_config["min_data_points"] / 25.0,  # Normalize
+            "default_mapping_threshold": self.blending_config["default_mapping_threshold"],
+            "emergent_structure_thresh": self.blending_config["emergent_structure_threshold"],
+            "elaboration_iterations": self.blending_config["elaboration_iterations"] / 5.0,
+            "enable_auto_blending": 1.0 if self.integrated_config["enable_auto_blending"] else 0.0,
+            "cross_system_map_thresh": self.integrated_config["cross_system_mapping_threshold"]
+        }
+        
+        # Update variable nodes from stats (with thread safety)
+        with self._stats_lock:
+            stats_mappings = {
+                "models_created": min(1.0, self.stats["models_created"] / 100.0) if self.stats["models_created"] > 0 else 0.0,
+                "nodes_created": min(1.0, self.stats["nodes_created"] / 1000.0) if self.stats["nodes_created"] > 0 else 0.0,
+                "relations_created": min(1.0, self.stats["relations_created"] / 1000.0) if self.stats["relations_created"] > 0 else 0.0,
+                "interventions_performed": min(1.0, self.stats["interventions_performed"] / 100.0) if self.stats["interventions_performed"] > 0 else 0.0,
+                "counterfactuals_analyzed": min(1.0, self.stats["counterfactuals_analyzed"] / 100.0) if self.stats["counterfactuals_analyzed"] > 0 else 0.0,
+                "blends_created": min(1.0, self.stats["blends_created"] / 100.0) if self.stats["blends_created"] > 0 else 0.0,
+                "integrated_analyses": min(1.0, self.stats["integrated_analyses"] / 100.0) if self.stats["integrated_analyses"] > 0 else 0.0,
+                "creative_interventions": min(1.0, self.stats["creative_interventions"] / 100.0) if self.stats["creative_interventions"] > 0 else 0.0
+            }
+        
+        # Batch update observations
+        for node_id, node in general_model.nodes.items():
+            original_id = node.metadata.get("original_id")
+            
+            if original_id in config_mappings:
+                value = config_mappings[original_id]
+                node.add_observation(value, confidence=1.0)
+            elif original_id in stats_mappings:
+                value = stats_mappings[original_id]
+                node.add_observation(value, confidence=0.9)
+
+    def add_causal_model(self, domain: str, model_dict: Dict[str, Any]) -> str:
+        """Register a pre-defined causal model from a dictionary"""
+        # Create the model
+        model_id = model_dict.get("id", f"model_{self.next_model_id}")
+        self.next_model_id += 1
+        
+        model = CausalModel(
+            model_id=model_id,
+            name=model_dict["name"],
+            domain=model_dict.get("domain", domain),
+            metadata=model_dict.get("metadata", {})
+        )
+        
+        # Add nodes
+        node_mappings = {}  # original_id -> actual_id
+        for node_id, node_data in model_dict.get("nodes", {}).items():
+            actual_node_id = model.add_node(
+                name=node_id,
+                domain=domain,
+                node_type=node_data["type"],
+                metadata={"original_id": node_id}
+            )
+            
+            node = model.nodes[actual_node_id]
+            
+            # Add states based on node type
+            if node_data["type"] == "control":
+                # Control nodes get discrete states
+                node.add_state(0.0)
+                node.add_state(0.5)
+                node.add_state(1.0)
+            else:
+                # Other nodes just use current value
+                node.add_state(node_data["current_value"])
+            
+            # Set current state
+            node.set_default_state(node_data["current_value"])
+            
+            # Add initial observation
+            node.add_observation(
+                value=node_data["current_value"],
+                confidence=1.0
+            )
+            
+            node_mappings[node_id] = actual_node_id
+        
+        # Add relations
+        for relation_data in model_dict.get("relations", []):
+            source_id = node_mappings.get(relation_data["source"])
+            target_id = node_mappings.get(relation_data["target"])
+            
+            if source_id and target_id:
+                model.add_relation(
+                    source_id=source_id,
+                    target_id=target_id,
+                    relation_type="causal",
+                    strength=relation_data["strength"],
+                    mechanism=relation_data.get("comment", "")
+                )
+        
+        # Store the model
+        self.causal_models[model_id] = model
+        
+        # Update statistics HERE, not later
+        self.stats["models_created"] += 1
+        
+        return model_id
     
     async def create_causal_model(self, name: str, domain: str, 
                             metadata: Dict[str, Any] = None) -> str:
@@ -946,8 +1081,106 @@ class ReasoningCore:
         
         # Update statistics
         self.stats["models_created"] += 1
-        
+
+        try:
+            loop = asyncio.get_running_loop()
+            loop.call_soon(self.sync_general_model)
+        except RuntimeError:
+            # No event loop, call directly
+            self.sync_general_model()                
+                
         return model_id
+
+    async def analyze_system_performance(self) -> Dict[str, Any]:
+        """Use the general model to analyze system performance"""
+        # Find general model
+        general_model = None
+        for model in self.causal_models.values():
+            if model.domain == "general":
+                general_model = model
+                break
+        
+        if not general_model:
+            return {"error": "General model not found"}
+        
+        # Resolve actual node IDs at runtime
+        node_id_map = {}
+        for node_id, node in general_model.nodes.items():
+            original_id = node.metadata.get("original_id")
+            if original_id:
+                node_id_map[original_id] = node_id
+        
+        suggestions = []
+        
+        # Test increasing discovery threshold
+        discovery_node_id = node_id_map.get("discovery_threshold")
+        
+        if discovery_node_id:
+            # Define intervention returns ID, not results
+            intervention_id = await self.define_intervention(
+                model_id=general_model.id,
+                target_node=discovery_node_id,
+                target_value=0.8,
+                name="Increase discovery threshold",
+                description="Test impact of stricter discovery"
+            )
+            
+            # Get intervention object
+            intervention = self.interventions[intervention_id]
+            
+            for effect_node_id, effect in intervention.effects.items():
+                node = general_model.nodes.get(effect_node_id)
+                if node and effect["probability"] > 0.6:
+                    original_name = node.metadata.get("original_id", node.name)
+                    suggestions.append({
+                        "control": "discovery_threshold",
+                        "change": "increase to 0.8",
+                        "expected_effect": f"{original_name}: {effect['expected_value']}",
+                        "confidence": effect["probability"]
+                    })
+        
+        return {
+            "current_performance": await self.get_stats(),
+            "optimization_suggestions": suggestions
+        }
+
+    async def start_system_monitoring(self, interval: float = 60.0):
+        """Start monitoring system performance with the general model"""
+        # Cancel existing task if any
+        if self._monitoring_task:
+            self._monitoring_task.cancel()
+        
+        async def _monitor():
+            while True:
+                try:
+                    # Sync is synchronous, so just call it
+                    self.sync_general_model()
+                    
+                    # Analysis is async
+                    analysis = await self.analyze_system_performance()
+                    
+                    if analysis.get("optimization_suggestions"):
+                        logger.info(f"System optimization suggestions: {analysis['optimization_suggestions']}")
+                    
+                    await asyncio.sleep(interval)
+                except asyncio.CancelledError:
+                    break
+                except Exception as e:
+                    logger.error(f"Error in system monitoring: {e}")
+                    await asyncio.sleep(interval)
+        
+        self._monitoring_task = asyncio.create_task(_monitor())
+    
+    async def shutdown(self):
+        """Clean shutdown of background tasks"""
+        if self._monitoring_task:
+            self._monitoring_task.cancel()
+            try:
+                await self._monitoring_task
+            except asyncio.CancelledError:
+                pass
+
+
     
     async def add_node_to_model(self, model_id: str, name: str, 
                           domain: str = "", node_type: str = "variable",
@@ -2812,7 +3045,7 @@ class ReasoningCore:
         self.blends[blend_id] = blend
         
         return blend.to_dict()
-    
+
     def _generate_contrast_blend(self, space1: ConceptSpace, space2: ConceptSpace,
                               mappings: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         """Generate a contrast blend that exploits differences between spaces"""
@@ -5701,3 +5934,26 @@ class ReasoningCore:
         except Exception as e:
             logger.error(f"Error loading integrated reasoning state: {e}")
             return False
+
+def test_general_model_registration():
+    """Test that general model can be registered successfully"""
+    from nyx.models.general_causal_model import GENERAL_CAUSAL_MODEL
+    
+    rc = ReasoningCore()
+    model_id = rc.add_causal_model("general", GENERAL_CAUSAL_MODEL)
+    
+    # Check model was added
+    assert model_id in rc.causal_models
+    assert any(m.domain == "general" for m in rc.causal_models.values())
+    
+    # Check nodes were created correctly
+    model = rc.causal_models[model_id]
+    assert len(model.nodes) == len(GENERAL_CAUSAL_MODEL["nodes"])
+    
+    # Check relations were created
+    assert len(model.relations) == len(GENERAL_CAUSAL_MODEL["relations"])
+    
+    # Test sync doesn't crash
+    rc.sync_general_model()
+    
+    print("✓ General model registration test passed")
