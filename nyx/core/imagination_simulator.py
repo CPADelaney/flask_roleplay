@@ -1285,15 +1285,17 @@ class ImaginationSimulator:
                 # Fix #1: Provide the JSON up-front when invoking the Orchestrator
                 result = await Runner.run(
                     self.orchestrator_agent,
-                    {
-                        "role": "user",
-                        "content": (
-                            "Generate a simulation setup for this description.\n"
-                            f"description: {description}\n"
-                            f"current_brain_state_json: {json.dumps(current_brain_state)}\n"
-                            "domain: general"
-                        ),
-                    },
+                    [  # ← LIST, not dict - Runner.run expects Sequence[Message]
+                        {
+                            "role": "user",
+                            "content": (
+                                "Generate a simulation setup for this description.\n"
+                                f"description: {description}\n"
+                                f"current_brain_state_json: {json.dumps(current_brain_state)}\n"
+                                "domain: general"
+                            ),
+                        }
+                    ],
                     context=self.context,
                     run_config=run_config
                 )
