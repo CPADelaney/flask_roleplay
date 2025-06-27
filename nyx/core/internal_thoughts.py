@@ -4,7 +4,7 @@ import logging
 import datetime
 import asyncio
 import uuid
-from typing import Dict, List, Any, Optional, Tuple, Callable, Set
+from typing import Dict, List, Any, Optional, Tuple, Callable, Set, Union
 from enum import Enum
 import re
 from pydantic import BaseModel, Field
@@ -56,6 +56,91 @@ class ThoughtPriority(str, Enum):
     CRITICAL = "critical"
 
 
+# Explicit models to satisfy strict JSON schema
+class EmotionalState(BaseModel):
+    """Emotional state data."""
+    status: str = "unknown"
+    primary_emotion: str = "neutral"
+    secondary_emotions: List[str] = Field(default_factory=list)
+    intensity: float = 0.5
+    
+class RecentThoughtSummary(BaseModel):
+    """Summary of a recent thought."""
+    content: str
+    source: str
+    created_at: str
+    
+class DebugThoughtEntry(BaseModel):
+    """Debug log entry for a thought."""
+    id: str
+    content: str
+    source: str
+    priority: str
+    created_at: str
+    critique: Optional[str] = None
+    is_active: bool = True
+    warning: Optional[str] = None
+    
+class ThoughtStats(BaseModel):
+    """Statistics about thoughts."""
+    active_thoughts_count: int
+    archived_thoughts_count: int
+    thoughts_by_source: Dict[str, int]
+    thoughts_by_priority: Dict[str, int]
+    thoughts_with_critique: int
+    oldest_active_thought: Optional[str] = None
+    newest_active_thought: Optional[str] = None
+
+class GeneralContext(BaseModel):
+    """General context for passing data."""
+    user_input: Optional[str] = None
+    user_id: Optional[str] = None
+    planned_response: Optional[str] = None
+    response_type: Optional[str] = None
+    interaction_id: Optional[str] = None
+    session_id: Optional[str] = None
+    extra_data_1: Optional[str] = None
+    extra_data_2: Optional[str] = None
+    extra_data_3: Optional[str] = None
+
+class ThoughtContext(BaseModel):
+    """Context data for a thought."""
+    user_input: Optional[str] = None
+    user_id: Optional[str] = None
+    perception_type: Optional[str] = None
+    reasoning_focus: Optional[str] = None
+    trigger: Optional[str] = None
+    perspective: Optional[str] = None
+    plan_type: Optional[str] = None
+    original_response: Optional[str] = None
+    planned_response: Optional[str] = None
+    original_context: Optional[str] = None
+    critique_focus: Optional[str] = None
+    reflection_focus: Optional[str] = None
+    reflection_id: Optional[str] = None
+    observation_id: Optional[str] = None
+    type: Optional[str] = None
+    timestamp: Optional[str] = None
+    
+    # Generic string fields for extensibility
+    extra_field_1: Optional[str] = None
+    extra_field_2: Optional[str] = None
+    extra_field_3: Optional[str] = None
+
+
+class ThoughtMetadata(BaseModel):
+    """Metadata for a thought."""
+    observation_id: Optional[str] = None
+    type: Optional[str] = None
+    timestamp: Optional[str] = None
+    source_system: Optional[str] = None
+    
+    # Generic string fields for extensibility
+    extra_field_1: Optional[str] = None
+    extra_field_2: Optional[str] = None
+    extra_field_3: Optional[str] = None
+
+
 class InternalThought(BaseModel):
     """Model representing an internal thought."""
     thought_id: str = Field(default_factory=lambda: f"thought_{uuid.uuid4().hex[:8]}")
@@ -63,10 +148,10 @@ class InternalThought(BaseModel):
     source: ThoughtSource = Field(..., description="Source of the thought")
     priority: ThoughtPriority = Field(ThoughtPriority.MEDIUM, description="Priority level")
     created_at: datetime.datetime = Field(default_factory=datetime.datetime.now)
-    context: Dict[str, Any] = Field(default_factory=dict, description="Context data related to thought")
+    context: ThoughtContext = Field(default_factory=ThoughtContext, description="Context data related to thought")
     critique: Optional[str] = None  # Self-critique of the thought
     related_thoughts: List[str] = Field(default_factory=list, description="IDs of related thoughts")
-    metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
+    metadata: ThoughtMetadata = Field(default_factory=ThoughtMetadata, description="Additional metadata")
     epistemic_status: str = Field("asserted", description="Level of knowledge: 'confident', 'uncertain', 'unknown', 'lied', 'self-justified'")
     originated_as_lie: bool = False    
 
@@ -125,7 +210,7 @@ class ThoughtGenerationOutput(BaseModel):
     thought_text: str = Field(..., description="The generated thought text")
     source: ThoughtSource = Field(..., description="Source of the thought")
     priority: ThoughtPriority = Field(ThoughtPriority.MEDIUM, description="Priority of the thought")
-    related_context: Dict[str, Any] = Field(default_factory=dict, description="Relevant context")
+    related_context: ThoughtContext = Field(default_factory=ThoughtContext, description="Relevant context")
     critique: Optional[str] = Field(None, description="Self-critique of the thought")
 
 
@@ -282,7 +367,7 @@ class InternalThoughtsManager:
     async def generate_thought(
         self,
         thought_source: ThoughtSource,
-        context: Dict[str, Any]
+        context: Union[Dict[str, Any], GeneralContext]
     ) -> InternalThought:
         """
         Generate a new internal thought from a specific source.
@@ -299,12 +384,35 @@ class InternalThoughtsManager:
                 # Log the thought generation attempt
                 thoughts_logger.debug(f"Generating {thought_source.value} thought")
                 
+                # Convert context to ThoughtContext
+                thought_context = ThoughtContext()
+                
+                # Handle both dict and GeneralContext input
+                if isinstance(context, dict):
+                    for key, value in context.items():
+                        if hasattr(thought_context, key) and isinstance(value, str):
+                            setattr(thought_context, key, value)
+                        elif key in ['extra_field_1', 'extra_field_2', 'extra_field_3'] and isinstance(value, str):
+                            setattr(thought_context, key, value)
+                elif isinstance(context, GeneralContext):
+                    # Map GeneralContext fields to ThoughtContext
+                    if context.user_input:
+                        thought_context.user_input = context.user_input
+                    if context.user_id:
+                        thought_context.user_id = context.user_id
+                    if context.planned_response:
+                        thought_context.planned_response = context.planned_response
+                    # Add other mappings as needed
+                
                 # Prepare prompt context
+                emotional_state = await self._get_emotional_state()
+                recent_thoughts = self._get_recent_thoughts(limit=3)
+                
                 generation_context = {
                     "source": thought_source.value,
-                    "input_context": context,
-                    "emotional_state": await self._get_emotional_state(),
-                    "recent_thoughts": self._get_recent_thoughts(limit=3)
+                    "input_context": context if isinstance(context, dict) else context.model_dump(),
+                    "emotional_state": emotional_state.model_dump(),
+                    "recent_thoughts": [t.model_dump() for t in recent_thoughts]
                 }
                 
                 # Run the thought generation agent
@@ -328,7 +436,7 @@ class InternalThoughtsManager:
                     content=thought_output.thought_text,
                     source=thought_output.source,
                     priority=thought_output.priority,
-                    context=thought_output.related_context or context,
+                    context=thought_output.related_context or thought_context,
                     critique=thought_output.critique,
                     epistemic_status=self._infer_epistemic_status(thought_output)
                 )
@@ -355,7 +463,7 @@ class InternalThoughtsManager:
                 content=f"I was trying to think about this, but I'm finding it difficult to form a clear thought.",
                 source=thought_source,
                 priority=ThoughtPriority.LOW,
-                context=context
+                context=ThoughtContext()
             )
             
             async with self._lock:
@@ -413,7 +521,7 @@ class InternalThoughtsManager:
             critique_context = {
                 "thought": thought.content,
                 "source": thought.source.value,
-                "context": thought.context
+                "context": thought.context.model_dump()
             }
             
             result = await Runner.run(
@@ -543,7 +651,7 @@ class InternalThoughtsManager:
             thoughts_logger.error(f"Error in process_input: {str(e)}")
             return generated_thoughts  # Return whatever thoughts were generated before the error
     
-    async def process_output(self, planned_response: str, context: Dict[str, Any]) -> Tuple[str, List[InternalThought]]:
+    async def process_output(self, planned_response: str, context: Union[Dict[str, Any], GeneralContext]) -> Tuple[str, List[InternalThought]]:
         """
         Process a planned response to generate internal thoughts and ensure no thought leakage.
         
@@ -567,11 +675,12 @@ class InternalThoughtsManager:
                 
                 # Add these as meta thoughts
                 for thought_text in filter_result.detected_thoughts:
+                    meta_context = ThoughtContext(original_response=planned_response)
                     meta_thought = InternalThought(
                         content=f"I noticed my response contained thought-like content that should stay internal: '{thought_text}'",
                         source=ThoughtSource.META,
                         priority=ThoughtPriority.HIGH,
-                        context={"original_response": planned_response}
+                        context=meta_context
                     )
                     self._add_thought(meta_thought)
                     generated_thoughts.append(meta_thought)
@@ -579,9 +688,10 @@ class InternalThoughtsManager:
             # If thought generation on output is enabled
             if self.config["thought_generation_on_output"]:
                 # Generate a self-critique thought about the response
+                context_str = str(context) if isinstance(context, dict) else context.model_dump_json()
                 critique_context = {
                     "planned_response": filtered_response,
-                    "original_context": context,
+                    "original_context": context_str,
                     "critique_focus": "response_quality"
                 }
                 
@@ -591,7 +701,7 @@ class InternalThoughtsManager:
                 # Generate a reflection on the interaction
                 reflection_context = {
                     "planned_response": filtered_response,
-                    "original_context": context,
+                    "original_context": context_str,
                     "reflection_focus": "interaction_dynamics"
                 }
                 
@@ -660,33 +770,35 @@ class InternalThoughtsManager:
             has_leakage=len(detected_thoughts) > 0
         )
     
-    async def _get_emotional_state(self) -> Dict[str, Any]:
+    async def _get_emotional_state(self) -> EmotionalState:
         """Get the current emotional state if emotional core is available."""
         if not self.emotional_core:
-            return {"status": "unknown", "primary_emotion": "neutral"}
+            return EmotionalState()
         
         try:
             if hasattr(self.emotional_core, "get_formatted_emotional_state"):
-                return self.emotional_core.get_formatted_emotional_state()
+                state_dict = self.emotional_core.get_formatted_emotional_state()
+                return EmotionalState(**{k: v for k, v in state_dict.items() if k in EmotionalState.model_fields})
             elif hasattr(self.emotional_core, "get_current_emotion"):
-                return await self.emotional_core.get_current_emotion()
+                emotion_data = await self.emotional_core.get_current_emotion()
+                return EmotionalState(**{k: v for k, v in emotion_data.items() if k in EmotionalState.model_fields})
             else:
-                return {"status": "unknown", "primary_emotion": "neutral"}
+                return EmotionalState()
         except Exception as e:
             thoughts_logger.error(f"Error getting emotional state: {str(e)}")
-            return {"status": "error", "primary_emotion": "neutral"}
+            return EmotionalState(status="error")
     
-    def _get_recent_thoughts(self, limit: int = 5) -> List[Dict[str, Any]]:
+    def _get_recent_thoughts(self, limit: int = 5) -> List[RecentThoughtSummary]:
         """Get recent thoughts for context."""
         recent_thoughts = sorted(self.active_thoughts, key=lambda x: x.created_at, reverse=True)[:limit]
         
-        # Convert to simple dict format
+        # Convert to RecentThoughtSummary objects
         return [
-            {
-                "content": thought.content,
-                "source": thought.source.value,
-                "created_at": thought.created_at.isoformat()
-            }
+            RecentThoughtSummary(
+                content=thought.content,
+                source=thought.source.value,
+                created_at=thought.created_at.isoformat()
+            )
             for thought in recent_thoughts
         ]
     
@@ -731,7 +843,7 @@ class InternalThoughtsManager:
             
             thoughts_logger.info(f"Archived {len(to_archive)} old thoughts")
     
-    async def get_debug_thoughts_log(self, limit: int = 50) -> List[Dict[str, Any]]:
+    async def get_debug_thoughts_log(self, limit: int = 50) -> List[DebugThoughtEntry]:
         """
         Get a formatted log of thoughts for debugging purposes.
         Only available in debug mode.
@@ -743,7 +855,14 @@ class InternalThoughtsManager:
             List of thought records
         """
         if not self.config["debug_mode"]:
-            return [{"warning": "Debug mode is disabled. Enable debug_mode in config to use this feature."}]
+            return [DebugThoughtEntry(
+                id="warning",
+                content="Debug mode is disabled. Enable debug_mode in config to use this feature.",
+                source="system",
+                priority="high",
+                created_at=datetime.datetime.now().isoformat(),
+                warning="Debug mode is disabled. Enable debug_mode in config to use this feature."
+            )]
         
         async with self._lock:
             # Combine active and archived, sort by recency
@@ -752,39 +871,40 @@ class InternalThoughtsManager:
             
             # Format for debug display
             return [
-                {
-                    "id": thought.thought_id,
-                    "content": thought.content,
-                    "source": thought.source.value,
-                    "priority": thought.priority.value,
-                    "created_at": thought.created_at.isoformat(),
-                    "critique": thought.critique,
-                    "is_active": thought in self.active_thoughts
-                }
+                DebugThoughtEntry(
+                    id=thought.thought_id,
+                    content=thought.content,
+                    source=thought.source.value,
+                    priority=thought.priority.value,
+                    created_at=thought.created_at.isoformat(),
+                    critique=thought.critique,
+                    is_active=thought in self.active_thoughts
+                )
                 for thought in all_thoughts[:limit]
             ]
     
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> ThoughtStats:
         """Get statistics about the internal thoughts system."""
-        stats = {
-            "active_thoughts_count": len(self.active_thoughts),
-            "archived_thoughts_count": len(self.archived_thoughts),
-            "thoughts_by_source": {},
-            "thoughts_by_priority": {},
-            "thoughts_with_critique": sum(1 for t in self.active_thoughts if t.critique),
-            "oldest_active_thought": min(t.created_at for t in self.active_thoughts).isoformat() if self.active_thoughts else None,
-            "newest_active_thought": max(t.created_at for t in self.active_thoughts).isoformat() if self.active_thoughts else None,
-        }
+        thoughts_by_source = {}
+        thoughts_by_priority = {}
         
         # Count by source
         for source in ThoughtSource:
-            stats["thoughts_by_source"][source.value] = sum(1 for t in self.active_thoughts if t.source == source)
+            thoughts_by_source[source.value] = sum(1 for t in self.active_thoughts if t.source == source)
         
         # Count by priority
         for priority in ThoughtPriority:
-            stats["thoughts_by_priority"][priority.value] = sum(1 for t in self.active_thoughts if t.priority == priority)
+            thoughts_by_priority[priority.value] = sum(1 for t in self.active_thoughts if t.priority == priority)
         
-        return stats
+        return ThoughtStats(
+            active_thoughts_count=len(self.active_thoughts),
+            archived_thoughts_count=len(self.archived_thoughts),
+            thoughts_by_source=thoughts_by_source,
+            thoughts_by_priority=thoughts_by_priority,
+            thoughts_with_critique=sum(1 for t in self.active_thoughts if t.critique),
+            oldest_active_thought=min(t.created_at for t in self.active_thoughts).isoformat() if self.active_thoughts else None,
+            newest_active_thought=max(t.created_at for t in self.active_thoughts).isoformat() if self.active_thoughts else None
+        )
     
     async def integrate_with_observation_system(self):
         """
@@ -834,13 +954,23 @@ class InternalThoughtsManager:
                 
                 thought_priority = priority_mapping.get(observation.priority.value, ThoughtPriority.MEDIUM)
                 
+                # Create thought context and metadata
+                thought_context = ThoughtContext(
+                    observation_id=observation.observation_id,
+                    type="from_observation"
+                )
+                thought_metadata = ThoughtMetadata(
+                    observation_id=observation.observation_id,
+                    type="from_observation"
+                )
+                
                 # Create thought from observation
                 thought = InternalThought(
                     content=f"Observation: {observation.content}",
                     source=thought_source,
                     priority=thought_priority,
-                    context=observation.context or {},
-                    metadata={"observation_id": observation.observation_id, "type": "from_observation"}
+                    context=thought_context,
+                    metadata=thought_metadata
                 )
                 
                 # Add to active thoughts
@@ -862,13 +992,24 @@ class InternalThoughtsManager:
                 # Get the most recent reflection
                 recent_reflection = self.reflection_engine.reflection_history[-1]
                 
+                # Create thought context and metadata
+                thought_context = ThoughtContext(
+                    reflection_id=recent_reflection.get("timestamp", ""),
+                    type="from_reflection",
+                    timestamp=recent_reflection.get("timestamp", "")
+                )
+                thought_metadata = ThoughtMetadata(
+                    type="from_reflection",
+                    timestamp=recent_reflection.get("timestamp", "")
+                )
+                
                 # Create a thought from it
                 thought = InternalThought(
                     content=f"Reflection: {recent_reflection.get('reflection', '')}",
                     source=ThoughtSource.REFLECTION,
                     priority=ThoughtPriority.MEDIUM,
-                    context={"reflection_id": recent_reflection.get("timestamp", "")},
-                    metadata={"type": "from_reflection", "timestamp": recent_reflection.get("timestamp", "")}
+                    context=thought_context,
+                    metadata=thought_metadata
                 )
                 
                 # Add to active thoughts
@@ -895,7 +1036,7 @@ async def pre_process_input(thoughts_manager: InternalThoughtsManager, user_inpu
     return await thoughts_manager.process_input(user_input, user_id)
 
 
-async def pre_process_output(thoughts_manager: InternalThoughtsManager, planned_response: str, context: Dict[str, Any]) -> str:
+async def pre_process_output(thoughts_manager: InternalThoughtsManager, planned_response: str, context: Union[Dict[str, Any], GeneralContext]) -> str:
     """
     Hook to add to the main output processing pipeline.
     
@@ -931,9 +1072,9 @@ def get_thoughts_log(thoughts_manager: InternalThoughtsManager) -> str:
     
     # Get stats
     stats = thoughts_manager.get_stats()
-    log_lines.append(f"Active thoughts: {stats['active_thoughts_count']}")
-    log_lines.append(f"Archived thoughts: {stats['archived_thoughts_count']}")
-    log_lines.append(f"Thoughts with critique: {stats['thoughts_with_critique']}")
+    log_lines.append(f"Active thoughts: {stats.active_thoughts_count}")
+    log_lines.append(f"Archived thoughts: {stats.archived_thoughts_count}")
+    log_lines.append(f"Thoughts with critique: {stats.thoughts_with_critique}")
     log_lines.append("")
     
     # Get recent thoughts
