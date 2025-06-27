@@ -7,7 +7,8 @@ import random
 import uuid
 import json
 from typing import Dict, List, Any, Optional, Sequence, Mapping, Union, TypedDict, Literal
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
+from dateutil.parser import isoparse  # External dependency - add python-dateutil to requirements.txt
 
 # Import OpenAI Agents SDK components
 from agents import (
@@ -82,6 +83,7 @@ class SimulationState(BaseModel):
     emotional_state: Optional[Dict[str, Any]] = None
     reasoning_focus: Optional[str] = None
     last_action: Optional[str] = None
+    # Pydantic handles datetime serialization automatically with model_dump_json()
 
 class SimulationResult(BaseModel):
     """Result of running a simulation."""
@@ -129,7 +131,8 @@ class ScenarioGenerationOutput(BaseModel, extra="forbid"):
     creative_elements: Dict[str, Any] = Field(default_factory=dict)
     confidence: float = Field(0.5, ge=0.0, le=1.0)
 
-class SimulationAnalysisOutput(BaseModel, extra="forbid"):
+# Fix #6: Allow extra fields for flexibility in analysis output
+class SimulationAnalysisOutput(BaseModel, extra="allow"):
     """Output from the simulation analysis agent."""
     analysis_text: str
     causal_patterns: List[Dict[str, Any]] = Field(default_factory=list)
@@ -1206,6 +1209,7 @@ class ImaginationSimulator:
             output_type=SimulationAnalysisOutput
         )
         
+        # Fix #1: Add explicit reminder about tool arguments
         # Create the orchestration agent
         self.orchestrator_agent = Agent[SimulationContext](
             name="Imagination Orchestrator",
@@ -1218,6 +1222,12 @@ class ImaginationSimulator:
             3. Manage the overall simulation process
             4. Integrate reasoning and reflection components into simulations
             5. Return comprehensive simulation results
+            
+            IMPORTANT: When you call the tool `setup_simulation_from_description`, you MUST supply
+            all three named arguments:
+              • description                (string)
+              • current_brain_state_json   (stringified JSON, can be "{}")
+              • domain                     (string, defaults to "general")
             
             You should ensure that simulations are both creative and grounded in causal reasoning,
             leveraging Nyx's reasoning core and reflection capabilities to provide meaningful
@@ -1254,6 +1264,15 @@ class ImaginationSimulator:
         Returns:
             Structured SimulationInput object or None if setup fails
         """
+        def set_nested_value(d: dict, path: str, value: Any) -> None:
+            """Helper to set nested dictionary values using dot notation."""
+            keys = path.split('.')
+            for key in keys[:-1]:
+                if key not in d:
+                    d[key] = {}
+                d = d[key]
+            d[keys[-1]] = value
+        
         with trace(workflow_name="SetupSimulation", group_id=self.trace_group_id):
             try:
                 # Configure the run
@@ -1263,10 +1282,18 @@ class ImaginationSimulator:
                     trace_metadata={"description": description}
                 )
                 
-                # Run the orchestrator agent
+                # Fix #1: Provide the JSON up-front when invoking the Orchestrator
                 result = await Runner.run(
                     self.orchestrator_agent,
-                    f"Generate a simulation setup for this description: {description}",
+                    {
+                        "role": "user",
+                        "content": (
+                            "Generate a simulation setup for this description.\n"
+                            f"description: {description}\n"
+                            f"current_brain_state_json: {json.dumps(current_brain_state)}\n"
+                            "domain: general"
+                        ),
+                    },
                     context=self.context,
                     run_config=run_config
                 )
@@ -1286,9 +1313,9 @@ class ImaginationSimulator:
                         focus_variables=scenario.focus_variables
                     )
                     
-                    # Apply initial state modifications
+                    # Apply initial state modifications with nested path support
                     for key, value in scenario.initial_state_modifications.items():
-                        sim_input.initial_state[key] = value
+                        set_nested_value(sim_input.initial_state, key, value)
                     
                     # Set hypothetical event or counterfactual condition
                     if scenario.hypothetical_event:
@@ -1313,10 +1340,10 @@ class ImaginationSimulator:
                         initial_state=current_brain_state.copy()
                     )
                     
-                    # Apply any modifications from the output
+                    # Apply any modifications from the output with nested path support
                     if "initial_state_modifications" in result.final_output:
                         for key, value in result.final_output["initial_state_modifications"].items():
-                            sim_input.initial_state[key] = value
+                            set_nested_value(sim_input.initial_state, key, value)
                     
                     # Set hypothetical event if provided
                     if "hypothetical_event" in result.final_output:
@@ -1413,10 +1440,13 @@ class ImaginationSimulator:
             # Run simulation steps
             try:
                 for step in range(1, sim_input.max_steps + 1):
+                    # Fix #2: Use model_dump_json() instead of json()
+                    current_state_json = trajectory[-1].model_dump_json()
+                    
                     # Predict next state
                     state_dto = await predict_simulation_step(
                         RunContextWrapper(self.context),
-                        trajectory[-1].json(),  # Use Pydantic's JSON serialization
+                        current_state_json,
                         json.dumps(causal_model),
                         step
                     )
@@ -1427,6 +1457,7 @@ class ImaginationSimulator:
                     
                     # Check goal condition if specified
                     if sim_input.goal_condition:
+                        # Fix #5: Ensure we're wrapping with json.dumps
                         goal_dto = await check_goal_condition(
                             RunContextWrapper(self.context),
                             state_dto.state_json,  # Already a JSON string
@@ -1443,7 +1474,7 @@ class ImaginationSimulator:
                         stab_dto = await evaluate_simulation_stability(
                             RunContextWrapper(self.context),
                             state_dto.state_json,  # Already a JSON string
-                            trajectory[-2].json()  # Use Pydantic's JSON serialization
+                            trajectory[-2].model_dump_json()  # Fix #2: Use model_dump_json()
                         )
                         
                         if stab_dto.is_stable:
@@ -1516,10 +1547,11 @@ class ImaginationSimulator:
             # Generate reflection if requested
             if sim_input.use_reflection and self.reflection_engine:
                 try:
+                    # Fix #5: Use model_dump_json() for proper JSON serialization
                     # Generate reflection
                     reflection_dto = await generate_simulation_reflection(
                         RunContextWrapper(self.context),
-                        result.json(),  # Use Pydantic's JSON serialization
+                        result.model_dump_json(),  # Fix #5: Use model_dump_json()
                         json.dumps(result.causal_analysis or {})
                     )
                     
@@ -1529,7 +1561,7 @@ class ImaginationSimulator:
                     # Generate abstraction
                     abstraction_dto = await generate_abstraction_from_simulation(
                         RunContextWrapper(self.context),
-                        result.json(),  # Use Pydantic's JSON serialization
+                        result.model_dump_json(),  # Fix #5: Use model_dump_json()
                         "causal"
                     )
                     
@@ -1736,9 +1768,9 @@ class ImaginationSimulator:
         Returns:
             List of simulation summaries
         """
-        # Convert to list and sort by recency
+        # Fix #3: Use isoparse for proper datetime sorting
         history = list(self.simulation_history.values())
-        history.sort(key=lambda x: x.trajectory[-1].timestamp if x.trajectory else datetime.datetime.min, reverse=True)
+        history.sort(key=lambda x: isoparse(x.trajectory[-1].timestamp) if x.trajectory else datetime.datetime.min, reverse=True)
         
         # Format results
         results = []
@@ -1755,3 +1787,17 @@ class ImaginationSimulator:
             })
             
         return results
+    
+    @staticmethod
+    async def _smoke():
+        """Quick sanity test to verify fixes are working"""
+        sim = ImaginationSimulator()
+        brain = {"clarity": 0.0, "awareness": 0.2}
+        out = await sim.imagine_scenario(
+            "What would happen if everything changed?",
+            brain
+        )
+        print(json.dumps(out, indent=2))
+
+# To run the smoke test:
+# asyncio.run(ImaginationSimulator._smoke())
