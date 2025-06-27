@@ -485,7 +485,7 @@ class EnhancedWorkspaceModule(WorkspaceModule):
         super().__init__(ws)
         self._pending_unconscious: List[Tuple[str, Callable, float]] = []
 
-    def register_unconscious(self, name: str, fn: Callable, *, threshold: float = 0.5):
+    def register_unconscious(self, name: str, fn: Callable, threshold: float = 0.5):
         self._pending_unconscious.append((name, fn, threshold))
 
     # default unconscious monitor (optional override)
