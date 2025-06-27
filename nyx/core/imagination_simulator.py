@@ -118,10 +118,10 @@ class SimulationInputDTO(BaseModel):
     """
     simulation_json: str                  # JSON string of a SimulationInput
 
-class ScenarioGenerationOutput(BaseModel):
+class ScenarioGenerationOutput(BaseModel, extra="forbid"):
     """Output from the scenario generation agent."""
     scenario_description: str
-    initial_state_modifications: Dict[str, Any]
+    initial_state_modifications: Dict[str, Any] = Field(default_factory=dict)
     hypothetical_event: Optional[Dict[str, Any]] = None
     counterfactual_condition: Optional[Dict[str, Any]] = None
     goal_condition: Optional[Dict[str, Any]] = None
@@ -129,7 +129,7 @@ class ScenarioGenerationOutput(BaseModel):
     creative_elements: Dict[str, Any] = Field(default_factory=dict)
     confidence: float = Field(0.5, ge=0.0, le=1.0)
 
-class SimulationAnalysisOutput(BaseModel):
+class SimulationAnalysisOutput(BaseModel, extra="forbid"):
     """Output from the simulation analysis agent."""
     analysis_text: str
     causal_patterns: List[Dict[str, Any]] = Field(default_factory=list)
@@ -1366,11 +1366,11 @@ class ImaginationSimulator:
             trajectory = []
             
             # Get causal model
-            causal_model_result = await get_causal_model_for_simulation(
+            causal_model_dto = await get_causal_model_for_simulation(
                 RunContextWrapper(self.context),
                 sim_input.domain
             )
-            causal_model = causal_model_result["model"]
+            causal_model = json.loads(causal_model_dto.model_json)
             
             # Initialize simulation state
             initial_state = {
@@ -1386,20 +1386,22 @@ class ImaginationSimulator:
             
             # Apply initial conditions
             if sim_input.hypothetical_event:
-                initial_state = await apply_hypothetical_event(
+                state_dto = await apply_hypothetical_event(
                     RunContextWrapper(self.context),
-                    initial_state,
-                    sim_input.hypothetical_event,
-                    causal_model
+                    json.dumps(initial_state),
+                    json.dumps(sim_input.hypothetical_event),
+                    json.dumps(causal_model)
                 )
+                initial_state = json.loads(state_dto.state_json)
             
             if sim_input.counterfactual_condition:
-                initial_state = await apply_counterfactual_condition(
+                state_dto = await apply_counterfactual_condition(
                     RunContextWrapper(self.context),
-                    initial_state,
-                    sim_input.counterfactual_condition,
-                    causal_model
+                    json.dumps(initial_state),
+                    json.dumps(sim_input.counterfactual_condition),
+                    json.dumps(causal_model)
                 )
+                initial_state = json.loads(state_dto.state_json)
             
             # Add initial state to trajectory
             trajectory.append(SimulationState(**initial_state))
@@ -1412,38 +1414,39 @@ class ImaginationSimulator:
             try:
                 for step in range(1, sim_input.max_steps + 1):
                     # Predict next state
-                    next_state = await predict_simulation_step(
+                    state_dto = await predict_simulation_step(
                         RunContextWrapper(self.context),
-                        trajectory[-1].model_dump(),
-                        causal_model,
+                        trajectory[-1].json(),  # Use Pydantic's JSON serialization
+                        json.dumps(causal_model),
                         step
                     )
+                    next_state_dict = json.loads(state_dto.state_json)
                     
                     # Add to trajectory
-                    trajectory.append(SimulationState(**next_state))
+                    trajectory.append(SimulationState(**next_state_dict))
                     
                     # Check goal condition if specified
                     if sim_input.goal_condition:
-                        goal_check = await check_goal_condition(
+                        goal_dto = await check_goal_condition(
                             RunContextWrapper(self.context),
-                            next_state,
-                            sim_input.goal_condition
+                            state_dto.state_json,  # Already a JSON string
+                            json.dumps(sim_input.goal_condition)
                         )
                         
-                        if goal_check["goal_met"]:
+                        if goal_dto.goal_met:
                             termination_reason = "goal_reached"
                             success = True
                             break
                     
                     # Check for stability
                     if step > 1:
-                        stability_check = await evaluate_simulation_stability(
+                        stab_dto = await evaluate_simulation_stability(
                             RunContextWrapper(self.context),
-                            next_state,
-                            trajectory[-2].model_dump()
+                            state_dto.state_json,  # Already a JSON string
+                            trajectory[-2].json()  # Use Pydantic's JSON serialization
                         )
                         
-                        if stability_check["is_stable"]:
+                        if stab_dto.is_stable:
                             termination_reason = "stable_state"
                             # Not marking as success/failure since stability is neutral
                             break
@@ -1471,9 +1474,6 @@ class ImaginationSimulator:
                         trace_id=f"sim-analysis-{gen_trace_id()}",
                         trace_metadata={"sim_id": sim_input.simulation_id}
                     )
-                    
-                    # Convert SimulationResult to dict for analysis
-                    result_dict = result.model_dump()
                     
                     # Run the analysis agent
                     analysis_result = await Runner.run(
@@ -1517,24 +1517,24 @@ class ImaginationSimulator:
             if sim_input.use_reflection and self.reflection_engine:
                 try:
                     # Generate reflection
-                    reflection_result = await generate_simulation_reflection(
+                    reflection_dto = await generate_simulation_reflection(
                         RunContextWrapper(self.context),
-                        result.model_dump(),
-                        result.causal_analysis or {}
+                        result.json(),  # Use Pydantic's JSON serialization
+                        json.dumps(result.causal_analysis or {})
                     )
                     
                     # Update result with reflection
-                    result.reflection = reflection_result.get("reflection", "")
+                    result.reflection = reflection_dto.reflection
                     
                     # Generate abstraction
-                    abstraction_result = await generate_abstraction_from_simulation(
+                    abstraction_dto = await generate_abstraction_from_simulation(
                         RunContextWrapper(self.context),
-                        result.model_dump(),
+                        result.json(),  # Use Pydantic's JSON serialization
                         "causal"
                     )
                     
                     # Update result with abstraction
-                    result.abstraction = abstraction_result
+                    result.abstraction = abstraction_dto.model_dump()
                 except Exception as e:
                     logger.error(f"Error generating reflection/abstraction: {e}")
             
