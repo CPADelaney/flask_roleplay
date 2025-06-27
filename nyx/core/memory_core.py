@@ -299,10 +299,14 @@ class MemoryStorage:
         self.level_index[memory.metadata.memory_level].discard(memory.id)
         self.significance_index[memory.significance].discard(memory.id)
         
-        for tag in memory.tags:
+        # Ensure tags is a list before iterating
+        tags = _ensure_list(memory.tags, "tags")
+        for tag in tags:
             self.tag_index[tag].discard(memory.id)
         
-        for entity in memory.metadata.entities:
+        # Ensure entities is a list before iterating
+        entities = _ensure_list(memory.metadata.entities, "entities")
+        for entity in entities:
             self.entity_index[entity].discard(memory.id)
         
         if memory.metadata.emotional_context:
@@ -323,10 +327,14 @@ class MemoryStorage:
         self.level_index[memory.metadata.memory_level].add(memory.id)
         self.significance_index[memory.significance].add(memory.id)
         
-        for tag in memory.tags:
+        # Ensure tags is a list before iterating
+        tags = _ensure_list(memory.tags, "tags")
+        for tag in tags:
             self.tag_index[tag].add(memory.id)
         
-        for entity in memory.metadata.entities:
+        # Ensure entities is a list before iterating
+        entities = _ensure_list(memory.metadata.entities, "entities")
+        for entity in entities:
             self.entity_index[entity].add(memory.id)
         
         if memory.metadata.emotional_context:
@@ -378,6 +386,17 @@ def get_default_context() -> MemoryContext:
     return _default_context
 
 # ==================== Utility Functions ====================
+
+def _ensure_list(obj, name="value"):
+    """Coerce scalars | dicts -> list; leave lists unchanged."""
+    if obj is None:
+        return []
+    if isinstance(obj, list):
+        return obj
+    if isinstance(obj, dict):
+        # keep values, fall back to keys
+        return list(obj.values()) or list(obj.keys())
+    return [obj]
 
 def _mk_cache_key(**parts) -> str:
     """
@@ -536,11 +555,16 @@ async def _create_memory_impl(
     entities: List[str] = None
 ) -> Dict[str, Any]:
     """Core implementation of create_memory"""
+    # Ensure list types
+    tags = _ensure_list(tags, "tags")
+    source_memory_ids = _ensure_list(source_memory_ids, "source_memory_ids")
+    entities = _ensure_list(entities, "entities")
+    
     # Create metadata
     metadata = MemoryMetadata(
         memory_level=memory_level,
         source_memory_ids=source_memory_ids,
-        entities=entities or [],
+        entities=entities,
         original_form=memory_text
     )
     
@@ -553,7 +577,7 @@ async def _create_memory_impl(
         memory_type=memory_type,
         memory_scope=memory_scope,
         significance=significance,
-        tags=tags or [],
+        tags=tags,
         metadata=metadata,
         embedding=_generate_embedding(memory_text, storage.embed_dim)
     )
@@ -617,6 +641,12 @@ async def _search_memories_impl(
     min_fidelity: float = 0.0
 ) -> List[Dict[str, Any]]:
     """Core implementation of search_memories"""
+    # Ensure list types
+    tags = _ensure_list(tags, "tags") if tags is not None else None
+    entities = _ensure_list(entities, "entities") if entities is not None else None
+    memory_types = _ensure_list(memory_types, "memory_types") if memory_types is not None else None
+    scopes = _ensure_list(scopes, "scopes") if scopes is not None else None
+    
     # Check cache
     cache_key = _mk_cache_key(
         q=query,
@@ -813,10 +843,18 @@ async def _update_memory_impl(
     # Apply updates
     for key, value in updates.items():
         if key == "metadata" and isinstance(value, dict):
+            # Ensure list fields in metadata
+            if "source_memory_ids" in value:
+                value["source_memory_ids"] = _ensure_list(value["source_memory_ids"], "source_memory_ids")
+            if "entities" in value:
+                value["entities"] = _ensure_list(value["entities"], "entities")
             # Merge metadata
             current_meta = memory.metadata.dict()
             current_meta.update(value)
             memory.metadata = MemoryMetadata(**current_meta)
+        elif key == "tags":
+            # Ensure tags is a list
+            setattr(memory, key, _ensure_list(value, "tags"))
         elif hasattr(memory, key):
             setattr(memory, key, value)
     
@@ -1002,9 +1040,13 @@ async def _consolidate_memories_impl(storage: MemoryStorage) -> Dict[str, Any]:
         consolidated_text = f"Pattern observed across {len(memories)} memories: {texts[0][:50]}..."
         
         avg_significance = sum(m.significance for m in memories) / len(memories)
-        all_tags = set()
+        all_tags = []
         for m in memories:
-            all_tags.update(m.tags)
+            # Ensure tags is a list before extending
+            tags = _ensure_list(m.tags, "tags")
+            all_tags.extend(tags)
+        # Deduplicate tags
+        all_tags = list(set(all_tags))
         
         # Create consolidated memory using implementation
         result = await _create_memory_impl(
@@ -1012,7 +1054,7 @@ async def _consolidate_memories_impl(storage: MemoryStorage) -> Dict[str, Any]:
             memory_text=consolidated_text,
             memory_type="consolidated",
             significance=min(10, int(avg_significance) + 1),
-            tags=list(all_tags) + ["consolidated"],
+            tags=all_tags + ["consolidated"],
             source_memory_ids=cluster
         )
         
@@ -1138,6 +1180,11 @@ async def create_memory(
     """Create a new memory with full metadata"""
     with custom_span("create_memory", {"memory_type": memory_type, "memory_level": memory_level}):
         storage = ctx.context.storage
+        # Ensure list types
+        tags = _ensure_list(tags, "tags")
+        source_memory_ids = _ensure_list(source_memory_ids, "source_memory_ids")
+        entities = _ensure_list(entities, "entities")
+        
         return await _create_memory_impl(
             storage=storage,
             memory_text=memory_text,
@@ -1169,6 +1216,12 @@ async def search_memories(
     """Search memories with enhanced filtering and relevance"""
     with custom_span("search_memories", {"query": query, "limit": limit}):
         storage = ctx.context.storage
+        # Ensure list types
+        tags = _ensure_list(tags, "tags") if tags is not None else None
+        entities = _ensure_list(entities, "entities") if entities is not None else None
+        memory_types = _ensure_list(memory_types, "memory_types") if memory_types is not None else None
+        scopes = _ensure_list(scopes, "scopes") if scopes is not None else None
+        
         return await _search_memories_impl(
             storage=storage,
             query=query,
@@ -1308,6 +1361,9 @@ async def retrieve_relevant_experiences(
     tags = []
     if scenario_type:
         tags.append(scenario_type.lower())
+    
+    # Ensure entities is a list
+    entities = _ensure_list(entities, "entities") if entities is not None else None
     
     # Search using implementation
     experiences = await _search_memories_impl(
@@ -1846,6 +1902,11 @@ class MemoryCoreAgents:
         # Extract metadata dict to individual params
         metadata = kwargs.pop('metadata', {})
         
+        # Ensure list fields
+        tags = _ensure_list(kwargs.get('tags'), "tags")
+        entities = _ensure_list(metadata.get('entities'), "entities")
+        source_memory_ids = _ensure_list(metadata.get('source_memory_ids'), "source_memory_ids")
+        
         # Use the implementation directly
         result = await _create_memory_impl(
             storage=self.context.storage,
@@ -1853,11 +1914,11 @@ class MemoryCoreAgents:
             memory_type=kwargs.get('memory_type', 'observation'),
             memory_scope=kwargs.get('memory_scope', 'game'),
             significance=kwargs.get('significance', 5),
-            tags=kwargs.get('tags', []),
+            tags=tags,
             emotional_context=metadata.get('emotional_context'),
             memory_level=metadata.get('memory_level', 'detail'),
-            source_memory_ids=metadata.get('source_memory_ids'),
-            entities=metadata.get('entities', [])
+            source_memory_ids=source_memory_ids,
+            entities=entities
         )
         
         return result.get("memory_id", "")
@@ -2047,7 +2108,7 @@ class MemoryCoreAgents:
             memory_type = mem_data.get("memory_type", "observation")
             memory_scope = mem_data.get("memory_scope", "game")
             significance = mem_data.get("significance", 5)
-            tags = mem_data.get("tags", [])
+            tags = _ensure_list(mem_data.get("tags"), "tags")
             metadata = mem_data.get("metadata", {})
             
             # If the memory has an ID and embedding, load it directly
@@ -2166,65 +2227,6 @@ class MemoryCoreAgents:
             memory_types=["experience"],
             limit=limit
         )
-    
-    async def load_recent_memories(self, memories_data: List[Dict[str, Any]]):
-        """Load memories from checkpoint"""
-        for mem_data in memories_data:
-            # Extract all the data
-            memory_text = mem_data.get("memory_text", "")
-            memory_type = mem_data.get("memory_type", "observation")
-            memory_scope = mem_data.get("memory_scope", "game")
-            significance = mem_data.get("significance", 5)
-            tags = mem_data.get("tags", [])
-            metadata = mem_data.get("metadata", {})
-            
-            # If the memory has an ID and embedding, load it directly
-            if "id" in mem_data and "embedding" in mem_data:
-                memory = Memory(
-                    id=mem_data["id"],
-                    memory_text=memory_text,
-                    memory_type=memory_type,
-                    memory_scope=memory_scope,
-                    significance=significance,
-                    tags=tags,
-                    metadata=MemoryMetadata(**metadata) if metadata else MemoryMetadata(),
-                    embedding=mem_data.get("embedding", []),
-                    created_at=mem_data.get("created_at", datetime.datetime.now().isoformat()),
-                    times_recalled=mem_data.get("times_recalled", 0),
-                    is_archived=mem_data.get("is_archived", False),
-                    is_consolidated=mem_data.get("is_consolidated", False)
-                )
-                
-                # Add directly to storage
-                memory_id = memory.id
-                self.context.storage.memories[memory_id] = memory
-                if memory.embedding:
-                    self.context.storage.embeddings[memory_id] = memory.embedding
-                
-                # Manually update indices (don't use add() to avoid duplication)
-                storage = self.context.storage
-                storage.type_index[memory.memory_type].add(memory_id)
-                storage.scope_index[memory.memory_scope].add(memory_id)
-                storage.level_index[memory.metadata.memory_level].add(memory_id)
-                storage.significance_index[memory.significance].add(memory_id)
-                
-                for tag in memory.tags:
-                    storage.tag_index[tag].add(memory_id)
-                
-                if memory.is_archived:
-                    storage.archived_memories.add(memory_id)
-                if memory.is_consolidated:
-                    storage.consolidated_memories.add(memory_id)
-            else:
-                # Create new memory through normal process
-                await self.add_memory(
-                    memory_text=memory_text,
-                    memory_type=memory_type,
-                    memory_scope=memory_scope,
-                    significance=significance,
-                    tags=tags,
-                    metadata=metadata
-                )
 
 # ==================== Brain Memory Core ====================
 
@@ -2256,6 +2258,11 @@ async def add_memory(
     # Extract metadata fields
     meta = metadata or {}
     
+    # Ensure list fields
+    tags = _ensure_list(tags, "tags")
+    entities = _ensure_list(meta.get('entities'), "entities")
+    source_memory_ids = _ensure_list(meta.get('source_memory_ids'), "source_memory_ids")
+    
     # Call the implementation directly
     result = await _create_memory_impl(
         storage=storage,
@@ -2266,8 +2273,8 @@ async def add_memory(
         tags=tags,
         emotional_context=meta.get('emotional_context'),
         memory_level=meta.get('memory_level', 'detail'),
-        source_memory_ids=meta.get('source_memory_ids'),
-        entities=meta.get('entities', [])
+        source_memory_ids=source_memory_ids,
+        entities=entities
     )
     
     return result.get("memory_id", "")
@@ -2331,6 +2338,9 @@ __all__ = [
     # Standalone functions
     'add_memory',
     'retrieve_memories',
+    
+    # Utility functions
+    '_ensure_list',
     
     # Tool functions
     'create_memory',
