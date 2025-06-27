@@ -245,7 +245,10 @@ class NeedsAdapter(EnhancedWorkspaceModule):
     async def on_phase(self, phase: int):
         if phase or not self.ns:
             return
-        st = await maybe_async(self.ns.get_needs_state)
+        
+        # Get needs state - handle both ContextAwareNeedsSystem and regular NeedsSystem
+        st = await maybe_async(self.ns.get_needs_state_async)
+        
         # Handle both NeedsStateResponse and dict formats
         if hasattr(st, 'needs'):
             # New format: NeedsStateResponse with list of needs
@@ -267,8 +270,9 @@ class NeedsAdapter(EnhancedWorkspaceModule):
     async def _homeo_bg(self, _):
         if hasattr(self.ns, "update_needs"):
             await maybe_async(self.ns.update_needs)
-        # The method name is correct, but handle the response type
-        st = await maybe_async(self.ns.get_needs_state)
+        
+        # Get needs state - both ContextAwareNeedsSystem and NeedsSystem have get_needs_state_async
+        st = await maybe_async(self.ns.get_needs_state_async)
         
         # Handle both NeedsStateResponse and dict formats
         if hasattr(st, 'needs'):
