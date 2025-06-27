@@ -410,6 +410,11 @@ class ExperienceConsolidationSystem:
         if not isinstance(payload, list):
             payload = [payload]
         
+        # Validate payload is not empty
+        if not payload or (len(payload) == 1 and not payload[0]):
+            logger.warning(f"Empty payload provided to {agent.name}, using default input")
+            payload = [{"message": "Please proceed with the task"}]
+        
         # Set default kwargs
         if 'context' not in kwargs:
             kwargs['context'] = self.context
@@ -1408,17 +1413,39 @@ class ExperienceConsolidationSystem:
                 status="skipped",
                 reason="Interval not met"
             )
-
+    
         logger.info("Starting experience consolidation cycle...")
         with trace(workflow_name="consolidation_cycle", group_id=self.trace_group_id):
             consolidations_created = 0
             total_memories_affected = 0
-
+    
             try:
+                # Get all experience IDs if none provided
+                if not experience_ids:
+                    logger.info("No experience IDs provided, fetching all available experiences")
+                    if self.memory_core:
+                        all_memories = await self.memory_core.get_all_memory_ids()
+                        # Filter for non-consolidated experiences
+                        experience_ids = []
+                        for mem_id in all_memories[:100]:  # Limit to 100 for performance
+                            memory = await self.memory_core.get_memory_by_id(mem_id)
+                            if memory and not memory.get('metadata', {}).get('is_consolidation', False):
+                                experience_ids.append(mem_id)
+                    
+                    if not experience_ids:
+                        logger.info("No experiences available for consolidation")
+                        self.last_consolidation = now
+                        return RunCycleResult(
+                            status="completed",
+                            consolidations_created=0,
+                            source_memories_processed=0,
+                            reason="No experiences available"
+                        )
+    
                 # 1. Find candidate groups - using list input
                 result = await self._run_agent(
                     self.candidate_finder_agent,
-                    {"experience_ids": experience_ids or [], 
+                    {"experience_ids": experience_ids, 
                      "similarity_threshold": self.similarity_threshold,
                      "max_group_size": self.max_group_size,
                      "min_group_size": self.min_group_size},
