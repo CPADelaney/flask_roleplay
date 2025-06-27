@@ -203,20 +203,33 @@ class EmotionalAdapter(EnhancedWorkspaceModule):
     async def on_phase(self, phase: int):
         if phase or not self.ec:
             return
-        st = await maybe_async(self.ec.get_current_emotion)
-        if not st:
-            return
-        for emo, lvl in st.items():
-            if lvl > .7:
-                await self.submit({"emotion": emo, "intensity": lvl},
-                                  salience=lvl,
+        # FIX: Use get_emotional_state instead of get_current_emotion
+        st = await maybe_async(self.ec.get_emotional_state)
+        if st and 'emotional_state_matrix' in st:
+            matrix = st['emotional_state_matrix']
+            primary = matrix.get('primary_emotion', {})
+            if primary.get('intensity', 0) > .7:
+                await self.submit({"emotion": primary.get('name', 'unknown'), 
+                                  "intensity": primary.get('intensity', 0)},
+                                  salience=primary.get('intensity', 0),
                                   context_tag="emotion_spike")
+
 
     async def _drift_bg(self, _):
         if hasattr(self.ec, "update_emotions"):
             await maybe_async(self.ec.update_emotions)
-        st = await maybe_async(self.ec.get_current_emotion)
-        sust = [e for e, v in (st or {}).items() if v > .5]
+        # FIX: Use get_emotional_state and extract emotions properly
+        st = await maybe_async(self.ec.get_emotional_state)
+        emotions = {}
+        if st and 'emotional_state_matrix' in st:
+            matrix = st['emotional_state_matrix']
+            primary = matrix.get('primary_emotion', {})
+            emotions[primary.get('name', 'neutral')] = primary.get('intensity', 0)
+            # Include secondary emotions
+            for name, data in matrix.get('secondary_emotions', {}).items():
+                emotions[name] = data.get('intensity', 0)
+        
+        sust = [e for e, v in emotions.items() if v > .5]
         if len(sust) >= 2:
             return {"sustained_emotions": sust, "significance": .4}
 
@@ -242,9 +255,19 @@ class NeedsAdapter(EnhancedWorkspaceModule):
     async def _homeo_bg(self, _):
         if hasattr(self.ns, "update_needs"):
             await maybe_async(self.ns.update_needs)
+        # The method name is correct, but handle the response type
         st = await maybe_async(self.ns.get_needs_state)
-        moderate = [n for n, d in (st or {}).items()
-                    if .4 < d.get("drive", 0) < .7]
+        
+        # Handle both NeedsStateResponse and dict formats
+        if hasattr(st, 'needs'):
+            # New format: NeedsStateResponse with list of needs
+            moderate = [need.name for need in st.needs 
+                        if .4 < need.drive_strength < .7]
+        else:
+            # Legacy dict format
+            moderate = [n for n, d in (st or {}).items()
+                        if .4 < d.get("drive", 0) < .7]
+        
         if len(moderate) >= 3:
             return {"moderate_needs": moderate, "significance": .5}
 
@@ -825,20 +848,64 @@ class InternalThoughtsAdapter(EnhancedWorkspaceModule):
         if phase != 1 or not self.tm:
             return
         focus = [p.content for p in self.ws.focus]
-        if focus:
-            chain = await maybe_async(self.tm.generate_thoughts, focus)
-            if chain:
-                await self.submit({"thoughts": chain,
-                                   "type": "chain_of_thought"},
-                                  salience=.5,
-                                  context_tag="internal_thought")
+        if focus and hasattr(self.tm, 'generate_thought'):
+            # Import ThoughtSource from the module
+            try:
+                from nyx.core.internal_thoughts import ThoughtSource
+                
+                # Generate a reasoning thought about the current focus
+                context = {
+                    "workspace_focus": focus,
+                    "focus_count": len(focus),
+                    "reasoning_target": "understanding_context"
+                }
+                
+                thought = await maybe_async(self.tm.generate_thought, 
+                                          ThoughtSource.REASONING, 
+                                          context)
+                
+                if thought and hasattr(thought, 'content'):
+                    await self.submit({"thoughts": [thought.content],
+                                       "thought_id": thought.thought_id,
+                                       "priority": thought.priority.value,
+                                       "type": "reasoning_thought"},
+                                      salience=.5,
+                                      context_tag="internal_thought")
+                    
+                    # Generate additional perception thought if high activity
+                    if len(focus) > 2:
+                        perception_thought = await maybe_async(
+                            self.tm.generate_thought,
+                            ThoughtSource.PERCEPTION,
+                            {"observation": "Multiple items in focus", "items": focus}
+                        )
+                        if perception_thought and hasattr(perception_thought, 'content'):
+                            await self.submit({"thoughts": [perception_thought.content],
+                                               "thought_id": perception_thought.thought_id,
+                                               "type": "perception_thought"},
+                                              salience=.4,
+                                              context_tag="internal_thought")
+            except ImportError:
+                logger.error("Could not import ThoughtSource from internal_thoughts module")
 
     async def _wand_bg(self, view):
-        if not view.focus and random.random() < .1:
-            w = await maybe_async(self.tm.wander)
-            if w:
-                return {"wandering_thought": w, "significance": .3}
-
+        if not view.focus and random.random() < .1 and hasattr(self.tm, 'generate_thought'):
+            try:
+                from nyx.core.internal_thoughts import ThoughtSource
+                
+                # Generate wandering/imagination thought
+                thought = await maybe_async(self.tm.generate_thought,
+                                          ThoughtSource.IMAGINATION,
+                                          {"context": "idle_wandering", 
+                                           "prompt": "What comes to mind when nothing is happening?"})
+                
+                if thought and hasattr(thought, 'content'):
+                    return {"wandering_thought": thought.content,
+                            "thought_id": thought.thought_id,
+                            "significance": .3}
+            except ImportError:
+                pass
+        return None
 
 # ── SAFETY / HARM DETECTION ───────────────────────────────────────────────
 @register_adapter("harm_detection")
@@ -1174,8 +1241,11 @@ class HormoneAdapter(EnhancedWorkspaceModule):
     async def on_phase(self, phase: int):
         if phase or not self.hs:
             return
-        lv = await maybe_async(self.hs.get_levels)
-        for h, v in (lv or {}).items():
+        # FIX: Use get_hormone_levels instead of get_levels
+        lv = await maybe_async(self.hs.get_hormone_levels)
+        for h, data in (lv or {}).items():
+            # Handle the hormone data structure properly
+            v = data.get('value', 0.5) if isinstance(data, dict) else data
             if v > .8 or v < .2:
                 await self.submit({"hormone": h, "level": v},
                                   salience=abs(v - .5) * 2,
@@ -1184,8 +1254,16 @@ class HormoneAdapter(EnhancedWorkspaceModule):
     async def _reg_bg(self, _):
         if hasattr(self.hs, "update_levels"):
             await maybe_async(self.hs.update_levels)
-        lv = await maybe_async(self.hs.get_levels)
-        if lv and sum(1 for v in lv.values() if v > .7 or v < .3) >= 3:
+        # FIX: Use get_hormone_levels
+        lv = await maybe_async(self.hs.get_hormone_levels)
+        # Count hormones out of normal range
+        imbalanced = 0
+        for h, data in (lv or {}).items():
+            v = data.get('value', 0.5) if isinstance(data, dict) else data
+            if v > .7 or v < .3:
+                imbalanced += 1
+        
+        if imbalanced >= 3:
             return {"hormonal_imbalance": True, "significance": .5}
 
 
@@ -1775,20 +1853,26 @@ class ExperienceConsolidationAdapter(EnhancedWorkspaceModule):
     async def on_phase(self, phase: int):
         if phase != 2 or not self.ec:
             return
-        # Check if consolidation needed
-        if self.ws.state.get("experience_count", 0) > 10:
-            result = await maybe_async(self.ec.consolidate_recent)
-            if result:
-                await self.submit({"consolidation": result},
+        # Check if consolidation needed based on time
+        if hasattr(self.ec, 'get_consolidation_insights'):
+            insights = await maybe_async(self.ec.get_consolidation_insights)
+            if insights and insights.ready_for_consolidation:
+                await self.submit({"ready_for_consolidation": True,
+                                   "total_consolidations": insights.total_consolidations},
                                   salience=.7,
-                                  context_tag="experience_consolidation")
+                                  context_tag="consolidation_ready")
 
     async def _consolidate_bg(self, _):
-        if random.random() < .1:  # 10 % chance per cycle
-            loop = asyncio.get_running_loop()
-            consolidated = await loop.run_in_executor(None, self.ec.deep_consolidation)
-            if consolidated:
-                return {"deep_consolidation": True, "significance": .8}
+        if random.random() < .1:  # 10% chance per cycle
+            # Use run_consolidation_cycle which is the actual method
+            if hasattr(self.ec, 'run_consolidation_cycle'):
+                result = await maybe_async(self.ec.run_consolidation_cycle)
+                if result and hasattr(result, 'consolidations_created'):
+                    if result.consolidations_created > 0:
+                        return {"consolidations_created": result.consolidations_created,
+                                "memories_processed": result.source_memories_processed,
+                                "significance": .8}
+        return None
 
 
 # ── CROSS USER MANAGER ────────────────────────────────────────────────────
@@ -2075,20 +2159,53 @@ class ImaginationAdapter(EnhancedWorkspaceModule):
     async def on_phase(self, phase: int):
         if phase != 1 or not self.ims:
             return
-        # Imagine based on current focus
+        # Use imagine_scenario which is the actual method
         prompts = [p for p in self.ws.focus if p.salience > .6]
-        if prompts:
-            imagination = await maybe_async(self.ims.imagine, prompts)
-            if imagination:
-                await self.submit({"imagination": imagination},
+        if prompts and hasattr(self.ims, 'imagine_scenario'):
+            # Extract text from first high-salience prompt
+            prompt_content = prompts[0].content
+            description = ""
+            if isinstance(prompt_content, dict):
+                description = prompt_content.get("message", str(prompt_content))
+            else:
+                description = str(prompt_content)
+            
+            # Get brain state from workspace
+            brain_state = {
+                "workspace_focus": [p.content for p in self.ws.focus],
+                "emotional_state": self.ws.state.get("emotional_state", {}),
+                "context": "imagination_from_workspace"
+            }
+            
+            result = await maybe_async(self.ims.imagine_scenario, description, brain_state)
+            if result and result.get('success'):
+                await self.submit({"imagination": result.get('reflection', ''),
+                                   "key_insights": result.get('key_insights', []),
+                                   "confidence": result.get('confidence', 0.5)},
                                   salience=.7,
                                   context_tag="imagination_output")
 
     async def _drift_bg(self, _):
-        if random.random() < .2:  # 20% chance
-            daydream = await maybe_async(self.ims.daydream)
-            if daydream:
-                return {"daydream": daydream, "significance": .5}
+        if random.random() < .2 and hasattr(self.ims, 'imagine_scenario'):
+            # Create a daydream using imagine_scenario
+            prompts = [
+                "What if I could experience something completely new?",
+                "Imagining a moment of perfect clarity",
+                "What would happen if everything changed?",
+                "Exploring the edges of possibility"
+            ]
+            description = random.choice(prompts)
+            brain_state = {
+                "context": "daydreaming",
+                "emotional_state": {"valence": 0.5, "arousal": 0.3}
+            }
+            
+            result = await maybe_async(self.ims.imagine_scenario, description, brain_state)
+            if result and result.get('success'):
+                return {"daydream": result.get('reflection', description),
+                        "insights": result.get('key_insights', []),
+                        "significance": .5}
+        return None
 
 
 # ── PROCESSING MANAGER ────────────────────────────────────────────────────
