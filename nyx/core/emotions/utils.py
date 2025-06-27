@@ -691,7 +691,7 @@ class EmotionalToolUtils:
         metadata = {
             "system": "nyx_emotional_core",
             "version": "1.0",
-            "cycle": ctx.context.cycle_count,
+            "cycle": str(ctx.context.cycle_count),
             "timestamp": datetime.datetime.now().isoformat()
         }
         
