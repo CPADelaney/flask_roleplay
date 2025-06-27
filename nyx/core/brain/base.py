@@ -1018,20 +1018,6 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
                 logger.warning("EventBus module not found - event system will be unavailable")
                 self.event_bus = None
         
-        # Global Workspace Architecture
-        if self.workspace_engine is None:
-            logger.debug("Initializing Global Workspace Architecture")
-            from nyx.core.brain.global_workspace.adapters import build_gw_modules
-            gw_modules = build_gw_modules(self)
-            self.workspace_engine = NyxEngineV3(
-                gw_modules,
-                hz=10.0,  # 10Hz cognitive cycle
-                persist_bias=Path(f"gw_bias_{self.user_id}_{self.conversation_id}.json"),
-                enable_unconscious=True
-            )
-            await self.workspace_engine.start()
-            logger.info(f"Global Workspace Engine started with {len(gw_modules)} modules")
-        
         # Support systems
         from nyx.core.brain.module_optimizer import ModuleOptimizer
         from nyx.core.brain.system_health_checker import SystemHealthChecker
@@ -2424,6 +2410,8 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
         # Initialize agent capabilities if enabled
         if os.environ.get("ENABLE_AGENT", "true").lower() == "true":
             await self.initialize_agent_capabilities()
+
+        await self._ensure_workspace_engine_started()
         
         # Initialize streaming if enabled
         if os.environ.get("ENABLE_STREAMING", "false").lower() == "true":
@@ -2652,6 +2640,36 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
                 self.default_active_modules.add("streaming_hormone_system")
             if self.streaming_reflection_engine:
                 self.default_active_modules.add("streaming_reflection_engine")
+
+    async def _ensure_workspace_engine_started(self) -> None:
+        """Create + launch the Global Workspace engine if we haven't yet."""
+        if self.workspace_engine is not None:          # already running
+            return
+
+        from nyx.core.brain.global_workspace.adapters import build_gw_modules
+
+        gw_modules = build_gw_modules(self)
+
+        self.workspace_engine = NyxEngineV3(
+            gw_modules,
+            hz=10.0,
+            persist_bias=Path(
+                f"gw_bias_{self.user_id}_{self.conversation_id}.json"
+            ),
+            enable_unconscious=True,
+        )
+
+        logger.critical(
+            "⚙️  Starting Global-Workspace with %d modules: %s",
+            len(gw_modules),
+            [m.__class__.__name__ for m in gw_modules],
+        )
+
+        await self.workspace_engine.start()
+
+        # in case someone wants to push signals before initialize() returns
+        self.default_active_modules.add("workspace_engine")
+
     
     async def _wrap_with_a2a(self, original_system, wrapper_class_name: str, attribute_name: str = None):
         """
