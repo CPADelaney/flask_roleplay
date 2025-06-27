@@ -186,7 +186,7 @@ class EmotionTools:
                     "emotions": {
                         k: round(v, 2) for k, v in emotion_scores.items() if v > 0.1
                     },
-                    "cycle": ctx.context.cycle_count,
+                    "cycle": str(ctx.context.cycle_count),
                     "primary": max(emotion_scores.items(), key=lambda x: x[1])[0]
                     if emotion_scores else "Neutral"
                 }
@@ -301,7 +301,7 @@ class EmotionTools:
                     "valence": round(overall_valence, 2),
                     "arousal": round(overall_arousal, 2),
                     "secondary_count": len(secondary_emotions),
-                    "cycle": ctx.context.cycle_count,
+                    "cycle": str(ctx.context.cycle_count),
                     "valence_category": EmotionValence.from_value(overall_valence),
                     "arousal_category": EmotionArousal.from_value(overall_arousal)
                 }
@@ -341,7 +341,7 @@ class EmotionTools:
                 trace_id=gen_trace_id(),
                 metadata={
                     "text_length": len(text),
-                    "cycle": ctx.context.cycle_count,
+                    "cycle": str(ctx.context.cycle_count),
                     "timestamp": datetime.datetime.now().isoformat()
                 }
             ):
@@ -544,7 +544,7 @@ class EmotionTools:
                         "intensity": round(intensity, 2),
                         "valence": round(valence, 2),
                         "chemicals": {k: round(v, 2) for k, v in chemical_impacts.items()},
-                        "cycle": ctx.context.cycle_count,
+                        "cycle": str(ctx.context.cycle_count),
                         "valence_category": EmotionValence.from_value(valence),
                         "arousal_category": EmotionArousal.from_value(intensity)
                     }
@@ -643,7 +643,7 @@ class EmotionTools:
                     "emotions_analyzed": list(trends.keys()),
                     "stability": round(stability, 2),
                     "stability_rating": stability_rating,
-                    "cycle": ctx.context.cycle_count
+                    "cycle": str(ctx.context.cycle_count)
                 }
             ):
                 return {
