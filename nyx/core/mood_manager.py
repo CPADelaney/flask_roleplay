@@ -254,8 +254,32 @@ class MoodManager:
             if self.needs_system:
                 try:
                     needs_response = await self.needs_system.get_needs_state_async()
-                    if needs_response and hasattr(needs_response, 'needs'):
-                        needs_state = needs_response.needs  # Extract the dict from the response
+                    
+                    # ── NEW: normalise whatever we got into a dict ─────────────────
+                    if needs_response is None:
+                        needs_state = {}
+                    elif hasattr(needs_response, "needs"):
+                        needs_state = needs_response.needs  # typical dict
+                    else:
+                        # needs_response is already a plain list OR dict
+                        needs_state = needs_response  # type: ignore
+                        
+                        # If it's a list, convert to a dict keyed by need name (or index)
+                        if isinstance(needs_state, list):
+                            needs_state = {
+                                getattr(n, "name", getattr(n, "need", f"need_{i}")): n
+                                for i, n in enumerate(needs_state)
+                            }
+                    # ----------------------------------------------------------------
+                    
+                    if not isinstance(needs_state, dict):
+                        logger.warning(f"Unexpected needs_state type: {type(needs_state)}")
+                        needs_state = {}
+                        
+                        # Optional sanity check: ensure pleasure_indulgence exists
+                        if ("pleasure_indulgence" not in needs_state and isinstance(needs_state, dict)):
+                            # ensure it exists even if zero
+                            needs_state["pleasure_indulgence"] = {"deficit": 0.0, "importance": 0.0}
                         
                         # Calculate weighted deficit
                         total_deficit = 0
@@ -284,7 +308,7 @@ class MoodManager:
                         weight = self.influence_weights["needs"]
             
                         # Add valence/arousal/control from pleasure deprivation
-                        if "pleasure_indulgence" in needs_state:
+                        if needs_state and "pleasure_indulgence" in needs_state:
                             pleasure_data = needs_state["pleasure_indulgence"]
                             # Handle both dict and NeedStateInfo objects
                             if hasattr(pleasure_data, 'deficit'):
