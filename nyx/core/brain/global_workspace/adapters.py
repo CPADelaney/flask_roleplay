@@ -97,24 +97,54 @@ def register_adapter(brain_attr: str):
 # │ ADAPTER CLASSES – one per Nyx subsystem                                 │
 # ╰──────────────────────────────────────────────────────────────────────────╯
 
+# Patch 3: FallbackResponderAdapter
+@register_adapter("fallback_responder")
+class FallbackResponderAdapter(EnhancedWorkspaceModule):
+    """Provides a fallback response when no other module has generated one"""
+    name = "fallback_responder"
+    
+    def __init__(self, brain, ws=None):
+        super().__init__(ws)
+        self.brain = brain
+    
+    async def on_phase(self, phase: int):
+        if phase != 2:  # Only act in final phase
+            return
+            
+        # Check if we already have a response
+        has_response = any(
+            p.context_tag in ["response_candidate", "complete_response"]
+            for p in self.ws.proposals
+        )
+        
+        if not has_response and self.ws.state.get("awaiting_response"):
+            # 🔧 PATCH 3: Tag output as complete_response instead of response_candidate
+            await self.submit({
+                "response": "I'm processing that thought...",
+                "confidence": 0.3,
+                "fallback": True
+            }, salience=0.5, context_tag="complete_response")
+
+
+# Patch 4: ResponseSynthesizerAdapter - Full implementation with guaranteed response key
 @register_adapter("response_synthesizer")
 class ResponseSynthesizerAdapter(EnhancedWorkspaceModule):
     """
     Promote the best reply-draft (or generate a last-minute one) to
-    a ‘complete_response’ so downstream guardrails have something
+    a 'complete_response' so downstream guardrails have something
     concrete to vet instead of falling back to boiler-plate.
     """
     name = "response_synthesizer"
-
+    
     def __init__(self, brain, ws=None):
         super().__init__(ws)
         self.brain = brain
-
+    
     # ------------------------------------------------------------------ #
     async def on_phase(self, phase: int):
         if phase != 2:                       # final conscious pass
             return
-
+        
         # ------------------------------------------
         # 1. Gather every reply-like proposal so far
         # ------------------------------------------
@@ -126,37 +156,38 @@ class ResponseSynthesizerAdapter(EnhancedWorkspaceModule):
             "imagination_output",
             "response_candidate",
         }
+        
         candidates = [
             p for p in self.ws.proposals
             if p.context_tag in REPLY_TAGS
         ]
-
+        
         # ------------------------------------------
         # 2. If we already have a COMPLETE response,
-        #    don’t touch anything.
+        #    don't touch anything.
         # ------------------------------------------
         if any(p.context_tag == "complete_response" for p in candidates):
             return
-
+        
         # ------------------------------------------
         # 3. Choose the strongest candidate or build
         #    a bare-bones reply from scratch.
         # ------------------------------------------
         if candidates:
             best = max(candidates, key=lambda p: p.salience)
-            text = _extract_text(best.content) or "…"        # fallback text
+            text = self._extract_text(best.content) or "…"        # fallback text
             confidence = min(1.0, best.salience)
-
         else:  # nothing at all – fabricate something minimal
             text = "I'm still thinking about that…"
             confidence = 0.3
-
+        
         # ------------------------------------------
         # 4. Publish COMPLETE response                 (context_tag key!)
         # ------------------------------------------
+        # 🔧 PATCH 4: Ensure response key exists with fallback
         await self.submit(
             {
-                "response": text,
+                "response": text or "(thinking…) ",  # Always ensure non-empty response
                 "confidence": confidence,
                 "sources": [
                     p.source for p in candidates if p.salience > 0.6
@@ -165,7 +196,7 @@ class ResponseSynthesizerAdapter(EnhancedWorkspaceModule):
             salience=1.0,                    # make sure it wins attention
             context_tag="complete_response",
         )
-
+    
     # ------------------------------------------------------------------ #
     @staticmethod
     def _extract_text(content: Any) -> str | None:
@@ -184,29 +215,33 @@ class ResponseSynthesizerAdapter(EnhancedWorkspaceModule):
         return None
 
 
-@register_adapter("fallback_responder") 
+@register_adapter("fallback_responder")
 class FallbackResponderAdapter(EnhancedWorkspaceModule):
-    """Ensures we always have some response"""
-    name = "fallback"
+    """Provides a fallback response when no other module has generated one"""
+    name = "fallback_responder"
     
     def __init__(self, brain, ws=None):
         super().__init__(ws)
         self.brain = brain
     
     async def on_phase(self, phase: int):
-        if phase != 2:
+        if phase != 2:  # Only act in final phase
             return
             
-        props, _ = await self.ws.snapshot()
-        has_any_response = any(p.context_tag in ["response_candidate", "complete_response", "ai_response"]
-                              for p in props[-50:])
+        # Check if we already have a response
+        has_response = any(
+            p.context_tag in ["response_candidate", "complete_response"]
+            for p in self.ws.proposals
+        )
         
-        if not has_any_response:
+        if not has_response and self.ws.state.get("awaiting_response"):
+            # 🔧 PATCH 3: Tag output as complete_response instead of response_candidate
             await self.submit({
                 "response": "I'm processing that thought...",
                 "confidence": 0.3,
                 "fallback": True
-            }, salience=0.5, context_tag="response_candidate")
+            }, salience=0.5, context_tag="complete_response")
+
 # ── MEMORY ────────────────────────────────────────────────────────────────
 @register_adapter("memory_core")
 class MemoryAdapter(EnhancedWorkspaceModule):
