@@ -4,6 +4,7 @@ import logging
 import datetime
 import asyncio
 import uuid
+import json
 from typing import Dict, List, Any, Optional, Tuple, Callable, Set, Union
 from enum import Enum
 import re
@@ -158,8 +159,8 @@ class InternalThought(BaseModel):
 
 class ThoughtFilter(BaseModel):
     """Filter criteria for selecting thoughts."""
-    sources: List[ThoughtSource] = []
-    priorities: List[ThoughtPriority] = []
+    sources: List[ThoughtSource] = Field(default_factory=list)
+    priorities: List[ThoughtPriority] = Field(default_factory=list)
     max_age_seconds: Optional[float] = None
     contains_text: Optional[str] = None
     exclude_critiqued: bool = False
@@ -415,15 +416,26 @@ class InternalThoughtsManager:
                     "recent_thoughts": [t.model_dump() for t in recent_thoughts]
                 }
                 
+                # Wrap context in proper message format for Runner.run()
+                prompt_messages = [
+                    {
+                        "role": "user",
+                        "content": (
+                            f"Generate a {thought_source.value} thought for Nyx using this JSON "
+                            f"context:\n{json.dumps(generation_context, indent=2)}"
+                        )
+                    }
+                ]
+                
                 # Run the thought generation agent
                 result = await Runner.run(
                     self.thought_generation_agent,
-                    generation_context,
+                    prompt_messages,
                     run_config=RunConfig(
                         workflow_name="InternalThoughtGeneration",
                         trace_metadata={
                             "source": thought_source.value,
-                            "context_type": str(type(context))
+                            "context_type": type(context).__name__
                         }
                     )
                 )
@@ -456,7 +468,7 @@ class InternalThoughtsManager:
                 return thought
                 
         except Exception as e:
-            thoughts_logger.error(f"Error generating thought: {str(e)}")
+            thoughts_logger.exception("Error generating thought")
             
             # Create a fallback thought
             fallback_thought = InternalThought(
@@ -524,9 +536,19 @@ class InternalThoughtsManager:
                 "context": thought.context.model_dump()
             }
             
+            # Wrap context in proper message format for Runner.run()
+            prompt_messages = [
+                {
+                    "role": "user",
+                    "content": (
+                        f"Critique this internal thought:\n{json.dumps(critique_context, indent=2)}"
+                    )
+                }
+            ]
+            
             result = await Runner.run(
                 self.critique_agent,
-                critique_context,
+                prompt_messages,
                 run_config=RunConfig(
                     workflow_name="ThoughtCritique",
                     trace_metadata={"thought_id": thought.thought_id}
@@ -537,7 +559,7 @@ class InternalThoughtsManager:
             return critique
             
         except Exception as e:
-            thoughts_logger.error(f"Error generating critique: {str(e)}")
+            thoughts_logger.exception("Error generating critique")
             return None
     
     def _add_thought(self, thought: InternalThought):
@@ -648,7 +670,7 @@ class InternalThoughtsManager:
             return generated_thoughts
             
         except Exception as e:
-            thoughts_logger.error(f"Error in process_input: {str(e)}")
+            thoughts_logger.exception("Error in process_input")
             return generated_thoughts  # Return whatever thoughts were generated before the error
     
     async def process_output(self, planned_response: str, context: Union[Dict[str, Any], GeneralContext]) -> Tuple[str, List[InternalThought]]:
@@ -711,7 +733,7 @@ class InternalThoughtsManager:
             return filtered_response, generated_thoughts
             
         except Exception as e:
-            thoughts_logger.error(f"Error in process_output: {str(e)}")
+            thoughts_logger.exception("Error in process_output")
             
             # In case of error, just return the filtered response to be safe
             filter_result = self.filter_response_for_thoughts(planned_response)
@@ -785,7 +807,7 @@ class InternalThoughtsManager:
             else:
                 return EmotionalState()
         except Exception as e:
-            thoughts_logger.error(f"Error getting emotional state: {str(e)}")
+            thoughts_logger.exception("Error getting emotional state")
             return EmotionalState(status="error")
     
     def _get_recent_thoughts(self, limit: int = 5) -> List[RecentThoughtSummary]:
@@ -977,7 +999,7 @@ class InternalThoughtsManager:
                 self._add_thought(thought)
         
         except Exception as e:
-            thoughts_logger.error(f"Error integrating with observation system: {str(e)}")
+            thoughts_logger.exception("Error integrating with observation system")
     
     async def integrate_with_reflection_engine(self):
         """
@@ -1016,7 +1038,7 @@ class InternalThoughtsManager:
                 self._add_thought(thought)
         
         except Exception as e:
-            thoughts_logger.error(f"Error integrating with reflection engine: {str(e)}")
+            thoughts_logger.exception("Error integrating with reflection engine")
 
 
 # Main integration hooks for the response pipeline
