@@ -99,41 +99,89 @@ def register_adapter(brain_attr: str):
 
 @register_adapter("response_synthesizer")
 class ResponseSynthesizerAdapter(EnhancedWorkspaceModule):
-    """Synthesizes final responses from all workspace content"""
+    """
+    Promote the best reply-draft (or generate a last-minute one) to
+    a ‘complete_response’ so downstream guardrails have something
+    concrete to vet instead of falling back to boiler-plate.
+    """
     name = "response_synthesizer"
-    
+
     def __init__(self, brain, ws=None):
         super().__init__(ws)
         self.brain = brain
-    
+
+    # ------------------------------------------------------------------ #
     async def on_phase(self, phase: int):
-        if phase != 2:  # Only in final phase
+        if phase != 2:                       # final conscious pass
             return
-            
-        # Let the coordinator handle synthesis
-        # This adapter mainly ensures we have response candidates
-        props, focus = await self.ws.snapshot()
-        
-        # Check if we have good response materials
-        has_response = any(p.context_tag in ["response_candidate", "complete_response"] 
-                          for p in focus)
-        
-        if not has_response and focus:
-            # Create a basic response candidate from available info
-            content_pieces = []
-            for p in focus:
-                if p.salience > 0.6:
-                    if isinstance(p.content, dict):
-                        content_pieces.append(str(p.content.get("message", p.content)))
-                    else:
-                        content_pieces.append(str(p.content))
-            
-            if content_pieces:
-                await self.submit({
-                    "response": " ".join(content_pieces[:3]),
-                    "confidence": 0.5,
-                    "synthesized": True
-                }, salience=0.7, context_tag="response_candidate")
+
+        # ------------------------------------------
+        # 1. Gather every reply-like proposal so far
+        # ------------------------------------------
+        REPLY_TAGS = {
+            "persona_adjusted",
+            "conditioned_output",
+            "reply_draft",
+            "creative_synthesis",
+            "imagination_output",
+            "response_candidate",
+        }
+        candidates = [
+            p for p in self.ws.proposals
+            if p.context_tag in REPLY_TAGS
+        ]
+
+        # ------------------------------------------
+        # 2. If we already have a COMPLETE response,
+        #    don’t touch anything.
+        # ------------------------------------------
+        if any(p.context_tag == "complete_response" for p in candidates):
+            return
+
+        # ------------------------------------------
+        # 3. Choose the strongest candidate or build
+        #    a bare-bones reply from scratch.
+        # ------------------------------------------
+        if candidates:
+            best = max(candidates, key=lambda p: p.salience)
+            text = _extract_text(best.content) or "…"        # fallback text
+            confidence = min(1.0, best.salience)
+
+        else:  # nothing at all – fabricate something minimal
+            text = "I'm still thinking about that…"
+            confidence = 0.3
+
+        # ------------------------------------------
+        # 4. Publish COMPLETE response                 (context_tag key!)
+        # ------------------------------------------
+        await self.submit(
+            {
+                "response": text,
+                "confidence": confidence,
+                "sources": [
+                    p.source for p in candidates if p.salience > 0.6
+                ],
+            },
+            salience=1.0,                    # make sure it wins attention
+            context_tag="complete_response",
+        )
+
+    # ------------------------------------------------------------------ #
+    @staticmethod
+    def _extract_text(content: Any) -> str | None:
+        """Best-effort text extraction from various draft payload shapes."""
+        if isinstance(content, str):
+            return content
+        if isinstance(content, dict):
+            for key in (
+                "adjusted_text", "conditioned_text", "response",
+                "message", "imagination"
+            ):
+                if key in content and content[key]:
+                    return str(content[key])
+            # last resort – stringify the whole dict
+            return str(content)
+        return None
 
 
 @register_adapter("fallback_responder") 
