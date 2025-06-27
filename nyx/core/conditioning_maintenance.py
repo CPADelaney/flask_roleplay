@@ -65,6 +65,19 @@ class RecordHistoryResult(BaseModel):
     history_count: int
     error: Optional[str] = None
 
+# Models for maintenance history records
+class MaintenanceRecord(BaseModel):
+    """Explicit model for maintenance history records"""
+    timestamp: str
+    duration_seconds: float
+    status: str
+    tasks_performed: List[MaintenanceTask]
+    associations_modified: int
+    traits_adjusted: int
+    extinction_count: int
+    improvements: List[str]
+    next_recommendation: str
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 #  Helper – convert dynamic dicts → strict lists
@@ -253,14 +266,20 @@ async def record_maintenance_history(                    # noqa: N802
 
     # ① decode
     try:
-        rec: dict[str, Any] = json.loads(params.maintenance_record_json or "{}")
+        rec = json.loads(params.maintenance_record_json or "{}")
         if not isinstance(rec, dict):
             raise TypeError("maintenance_record_json must decode to an object")
+        
+        # Validate that it contains the expected structure
+        # Convert to MaintenanceRecord and back to ensure compatibility
+        # This validates the structure without storing the model
+        _ = MaintenanceRecord(**rec)
+        
     except Exception as exc:
         return RecordHistoryResult(
             success=False,
             history_count=len(ctx.context.maintenance_history),
-            error=f"Bad JSON: {exc}",
+            error=f"Bad JSON or invalid structure: {exc}",
         )
 
     # ② augment & store
@@ -422,27 +441,30 @@ class ConditioningMaintenanceSystem:
                 summary = result.final_output
                 duration = (datetime.datetime.now() - start_time).total_seconds()
                 
-                maintenance_record = {
-                    "timestamp": datetime.datetime.now().isoformat(),
-                    "duration_seconds": duration,
-                    "status": "completed",
-                    "tasks_performed": summary.tasks_performed,
-                    "associations_modified": summary.associations_modified,
-                    "traits_adjusted": summary.traits_adjusted,
-                    "extinction_count": summary.extinction_count,
-                    "improvements": summary.improvements,
-                    "next_recommendation": summary.next_maintenance_recommendation
-                }
+                # Create structured maintenance record
+                maintenance_record = MaintenanceRecord(
+                    timestamp=datetime.datetime.now().isoformat(),
+                    duration_seconds=duration,
+                    status="completed",
+                    tasks_performed=summary.tasks_performed,
+                    associations_modified=summary.associations_modified,
+                    traits_adjusted=summary.traits_adjusted,
+                    extinction_count=summary.extinction_count,
+                    improvements=summary.improvements,
+                    next_recommendation=summary.next_maintenance_recommendation
+                )
                 
                 self.context.last_maintenance_time = datetime.datetime.now()
                 
-                # Record history
+                # Record history using JSON string
                 await record_maintenance_history(
                     RunContextWrapper(context=self.context),
-                    maintenance_record
+                    RecordHistoryParams(
+                        maintenance_record_json=maintenance_record.model_dump_json()
+                    )
                 )
                 
-                return maintenance_record
+                return maintenance_record.model_dump()
                 
             except Exception as e:
                 logger.error(f"Error in maintenance: {e}")
@@ -458,9 +480,9 @@ class ConditioningMaintenanceSystem:
         status = await get_maintenance_status(ctx_wrapper)
         
         return {
-            "last_maintenance_time": status.get("last_maintenance_time"),
+            "last_maintenance_time": status.last_maintenance_time,
             "maintenance_count": len(self.context.maintenance_history),
             "task_running": self.context.maintenance_task is not None,
             "recent_history": self.context.maintenance_history[-5:],
-            "maintenance_due": status.get("maintenance_due", False)
+            "maintenance_due": status.maintenance_due
         }
