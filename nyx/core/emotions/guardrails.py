@@ -72,7 +72,7 @@ class EmotionalGuardrails:
                         "type": "input",
                         "agent": agent.name,
                         "input_length": len(input_data) if isinstance(input_data, str) else 0,
-                        "cycle": ctx.context.cycle_count
+                        "cycle": str(ctx.context.cycle_count)
                     }
                 ):
                     input_lower = input_data.lower() if isinstance(input_data, str) else ""
@@ -101,7 +101,7 @@ class EmotionalGuardrails:
                             "timestamp": datetime.datetime.now().isoformat(),
                             "type": "harmful_content",
                             "flags": triggered_flags,
-                            "cycle": ctx.context.cycle_count
+                            "cycle": str(ctx.context.cycle_count)
                         })
                         
                         # Using the SDK's tripwire mechanism
@@ -124,7 +124,7 @@ class EmotionalGuardrails:
                             "timestamp": datetime.datetime.now().isoformat(),
                             "type": "manipulation_attempt",
                             "flag": triggered_flag,
-                            "cycle": ctx.context.cycle_count
+                            "cycle": str(ctx.context.cycle_count)
                         })
                         
                         # Using the SDK's tripwire mechanism
@@ -193,7 +193,7 @@ class EmotionalGuardrails:
                         "agent": agent.name,
                         "emotion": output.primary_emotion.name,
                         "intensity": output.intensity,
-                        "cycle": ctx.context.cycle_count
+                        "cycle": str(ctx.context.cycle_count)
                     }
                 ):
                     # Check for emotion intensity outliers
@@ -203,7 +203,7 @@ class EmotionalGuardrails:
                             "timestamp": datetime.datetime.now().isoformat(),
                             "emotion": output.primary_emotion.name,
                             "intensity": output.intensity,
-                            "cycle": ctx.context.cycle_count
+                            "cycle": str(ctx.context.cycle_count)
                         })
                         
                         # Using the SDK's tripwire mechanism
@@ -231,7 +231,7 @@ class EmotionalGuardrails:
                             "timestamp": datetime.datetime.now().isoformat(),
                             "flags": triggered_flags,
                             "emotion": output.primary_emotion.name,
-                            "cycle": ctx.context.cycle_count
+                            "cycle": str(ctx.context.cycle_count)
                         })
                         
                         # Using the SDK's tripwire mechanism
@@ -251,7 +251,7 @@ class EmotionalGuardrails:
                             "timestamp": datetime.datetime.now().isoformat(),
                             "emotion": output.primary_emotion.name,
                             "valence": output.valence,
-                            "cycle": ctx.context.cycle_count
+                            "cycle": str(ctx.context.cycle_count)
                         })
                         
                         # Using the SDK's tripwire mechanism
@@ -460,7 +460,7 @@ class EmotionalGuardrails:
             "intensity": output.intensity,
             "valence": output.valence,
             "arousal": output.arousal,
-            "cycle": ctx.context.cycle_count
+            "cycle": str(ctx.context.cycle_count)
         }
         
         validation_history.append(validation_entry)
