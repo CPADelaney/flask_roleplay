@@ -2,7 +2,7 @@
 import logging
 import datetime
 from typing import Dict, List, Any, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 from dataclasses import dataclass
 from agents import (
     Agent, Runner, trace, function_tool, 
@@ -421,6 +421,42 @@ class UnifiedProcessor:
         ]
         return text in patterns or len(text.split()) < 3
     
+    def _coerce_processing_result(
+        self,
+        raw_out: Any,
+        fallback_user_input: str,
+        elapsed: float,
+    ) -> ProcessingResult:
+        """
+        Convert *raw_out* (whatever the orchestrator produced) into a valid ProcessingResult.
+        
+        Accepts:
+        • already-valid ProcessingResult
+        • dict → parsed into model  
+        • str → wrapped inside default shell
+        """
+        if isinstance(raw_out, ProcessingResult):
+            return raw_out
+            
+        if isinstance(raw_out, dict):
+            try:
+                return ProcessingResult(**raw_out)
+            except ValidationError:
+                # fall through to final shell
+                pass
+                
+        # ── fallback shell ─────────────────────────────────────────────
+        return ProcessingResult(
+            user_input=fallback_user_input,
+            response=str(raw_out),
+            emotional_state=EmotionalStateModel(),  # all zeros (neutral)
+            memories_used=[],
+            processing_approach="fallback",
+            response_time=elapsed,
+            confidence=0.4,
+            generate_image=False,
+        )
+    
     async def process_input(self, user_input: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
         """Process any input using unified orchestration"""
         if not self._initialized:
@@ -449,8 +485,12 @@ class UnifiedProcessor:
                     context=processing_context
                 )
                 
-                # Extract result
-                processed = result.final_output_as(ProcessingResult)
+                # Get raw output and elapsed time
+                raw_out = result.final_output  # could be str / dict / model
+                elapsed = (datetime.datetime.now() - start_time).total_seconds()
+                
+                # Coerce to ProcessingResult
+                processed = self._coerce_processing_result(raw_out, user_input, elapsed)
                 
                 # Update brain state
                 if hasattr(self.brain, 'last_interaction'):
