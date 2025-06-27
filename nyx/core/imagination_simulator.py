@@ -41,14 +41,11 @@ class SimulationAbstractionDTO(BaseModel):
     entity_focus: Optional[Any] = None
     neurochemical_insight: Optional[Any] = None
 
-    model_config = {"extra": "forbid"}      # <- strict!
-
 class SimulationReflectionDTO(BaseModel):
     reflection: str
     confidence: float
     source: Literal["reflection_engine", "basic_generation", "error"]
     timestamp: str
-    model_config = {"extra": "forbid"}   # strict!
 
 class SimulationAnalysisDTO(BaseModel):
     simulation_id: str
@@ -58,19 +55,16 @@ class SimulationAnalysisDTO(BaseModel):
     insights_json: str                # json.dumps(insights   )
     confidence: float
     confidence_factors_json: str      # json.dumps(confidence_factors)
-    model_config = {"extra": "forbid"}   # strict!
 
 class StabilityEvaluationDTO(BaseModel):
     is_stable: bool
     avg_change: float
     changes_json: str            # JSON-encoded dict of per-variable deltas
     stability_confidence: float
-    model_config = {"extra": "forbid"}   # ← strict
 
 class GoalCheckResultDTO(BaseModel):
     goal_met: bool
     conditions_met_json: str            # JSON-encoded dict
-    model_config = {"extra": "forbid"}  # ← strict
 
 class SimulationStateDTO(BaseModel):
     """
@@ -79,8 +73,6 @@ class SimulationStateDTO(BaseModel):
     so the schema is closed (additionalProperties == false).
     """
     state_json: str
-
-    model_config = {"extra": "forbid"}
 
 class SimulationState(BaseModel):
     """Represents a state within a simulation."""
@@ -126,8 +118,6 @@ class SimulationInputDTO(BaseModel):
     """
     simulation_json: str                  # JSON string of a SimulationInput
 
-    model_config = {"extra": "forbid"}
-
 class ScenarioGenerationOutput(BaseModel):
     """Output from the scenario generation agent."""
     scenario_description: str
@@ -152,12 +142,10 @@ class CausalModelOutput(BaseModel):
     """
     Strict DTO returned by `get_causal_model_for_simulation`.
     The `model` blob is serialised as JSON to avoid open-ended objects
-    in the schema, and `extra = "forbid"` keeps the schema strict.
+    in the schema.
     """
     status: Literal["cached", "retrieved", "created"]
     model_json: str                     # ← JSON-encoded causal model
-
-    model_config = {"extra": "forbid"}
 
 class SimulationContext:
     """Context object for simulation agents."""
@@ -202,7 +190,7 @@ async def setup_simulation_from_description(
     Interpret a simulation description into a structured SimulationInput.
 
     Args:
-        description:              User’s natural-language description.
+        description:              User's natural-language description.
         current_brain_state_json: JSON string with the current brain state.
         domain:                   (optional) simulation domain.
 
@@ -229,7 +217,7 @@ async def setup_simulation_from_description(
             focus_variables=[],
         )
 
-        # Detect “what if” / counterfactual clues in the prompt
+        # Detect "what if" / counterfactual clues in the prompt
         d_lower = description.lower()
         if "what if i" in d_lower:
             sim_input.hypothetical_event = {
@@ -495,7 +483,7 @@ async def apply_counterfactual_condition(
     causal_model_json: str | None = None,
 ) -> SimulationStateDTO:
     """
-    Apply a counterfactual (‘what-if’) condition to the simulation state.
+    Apply a counterfactual ('what-if') condition to the simulation state.
 
     Args:
         initial_state_json:  JSON of the starting state.
@@ -990,7 +978,7 @@ async def generate_abstraction_from_simulation(
 
     Args:
         simulation_result_json: JSON-encoded SimulationResult dict
-        pattern_type:           pattern family to look for (“causal”, “temporal”, …)
+        pattern_type:           pattern family to look for ("causal", "temporal", …)
     """
 
     with custom_span("generate_abstraction_from_simulation"):
