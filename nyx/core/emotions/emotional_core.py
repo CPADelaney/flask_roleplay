@@ -1632,6 +1632,26 @@ class EmotionalCore:
                     "history_size": len(emotional_core.emotional_state_history),
                     "analysis_time": datetime.datetime.now().isoformat()
                 }
+
+    def analyze_text_sentiment(self, text: str):
+        """
+        Lightweight wrapper so external code can ask the EmotionalCore
+        for text-sentiment analysis without knowing about EmotionTools or
+        the Agents SDK plumbing.
+        """
+        # Re-use the EmotionTools implementation directly
+        ctx = RunContextWrapper(context=self.context)
+
+        # Call the *internal* implementation to avoid tool overhead
+        coro = self.emotion_tools._analyze_text_sentiment_impl(ctx, text)
+
+        # If we’re already in an event-loop, await; otherwise run synchronously
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+
+        return loop.run_until_complete(coro) if loop is None else loop.create_task(coro)
     
     async def update_neurochemical(self, chemical: str, value: float, source: str = "system") -> NeurochemicalResponseDTO:
         """
