@@ -3,7 +3,7 @@
 import datetime
 import logging
 from typing import Dict, List, Any, Optional, Union
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 import os
 
 logger = logging.getLogger(__name__)
@@ -137,13 +137,46 @@ class OperantConditioningOutput(BaseModel):
     is_positive: bool = Field(..., description="Whether this is positive or negative")
     explanation: str = Field(..., description="Explanation of the conditioning process")
 
+# ─── at the top of nyx/core/conditioning_models.py ───────────────────────────
+from pydantic import BaseModel, Field, ConfigDict   # ← add ConfigDict import
+# -----------------------------------------------------------------------------
+
+
+# ─── replace the old BehaviorEvaluationOutput definition with this one ───────
 class BehaviorEvaluationOutput(BaseModel):
+    """
+    Output of Behavior-Evaluation agent (Pydantic v2-ready).
+
+    • Any extra keys the LLM decides to emit are allowed – they’ll simply be
+      included in the model instance instead of raising a validation error.
+    """
+
+    # Pydantic v2 style config
+    model_config = ConfigDict(extra='allow')
+
     behavior: str = Field(default="", description="The behavior being evaluated")
-    expected_valence: float = Field(default=0.0, description="Expected outcome valence (-1.0 to 1.0)")
-    confidence: float = Field(default=0.0, description="Confidence in the evaluation (0.0-1.0)")
-    recommendation: str = Field(default="neutral", description="Recommendation (approach, avoid, neutral)")
-    explanation: str = Field(default="", description="Explanation of the recommendation")
-    relevant_associations: Optional[List[RelevantAssociation]] = Field(default=None, description="Relevant associations considered")
+    expected_valence: float = Field(
+        default=0.0,
+        description="Expected outcome valence (-1.0 … 1.0)",
+    )
+    confidence: float = Field(
+        default=0.0,
+        description="Confidence in the evaluation (0.0 … 1.0)",
+    )
+    recommendation: str = Field(
+        default="neutral",
+        description="Recommendation (approach | avoid | neutral)",
+    )
+    explanation: str = Field(
+        default="",
+        description="Explanation of the recommendation",
+    )
+    relevant_associations: Optional[List[RelevantAssociation]] = Field(
+        default=None,
+        description="Associations considered in the evaluation",
+    )
+# ─────────────────────────────────────────────────────────────────────────────
+
 
 class TraitConditioningOutput(BaseModel):
     trait: str = Field(default="", description="The personality trait being conditioned")
