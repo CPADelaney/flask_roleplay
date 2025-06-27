@@ -214,7 +214,6 @@ class EmotionalAdapter(EnhancedWorkspaceModule):
                                   salience=primary.get('intensity', 0),
                                   context_tag="emotion_spike")
 
-
     async def _drift_bg(self, _):
         if hasattr(self.ec, "update_emotions"):
             await maybe_async(self.ec.update_emotions)
@@ -234,6 +233,7 @@ class EmotionalAdapter(EnhancedWorkspaceModule):
             return {"sustained_emotions": sust, "significance": .4}
 
 
+
 # ── NEEDS ──────────────────────────────────────────────────────────────────
 @register_adapter("needs_system")
 class NeedsAdapter(EnhancedWorkspaceModule):
@@ -246,11 +246,23 @@ class NeedsAdapter(EnhancedWorkspaceModule):
         if phase or not self.ns:
             return
         st = await maybe_async(self.ns.get_needs_state)
-        for need, data in (st or {}).items():
-            if data.get("drive", 0) > .8:
-                await self.submit({"need": need, **data},
-                                  salience=data["drive"],
-                                  context_tag="need_spike")
+        # Handle both NeedsStateResponse and dict formats
+        if hasattr(st, 'needs'):
+            # New format: NeedsStateResponse with list of needs
+            for need in st.needs:
+                if need.drive_strength > 0.8:
+                    await self.submit({"need": need.name, 
+                                       "drive": need.drive_strength,
+                                       "level": need.level},
+                                      salience=need.drive_strength,
+                                      context_tag="need_spike")
+        else:
+            # Legacy dict format
+            for need, data in (st or {}).items():
+                if data.get("drive", 0) > .8:
+                    await self.submit({"need": need, **data},
+                                      salience=data["drive"],
+                                      context_tag="need_spike")
 
     async def _homeo_bg(self, _):
         if hasattr(self.ns, "update_needs"):
@@ -1252,8 +1264,13 @@ class HormoneAdapter(EnhancedWorkspaceModule):
                                   context_tag="hormone_extreme")
 
     async def _reg_bg(self, _):
-        if hasattr(self.hs, "update_levels"):
-            await maybe_async(self.hs.update_levels)
+        # FIX: Use update_hormone_cycles with context
+        if hasattr(self.hs, "update_hormone_cycles"):
+            # Create a minimal context for the hormone system
+            from nyx.core.emotions.context import EmotionalContext
+            ctx = EmotionalContext()
+            await maybe_async(self.hs.update_hormone_cycles, ctx)
+        
         # FIX: Use get_hormone_levels
         lv = await maybe_async(self.hs.get_hormone_levels)
         # Count hormones out of normal range
