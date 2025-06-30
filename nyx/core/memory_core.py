@@ -2228,6 +2228,50 @@ class MemoryCoreAgents:
             limit=limit
         )
 
+    async def get_all_memory_ids(self, 
+                                memory_types: List[str] = None,
+                                include_archived: bool = False,
+                                include_consolidated: bool = False) -> List[str]:
+        """
+        Get all memory IDs in the system with optional filtering
+        
+        Args:
+            memory_types: Filter by memory types (if None, returns all types)
+            include_archived: Whether to include archived memories
+            include_consolidated: Whether to include consolidated memories
+            
+        Returns:
+            List of memory IDs matching the criteria
+        """
+        storage = self.context.storage
+        
+        # Start with all memory IDs
+        memory_ids = set(storage.memories.keys())
+        
+        # Filter by type if specified
+        if memory_types:
+            type_ids = set()
+            for memory_type in memory_types:
+                type_ids.update(storage.type_index.get(memory_type, set()))
+            memory_ids &= type_ids
+        
+        # Filter archived
+        if not include_archived:
+            memory_ids -= storage.archived_memories
+        
+        # Filter consolidated
+        if not include_consolidated:
+            memory_ids -= storage.consolidated_memories
+        
+        return list(memory_ids)
+    
+    async def get_memory_by_id(self, memory_id: str) -> Optional[Dict[str, Any]]:
+        """Get a specific memory by ID"""
+        memory = self.context.storage.get(memory_id)
+        if memory:
+            return memory.dict()
+        return None
+
 # ==================== Brain Memory Core ====================
 
 class BrainMemoryCore(MemoryCoreAgents):
