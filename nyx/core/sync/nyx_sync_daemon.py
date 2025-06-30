@@ -4,6 +4,7 @@ import asyncio
 import asyncpg
 import logging
 from datetime import datetime, timezone
+from typing import Dict, Any, Optional
 
 from nyx.nyx_agent_sdk import add_memory
 from nyx.user_model_sdk import UserModelManager
@@ -20,6 +21,15 @@ class NyxSyncDaemon:
     def __init__(self, db_dsn=DB_DSN):
         self.db_dsn = db_dsn
         self.interval_seconds = 60  # configurable polling time
+        self._last_sync_time: Optional[datetime.datetime] = None
+        self._sync_status: Dict[str, Any] = {
+            "out_of_sync": False,
+            "last_sync": None,
+            "pending_strategies": 0,
+            "pending_scenes": 0,
+            "sync_errors": []
+        }
+        self._systems_synced = 0
 
     async def start(self):
         while True:
@@ -27,6 +37,12 @@ class NyxSyncDaemon:
                 await self.run_sync_cycle()
             except Exception as e:
                 logger.error(f"Sync cycle failed: {e}")
+                self._sync_status["sync_errors"].append({
+                    "error": str(e),
+                    "time": datetime.datetime.now().isoformat()
+                })
+                # Keep only last 10 errors
+                self._sync_status["sync_errors"] = self._sync_status["sync_errors"][-10:]
             await asyncio.sleep(self.interval_seconds)
 
     async def run_sync_cycle(self):
@@ -34,27 +50,73 @@ class NyxSyncDaemon:
         conn = await asyncpg.connect(dsn=self.db_dsn)
 
         try:
+            # Reset sync counters
+            self._systems_synced = 0
+            
             # --- Strategy Injection ---
             active_strategies = await conn.fetch("""
                 SELECT * FROM nyx1_strategy_injections
                 WHERE status = 'active'
                 AND (expires_at IS NULL OR expires_at > NOW())
             """)
+            
+            self._sync_status["pending_strategies"] = len(active_strategies)
 
             for strategy in active_strategies:
                 await self.inject_strategy(strategy, conn)
+                self._systems_synced += 1
 
             # --- Scene Templates ---
             active_scenes = await conn.fetch("""
                 SELECT * FROM nyx1_scene_templates
                 WHERE active = TRUE
             """)
+            
+            self._sync_status["pending_scenes"] = len(active_scenes)
 
             for scene in active_scenes:
                 await self.inject_scene(scene, conn)
+                self._systems_synced += 1
 
+            # Update sync status
+            self._last_sync_time = datetime.datetime.now()
+            self._sync_status["last_sync"] = self._last_sync_time.isoformat()
+            self._sync_status["out_of_sync"] = False
+
+        except Exception as e:
+            self._sync_status["out_of_sync"] = True
+            raise
         finally:
             await conn.close()
+
+    async def get_sync_status(self) -> Dict[str, Any]:
+        """Return current sync status for the workspace adapter"""
+        # Check if we're out of sync (no sync in last 5 minutes)
+        if self._last_sync_time:
+            time_since_sync = datetime.datetime.now() - self._last_sync_time
+            if time_since_sync.total_seconds() > 300:  # 5 minutes
+                self._sync_status["out_of_sync"] = True
+        else:
+            self._sync_status["out_of_sync"] = True
+        
+        return self._sync_status.copy()
+
+    async def background_sync(self) -> Dict[str, Any]:
+        """Perform a background sync operation"""
+        try:
+            await self.run_sync_cycle()
+            return {
+                "synced_count": self._systems_synced,
+                "success": True,
+                "timestamp": datetime.datetime.now().isoformat()
+            }
+        except Exception as e:
+            logger.error(f"Background sync failed: {e}")
+            return {
+                "synced_count": 0,
+                "success": False,
+                "error": str(e)
+            }
 
     async def inject_strategy(self, strategy_row, conn):
         """
@@ -62,7 +124,7 @@ class NyxSyncDaemon:
         for every active user, and log the event.
         """
         strategy_id   = strategy_row["id"]
-        strategy_type = strategy_row["strategy_type"]          # e.g. “rlhf‑policy”
+        strategy_type = strategy_row["strategy_type"]          # e.g. "rlhf‑policy"
         payload       = strategy_row["payload"] or {}
         strategy_name = strategy_row["strategy_name"]
     
