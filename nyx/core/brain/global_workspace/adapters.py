@@ -1789,30 +1789,126 @@ class ExperienceInterfaceAdapter(EnhancedWorkspaceModule):
 
 
 # ── TEMPORAL PERCEPTION ───────────────────────────────────────────────────
+
 @register_adapter("temporal_perception")
 class TemporalPerceptionAdapter(EnhancedWorkspaceModule):
     name = "temporal"
     def __init__(self, tp, ws=None):
-        super().__init__(ws); self.tp = tp
+        super().__init__(ws)
+        self.tp = tp
+        self._last_context = None
+        self._interaction_active = False
         self.register_unconscious("time_tracking", self._track_bg, .5)
+        self.register_unconscious("milestone_check", self._milestone_bg, .7)
 
     async def on_phase(self, phase: int):
-        if phase != 0 or not self.tp:
+        if not self.tp:
             return
-        # Update temporal context
-        temporal_context = await maybe_async(self.tp.get_temporal_context)
-        if temporal_context and temporal_context.get("significant_change"):
-            await self.submit(temporal_context,
-                              salience=.6,
-                              context_tag="temporal_shift")
+            
+        # Phase 0: Handle interaction state and get temporal awareness
+        if phase == 0:
+            # Check if we have a new user interaction
+            user_inputs = [p for p in self.ws.focus if p.context_tag == "user_input"]
+            
+            if user_inputs and not self._interaction_active:
+                # Interaction starting
+                self._interaction_active = True
+                temporal_state = await maybe_async(self.tp.on_interaction_start)
+                
+                if temporal_state:
+                    # Submit time effects
+                    if temporal_state.get("time_effects"):
+                        for effect in temporal_state["time_effects"]:
+                            await self.submit(
+                                {"time_effect": effect, "category": temporal_state.get("time_category")},
+                                salience=effect.get("intensity", 0.5),
+                                context_tag="time_effect"
+                            )
+                    
+                    # Submit waiting reflections
+                    if temporal_state.get("waiting_reflections"):
+                        for reflection in temporal_state["waiting_reflections"]:
+                            await self.submit(
+                                reflection,
+                                salience=0.7,
+                                context_tag="temporal_reflection"
+                            )
+                    
+                    # Submit perception state
+                    if temporal_state.get("perception_state"):
+                        await self.submit(
+                            temporal_state["perception_state"],
+                            salience=0.6,
+                            context_tag="temporal_state"
+                        )
+            
+            elif not user_inputs and self._interaction_active:
+                # Interaction ending
+                self._interaction_active = False
+                end_state = await maybe_async(self.tp.on_interaction_end)
+                if end_state:
+                    await self.submit(
+                        end_state,
+                        salience=0.5,
+                        context_tag="interaction_end"
+                    )
+        
+        # Phase 1: Get temporal awareness and check for context changes
+        elif phase == 1:
+            # Get current temporal awareness
+            temporal_awareness = await maybe_async(self.tp.get_temporal_awareness)
+            if temporal_awareness:
+                await self.submit(
+                    temporal_awareness,
+                    salience=0.6,
+                    context_tag="temporal_awareness"
+                )
+            
+            # Check for temporal context changes
+            if hasattr(self.tp, 'current_temporal_context') and self.tp.current_temporal_context:
+                current = self.tp.current_temporal_context
+                # Convert to dict for comparison
+                current_dict = current.model_dump() if hasattr(current, 'model_dump') else current
+                
+                if self._last_context and current_dict != self._last_context:
+                    # Temporal context has changed
+                    await self.submit(
+                        {
+                            "temporal_context": current_dict,
+                            "previous_context": self._last_context,
+                            "significant_change": True
+                        },
+                        salience=0.7,
+                        context_tag="temporal_shift"
+                    )
+                
+                self._last_context = current_dict
 
     async def _track_bg(self, _):
-        if hasattr(self.tp, "update_time_perception"):
-            perception = await maybe_async(self.tp.update_time_perception)
-            if perception and perception.get("time_distortion", 0) > .3:
-                return {"time_distortion": perception["time_distortion"], "significance": .5}
-
-
+        # Check temporal ticks for background time tracking
+        if hasattr(self.tp, "temporal_ticks"):
+            ticks = self.tp.temporal_ticks
+            
+            # Detect significant time passages
+            if ticks.get("hour_tick", 0) > 0:
+                # Reset hour tick after processing
+                self.tp.temporal_ticks["hour_tick"] = 0
+                return {"time_passage": "hour", "significance": 0.5}
+            elif ticks.get("day_tick", 0) > 0:
+                # Reset day tick after processing
+                self.tp.temporal_ticks["day_tick"] = 0
+                return {"time_passage": "day", "significance": 0.7}
+        
+        # Check for idle reflections
+        if hasattr(self.tp, "idle_reflections") and self.tp.idle_reflections:
+            return {"idle_reflections_pending": len(self.tp.idle_reflections), "significance": 0.6}
+    
+    async def _milestone_bg(self, _):
+        # Periodically check for temporal milestones
+        if hasattr(self.tp, "check_milestones") and random.random() < 0.1:
+            milestone = await maybe_async(self.tp.check_milestones)
+            if milestone:
+                return {"milestone_reached": milestone, "significance": 0.9}
 # ── AGENTIC ACTION GENERATOR ──────────────────────────────────────────────
 @register_adapter("agentic_action_generator")
 class AgenticActionAdapter(EnhancedWorkspaceModule):
