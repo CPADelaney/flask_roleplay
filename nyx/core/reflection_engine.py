@@ -1977,6 +1977,71 @@ class ReflectionEngine:
             logger.error(f"Error generating communication reflection: {str(e)}")
             return ("I'm having difficulty reflecting on my communication patterns right now.", 0.2)
     
+    # Add this method to the ReflectionEngine class in reflection_engine.py
+    
+    async def reflect_on_recent(self, lookback_minutes: int = 30) -> Dict[str, Any]:
+        """
+        Generate a reflection on recent memories and return it in the format expected by the adapter.
+        
+        Args:
+            lookback_minutes: How far back to look for memories (default: 30 minutes)
+            
+        Returns:
+            Dict with 'reflection' text and 'significance' score
+        """
+        try:
+            # Check if we should reflect
+            if not self.should_reflect():
+                return None
+                
+            # Get recent memories from memory core
+            if not self.memory_core:
+                logger.warning("No memory core available for reflection")
+                return None
+                
+            # Calculate lookback time
+            since_time = datetime.datetime.now() - datetime.timedelta(minutes=lookback_minutes)
+            
+            # Retrieve recent memories
+            recent_memories = await self.memory_core.retrieve_memories(
+                query="recent experiences",
+                limit=10,
+                since=since_time.isoformat()
+            )
+            
+            if not recent_memories:
+                return None
+                
+            # Get current neurochemical state if available
+            neurochemical_state = None
+            if self.emotional_core and hasattr(self.emotional_core, "_get_neurochemical_state"):
+                neurochemical_state = {
+                    c: d["value"] for c, d in self.emotional_core.neurochemicals.items()
+                }
+            
+            # Generate reflection
+            reflection_text, confidence = await self.generate_reflection(
+                memories=recent_memories,
+                topic="recent experiences",
+                neurochemical_state=neurochemical_state
+            )
+            
+            # Calculate significance based on confidence and memory count
+            significance = min(0.9, confidence * 0.8 + (len(recent_memories) / 20))
+            
+            # Return in the format expected by the adapter
+            return {
+                "reflection": reflection_text,
+                "significance": significance,
+                "confidence": confidence,
+                "memory_count": len(recent_memories),
+                "timestamp": datetime.datetime.now().isoformat()
+            }
+            
+        except Exception as e:
+            logger.error(f"Error in reflect_on_recent: {str(e)}")
+            return None
+    
     async def get_integrated_reflection(self, 
                                     include_observations: bool = True,
                                     include_communications: bool = True,
