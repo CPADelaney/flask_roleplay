@@ -57,7 +57,7 @@ class SensoryInput(ToolModel):
         default_factory=lambda: datetime.datetime.now().isoformat(),
         description="ISO-8601 timestamp when the data was captured"
     )
-    metadata: MetadataDict = Field(
+    metadata: Any = Field(
         default_factory=dict,
         description="Metadata blob (simple key-value pairs)"
     )
@@ -242,11 +242,11 @@ class GetRecentPerceptsParams(ToolModel):
 
 class ProcessTextParams(ToolModel):
     text: str
-    metadata: Optional[MetadataDict] = None
+    metadata: Optional[Any] = None
 
 class ProcessImageParams(ToolModel):
     image_data: str  # Changed from Any to str (base64 encoded)
-    metadata: Optional[MetadataDict] = None
+    metadata: Optional[Any] = None
 
 class RegisterFeatureExtractorParams(ToolModel):
     modality: str
@@ -255,12 +255,12 @@ class RegisterFeatureExtractorParams(ToolModel):
 # Create a response model for the main function
 class ProcessSensoryResponse(ToolModel):
     modality: str
-    content: Dict[str, MetadataValueType]
+    content: Any
     bottom_up_confidence: float
     top_down_influence: float
     attention_weight: float
     timestamp: str
-    raw_features: Optional[Dict[str, MetadataValueType]] = None
+    raw_features: Optional[Any] = None
 
 @function_tool
 async def process_sensory_input(
@@ -427,7 +427,7 @@ def _clean_features(features: Any) -> Optional[Dict[str, MetadataValueType]]:
 
 class AddExpectationResponse(ToolModel):
     success: bool
-    expectation_added: Optional[Dict[str, MetadataValueType]] = None
+    expectation_added: Optional[Any]
     active_expectations_count: Optional[int] = None
     error: Optional[str] = None
 
@@ -534,12 +534,12 @@ async def clear_expectations(
 
 class PerceptDict(ToolModel):
     modality: str
-    content: Dict[str, MetadataValueType]
+    content: Any
     bottom_up_confidence: float
     top_down_influence: float
     attention_weight: float
     timestamp: str
-    raw_features: Optional[Dict[str, MetadataValueType]] = None
+    raw_features: Optional[Any]
 
 @function_tool
 async def get_recent_percepts(
@@ -584,7 +584,7 @@ async def get_recent_percepts(
     return percepts
 
 class PerceptionStatsResponse(ToolModel):
-    stats_by_modality: Dict[str, Dict[str, MetadataValueType]]
+    stats_by_modality: Any
     total_percepts: int
     active_expectations: int
 
