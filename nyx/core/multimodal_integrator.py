@@ -27,25 +27,20 @@ class Modality(str, Enum):
     TASTE = "taste"
     SMELL = "smell"
 
-# --- Base Schemas ---
-# Define a concrete type for metadata instead of using forward references
-class MetadataValue(BaseModel):
-    """Wrapper for metadata values to ensure JSON compatibility"""
-    value: Union[str, int, float, bool, None, List["MetadataValue"], Dict[str, "MetadataValue"]]
+# --- Define concrete types for metadata ---
+MetadataValueType = Union[str, int, float, bool, None]
+MetadataDict = Dict[str, MetadataValueType]
 
+# --- Base Schemas ---
 class SensoryInput(BaseModel):
     """
     Raw sensory payload passed into the process_sensory_input() tool.
 
     • `data` is now a *string* (text or base-64 for binary).  
-    • `metadata` is an object/dict (recursive JSON).  
-      → If you need to pass non-JSON, JSON-encode it first.
+    • `metadata` is a simple dict with primitive values
     """
     modality: Modality
-
-    # If you need to send binary (image bytes, etc.), base-64 encode it
     data: str = Field(..., description="Raw payload – text or base-64 string")
-
     confidence: float = Field(
         1.0, ge=0.0, le=1.0,
         description="Source-estimated reliability of the payload"
@@ -54,19 +49,14 @@ class SensoryInput(BaseModel):
         default_factory=lambda: datetime.datetime.now().isoformat(),
         description="ISO-8601 timestamp when the data was captured"
     )
-
-    # Use explicit model instead of Dict with forward reference
-    metadata: Dict[str, Any] = Field(
+    metadata: MetadataDict = Field(
         default_factory=dict,
-        description="Opaque metadata blob (must be JSON-serialisable)"
+        description="Metadata blob (simple key-value pairs)"
     )
 
 class ExpectationSignal(BaseModel):
     """
     Top-down bias sent to the integrator.
-
-    If you must transmit complex patterns (e.g. an array or dict),
-    JSON-encode them first and put the resulting string here.
     """
     target_modality: Modality
     pattern: str = Field(
@@ -78,15 +68,23 @@ class ExpectationSignal(BaseModel):
     source: str = Field(..., description="Subsystem that emitted the expectation")
     priority: float = Field(0.5, ge=0.0, le=1.0)
 
+# Define a concrete content type
+class PerceptContent(BaseModel):
+    """Structured content for integrated percepts"""
+    type: str = Field(..., description="Content type identifier")
+    data: Dict[str, MetadataValueType] = Field(default_factory=dict)
+    description: Optional[str] = None
+    features: Optional[List[str]] = None
+
 class IntegratedPercept(BaseModel):
     """Schema for integrated percept after bottom-up and top-down processing"""
     modality: Modality
-    content: Any = Field(..., description="Processed content (features, descriptions, etc.)")
+    content: Dict[str, MetadataValueType] = Field(..., description="Processed content")
     bottom_up_confidence: float = Field(..., description="Confidence from bottom-up processing")
     top_down_influence: float = Field(..., description="Degree of top-down influence")
     attention_weight: float = Field(..., description="Attentional weight applied")
     timestamp: str = Field(default_factory=lambda: datetime.datetime.now().isoformat())
-    raw_features: Optional[Dict[str, Any]] = Field(None, description="Detailed features from bottom-up processing")
+    raw_features: Optional[Dict[str, MetadataValueType]] = Field(None, description="Features from bottom-up processing")
 
 # --- Feature Schemas for Different Modalities ---
 class ImageFeatures(BaseModel):
@@ -97,9 +95,9 @@ class ImageFeatures(BaseModel):
     dominant_colors: List[Tuple[int, int, int]] = Field(default_factory=list)
     estimated_mood: Optional[str] = None
     is_screenshot: bool = False
-    spatial_layout: Any = None             # ← Dict → Any
+    spatial_layout: Optional[Dict[str, MetadataValueType]] = None
 
-class AudioFeatures(BaseModel):            # unchanged – shown for fwd-ref clarity
+class AudioFeatures(BaseModel):
     type: str = "unknown"
     transcription: Optional[str] = None
     speaker_id: Optional[str] = None
@@ -114,72 +112,39 @@ class VideoFeatures(BaseModel):
     """Features extracted from video data."""
     summary: str = "No summary available."
     key_actions: List[str] = Field(default_factory=list)
-    tracked_objects: Any = None            # ← Dict → Any
+    tracked_objects: Optional[Dict[str, MetadataValueType]] = None
     scene_changes: List[float] = Field(default_factory=list)
     audio_features: Optional[AudioFeatures] = None
     estimated_mood_progression: List[Tuple[float, str]] = Field(default_factory=list)
-    significant_frames: Any = None         # ← List[Dict] → Any
+    significant_frames: Optional[List[Dict[str, MetadataValueType]]] = None
 
 class TouchEventFeatures(BaseModel):
     """Features extracted from touch event data."""
     region: str
-    texture: Optional[str] = None  # e.g., smooth, rough, soft, sticky, wet
-    temperature: Optional[str] = None  # e.g., warm, cool, hot, cold
-    pressure_level: Optional[float] = None  # 0.0-1.0
-    hardness: Optional[str] = None  # e.g., soft, firm, hard
-    shape: Optional[str] = None  # e.g., flat, round, sharp
-    object_description: Optional[str] = None  # What was touched
+    texture: Optional[str] = None
+    temperature: Optional[str] = None
+    pressure_level: Optional[float] = None
+    hardness: Optional[str] = None
+    shape: Optional[str] = None
+    object_description: Optional[str] = None
 
 class TasteFeatures(BaseModel):
     """Features extracted from taste data."""
-    profiles: List[str] = Field(default_factory=list)  # e.g., sweet, sour, bitter, salty, umami, fatty, metallic, fruity, spicy
-    intensity: float = 0.5  # 0.0-1.0
-    texture: Optional[str] = None  # e.g., creamy, crunchy, chewy, liquid
-    temperature: Optional[str] = None  # e.g., hot, cold, room
+    profiles: List[str] = Field(default_factory=list)
+    intensity: float = 0.5
+    texture: Optional[str] = None
+    temperature: Optional[str] = None
     source_description: Optional[str] = None
 
 class SmellFeatures(BaseModel):
     """Features extracted from smell data."""
-    profiles: List[str] = Field(default_factory=list)  # e.g., floral, fruity, citrus, woody, spicy, fresh, pungent, earthy, chemical, sweet, rotten
-    intensity: float = 0.5  # 0.0-1.0
-    pleasantness: Optional[float] = None  # Estimated pleasantness -1.0 to 1.0
+    profiles: List[str] = Field(default_factory=list)
+    intensity: float = 0.5
+    pleasantness: Optional[float] = None
     source_description: Optional[str] = None
 
-class FeatureExtractionResult(BaseModel):
-    modality: Modality
-    features: Any
-    confidence: float
-    metadata: Any
-
-class ExpectationResult(BaseModel):
-    """Result of applying top-down expectations to features."""
-    features: Any
-    influence_strength: float
-    influenced_by: List[str]
-
-class IntegrationResult(BaseModel):
-    """Result of integrating bottom-up and top-down processing."""
-    content: Any
-    integrated_confidence: float
-    bottom_up_features: Optional[Any] = None
-    top_down_features: Optional[Any] = None
-
-class SensoryInputDict(TypedDict, total=False):
-    """Type definition for sensory input data"""
-    modality: str
-    data: Any
-    confidence: float
-    timestamp: str
-    metadata: Dict[str, Any]
-
-class ExpectationDict(TypedDict, total=False):
-    """Type definition for expectation data"""
-    target_modality: str
-    pattern: Any
-    strength: float
-    source: str
-    priority: float
-    
+# Remove TypedDict classes as they can cause issues with strict schema
+# Just use regular dicts instead
 
 # --- Constants for Feature Classification ---
 POSITIVE_TASTES = {"sweet", "umami", "fatty", "savory"}
@@ -191,12 +156,11 @@ class ProcessSensoryInputParams(BaseModel):
     input_data: SensoryInput
     expectations: Optional[List[ExpectationSignal]] = None
 
-
 def make_sensory_input(
     modality: Modality,
     data: Union[str, bytes],
     *,
-    metadata: Optional[Dict[str, Any]] = None,
+    metadata: Optional[MetadataDict] = None,
     confidence: float = 1.0,
 ) -> SensoryInput:
     """
@@ -212,7 +176,6 @@ def make_sensory_input(
         confidence=confidence,
         metadata=metadata or {},
     )
-
 
 # Context class to hold the state and dependencies
 class MultimodalIntegratorContext:
@@ -257,7 +220,7 @@ class MultimodalIntegratorContext:
 # Create parameter models for function tools that need them
 class AddExpectationParams(BaseModel):
     target_modality: str
-    pattern: Any
+    pattern: str  # Changed from Any to str
     strength: float = 0.5
     priority: float = 0.5
     source: str = "agent"
@@ -271,21 +234,31 @@ class GetRecentPerceptsParams(BaseModel):
 
 class ProcessTextParams(BaseModel):
     text: str
-    metadata: Optional[Dict[str, Any]] = None
+    metadata: Optional[MetadataDict] = None
 
 class ProcessImageParams(BaseModel):
-    image_data: Any
-    metadata: Optional[Dict[str, Any]] = None
+    image_data: str  # Changed from Any to str (base64 encoded)
+    metadata: Optional[MetadataDict] = None
 
 class RegisterFeatureExtractorParams(BaseModel):
     modality: str
     extractor_name: str
 
+# Create a response model for the main function
+class ProcessSensoryResponse(BaseModel):
+    modality: str
+    content: Dict[str, MetadataValueType]
+    bottom_up_confidence: float
+    top_down_influence: float
+    attention_weight: float
+    timestamp: str
+    raw_features: Optional[Dict[str, MetadataValueType]] = None
+
 @function_tool
 async def process_sensory_input(
     ctx: RunContextWrapper[MultimodalIntegratorContext],
-    params: ProcessSensoryInputParams,                     # ← single Pydantic arg
-) -> Dict[str, Any]:
+    params: ProcessSensoryInputParams,
+) -> ProcessSensoryResponse:
     """
     Bottom-up + top-down sensory processing. Returns IntegratedPercept as dict.
     """
@@ -299,7 +272,14 @@ async def process_sensory_input(
             input_data = SensoryInput(**input_data)
         except Exception as e:
             logger.error(f"Error converting input data to SensoryInput: {e}")
-            return {"error": f"Invalid input data: {e}"}
+            return ProcessSensoryResponse(
+                modality="error",
+                content={"error": f"Invalid input data: {e}"},
+                bottom_up_confidence=0.0,
+                top_down_influence=0.0,
+                attention_weight=0.0,
+                timestamp=datetime.datetime.now().isoformat()
+            )
     
     # Convert expectations to ExpectationSignal objects if they're dicts
     expectation_objects = None
@@ -370,14 +350,27 @@ async def process_sensory_input(
             attentional_weight = 0.5  # Fallback attention if error
 
     # 6. Create final percept
+    content = integrated_result.get("content", {})
+    if not isinstance(content, dict):
+        # Convert to dict if it's not already
+        content = {"data": str(content)}
+    
+    # Ensure content values are primitive types
+    clean_content = {}
+    for k, v in content.items():
+        if isinstance(v, (str, int, float, bool, type(None))):
+            clean_content[k] = v
+        else:
+            clean_content[k] = str(v)
+    
     percept = IntegratedPercept(
         modality=modality,
-        content=integrated_result.get("content"),
+        content=clean_content,
         bottom_up_confidence=bottom_up_result.get("confidence", 0.0),
         top_down_influence=modulated_result.get("influence_strength", 0.0),
         attention_weight=attentional_weight,
         timestamp=timestamp,
-        raw_features=bottom_up_result.get("features")
+        raw_features=_clean_features(bottom_up_result.get("features"))
     )
 
     # 7. Add to perception buffer
@@ -395,34 +388,60 @@ async def process_sensory_input(
 
     logger.info(f"Finished processing sensory input for {modality}")
     
-    # Return the percept as a dict
-    return percept.dict()
+    # Return as ProcessSensoryResponse
+    return ProcessSensoryResponse(
+        modality=percept.modality.value,
+        content=percept.content,
+        bottom_up_confidence=percept.bottom_up_confidence,
+        top_down_influence=percept.top_down_influence,
+        attention_weight=percept.attention_weight,
+        timestamp=percept.timestamp,
+        raw_features=percept.raw_features
+    )
+
+def _clean_features(features: Any) -> Optional[Dict[str, MetadataValueType]]:
+    """Convert features to clean dict with primitive values"""
+    if features is None:
+        return None
+    
+    if isinstance(features, dict):
+        clean = {}
+        for k, v in features.items():
+            if isinstance(v, (str, int, float, bool, type(None))):
+                clean[k] = v
+            else:
+                clean[k] = str(v)
+        return clean
+    elif isinstance(features, BaseModel):
+        return _clean_features(features.dict())
+    else:
+        return {"data": str(features)}
+
+class AddExpectationResponse(BaseModel):
+    success: bool
+    expectation_added: Optional[Dict[str, MetadataValueType]] = None
+    active_expectations_count: Optional[int] = None
+    error: Optional[str] = None
 
 @function_tool
 async def add_expectation(
     ctx: RunContextWrapper[MultimodalIntegratorContext],
     params: AddExpectationParams
-) -> Dict[str, Any]:
+) -> AddExpectationResponse:
     """
     Add a top-down expectation signal to guide perception.
-    
-    Args:
-        params: Parameters for adding expectation
-        
-    Returns:
-        Result of adding the expectation
     """
     integrator_ctx = ctx.context
     
     try:
         modality = Modality(params.target_modality)
     except ValueError:
-        return {
-            "success": False,
-            "error": f"Invalid modality: {params.target_modality}. Valid options are: {[m.value for m in Modality]}"
-        }
+        return AddExpectationResponse(
+            success=False,
+            error=f"Invalid modality: {params.target_modality}. Valid options are: {[m.value for m in Modality]}"
+        )
         
-    pattern = params.pattern if isinstance(params.pattern, str) else json.dumps(params.pattern)
+    pattern = params.pattern  # Already a string
     expectation = ExpectationSignal(
         target_modality=modality,
         pattern=pattern,
@@ -441,30 +460,31 @@ async def add_expectation(
     
     logger.debug(f"Added expectation for {modality}: {pattern}")
     
-    return {
-        "success": True,
-        "expectation_added": {
-            "modality": modality,
+    return AddExpectationResponse(
+        success=True,
+        expectation_added={
+            "modality": modality.value,
             "pattern": str(pattern),
             "strength": params.strength,
             "priority": params.priority
         },
-        "active_expectations_count": len(integrator_ctx.active_expectations)
-    }
+        active_expectations_count=len(integrator_ctx.active_expectations)
+    )
+
+class ClearExpectationsResponse(BaseModel):
+    success: bool
+    cleared_count: int
+    remaining_count: int
+    modality: Optional[str] = None
+    error: Optional[str] = None
 
 @function_tool
 async def clear_expectations(
     ctx: RunContextWrapper[MultimodalIntegratorContext],
     params: ClearExpectationsParams
-) -> Dict[str, Any]:
+) -> ClearExpectationsResponse:
     """
     Clear active expectations, optionally for a specific modality.
-    
-    Args:
-        params: Parameters for clearing expectations
-        
-    Returns:
-        Result of clearing expectations
     """
     integrator_ctx = ctx.context
     
@@ -481,62 +501,91 @@ async def clear_expectations(
                 new_count = len(integrator_ctx.active_expectations)
                 logger.info(f"Cleared {old_count - new_count} expectations for {params.modality}")
                 
-                return {
-                    "success": True,
-                    "cleared_count": old_count - new_count,
-                    "remaining_count": new_count,
-                    "modality": params.modality
-                }
+                return ClearExpectationsResponse(
+                    success=True,
+                    cleared_count=old_count - new_count,
+                    remaining_count=new_count,
+                    modality=params.modality
+                )
             except ValueError:
-                return {
-                    "success": False,
-                    "error": f"Invalid modality: {params.modality}"
-                }
+                return ClearExpectationsResponse(
+                    success=False,
+                    cleared_count=0,
+                    remaining_count=old_count,
+                    error=f"Invalid modality: {params.modality}"
+                )
         else:
             integrator_ctx.active_expectations = []
             logger.info(f"Cleared all {old_count} active expectations")
             
-            return {
-                "success": True,
-                "cleared_count": old_count,
-                "remaining_count": 0
-            }
+            return ClearExpectationsResponse(
+                success=True,
+                cleared_count=old_count,
+                remaining_count=0
+            )
+
+class PerceptDict(BaseModel):
+    modality: str
+    content: Dict[str, MetadataValueType]
+    bottom_up_confidence: float
+    top_down_influence: float
+    attention_weight: float
+    timestamp: str
+    raw_features: Optional[Dict[str, MetadataValueType]] = None
 
 @function_tool
 async def get_recent_percepts(
     ctx: RunContextWrapper[MultimodalIntegratorContext],
     params: GetRecentPerceptsParams
-) -> List[Dict[str, Any]]:
+) -> List[PerceptDict]:
     """
     Get recent percepts, optionally filtered by modality.
-    
-    Args:
-        params: Parameters for getting recent percepts
-        
-    Returns:
-        List of recent percepts
     """
     integrator_ctx = ctx.context
+    
+    percepts = []
     
     if params.modality:
         try:
             mod = Modality(params.modality)
             filtered = [p for p in integrator_ctx.perception_buffer if p.modality == mod]
-            return [p.dict() for p in filtered[-params.limit:]]
+            for p in filtered[-params.limit:]:
+                percepts.append(PerceptDict(
+                    modality=p.modality.value,
+                    content=p.content,
+                    bottom_up_confidence=p.bottom_up_confidence,
+                    top_down_influence=p.top_down_influence,
+                    attention_weight=p.attention_weight,
+                    timestamp=p.timestamp,
+                    raw_features=p.raw_features
+                ))
         except ValueError:
-            return []
+            pass  # Return empty list
     else:
-        return [p.dict() for p in integrator_ctx.perception_buffer[-params.limit:]]
+        for p in integrator_ctx.perception_buffer[-params.limit:]:
+            percepts.append(PerceptDict(
+                modality=p.modality.value,
+                content=p.content,
+                bottom_up_confidence=p.bottom_up_confidence,
+                top_down_influence=p.top_down_influence,
+                attention_weight=p.attention_weight,
+                timestamp=p.timestamp,
+                raw_features=p.raw_features
+            ))
+    
+    return percepts
+
+class PerceptionStatsResponse(BaseModel):
+    stats_by_modality: Dict[str, Dict[str, MetadataValueType]]
+    total_percepts: int
+    active_expectations: int
 
 @function_tool
 async def get_perception_stats(
     ctx: RunContextWrapper[MultimodalIntegratorContext]
-) -> Dict[str, Any]:
+) -> PerceptionStatsResponse:
     """
     Get statistics about processed percepts.
-    
-    Returns:
-        Statistics by modality including counts and filtering rates
     """
     integrator_ctx = ctx.context
     
@@ -548,23 +597,23 @@ async def get_perception_stats(
         
         filter_rate = filtered / total if total > 0 else 0.0
         
-        stats[modality] = {
+        stats[modality.value] = {
             "total_processed": total,
             "attention_filtered": filtered,
             "filter_rate": filter_rate
         }
         
-    return {
-        "stats_by_modality": stats,
-        "total_percepts": len(integrator_ctx.perception_buffer),
-        "active_expectations": len(integrator_ctx.active_expectations)
-    }
+    return PerceptionStatsResponse(
+        stats_by_modality=stats,
+        total_percepts=len(integrator_ctx.perception_buffer),
+        active_expectations=len(integrator_ctx.active_expectations)
+    )
 
 @function_tool
 async def process_text(
     ctx: RunContextWrapper[MultimodalIntegratorContext],
     params: ProcessTextParams
-) -> Dict[str, Any]:
+) -> ProcessSensoryResponse:
     input_data = SensoryInput(
         modality=Modality.TEXT,
         data=params.text,
@@ -576,42 +625,37 @@ async def process_text(
 async def process_image(
     ctx: RunContextWrapper[MultimodalIntegratorContext],
     params: ProcessImageParams
-) -> Dict[str, Any]:
-    if isinstance(params.image_data, bytes):
-        image_data = base64.b64encode(params.image_data).decode("ascii")
-    else:
-        image_data = params.image_data
-    
+) -> ProcessSensoryResponse:
     input_data = make_sensory_input(
         Modality.IMAGE,
-        image_data,
+        params.image_data,
         metadata=params.metadata or {}
     )
     return await process_sensory_input(ctx, ProcessSensoryInputParams(input_data=input_data))
+
+class RegisterFeatureExtractorResponse(BaseModel):
+    success: bool
+    modality: Optional[str] = None
+    extractor: Optional[str] = None
+    error: Optional[str] = None
 
 @function_tool
 async def register_feature_extractor(
     ctx: RunContextWrapper[MultimodalIntegratorContext],
     params: RegisterFeatureExtractorParams
-) -> Dict[str, Any]:
+) -> RegisterFeatureExtractorResponse:
     """
     Register a named feature extraction function for a specific modality.
-    
-    Args:
-        params: Parameters for registering feature extractor
-        
-    Returns:
-        Result of the registration
     """
     integrator_ctx = ctx.context
     
     try:
         mod = Modality(params.modality)
     except ValueError:
-        return {
-            "success": False,
-            "error": f"Invalid modality: {params.modality}"
-        }
+        return RegisterFeatureExtractorResponse(
+            success=False,
+            error=f"Invalid modality: {params.modality}"
+        )
     
     # Map extractor names to functions
     extractors = {
@@ -625,19 +669,19 @@ async def register_feature_extractor(
     }
     
     if params.extractor_name not in extractors:
-        return {
-            "success": False,
-            "error": f"Unknown extractor: {params.extractor_name}. Available extractors: {list(extractors.keys())}"
-        }
+        return RegisterFeatureExtractorResponse(
+            success=False,
+            error=f"Unknown extractor: {params.extractor_name}. Available extractors: {list(extractors.keys())}"
+        )
     
     integrator_ctx.feature_extractors[mod] = extractors[params.extractor_name]
     logger.info(f"Registered {params.extractor_name} feature extractor for {params.modality}")
     
-    return {
-        "success": True,
-        "modality": params.modality,
-        "extractor": params.extractor_name
-    }
+    return RegisterFeatureExtractorResponse(
+        success=True,
+        modality=params.modality,
+        extractor=params.extractor_name
+    )
 
 # --- Helper Functions ---
 
@@ -986,9 +1030,10 @@ async def _extract_touch_event_features(ctx: MultimodalIntegratorContext, data: 
 
     if isinstance(data, str):
         try:
-            data = base64.b64decode(data)
+            data = json.loads(data)
         except Exception:
-            logger.warning("Invalid base-64 payload")
+            logger.warning("Invalid JSON data for touch event")
+            return TouchEventFeatures(region="unknown", object_description="Parsing error")
     
     # Validate input data
     if not isinstance(data, dict):
@@ -1013,9 +1058,10 @@ async def _extract_taste_features(ctx: MultimodalIntegratorContext, data: Dict, 
 
     if isinstance(data, str):
         try:
-            data = base64.b64decode(data)
+            data = json.loads(data)
         except Exception:
-            logger.warning("Invalid base-64 payload")
+            logger.warning("Invalid JSON data for taste")
+            return TasteFeatures(profiles=["unknown"], source_description="Parsing error")
     
     # Validate input data
     if not isinstance(data, dict):
@@ -1040,9 +1086,10 @@ async def _extract_smell_features(ctx: MultimodalIntegratorContext, data: Dict, 
 
     if isinstance(data, str):
         try:
-            data = base64.b64decode(data)
+            data = json.loads(data)
         except Exception:
-            logger.warning("Invalid base-64 payload")
+            logger.warning("Invalid JSON data for smell")
+            return SmellFeatures(profiles=["unknown"], source_description="Parsing error")
     
     # Validate input data
     if not isinstance(data, dict):
@@ -1256,20 +1303,6 @@ class MultimodalIntegrator:
                     if pattern in transcription:
                         influence_strength = max(influence_strength, exp.strength * 0.2)
                         influenced_by.append(f"content_match:{exp.pattern[:10]}")
-                    
-            # If expecting specific speaker
-            elif hasattr(exp.pattern, "speaker_id"):
-                # Handle AudioFeatures
-                if isinstance(features, AudioFeatures) and features.speaker_id:
-                    if exp.pattern.speaker_id == features.speaker_id:
-                        influence_strength = max(influence_strength, exp.strength * 0.4)
-                        influenced_by.append(f"speaker_match:{features.speaker_id}")
-                
-                # Handle dict
-                elif isinstance(features, dict) and "speaker_id" in features:
-                    if exp.pattern.speaker_id == features["speaker_id"]:
-                        influence_strength = max(influence_strength, exp.strength * 0.4)
-                        influenced_by.append(f"speaker_match:{features['speaker_id']}")
         
         return {
             "features": modified_features,
@@ -1352,7 +1385,7 @@ class MultimodalIntegrator:
         
         # Add any modulation influences to content
         if top_down.get("influenced_by"):
-            content["influences"] = top_down.get("influenced_by")
+            content["influences"] = str(top_down.get("influenced_by"))
         
         return {
             "content": content,
@@ -1373,15 +1406,12 @@ class MultimodalIntegrator:
         # Use top-down features, falling back to bottom-up if not available
         content = top_down.get("features", bottom_up.get("features"))
         
-        # For structured content (BaseModel instances), add influence information if available
-        if isinstance(content, BaseModel) and top_down.get("influenced_by"):
-            # Create a mutable copy
-            content_dict = content.dict()
-            # Add influence information if not already present
-            if "influenced_by" not in content_dict:
-                content_dict["influenced_by"] = top_down.get("influenced_by")
-            # Convert back to the original type
-            content = type(content)(**content_dict)
+        # For structured content (BaseModel instances), convert to dict
+        if isinstance(content, BaseModel):
+            content = content.dict()
+            # Add influence information if available
+            if top_down.get("influenced_by"):
+                content["influenced_by"] = str(top_down.get("influenced_by"))
         
         return {
             "content": content,
@@ -1418,7 +1448,7 @@ class MultimodalIntegrator:
             
             # Add influence info
             if top_down.get("influenced_by"):
-                enriched_content["influences"] = top_down.get("influenced_by")
+                enriched_content["influences"] = str(top_down.get("influenced_by"))
             
             # Use enriched dict as content
             return {
@@ -1473,7 +1503,16 @@ class MultimodalIntegrator:
             # Convert the result to IntegratedPercept
             if isinstance(result.final_output, dict):
                 try:
-                    return IntegratedPercept(**result.final_output)
+                    # Extract the fields we need
+                    return IntegratedPercept(
+                        modality=Modality(result.final_output.get("modality", input_data.modality)),
+                        content=result.final_output.get("content", {}),
+                        bottom_up_confidence=result.final_output.get("bottom_up_confidence", 0.5),
+                        top_down_influence=result.final_output.get("top_down_influence", 0.0),
+                        attention_weight=result.final_output.get("attention_weight", 0.5),
+                        timestamp=result.final_output.get("timestamp", datetime.datetime.now().isoformat()),
+                        raw_features=result.final_output.get("raw_features")
+                    )
                 except Exception as e:
                     logger.error(f"Error converting agent output to IntegratedPercept: {e}")
                     
@@ -1548,7 +1587,16 @@ class MultimodalIntegrator:
             percepts = []
             for item in result.final_output:
                 try:
-                    percepts.append(IntegratedPercept(**item))
+                    # Convert back to IntegratedPercept
+                    percepts.append(IntegratedPercept(
+                        modality=Modality(item["modality"]),
+                        content=item["content"],
+                        bottom_up_confidence=item["bottom_up_confidence"],
+                        top_down_influence=item["top_down_influence"],
+                        attention_weight=item["attention_weight"],
+                        timestamp=item["timestamp"],
+                        raw_features=item.get("raw_features")
+                    ))
                 except Exception as e:
                     logger.error(f"Error converting percept: {e}")
             return percepts
@@ -1579,7 +1627,15 @@ class MultimodalIntegrator:
         # Convert result to IntegratedPercept
         if isinstance(result.final_output, dict):
             try:
-                return IntegratedPercept(**result.final_output)
+                return IntegratedPercept(
+                    modality=Modality(result.final_output.get("modality", "text")),
+                    content=result.final_output.get("content", {"text": text[:100]}),
+                    bottom_up_confidence=result.final_output.get("bottom_up_confidence", 0.5),
+                    top_down_influence=result.final_output.get("top_down_influence", 0.0),
+                    attention_weight=result.final_output.get("attention_weight", 0.3),
+                    timestamp=result.final_output.get("timestamp", datetime.datetime.now().isoformat()),
+                    raw_features=result.final_output.get("raw_features")
+                )
             except Exception as e:
                 logger.error(f"Error converting text processing result: {e}")
         
@@ -1608,7 +1664,15 @@ class MultimodalIntegrator:
         # Convert result to IntegratedPercept
         if isinstance(result.final_output, dict):
             try:
-                return IntegratedPercept(**result.final_output)
+                return IntegratedPercept(
+                    modality=Modality(result.final_output.get("modality", "image")),
+                    content=result.final_output.get("content", {"error": "Image processing error"}),
+                    bottom_up_confidence=result.final_output.get("bottom_up_confidence", 0.5),
+                    top_down_influence=result.final_output.get("top_down_influence", 0.0),
+                    attention_weight=result.final_output.get("attention_weight", 0.3),
+                    timestamp=result.final_output.get("timestamp", datetime.datetime.now().isoformat()),
+                    raw_features=result.final_output.get("raw_features")
+                )
             except Exception as e:
                 logger.error(f"Error converting image processing result: {e}")
         
@@ -1640,57 +1704,3 @@ class MultimodalIntegrator:
         self.context.integration_strategies[modality] = integration_function
         logger.info(f"Registered integration strategy for {modality}")
         return True
-        
-# --- How NyxBrain would use it (Conceptual Example) ---
-# class NyxBrain:
-#     # ... (initialization of multimodal_integrator) ...
-
-#     async def process_image_input(self, image_bytes: bytes, metadata: Dict = None):
-#         input_obj = SensoryInput(
-#             modality=MODALITY_IMAGE,
-#             data=image_bytes, # Pass raw bytes
-#             timestamp=datetime.datetime.now().isoformat(),
-#             metadata=metadata or {}
-#         )
-#         percept = await self.multimodal_integrator.process_sensory_input(input_obj)
-#         self.logger.info(f"Processed image, percept content: {percept.content}")
-#         # Further processing based on percept...
-#         await self.emotional_core.update_from_stimuli(...) # Update based on image mood?
-#         await self.memory_core.add_memory(memory_text=f"Saw an image: {percept.content.description}", ...)
-
-#     async def process_audio_chunk(self, audio_bytes: bytes, metadata: Dict = None):
-#         # Determine if speech or music (maybe based on metadata or a quick classifier)
-#         modality = MODALITY_AUDIO_SPEECH # Default to speech
-#         if metadata and metadata.get("content_type") == "music":
-#             modality = MODALITY_AUDIO_MUSIC
-#         elif metadata and metadata.get("source") == "system_mic":
-#             modality = MODALITY_SYSTEM_AUDIO
-
-#         input_obj = SensoryInput(
-#             modality=modality,
-#             data=audio_bytes,
-#             timestamp=datetime.datetime.now().isoformat(),
-#             metadata=metadata or {}
-#         )
-#         percept = await self.multimodal_integrator.process_sensory_input(input_obj)
-#         self.logger.info(f"Processed audio ({modality}), percept content: {percept.content}")
-#         # If speech, maybe process transcription as text input?
-#         if percept.content and percept.content.transcription:
-#             await self.process_input(percept.content.transcription, context={"source": "audio_transcription"})
-
-#     async def capture_and_process_screen(self):
-#         # 1. Use an OS-specific library to capture the screen (e.g., pyautogui, mss)
-#         # screen_bytes = capture_screen_function()
-#         screen_bytes = b"dummy_screen_bytes" # Placeholder
-#         if not screen_bytes: return
-
-#         # 2. Feed into integrator
-#         input_obj = SensoryInput(
-#             modality=MODALITY_SYSTEM_SCREEN,
-#             data=screen_bytes,
-#             timestamp=datetime.datetime.now().isoformat(),
-#             metadata={"source_modality": MODALITY_SYSTEM_SCREEN} # Add metadata
-#         )
-#         percept = await self.multimodal_integrator.process_sensory_input(input_obj)
-#         self.logger.info(f"Processed system screen, description: {percept.content.description}")
-#         # React based on screen content (e.g., identify application, read text)
