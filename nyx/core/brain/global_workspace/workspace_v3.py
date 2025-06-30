@@ -26,6 +26,17 @@ async def maybe_async(fn: Callable, *args, **kw):
         return await res
     return res
 
+async def safe_call(coro_or_future):
+    """Safely await a coroutine or future, handling exceptions"""
+    try:
+        if asyncio.iscoroutine(coro_or_future) or isinstance(coro_or_future, asyncio.Future):
+            return await coro_or_future
+        return coro_or_future
+    except Exception as e:
+        print(f"[safe_call] Error: {e}")
+        return None
+
+
 # ---------------------------------------------------------------------------
 # UNCONSCIOUS PROCESSING EXTENSION (v2 — with stability + perf fixes)
 # ---------------------------------------------------------------------------
@@ -511,17 +522,7 @@ class NyxEngineV3(NyxEngineV2):
         self._decision_ready = asyncio.Event()
         self._last_decision = None
         self._response_timeout = 2.0
-
-    async def safe_call(coro_or_future):
-        """Safely await a coroutine or future, handling exceptions"""
-        try:
-            if asyncio.iscoroutine(coro_or_future) or isinstance(coro_or_future, asyncio.Future):
-                return await coro_or_future
-            return coro_or_future
-        except Exception as e:
-            print(f"[safe_call] Error: {e}")
-            return None
-
+                     
     # ADD THIS METHOD:
     async def run_cycle(self):
         """Run a single complete cycle (all 3 phases)"""
