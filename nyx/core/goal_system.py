@@ -4838,6 +4838,50 @@ class GoalManager:
         return any(g.status in ["active", "pending"] and g.associated_need == need_name 
                   for g in all_goals)
 
+    async def get_active_goals(self) -> List[Dict[str, Any]]:
+        """
+        Get currently active goals
+        
+        Returns:
+            List of active goal summaries
+        """
+        # Get all active goal IDs
+        async with self._active_goals_lock:
+            active_goal_ids = list(self.active_goals)
+        
+        active_goals = []
+        for goal_id in active_goal_ids:
+            goal = await self._get_goal_with_reader_lock(goal_id)
+            if goal and goal.status == "active":
+                # Return summary without large fields
+                goal_summary = {
+                    "id": goal.id,
+                    "description": goal.description,
+                    "priority": goal.priority,
+                    "source": goal.source,
+                    "associated_need": goal.associated_need,
+                    "status": goal.status,
+                    "progress": goal.progress,
+                    "current_step_index": goal.current_step_index,
+                    "plan_step_count": len(goal.plan) if goal.plan else 0
+                }
+                
+                # Add current step info if available
+                if goal.plan and 0 <= goal.current_step_index < len(goal.plan):
+                    current_step = goal.plan[goal.current_step_index]
+                    goal_summary["current_step"] = {
+                        "description": current_step.description,
+                        "action": current_step.action,
+                        "status": current_step.status
+                    }
+                
+                active_goals.append(goal_summary)
+        
+        # Sort by priority (highest first)
+        active_goals.sort(key=lambda g: g["priority"], reverse=True)
+        
+        return active_goals
+
     async def get_goal_status(self, goal_id: str) -> Optional[Dict[str, Any]]:
         """
         Gets the status and plan of a specific goal
