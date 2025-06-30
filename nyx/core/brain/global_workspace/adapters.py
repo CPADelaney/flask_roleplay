@@ -1415,7 +1415,21 @@ class ModeIntegrationAdapter(EnhancedWorkspaceModule):
     async def on_phase(self, phase: int):
         if phase or not self.mi:
             return
-        mode = await maybe_async(self.mi.get_current_mode)
+        
+        # FIX: Access current mode through mode_manager
+        mode = None
+        if self.mi.mode_manager and hasattr(self.mi.mode_manager, 'context'):
+            try:
+                # Get primary mode from mode distribution
+                primary_mode, _ = self.mi.mode_manager.context.mode_distribution.primary_mode
+                mode = primary_mode
+            except:
+                # Fallback to current_mode attribute if available
+                mode = getattr(self.mi.mode_manager.context, 'current_mode', None)
+        
+        if not mode:
+            return
+            
         emo_ctx = any(p.context_tag == "emotion_spike"
                       for p in self.ws.focus)
         if emo_ctx and mode != "EMOTIONAL":
