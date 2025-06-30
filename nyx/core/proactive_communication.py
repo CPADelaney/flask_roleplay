@@ -1080,6 +1080,48 @@ and qualitative insights about communication quality and effectiveness.""",
                 
                 # Create intent for user
                 await self._create_intent_for_user(user_id, user_data)
+
+    async def generate_proactive_action(self) -> Optional[Dict[str, Any]]:
+        """
+        Generate a proactive action based on active communication intents.
+        This is called by the workspace adapter when the system is idle.
+        
+        Returns:
+            Action dict if there's something to communicate, None otherwise
+        """
+        # Check if we have any high-urgency intents that should be acted upon
+        if not self.active_intents:
+            return None
+        
+        # Sort by urgency to find the most important intent
+        sorted_intents = sorted(self.active_intents, key=lambda x: x.urgency, reverse=True)
+        highest_urgency_intent = sorted_intents[0]
+        
+        # Only generate action if urgency is above threshold
+        if highest_urgency_intent.urgency < 0.5:
+            return None
+        
+        # Check if we're in the allowed time window
+        now = datetime.datetime.now()
+        current_hour = now.hour
+        
+        if not (self.config["daily_message_window"]["start_hour"] <= current_hour < 
+                self.config["daily_message_window"]["end_hour"]):
+            return None
+        
+        # Generate an action to communicate with the user
+        action = {
+            "type": "proactive_communication",
+            "intent_id": highest_urgency_intent.intent_id,
+            "user_id": highest_urgency_intent.user_id,
+            "intent_type": highest_urgency_intent.intent_type,
+            "motivation": highest_urgency_intent.motivation,
+            "urgency": highest_urgency_intent.urgency,
+            "description": f"Reach out to user {highest_urgency_intent.user_id} for {highest_urgency_intent.motivation}",
+            "timestamp": datetime.datetime.now().isoformat()
+        }
+        
+        return action
     
     async def _create_intent_for_user(self, user_id: str, user_data: Dict[str, Any]):
         """Create a communication intent for a specific user"""
