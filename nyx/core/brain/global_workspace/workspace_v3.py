@@ -507,11 +507,54 @@ class NyxEngineV3(NyxEngineV2):
         if enable_unconscious:
             self.unconscious = UnconsciousLayer(self.ws)
             
-        
         # ADD: Synchronization mechanisms
         self._decision_ready = asyncio.Event()
         self._last_decision = None
         self._response_timeout = 2.0
+
+    # ADD THIS METHOD:
+    async def run_cycle(self):
+        """Run a single complete cycle (all 3 phases)"""
+        for phase in range(3):  # phases 0, 1, 2
+            # Update clock phase
+            self.clock.phase = phase
+            self.neuro.step()
+            
+            # Run all modules for this phase
+            await asyncio.gather(*(safe_call(m.on_phase(phase))
+                                   for m in self.modules))
+            
+            # After analysis phase: pick interim focus
+            if phase == 1:
+                winners = await self.attn.select()
+                await self.ws.set_focus(winners)
+            
+            # After reflection/response phase: final focus and decision
+            if phase == 2:
+                # Check for new proposals
+                props_before = len(self.ws.proposals)
+                new_props = len(self.ws.proposals) > props_before
+                
+                if new_props:
+                    # Final attention refresh
+                    winners = await self.attn.select()
+                    await self.ws.set_focus(winners)
+                
+                # Make decision
+                decision = await self.coord.decide()
+                self.ws.state["last_decision"] = decision
+                self._last_decision = decision
+                self._decision_ready.set()
+                
+    async def safe_call(coro_or_future):
+        """Safely await a coroutine or future, handling exceptions"""
+        try:
+            if asyncio.iscoroutine(coro_or_future) or isinstance(coro_or_future, asyncio.Future):
+                return await coro_or_future
+            return coro_or_future
+        except Exception as e:
+            print(f"[safe_call] Error: {e}")
+            return None
 
     async def start(self):
         await super().start()
