@@ -20,7 +20,7 @@ class ToolModel(BaseModel):
     value) must inherit from this.  Setting `extra="allow"` makes Pydantic omit
     the `additionalProperties` keyword entirely, which the Agents SDK requires.
     """
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="ignore")
 
 # --- Constants for Modalities ---
 class Modality(str, Enum):
