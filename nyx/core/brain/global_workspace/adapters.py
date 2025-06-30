@@ -2093,12 +2093,34 @@ class NoveltyEngineAdapter(EnhancedWorkspaceModule):
             return
         # Detect novel patterns
         for p in self.ws.focus:
-            novelty = await maybe_async(self.ne.assess_novelty, p.content)
-            if novelty and novelty.get("score", 0) > .7:
-                await self.submit({"novel_content": p.content,
-                                   "novelty": novelty},
-                                  salience=_clamp(novelty["score"]),
-                                  context_tag="novelty_detected")
+            # Convert content to idea format for evaluation
+            idea_content = {
+                "description": str(p.content),
+                "title": f"Workspace content from {p.source}",
+                "source_concepts": [p.source],
+                "context_tag": p.context_tag
+            }
+            
+            # Use evaluate_idea instead of assess_novelty
+            try:
+                evaluation = await maybe_async(self.ne.evaluate_idea, idea_content=idea_content)
+                
+                # Extract novelty score from evaluation
+                if evaluation and hasattr(evaluation, 'novelty_score'):
+                    novelty_score = evaluation.novelty_score
+                    
+                    if novelty_score > 0.7:
+                        await self.submit({
+                            "novel_content": p.content,
+                            "novelty": {
+                                "score": novelty_score,
+                                "evaluation": evaluation.dict() if hasattr(evaluation, 'dict') else evaluation
+                            }
+                        },
+                        salience=_clamp(novelty_score),
+                        context_tag="novelty_detected")
+            except Exception as e:
+                logger.debug(f"Could not evaluate novelty for {p.source}: {e}")
 
     async def _detect_bg(self, view):
         if hasattr(self.ne, "update_novelty_baseline"):
