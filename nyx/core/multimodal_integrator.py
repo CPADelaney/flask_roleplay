@@ -3,6 +3,7 @@
 import logging
 import numpy as np
 import datetime
+import base64
 import asyncio
 import json
 from typing import Dict, List, Any, Optional, Tuple, Union, AsyncGenerator, Set, TypedDict
@@ -28,20 +29,49 @@ class Modality(str, Enum):
 
 # --- Base Schemas ---
 class SensoryInput(BaseModel):
-    """Schema for raw sensory input (strict-schema-safe)"""
+    """
+    Raw sensory payload passed into the process_sensory_input() tool.
+
+    • `data` is now a *string* (text or base-64 for binary).  
+    • `metadata` is an object/dict (recursive JSON).  
+      → If you need to pass non-JSON, JSON-encode it first.
+    """
     modality: Modality
-    data: Any = Field(..., description="Raw input (text, bytes, etc.)")
-    confidence: float = Field(1.0, ge=0.0, le=1.0)
-    timestamp: str = Field(default_factory=lambda: datetime.datetime.now().isoformat())
-    metadata: Any = Field(default_factory=dict, description="Opaque metadata blob")
+
+    # If you need to send binary (image bytes, etc.), base-64 encode it
+    data: str = Field(..., description="Raw payload – text or base-64 string")
+
+    confidence: float = Field(
+        1.0, ge=0.0, le=1.0,
+        description="Source-estimated reliability of the payload"
+    )
+    timestamp: str = Field(
+        default_factory=lambda: datetime.datetime.now().isoformat(),
+        description="ISO-8601 timestamp when the data was captured"
+    )
+
+    # Can contain arbitrary keys/values **as long as the overall value is JSON**
+    metadata: Dict[str, "JSON"] = Field(  # type: ignore[name-defined]
+        default_factory=dict,
+        description="Opaque metadata blob (must be JSON-serialisable)"
+    )
 
 class ExpectationSignal(BaseModel):
-    """Schema for top-down expectation signal"""
+    """
+    Top-down bias sent to the integrator.
+
+    If you must transmit complex patterns (e.g. an array or dict),
+    JSON-encode them first and put the resulting string here.
+    """
     target_modality: Modality
-    pattern: Any = Field(..., description="Expected pattern or feature (e.g., object name, specific sound, text content)")
-    strength: float = Field(0.5, description="Signal strength (0.0-1.0)", ge=0.0, le=1.0)
-    source: str = Field(..., description="Source of expectation (reasoning, memory, etc.)")
-    priority: float = Field(0.5, description="Priority level (0.0-1.0)", ge=0.0, le=1.0)
+    pattern: str = Field(
+        ...,
+        description="Expected pattern/feature. "
+                    "Encode complex data with json.dumps(...)"
+    )
+    strength: float = Field(0.5, ge=0.0, le=1.0)
+    source: str = Field(..., description="Subsystem that emitted the expectation")
+    priority: float = Field(0.5, ge=0.0, le=1.0)
 
 class IntegratedPercept(BaseModel):
     """Schema for integrated percept after bottom-up and top-down processing"""
@@ -144,6 +174,7 @@ class ExpectationDict(TypedDict, total=False):
     strength: float
     source: str
     priority: float
+    
 
 # --- Constants for Feature Classification ---
 POSITIVE_TASTES = {"sweet", "umami", "fatty", "savory"}
@@ -152,9 +183,32 @@ POSITIVE_SMELLS = {"floral", "fruity", "sweet", "fresh", "baked", "woody", "eart
 NEGATIVE_SMELLS = {"pungent", "chemical", "rotten", "sour", "fishy", "burnt"}
 
 class ProcessSensoryInputParams(BaseModel):
-    """Arguments wrapper for the process_sensory_input() tool"""
     input_data: SensoryInput
-    expectations: Optional[List['ExpectationSignal']] = None   # fwd-ref
+    expectations: Optional[List[ExpectationSignal]] = None
+
+
+def make_sensory_input(
+    modality: Modality,
+    data: Union[str, bytes],
+    *,
+    metadata: Optional[Dict[str, "JSON"]] = None,  # type: ignore[name-defined]
+    confidence: float = 1.0,
+) -> SensoryInput:
+    """
+    Convenience wrapper that:
+    • base-64 encodes bytes
+    • injects a timestamp automatically
+    """
+    if isinstance(data, bytes):
+        data = base64.b64encode(data).decode("ascii")
+    return SensoryInput(
+        modality=modality,
+        data=data,
+        confidence=confidence,
+        metadata=metadata or {},
+    )
+JSON = Any  
+
 
 # Context class to hold the state and dependencies
 class MultimodalIntegratorContext:
@@ -345,6 +399,7 @@ async def add_expectation(
             "error": f"Invalid modality: {target_modality}. Valid options are: {[m.value for m in Modality]}"
         }
         
+    pattern = pattern if isinstance(pattern, str) else json.dumps(pattern)
     expectation = ExpectationSignal(
         target_modality=modality,
         pattern=pattern,
@@ -503,9 +558,12 @@ async def process_image(
     image_data: Any,
     metadata: Optional[Any] = None,        # Dict → Any
 ) -> Dict[str, Any]:
-    input_data = SensoryInput(
-        modality=Modality.IMAGE,
-        data=image_data,
+    if isinstance(image_data, bytes):
+        image_data = base64.b64encode(image_data).decode("ascii")
+    
+    input_data = make_sensory_input(
+        Modality.IMAGE,
+        image_data,
         metadata=metadata or {}
     )
     return await process_sensory_input(ctx, ProcessSensoryInputParams(input_data=input_data))
@@ -776,6 +834,11 @@ async def _extract_text_features(ctx: MultimodalIntegratorContext, data: str, me
 async def _extract_image_features(ctx: MultimodalIntegratorContext, data: Any, metadata: Dict) -> ImageFeatures:
     """Extract features from image data."""
     logger.debug(f"Extracting image features (data type: {type(data)})...")
+    if isinstance(data, str):
+        try:
+            data = base64.b64decode(data)
+        except Exception:
+            logger.warning("Invalid base-64 payload")
     
     # Use vision model if available
     if ctx.vision_model and hasattr(ctx.vision_model, 'analyze_image'):
@@ -821,6 +884,12 @@ async def _extract_video_features(ctx: MultimodalIntegratorContext, data: Any, m
     """Extract features from video data."""
     logger.debug(f"Extracting video features (data type: {type(data)})...")
     
+    if isinstance(data, str):
+        try:
+            data = base64.b64decode(data)
+        except Exception:
+            logger.warning("Invalid base-64 payload")
+    
     # Use vision model if available for key frames
     if ctx.vision_model and hasattr(ctx.vision_model, 'analyze_video'):
         try:
@@ -850,6 +919,12 @@ async def _extract_video_features(ctx: MultimodalIntegratorContext, data: Any, m
 async def _extract_audio_features(ctx: MultimodalIntegratorContext, data: Any, metadata: Dict) -> AudioFeatures:
     """Extract features from audio data."""
     logger.debug(f"Extracting audio features (data type: {type(data)})...")
+
+    if isinstance(data, str):
+        try:
+            data = base64.b64decode(data)
+        except Exception:
+            logger.warning("Invalid base-64 payload")
     
     # Use audio processor if available
     if ctx.audio_processor:
@@ -889,6 +964,12 @@ async def _extract_audio_features(ctx: MultimodalIntegratorContext, data: Any, m
 async def _extract_touch_event_features(ctx: MultimodalIntegratorContext, data: Dict, metadata: Dict) -> TouchEventFeatures:
     """Extract features from touch event data."""
     logger.debug(f"Extracting touch event features: {data}")
+
+    if isinstance(data, str):
+        try:
+            data = base64.b64decode(data)
+        except Exception:
+            logger.warning("Invalid base-64 payload")
     
     # Validate input data
     if not isinstance(data, dict):
@@ -910,6 +991,12 @@ async def _extract_touch_event_features(ctx: MultimodalIntegratorContext, data: 
 async def _extract_taste_features(ctx: MultimodalIntegratorContext, data: Dict, metadata: Dict) -> TasteFeatures:
     """Extract features from taste data."""
     logger.debug(f"Extracting taste features: {data}")
+
+    if isinstance(data, str):
+        try:
+            data = base64.b64decode(data)
+        except Exception:
+            logger.warning("Invalid base-64 payload")
     
     # Validate input data
     if not isinstance(data, dict):
@@ -931,6 +1018,12 @@ async def _extract_taste_features(ctx: MultimodalIntegratorContext, data: Dict, 
 async def _extract_smell_features(ctx: MultimodalIntegratorContext, data: Dict, metadata: Dict) -> SmellFeatures:
     """Extract features from smell data."""
     logger.debug(f"Extracting smell features: {data}")
+
+    if isinstance(data, str):
+        try:
+            data = base64.b64decode(data)
+        except Exception:
+            logger.warning("Invalid base-64 payload")
     
     # Validate input data
     if not isinstance(data, dict):
