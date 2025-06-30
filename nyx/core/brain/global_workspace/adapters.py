@@ -1311,11 +1311,37 @@ class PassiveObservationAdapter(EnhancedWorkspaceModule):
     async def on_phase(self, phase: int):
         if phase or not self.po:
             return
+        
+        # Create a proper filter object for the passive observation system
+        try:
+            # Import ObservationFilter from the passive observation module
+            from nyx.core.passive_observation import ObservationFilter
+            filter_criteria = ObservationFilter(min_relevance=0.7)
+        except ImportError:
+            logger.warning("Could not import ObservationFilter, using None")
+            filter_criteria = None
+        
+        # Get observations using the correct method signature
         obs = await maybe_async(self.po.get_relevant_observations,
-                                min_relevance=.7, limit=3)
+                                filter_criteria=filter_criteria, limit=3)
+        
+        # Process observations
         for o in obs or []:
-            d = o.dict() if hasattr(o, "dict") else o
-            await self.submit(d, salience=d.get("relevance", .5),
+            # Handle both dict and object formats
+            if hasattr(o, "dict"):
+                d = o.dict()
+            elif hasattr(o, "__dict__"):
+                d = {
+                    "content": o.content,
+                    "source": str(o.source),
+                    "relevance_score": o.relevance_score,
+                    "observation_id": o.observation_id
+                }
+            else:
+                d = o  # Already a dict
+            
+            # Use relevance_score field (not relevance)
+            await self.submit(d, salience=d.get("relevance_score", .5),
                               context_tag="observation")
 
     async def _flt_bg(self, _):
