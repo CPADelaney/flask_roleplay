@@ -341,6 +341,49 @@ class SystemHealthChecker:
             "success": True,
             "results": results
         }
+
+    async def quick_health_check(self) -> Dict[str, Any]:
+        """
+        Perform a quick health check focusing on critical components only
+        
+        Returns:
+            Quick health check results
+        """
+        try:
+            # Quick check of critical components only
+            critical_components = [
+                "emotional_core",
+                "memory_core", 
+                "reasoning_core",
+                "global_workspace"
+            ]
+            
+            issues = []
+            for component_name in critical_components:
+                if component_name in self.component_registry:
+                    config = self.component_registry[component_name]
+                    component = config["accessor"]()
+                    
+                    if component is None and config.get("required", False):
+                        issues.append({
+                            "component": component_name,
+                            "error": "Required component is missing"
+                        })
+            
+            # Return simple status
+            return {
+                "status": "healthy" if not issues else "unhealthy",
+                "issues": issues,
+                "timestamp": time.time()
+            }
+            
+        except Exception as e:
+            logger.error(f"Quick health check failed: {e}")
+            return {
+                "status": "error",
+                "error": str(e),
+                "timestamp": time.time()
+            }
     
     async def _analyze_module_code(self, file_path: str, module_path: str) -> Dict[str, Any]:
         """
