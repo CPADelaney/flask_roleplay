@@ -2257,17 +2257,48 @@ class ReflexiveSystemAdapter(EnhancedWorkspaceModule):
         # Check for reflex triggers
         for p in self.ws.focus:
             if p.salience > .9:  # High salience triggers
-                reflex = await maybe_async(self.rs.check_reflexes, p.content)
-                if reflex:
-                    await self.submit({"reflex_action": reflex},
-                                      salience=1.0,
-                                      context_tag="reflex_response")
+                # Convert proposal content to stimulus format
+                stimulus = {}
+                if isinstance(p.content, str):
+                    stimulus = {"text": p.content}
+                elif isinstance(p.content, dict):
+                    stimulus = p.content
+                else:
+                    stimulus = {"text": str(p.content)}
+                
+                # Check if this should trigger a reflex using existing method
+                should_use, confidence = await maybe_async(self.rs.should_use_reflex, stimulus, {"source": p.source})
+                
+                if should_use and confidence > 0.7:
+                    # Process the stimulus using the fast processing method
+                    from nyx.core.reflexive_system import dict_to_stimulus_dict, ContextDict
+                    
+                    try:
+                        # Create proper input for process_stimulus_fast
+                        process_input = self.rs.ProcessStimulusInput(
+                            stimulus=dict_to_stimulus_dict(stimulus),
+                            context=ContextDict(string_fields=[])
+                        )
+                        
+                        # Process the stimulus
+                        result = await maybe_async(self.rs.process_stimulus_fast, process_input)
+                        
+                        if result.success:
+                            await self.submit({
+                                "reflex_action": {
+                                    "pattern": result.pattern_name,
+                                    "reaction_time_ms": result.reaction_time_ms,
+                                    "confidence": confidence
+                                }
+                            }, salience=1.0, context_tag="reflex_response")
+                    except Exception as e:
+                        logger.debug(f"Could not process reflex for {p.source}: {e}")
 
     async def _monitor_bg(self, _):
-        if hasattr(self.rs, "update_reflex_patterns"):
-            updated = await maybe_async(self.rs.update_reflex_patterns)
-            if updated:
-                return {"reflexes_updated": len(updated), "significance": .7}
+        if hasattr(self.rs, "optimize_reflexes"):
+            result = await maybe_async(self.rs.optimize_reflexes)
+            if result and result.patterns_optimized > 0:
+                return {"reflexes_optimized": result.patterns_optimized, "significance": .7}
 
 @register_adapter("reflexive_override")  # New adapter, different brain attribute
 class ReflexiveOverrideAdapter(EnhancedWorkspaceModule):
