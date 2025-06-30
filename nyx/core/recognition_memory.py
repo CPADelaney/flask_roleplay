@@ -924,6 +924,57 @@ class RecognitionMemorySystem:
             await self.initialize()
         
         return [trigger for _, trigger in self.context.active_triggers]
+
+    async def recognize_pattern(self, content: Any) -> Optional[Dict[str, Any]]:
+        """
+        Recognize patterns in content and return recognition results
+        
+        This method provides compatibility with the workspace adapter interface
+        
+        Args:
+            content: Content to analyze for pattern recognition
+            
+        Returns:
+            Recognition result dict with confidence score, or None
+        """
+        # Ensure system is initialized
+        if not self.initialized:
+            await self.initialize()
+        
+        # Convert content to string for processing
+        if isinstance(content, dict):
+            # Extract text from dict content
+            text = content.get("text", "") or content.get("message", "") or str(content)
+        else:
+            text = str(content)
+        
+        if not text or len(text) < 3:
+            return None
+        
+        try:
+            # Process through recognition system
+            recognition_results = await self.process_conversation_turn(text)
+            
+            if not recognition_results:
+                return None
+            
+            # Take the best recognition result
+            best_result = recognition_results[0]
+            
+            # Format for workspace consumption
+            return {
+                "pattern": best_result.activation_trigger,
+                "memory_text": best_result.memory_text,
+                "memory_type": best_result.memory_type,
+                "confidence": best_result.confidence,
+                "relevance": best_result.relevance_score,
+                "memory_id": best_result.memory_id,
+                "context_tag": "pattern_recognized"
+            }
+            
+        except Exception as e:
+            logger.error(f"Error in recognize_pattern: {e}")
+            return None
     
     async def register_contextual_cue(
         self,
