@@ -875,11 +875,12 @@ class ReflexiveSystem:
             Your job is to quickly identify patterns in stimuli and match them to known patterns.
             Focus on speed and accuracy in pattern matching.""",
             tools=[
-                function_tool(fast_match),
-                function_tool(generate_similar_stimulus),
-                function_tool(generate_gaming_stimulus)
+                fast_match,
+                generate_similar_stimulus,
+                generate_gaming_stimulus
             ],
-            model_settings=ModelSettings(temperature=0.4)
+            model_settings=ModelSettings(temperature=0.4),
+            model="gpt-4.1-nano"
         )
         
         # Pattern Optimization Agent
@@ -889,10 +890,11 @@ class ReflexiveSystem:
             Your job is to improve pattern definitions for better matching accuracy and performance.
             Focus on identifying the most distinctive features and creating efficient patterns.""",
             tools=[
-                function_tool(optimize_pattern),
-                function_tool(simplify_pattern)
+                optimize_pattern,
+                simplify_pattern
             ],
-            model_settings=ModelSettings(temperature=0.4)
+            model_settings=ModelSettings(temperature=0.4),
+            model="gpt-4.1-nano"
         )
         
         # Gaming Reflex Agent
@@ -902,10 +904,11 @@ class ReflexiveSystem:
             Your job is to create and optimize reflex patterns specifically for gaming scenarios.
             Focus on timing-critical reactions and accurate pattern recognition for game actions.""",
             tools=[
-                function_tool(generate_gaming_stimulus),
-                function_tool(fast_match)
+                generate_gaming_stimulus,
+                fast_match
             ],
-            model_settings=ModelSettings(temperature=0.4)
+            model_settings=ModelSettings(temperature=0.4),
+            model="gpt-4.1-nano"
         )
         
         # Decision System Agent
@@ -914,7 +917,8 @@ class ReflexiveSystem:
             instructions="""You are a specialized agent for the reflex decision system.
             Your job is to decide when to use reflexes vs. deliberate thinking based on context.
             Focus on analyzing stimuli and contexts to make appropriate reflex usage decisions.""",
-            model_settings=ModelSettings(temperature=0.5)
+            model_settings=ModelSettings(temperature=0.5),
+            model="gpt-4.1-nano"
         )
         
         # Main Reflexive Agent
@@ -937,7 +941,8 @@ class ReflexiveSystem:
                        tool_name_override="make_reflex_decision",
                        tool_description_override="Decide whether to use reflexes or deliberate thinking")
             ],
-            model_settings=ModelSettings(temperature=0.4)
+            model_settings=ModelSettings(temperature=0.4),
+            model="gpt-4.1-nano"
         )
 
     async def should_use_reflex(self, stimulus: Dict[str, Any], context: Dict[str, Any] = None, pattern: Any = None) -> Tuple[bool, float]:
