@@ -409,6 +409,7 @@ class InternalThoughtsManager:
                 emotional_state = await self._get_emotional_state()
                 recent_thoughts = self._get_recent_thoughts(limit=3)
                 
+                # Create generation context with proper serialization
                 generation_context = {
                     "source": thought_source.value,
                     "input_context": context if isinstance(context, dict) else context.model_dump(),
@@ -416,13 +417,38 @@ class InternalThoughtsManager:
                     "recent_thoughts": [t.model_dump() for t in recent_thoughts]
                 }
                 
+                # Convert datetime objects to strings if present
+                def serialize_for_json(obj):
+                    """Recursively convert non-serializable objects."""
+                    if isinstance(obj, dict):
+                        return {k: serialize_for_json(v) for k, v in obj.items()}
+                    elif isinstance(obj, list):
+                        return [serialize_for_json(item) for item in obj]
+                    elif isinstance(obj, datetime.datetime):
+                        return obj.isoformat()
+                    elif hasattr(obj, 'model_dump'):
+                        return obj.model_dump()
+                    else:
+                        return obj
+                
+                # Ensure all values are JSON serializable
+                generation_context = serialize_for_json(generation_context)
+                
+                # Alternative approach: use Pydantic's json encoder
+                try:
+                    context_json = json.dumps(generation_context, indent=2)
+                except (TypeError, ValueError) as e:
+                    # Fallback: use Pydantic's json encoder with default handler
+                    from pydantic.json import pydantic_encoder
+                    context_json = json.dumps(generation_context, indent=2, default=pydantic_encoder)
+                
                 # Wrap context in proper message format for Runner.run()
                 prompt_messages = [
                     {
                         "role": "user",
                         "content": (
                             f"Generate a {thought_source.value} thought for Nyx using this JSON "
-                            f"context:\n{json.dumps(generation_context, indent=2)}"
+                            f"context:\n{context_json}"
                         )
                     }
                 ]
@@ -482,7 +508,6 @@ class InternalThoughtsManager:
                 self._add_thought(fallback_thought)
             
             return fallback_thought
-
     def _infer_epistemic_status(self, thought_output):
         """
         Infer epistemic status from the text content of the thought.
