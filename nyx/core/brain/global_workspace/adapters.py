@@ -1209,12 +1209,49 @@ class TheoryOfMindAdapter(EnhancedWorkspaceModule):
     async def on_phase(self, phase: int):
         if phase != 1 or not self.tom or not self.ws.focus:
             return
-        txt = self.ws.focus[0].content
-        mental = await maybe_async(self.tom.infer_mental_state, txt)
-        if mental and mental.get("confidence", 0) > .6:
-            await self.submit(mental,
-                              salience=mental["confidence"],
-                              context_tag="user_mental_state")
+        
+        # Find user input and extract user_id
+        user_input = None
+        user_id = None
+        for p in self.ws.focus:
+            if p.context_tag == "user_input":
+                user_input = p.content
+                # Try to extract user_id from workspace state or use default
+                user_id = self.ws.state.get("user_id", "default_user")
+                break
+        
+        if not user_input:
+            return
+            
+        # Check if it's ContextAwareTheoryOfMind (has process_input method)
+        if hasattr(self.tom, 'process_input'):
+            # Create a minimal context for ContextAwareTheoryOfMind
+            from nyx.core.brain.context_distribution import SharedContext
+            context = SharedContext(
+                user_id=user_id,
+                user_input=str(user_input),
+                session_context=self.ws.state
+            )
+            result = await maybe_async(self.tom.process_input, context)
+            
+            if result and result.get("mental_state_update"):
+                mental = result["mental_state_update"]
+                if mental.get("overall_confidence", 0) > 0.6:
+                    await self.submit(mental,
+                                      salience=mental.get("overall_confidence", 0.7),
+                                      context_tag="user_mental_state")
+        else:
+            # Standard TheoryOfMind - update user model
+            interaction_data = {
+                "user_input": str(user_input),
+                "nyx_response": self.ws.state.get("last_decision", {}).get("response", "")
+            }
+            mental = await maybe_async(self.tom.update_user_model, user_id, interaction_data)
+            
+            if mental and mental.get("status") == "success" and mental.get("overall_confidence", 0) > 0.6:
+                await self.submit(mental,
+                                  salience=mental.get("overall_confidence", 0.7),
+                                  context_tag="user_mental_state")
 
     async def _upd_bg(self, _):
         if hasattr(self.tom, "update_user_models"):
