@@ -7,12 +7,20 @@ import base64
 import asyncio
 import json
 from typing import Dict, List, Any, Optional, Tuple, Union, AsyncGenerator, Set, TypedDict
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from enum import Enum
 
 from agents import Agent, Runner, ModelSettings, trace, function_tool, RunContextWrapper
 
 logger = logging.getLogger(__name__)
+
+class ToolModel(BaseModel):
+    """
+    Any model that is part of a `@function_tool` signature (params **or** return
+    value) must inherit from this.  Setting `extra="allow"` makes Pydantic omit
+    the `additionalProperties` keyword entirely, which the Agents SDK requires.
+    """
+    model_config = ConfigDict(extra="allow")
 
 # --- Constants for Modalities ---
 class Modality(str, Enum):
@@ -32,7 +40,7 @@ MetadataValueType = Union[str, int, float, bool, None]
 MetadataDict = Dict[str, MetadataValueType]
 
 # --- Base Schemas ---
-class SensoryInput(BaseModel):
+class SensoryInput(ToolModel):
     """
     Raw sensory payload passed into the process_sensory_input() tool.
 
@@ -54,7 +62,7 @@ class SensoryInput(BaseModel):
         description="Metadata blob (simple key-value pairs)"
     )
 
-class ExpectationSignal(BaseModel):
+class ExpectationSignal(ToolModel):
     """
     Top-down bias sent to the integrator.
     """
@@ -152,7 +160,7 @@ NEGATIVE_TASTES = {"bitter", "sour", "metallic", "spoiled"}
 POSITIVE_SMELLS = {"floral", "fruity", "sweet", "fresh", "baked", "woody", "earthy"}
 NEGATIVE_SMELLS = {"pungent", "chemical", "rotten", "sour", "fishy", "burnt"}
 
-class ProcessSensoryInputParams(BaseModel):
+class ProcessSensoryInputParams(ToolModel):
     input_data: SensoryInput
     expectations: Optional[List[ExpectationSignal]] = None
 
@@ -218,34 +226,34 @@ class MultimodalIntegratorContext:
 # --- Function Tools for Agent SDK ---
 
 # Create parameter models for function tools that need them
-class AddExpectationParams(BaseModel):
+class AddExpectationParams(ToolModel):
     target_modality: str
     pattern: str  # Changed from Any to str
     strength: float = 0.5
     priority: float = 0.5
     source: str = "agent"
 
-class ClearExpectationsParams(BaseModel):
+class ClearExpectationsParams(ToolModel):
     modality: Optional[str] = None
 
-class GetRecentPerceptsParams(BaseModel):
+class GetRecentPerceptsParams(ToolModel):
     modality: Optional[str] = None
     limit: int = 10
 
-class ProcessTextParams(BaseModel):
+class ProcessTextParams(ToolModel):
     text: str
     metadata: Optional[MetadataDict] = None
 
-class ProcessImageParams(BaseModel):
+class ProcessImageParams(ToolModel):
     image_data: str  # Changed from Any to str (base64 encoded)
     metadata: Optional[MetadataDict] = None
 
-class RegisterFeatureExtractorParams(BaseModel):
+class RegisterFeatureExtractorParams(ToolModel):
     modality: str
     extractor_name: str
 
 # Create a response model for the main function
-class ProcessSensoryResponse(BaseModel):
+class ProcessSensoryResponse(ToolModel):
     modality: str
     content: Dict[str, MetadataValueType]
     bottom_up_confidence: float
@@ -417,7 +425,7 @@ def _clean_features(features: Any) -> Optional[Dict[str, MetadataValueType]]:
     else:
         return {"data": str(features)}
 
-class AddExpectationResponse(BaseModel):
+class AddExpectationResponse(ToolModel):
     success: bool
     expectation_added: Optional[Dict[str, MetadataValueType]] = None
     active_expectations_count: Optional[int] = None
@@ -471,7 +479,7 @@ async def add_expectation(
         active_expectations_count=len(integrator_ctx.active_expectations)
     )
 
-class ClearExpectationsResponse(BaseModel):
+class ClearExpectationsResponse(ToolModel):
     success: bool
     cleared_count: int
     remaining_count: int
@@ -524,7 +532,7 @@ async def clear_expectations(
                 remaining_count=0
             )
 
-class PerceptDict(BaseModel):
+class PerceptDict(ToolModel):
     modality: str
     content: Dict[str, MetadataValueType]
     bottom_up_confidence: float
@@ -575,7 +583,7 @@ async def get_recent_percepts(
     
     return percepts
 
-class PerceptionStatsResponse(BaseModel):
+class PerceptionStatsResponse(ToolModel):
     stats_by_modality: Dict[str, Dict[str, MetadataValueType]]
     total_percepts: int
     active_expectations: int
@@ -633,7 +641,7 @@ async def process_image(
     )
     return await process_sensory_input(ctx, ProcessSensoryInputParams(input_data=input_data))
 
-class RegisterFeatureExtractorResponse(BaseModel):
+class RegisterFeatureExtractorResponse(ToolModel):
     success: bool
     modality: Optional[str] = None
     extractor: Optional[str] = None
