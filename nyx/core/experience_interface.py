@@ -1556,6 +1556,122 @@ class ExperienceInterface:
             experience["confidence_marker"] = "remember"  # Default
         
         return experience
+
+    async def create_experience(self, significant_content: List[Any]) -> Optional[Dict[str, Any]]:
+        """
+        Create an experience from significant workspace content
+        
+        Args:
+            significant_content: List of significant content items from workspace
+            
+        Returns:
+            Created experience data or None
+        """
+        if not significant_content:
+            return None
+        
+        # Extract the most relevant content
+        content_texts = []
+        emotional_contexts = []
+        entities = []
+        
+        for content in significant_content:
+            if isinstance(content, str):
+                content_texts.append(content)
+            elif isinstance(content, dict):
+                # Extract text content
+                if "text" in content:
+                    content_texts.append(content["text"])
+                elif "message" in content:
+                    content_texts.append(content["message"])
+                elif "content" in content:
+                    content_texts.append(str(content["content"]))
+                else:
+                    content_texts.append(str(content))
+                
+                # Extract emotional context
+                if "emotional_context" in content:
+                    emotional_contexts.append(content["emotional_context"])
+                elif "emotion" in content:
+                    emotional_contexts.append(content["emotion"])
+                
+                # Extract entities
+                if "entities" in content:
+                    entities.extend(content["entities"])
+                elif "user_id" in content:
+                    entities.append(content["user_id"])
+        
+        # Combine content into experience text
+        if not content_texts:
+            return None
+        
+        experience_text = " ".join(content_texts[:3])  # Limit to first 3 items
+        
+        # Determine scenario type based on content
+        scenario_type = "general"
+        for text in content_texts:
+            text_lower = text.lower()
+            if any(word in text_lower for word in ["tease", "teasing", "playful"]):
+                scenario_type = "teasing"
+                break
+            elif any(word in text_lower for word in ["discipline", "punishment", "strict"]):
+                scenario_type = "discipline"
+                break
+            elif any(word in text_lower for word in ["dark", "intense", "cruel"]):
+                scenario_type = "dark"
+                break
+            elif any(word in text_lower for word in ["nurture", "care", "gentle"]):
+                scenario_type = "nurturing"
+                break
+        
+        # Get or merge emotional contexts
+        emotional_context = None
+        if emotional_contexts:
+            # Use the first emotional context or merge them
+            emotional_context = emotional_contexts[0]
+        elif self.emotional_core:
+            emotional_context = self.emotional_core.get_formatted_emotional_state()
+        
+        # Calculate significance based on content
+        significance = min(8, 5 + len(significant_content))
+        
+        # Generate tags
+        tags = ["auto_generated", "workspace_content", scenario_type]
+        
+        try:
+            # Store the experience using the existing method
+            ctx = type('MockContext', (), {'context': self.context})()  # Create mock context
+            
+            # Convert emotional_context to EmotionalContext model if needed
+            if emotional_context and not isinstance(emotional_context, EmotionalContext):
+                from nyx.core.brain.base import EmotionalContext
+                emotional_context = EmotionalContext.model_validate(emotional_context)
+            
+            result = await self._store_experience(
+                ctx,
+                self,  # instance
+                memory_text=experience_text,
+                scenario_type=scenario_type,
+                entities=list(set(entities))[:5],  # Limit entities
+                emotional_context=emotional_context,
+                significance=significance,
+                tags=tags,
+                user_id=entities[0] if entities and isinstance(entities[0], str) else None
+            )
+            
+            # Return formatted experience data
+            return {
+                "id": result.experience_id,
+                "text": experience_text,
+                "scenario_type": scenario_type,
+                "tags": result.tags,
+                "significance": result.significance,
+                "created": True
+            }
+            
+        except Exception as e:
+            logger.error(f"Failed to create experience: {e}")
+            return None
     
     # Public API methods with enhanced SDK integration
     
