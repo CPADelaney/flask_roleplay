@@ -18,6 +18,7 @@ import logging
 import math
 import random
 import time
+import datetime
 from pathlib import Path
 from typing import (
     Any,
@@ -540,16 +541,63 @@ class PredictionAdapter(EnhancedWorkspaceModule):
     async def on_phase(self, phase: int):
         if phase != 1 or not self.pe:
             return
-        pr = await maybe_async(self.pe.predict_next_state)
-        if pr and pr.get("confidence", 0) > .6:
-            await self.submit(pr, salience=pr["confidence"],
-                              context_tag="prediction")
+        
+        # Build context and history from workspace
+        context = {}
+        history = []
+        
+        # Extract context from workspace state
+        if hasattr(self.ws, 'state'):
+            context = {
+                'emotional_state': self.ws.state.get('emotional_state', {}),
+                'topic': self.ws.state.get('current_topic', ''),
+                'user_id': self.ws.state.get('user_id', 'unknown')
+            }
+        
+        # Extract history from recent proposals
+        props, _ = await self.ws.snapshot()
+        for p in props[-10:]:  # Last 10 items
+            if p.context_tag == "user_input":
+                history.append({
+                    'role': 'user',
+                    'text': str(p.content),
+                    'timestamp': datetime.datetime.fromtimestamp(p.ts).isoformat()
+                })
+        
+        # Generate prediction using the correct method
+        try:
+            prediction_result = await maybe_async(
+                self.pe.generate_prediction,
+                context=context,
+                history=history,
+                query_type="all"  # or specific type
+            )
+            
+            # Convert PredictionResult to dict format expected by workspace
+            if prediction_result:
+                pr = {
+                    'confidence': prediction_result.confidence,
+                    'predicted_input': prediction_result.predicted_input,
+                    'predicted_response': prediction_result.predicted_response,
+                    'predicted_emotional_state': prediction_result.predicted_emotional_state,
+                    'horizon': prediction_result.prediction_horizon,
+                    'prediction_id': prediction_result.prediction_id
+                }
+                
+                if pr.get("confidence", 0) > 0.6:
+                    await self.submit(pr, salience=pr["confidence"],
+                                      context_tag="prediction")
+        except Exception as e:
+            logger.error(f"Error generating prediction: {e}")
 
     async def _upd_bg(self, _):
-        if hasattr(self.pe, "update_prediction_models"):
-            ok = await maybe_async(self.pe.update_prediction_models)
-            if ok:
-                return {"models_updated": True, "significance": .3}
+        # The PredictionEngine doesn't have update_prediction_models either
+        # We could trigger prior updates or performance metrics instead
+        if hasattr(self.pe, "get_performance_metrics"):
+            metrics = await maybe_async(self.pe.get_performance_metrics)
+            if metrics and metrics.get("avg_error", 1.0) < 0.3:
+                return {"prediction_accuracy": metrics.get("accuracy", 0), 
+                        "significance": .3}
 
 
 # ── CREATIVE SYSTEM ────────────────────────────────────────────────────────
