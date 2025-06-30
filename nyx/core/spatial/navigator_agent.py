@@ -231,7 +231,47 @@ class SpatialNavigatorAgent:
             estimated_time=path_result.get("estimated_time"),
             route_id=path_result.get("route_id")
         )
+
+    async def get_current_location(self) -> Optional[Dict[str, Any]]:
+        """
+        Get the current location of the observer
         
+        Returns:
+            Current location information or None if not available
+        """
+        # Check if we have an observer position in the spatial mapper context
+        if self.spatial_mapper and self.spatial_mapper.context.observer_position:
+            pos = self.spatial_mapper.context.observer_position
+            
+            # Get the active map ID
+            map_id = self.spatial_mapper.context.active_map_id
+            
+            # Find which region the observer is in (if any)
+            current_region = None
+            if map_id and map_id in self.spatial_mapper.maps:
+                map_obj = self.spatial_mapper.maps[map_id]
+                for region_id, region in map_obj.regions.items():
+                    if region.contains_point(pos):
+                        current_region = {
+                            "id": region_id,
+                            "name": region.name,
+                            "type": region.region_type
+                        }
+                        break
+            
+            return {
+                "coordinates": {
+                    "x": pos.x,
+                    "y": pos.y,
+                    "z": pos.z
+                },
+                "map_id": map_id,
+                "region": current_region,
+                "reference_frame": pos.reference_frame
+            }
+        
+        return None
+    
     async def _create_temporary_position(self, map_id: str, position: Dict[str, float]) -> str:
         """Create a temporary position marker"""
         result = await self.spatial_mapper.add_spatial_object(
