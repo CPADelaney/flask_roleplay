@@ -3045,6 +3045,67 @@ class PhysicalHarmGuardrail:
             "original_text": text,
             "message": "Text is safe."
         }
+
+    async def get_current_sensations(self) -> List[Dict[str, Any]]:
+        """Get current sensations across all body regions that are above threshold"""
+        sensations = []
+        
+        for region_name, region in self.body_regions.items():
+            # Check each sensation type for this region
+            if region.pressure > 0.1:
+                sensations.append({
+                    "type": "pressure",
+                    "region": region_name,
+                    "intensity": region.pressure,
+                    "last_update": region.last_update.isoformat() if region.last_update else None
+                })
+            
+            if abs(region.temperature - 0.5) > 0.2:  # Deviation from neutral
+                sensations.append({
+                    "type": "temperature",
+                    "region": region_name,
+                    "intensity": abs(region.temperature - 0.5) * 2,  # Normalize deviation
+                    "value": region.temperature,
+                    "last_update": region.last_update.isoformat() if region.last_update else None
+                })
+            
+            if region.pain > 0.1:
+                sensations.append({
+                    "type": "pain",
+                    "region": region_name,
+                    "intensity": region.pain,
+                    "last_update": region.last_update.isoformat() if region.last_update else None
+                })
+            
+            if region.pleasure > 0.1:
+                sensations.append({
+                    "type": "pleasure",
+                    "region": region_name,
+                    "intensity": region.pleasure,
+                    "last_update": region.last_update.isoformat() if region.last_update else None
+                })
+            
+            if region.tingling > 0.1:
+                sensations.append({
+                    "type": "tingling",
+                    "region": region_name,
+                    "intensity": region.tingling,
+                    "last_update": region.last_update.isoformat() if region.last_update else None
+                })
+        
+        # Add arousal as a sensation if it's significant
+        if self.arousal_state.arousal_level > 0.3:
+            sensations.append({
+                "type": "arousal",
+                "region": "overall",
+                "intensity": self.arousal_state.arousal_level,
+                "arousal_type": "combined",
+                "physical_component": self.arousal_state.physical_arousal,
+                "cognitive_component": self.arousal_state.cognitive_arousal,
+                "last_update": self.arousal_state.last_update.isoformat() if self.arousal_state.last_update else None
+            })
+        
+        return sensations
     
     # --- Response Generation Helpers ---
     
