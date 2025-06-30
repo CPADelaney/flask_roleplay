@@ -4028,19 +4028,35 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
         # ─── 2. MAIN PIPELINE ────────────────────────────────────────────────
         with trace(workflow_name="NyxCognitiveCycle", group_id=instance.trace_group_id):
     
-            # Needs update ­­­--------------------------------------------------
-            if instance.needs_system:
+            # Needs update with time-based gating ─────────────────────────────
+            needs_update_interval = getattr(instance.config, 'needs_update_interval', 300)  # Default 5 minutes
+            current_time = datetime.datetime.now()
+            
+            # Check if enough time has passed since last needs update
+            if hasattr(instance, '_last_needs_update'):
+                time_since_update = (current_time - instance._last_needs_update).total_seconds()
+                should_update_needs = time_since_update >= needs_update_interval
+            else:
+                should_update_needs = True
+                instance._last_needs_update = current_time
+            
+            if instance.needs_system and should_update_needs:
                 try:
                     drive_strengths_raw = await instance.needs_system.update_needs()
+                    instance._last_needs_update = current_time
                     cycle_results.needs_update = NeedsUpdate(
                         drive_strengths = _dict_to_kv(drive_strengths_raw)
                     )
-                    logger.debug(f"Needs updated. Drives: {drive_strengths_raw}")
+                    logger.debug(f"Needs updated after {time_since_update:.1f}s. Drives: {drive_strengths_raw}")
                 except Exception as e:
                     logger.error(f"Error updating needs: {e}")
                     cycle_results.needs_update = NeedsUpdate(error=str(e))
+            else:
+                # Log that we skipped the update
+                if instance.needs_system:
+                    logger.debug(f"Skipping needs update (only {time_since_update:.1f}s since last update)")
     
-            # Goal execution ­­­-----------------------------------------------
+            # Goal execution ─────────────────────────────────────────────────
             if instance.goal_manager:
                 try:
                     execution_result = await instance.goal_manager.execute_next_step()
@@ -4084,7 +4100,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
                     logger.exception(f"Error during goal execution: {e}")
                     cycle_results.goal_execution = GoalExecutionResult(error=str(e))
     
-            # Meta-cognitive loop ­­­------------------------------------------
+            # Meta-cognitive loop ─────────────────────────────────────────────
             if instance.meta_core and getattr(instance.meta_core.context, "meta_parameters", None):
                 eval_interval = instance.meta_core.context.meta_parameters.get("evaluation_interval", 5)
                 if instance.cognitive_cycles_executed % eval_interval == 0:
@@ -4095,7 +4111,8 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
                         if context_data:
                             meta_context.update(context_data.model_dump())
     
-                        if instance.needs_system:
+                        # Only get needs state if we recently updated it
+                        if instance.needs_system and should_update_needs:
                             needs_state_raw = await instance.needs_system.get_needs_state_async()
                             if isinstance(needs_state_raw, dict) and "error" not in needs_state_raw:
                                 meta_context["needs_state"] = needs_state_raw
@@ -8974,57 +8991,71 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
     
         return LimitTestResult(success=True, status="limit_test_approved", planned_action=test_action_description)
 
+    async def _get_cached_needs_state(self):
+        """Get and cache needs state"""
+        if self.needs_system:
+            try:
+                needs_state_response = await self.needs_system.get_needs_state_async()
+                self._cached_needs_state = needs_state_response
+                self._needs_cache_time = datetime.datetime.now()
+                return needs_state_response
+            except Exception as e:
+                logger.error(f"Error getting needs state: {e}")
+                return {}
+        return {}
+
     async def _determine_active_modules(self, context: Dict[str, Any], user_input: Optional[str] = None) -> Set[str]:
-            """Determines which modules should be actively engaged based on context and purpose."""
-            if not self.initialized: return set()
-        
-            # Ensure registry is built
-            if not hasattr(self, 'internal_module_registry') or not self.internal_module_registry:
-                await self._build_internal_module_registry()
-                if not self.internal_module_registry: # Still failed
-                    logger.error("Internal module registry failed to build. Cannot determine active modules.")
-                    return self.default_active_modules.copy() # Return default as fallback
-        
-            active_modules = self.default_active_modules.copy()
-            reasoning_log = [f"Default set activated: {sorted(list(active_modules))}"]
-        
-            # --- Helper function to safely add modules ---
-            def add_module(module_name, reason):
-                if module_name in self.internal_module_registry: # Check against registry
-                    if module_name not in active_modules:
-                        active_modules.add(module_name)
-                        reasoning_log.append(f"Activated {module_name} ({reason}).")
-                # else: logger.debug(f"Module {module_name} requested but not in registry or not initialized.")
-        
-            # --- 1. Classify Task Purpose ---
-            current_purpose = self._classify_task_purpose(context, user_input)
-            reasoning_log.append(f"Classified task purpose: {current_purpose.value}")
-        
-            # --- 2. Activate Modules by Purpose ---
-            activated_for_purpose = set()
-            for module_name, definition in self.internal_module_registry.items():
-                # Ensure definition is a dict and has 'purposes' list
-                if isinstance(definition, dict) and current_purpose in definition.get("purposes", []):
-                    if module_name not in active_modules:
-                        active_modules.add(module_name) # Directly add if check passed in add_module
-                        activated_for_purpose.add(module_name)
-                        reasoning_log.append(f"Activated {module_name} (purpose: {current_purpose.value}).") # Log addition here
-        
-            # --- 3. Activate Modules by Goal ---
-            if "goal_manager" in active_modules and self.goal_manager: # Check if goal manager itself is active
-                try:
-                    # Add goal_manager if not already active for the lookup itself
-                    add_module("goal_manager", "checking active goals")
-                    active_goals_summary = await self.goal_manager.get_all_goals(status_filter=["active"])
-                    if active_goals_summary:
-                        highest_prio_goal_summary = active_goals_summary[0]
-                        goal_id = highest_prio_goal_summary['id']
-                        goal_obj = await self.goal_manager._get_goal_with_reader_lock(goal_id) if hasattr(self.goal_manager, '_get_goal_with_reader_lock') else self.goal_manager.goals.get(goal_id)
-        
-                        if goal_obj and hasattr(goal_obj, 'plan') and 0 <= goal_obj.current_step_index < len(goal_obj.plan):
-                            next_step = goal_obj.plan[goal_obj.current_step_index]
-                            next_step_action = next_step.action
-                            reason_prefix = f"active goal '{goal_id}' step '{next_step_action}'"
+        """Determines which modules should be actively engaged based on context and purpose."""
+        if not self.initialized: return set()
+    
+        # Ensure registry is built
+        if not hasattr(self, 'internal_module_registry') or not self.internal_module_registry:
+            await self._build_internal_module_registry()
+            if not self.internal_module_registry: # Still failed
+                logger.error("Internal module registry failed to build. Cannot determine active modules.")
+                return self.default_active_modules.copy() # Return default as fallback
+    
+        active_modules = self.default_active_modules.copy()
+        reasoning_log = [f"Default set activated: {sorted(list(active_modules))}"]
+    
+        # --- Helper function to safely add modules ---
+        def add_module(module_name, reason):
+            if module_name in self.internal_module_registry: # Check against registry
+                if module_name not in active_modules:
+                    active_modules.add(module_name)
+                    reasoning_log.append(f"Activated {module_name} ({reason}).")
+            # else: logger.debug(f"Module {module_name} requested but not in registry or not initialized.")
+    
+        # --- 1. Classify Task Purpose ---
+        current_purpose = self._classify_task_purpose(context, user_input)
+        reasoning_log.append(f"Classified task purpose: {current_purpose.value}")
+    
+        # --- 2. Activate Modules by Purpose ---
+        activated_for_purpose = set()
+        for module_name, definition in self.internal_module_registry.items():
+            # Ensure definition is a dict and has 'purposes' list
+            if isinstance(definition, dict) and current_purpose in definition.get("purposes", []):
+                if module_name not in active_modules:
+                    active_modules.add(module_name) # Directly add if check passed in add_module
+                    activated_for_purpose.add(module_name)
+                    reasoning_log.append(f"Activated {module_name} (purpose: {current_purpose.value}).") # Log addition here
+    
+        # --- 3. Activate Modules by Goal ---
+        if "goal_manager" in active_modules and self.goal_manager: # Check if goal manager itself is active
+            try:
+                # Add goal_manager if not already active for the lookup itself
+                add_module("goal_manager", "checking active goals")
+                active_goals_summary = await self.goal_manager.get_all_goals(status_filter=["active"])
+                if active_goals_summary:
+                    highest_prio_goal_summary = active_goals_summary[0]
+                    goal_id = highest_prio_goal_summary['id']
+                    goal_obj = await self.goal_manager._get_goal_with_reader_lock(goal_id) if hasattr(self.goal_manager, '_get_goal_with_reader_lock') else self.goal_manager.goals.get(goal_id)
+    
+                    if goal_obj and hasattr(goal_obj, 'plan') and 0 <= goal_obj.current_step_index < len(goal_obj.plan):
+                        next_step = goal_obj.plan[goal_obj.current_step_index]
+                        next_step_action = next_step.action
+                        reason_prefix = f"active goal '{goal_id}' step '{next_step_action}'"
+                    
                             
                             # --- Action-to-Module Mapping (EXPANDED) ---
                             module_map = {
@@ -9188,30 +9219,30 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
                                 "recall_association": "recognition_memory",
                             }
                             
-                            activated_for_goal = False
-                            for prefix, module_names in module_map.items():
-                                # Use startswith for flexibility
-                                if next_step_action.lower().startswith(prefix.lower()):
-                                    if isinstance(module_names, str): 
-                                        module_names = [module_names]
-                                    elif isinstance(module_names, tuple):
-                                        module_names = list(module_names)
-                                    for module_name in module_names:
-                                        add_module(module_name, reason_prefix)
-                                    activated_for_goal = True
-                                    # Allow multiple matches if action fits multiple categories
-                            
-                            if not activated_for_goal:
-                                logger.warning(f"No module mapping found for goal action: {next_step_action}")
-                    else:
-                        reasoning_log.append("No active goals driving module selection.")
-                except Exception as e:
-                    logger.error(f"Error checking goals for module activation: {e}")
-        
-            # --- 4. Activate by Input Keywords (Refined) ---
-            input_text = user_input or context.get("last_user_input", "")
-            input_lower = input_text.lower()
-            keywords_activated_now = set()
+                        activated_for_goal = False
+                        for prefix, module_names in module_map.items():
+                            # Use startswith for flexibility
+                            if next_step_action.lower().startswith(prefix.lower()):
+                                if isinstance(module_names, str): 
+                                    module_names = [module_names]
+                                elif isinstance(module_names, tuple):
+                                    module_names = list(module_names)
+                                for module_name in module_names:
+                                    add_module(module_name, reason_prefix)
+                                activated_for_goal = True
+                                # Allow multiple matches if action fits multiple categories
+                        
+                        if not activated_for_goal:
+                            logger.warning(f"No module mapping found for goal action: {next_step_action}")
+                else:
+                    reasoning_log.append("No active goals driving module selection.")
+            except Exception as e:
+                logger.error(f"Error checking goals for module activation: {e}")
+    
+        # --- 4. Activate by Input Keywords (Refined) ---
+        input_text = user_input or context.get("last_user_input", "")
+        input_lower = input_text.lower()
+        keywords_activated_now = set()
         
             # --- Keyword-to-Module Mapping (EXPANDED) ---
             keyword_map = {
@@ -9318,25 +9349,25 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
                 ("understand you", "know you", "your mind", "your thoughts", "empathy", "perspective"): "theory_of_mind",
             }
         
-            for keywords, module_names in keyword_map.items():
-                if any(kw in input_lower for kw in keywords):
-                    if isinstance(module_names, str): 
-                        module_names = [module_names]
-                    elif isinstance(module_names, tuple):
-                        module_names = list(module_names)
-                    for module_name in module_names:
-                        add_module(module_name, f"input keyword '{keywords[0]}...'")
-                        keywords_activated_now.add(module_name)
-        
-            if keywords_activated_now:
-                reasoning_log.append(f"Activated modules based on input keywords: {keywords_activated_now}")
-        
-            # --- 5. Mode-Driven Activation ---
-            if hasattr(self, "mode_integration") and self.mode_integration and hasattr(self.mode_integration, "get_active_mode_name"):
-                try:
-                    current_mode = await self.mode_integration.get_active_mode_name()
-                    if current_mode:
-                        reason_prefix = f"interaction mode '{current_mode}'"
+        for keywords, module_names in keyword_map.items():
+            if any(kw in input_lower for kw in keywords):
+                if isinstance(module_names, str): 
+                    module_names = [module_names]
+                elif isinstance(module_names, tuple):
+                    module_names = list(module_names)
+                for module_name in module_names:
+                    add_module(module_name, f"input keyword '{keywords[0]}...'")
+                    keywords_activated_now.add(module_name)
+    
+        if keywords_activated_now:
+            reasoning_log.append(f"Activated modules based on input keywords: {keywords_activated_now}")
+    
+        # --- 5. Mode-Driven Activation ---
+        if hasattr(self, "mode_integration") and self.mode_integration and hasattr(self.mode_integration, "get_active_mode_name"):
+            try:
+                current_mode = await self.mode_integration.get_active_mode_name()
+                if current_mode:
+                    reason_prefix = f"interaction mode '{current_mode}'"
                         
                         # --- Mode-to-Module Mapping (EXPANDED) ---
                         mode_module_map = {
@@ -9363,23 +9394,23 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
                             "PROTECTIVE": ["protocol_enforcement", "relationship_manager", "emotional_core", "theory_of_mind"],
                         }
                         
-                        if current_mode in mode_module_map:
-                            modules_to_activate_names = mode_module_map[current_mode]
-                            if isinstance(modules_to_activate_names, str): 
-                                modules_to_activate_names = [modules_to_activate_names]
-                            for mod_name in modules_to_activate_names:
-                                add_module(mod_name, reason_prefix)
-                except Exception as e:
-                    logger.error(f"Error checking mode for module activation: {e}")
-        
-            # --- 6. Attention-Driven Activation ---
-            if hasattr(self, "attentional_controller") and self.attentional_controller:
-                try:
-                    foci = self.attentional_controller.current_foci # Direct access assumed
-                    if foci:
-                        strongest_focus = max(foci, key=lambda f: f.strength)
-                        focus_target = strongest_focus.target
-                        reason_prefix = f"attention focus '{focus_target}'"
+                    if current_mode in mode_module_map:
+                        modules_to_activate_names = mode_module_map[current_mode]
+                        if isinstance(modules_to_activate_names, str): 
+                            modules_to_activate_names = [modules_to_activate_names]
+                        for mod_name in modules_to_activate_names:
+                            add_module(mod_name, reason_prefix)
+            except Exception as e:
+                logger.error(f"Error checking mode for module activation: {e}")
+    
+        # --- 6. Attention-Driven Activation ---
+        if hasattr(self, "attentional_controller") and self.attentional_controller:
+            try:
+                foci = self.attentional_controller.current_foci # Direct access assumed
+                if foci:
+                    strongest_focus = max(foci, key=lambda f: f.strength)
+                    focus_target = strongest_focus.target
+                    reason_prefix = f"attention focus '{focus_target}'"
                         
                         # --- Attention Target to Module Mapping ---
                         attention_target_map = {
@@ -9426,54 +9457,69 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
                             "dominance_dynamics": ("femdom_coordinator", "psychological_dominance", "theory_of_mind"),
                         }
                         
-                        activated_by_attention = False
-                        # Check exact match first
-                        if focus_target in attention_target_map:
-                            target_modules = attention_target_map[focus_target]
-                            if isinstance(target_modules, str):
-                                add_module(target_modules, reason_prefix)
-                            else:
-                                for module in target_modules:
-                                    add_module(module, reason_prefix)
-                            activated_by_attention = True
-                        # Check keywords if no exact match
+                 activated_by_attention = False
+                    # Check exact match first
+                    if focus_target in attention_target_map:
+                        target_modules = attention_target_map[focus_target]
+                        if isinstance(target_modules, str):
+                            add_module(target_modules, reason_prefix)
                         else:
-                            for keyword, module_name in attention_target_map.items():
-                                if keyword in focus_target.lower():
-                                    if isinstance(module_name, str):
-                                        add_module(module_name, reason_prefix + f" (keyword '{keyword}')")
-                                    else:
-                                        for module in module_name:
-                                            add_module(module, reason_prefix + f" (keyword '{keyword}')")
-                                    activated_by_attention = True
-                                    # Maybe break after first keyword match or allow multiple? Decide based on need.
-                except Exception as e:
-                    logger.error(f"Error checking attention for module activation: {e}")
-        
-            # --- 7. Internal State Activation (Needs, Mood) ---
-            if hasattr(self, "needs_system") and self.needs_system:
-                try:
-                    needs_state_response = await self.needs_system.get_needs_state_async()
-                    
-                    # Handle different response types
-                    needs_state = None
-                    if hasattr(needs_state_response, 'needs'):
-                        needs_state = needs_state_response.needs
-                    elif isinstance(needs_state_response, dict):
-                        needs_state = needs_state_response
-                    elif isinstance(needs_state_response, list):
-                        # If it's a list, log warning and skip
-                        logger.warning(f"Unexpected list response from get_needs_state_async: {needs_state_response}")
-                        needs_state = {}
+                            for module in target_modules:
+                                add_module(module, reason_prefix)
+                        activated_by_attention = True
+                    # Check keywords if no exact match
                     else:
-                        logger.warning(f"Unexpected response type from get_needs_state_async: {type(needs_state_response)}")
-                        needs_state = {}
-                    
-                    # Only iterate if we have a dict
-                    if isinstance(needs_state, dict):
-                        for need, state_data in needs_state.items():
-                            if isinstance(state_data, dict) and state_data.get('drive_strength', 0.0) > self.need_drive_threshold:
-                                reason = f"high drive for need '{need}' ({state_data['drive_strength']:.2f})"
+                        for keyword, module_name in attention_target_map.items():
+                            if keyword in focus_target.lower():
+                                if isinstance(module_name, str):
+                                    add_module(module_name, reason_prefix + f" (keyword '{keyword}')")
+                                else:
+                                    for module in module_name:
+                                        add_module(module, reason_prefix + f" (keyword '{keyword}')")
+                                activated_by_attention = True
+                                # Maybe break after first keyword match or allow multiple? Decide based on need.
+            except Exception as e:
+                logger.error(f"Error checking attention for module activation: {e}")
+    
+        # --- 7. Internal State Activation (Needs, Mood) WITH CACHING ---
+        if hasattr(self, "needs_system") and self.needs_system:
+            try:
+                # Check cached needs state first
+                cache_duration = getattr(self.config, 'needs_cache_duration', 120)  # Default 2 minutes
+                current_time = datetime.datetime.now()
+                
+                needs_state_response = None
+                if hasattr(self, '_cached_needs_state') and hasattr(self, '_needs_cache_time'):
+                    if (current_time - self._needs_cache_time).total_seconds() < cache_duration:
+                        needs_state_response = self._cached_needs_state
+                        logger.debug(f"Using cached needs state (age: {(current_time - self._needs_cache_time).total_seconds():.1f}s)")
+                    else:
+                        needs_state_response = await self._get_cached_needs_state()
+                        logger.debug(f"Refreshed needs cache (was {(current_time - self._needs_cache_time).total_seconds():.1f}s old)")
+                else:
+                    needs_state_response = await self._get_cached_needs_state()
+                    logger.debug("Initial needs cache population")
+                
+                # Handle different response types
+                needs_state = None
+                if hasattr(needs_state_response, 'needs'):
+                    needs_state = needs_state_response.needs
+                elif isinstance(needs_state_response, dict):
+                    needs_state = needs_state_response
+                elif isinstance(needs_state_response, list):
+                    # If it's a list, log warning and skip
+                    logger.warning(f"Unexpected list response from get_needs_state_async: {needs_state_response}")
+                    needs_state = {}
+                else:
+                    logger.warning(f"Unexpected response type from get_needs_state_async: {type(needs_state_response)}")
+                    needs_state = {}
+                
+                # Only iterate if we have a dict
+                if isinstance(needs_state, dict):
+                    for need, state_data in needs_state.items():
+                        if isinstance(state_data, dict) and state_data.get('drive_strength', 0.0) > self.need_drive_threshold:
+                            reason = f"high drive for need '{need}' ({state_data['drive_strength']:.2f})"
+                        
                                 
                                 # --- Need-to-Module Mapping (EXPANDED) ---
                                 need_map = {
@@ -9500,25 +9546,26 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
                                     "drive_expression": ("emotional_core", "agentic_action_generator"),
                                 }
                                 
-                                modules_for_need = need_map.get(need)
-                                if modules_for_need:
-                                    if isinstance(modules_for_need, str): 
-                                        modules_for_need = [modules_for_need]
-                                    elif isinstance(modules_for_need, tuple):
-                                        modules_for_need = list(modules_for_need)
-                                    for mod_name in modules_for_need:
-                                        add_module(mod_name, reason)
-                except Exception as e:
-                    logger.error(f"Error checking needs for activation: {e}")
-        
-            if hasattr(self, "mood_manager") and self.mood_manager:
-                try:
-                    mood_state_obj = await self.mood_manager.get_current_mood()
-                    mood_state = mood_state_obj.model_dump() if hasattr(mood_state_obj, 'model_dump') else mood_state_obj
-        
-                    if mood_state and isinstance(mood_state, dict) and mood_state.get('intensity', 0.0) > 0.6:
-                        mood_name = mood_state.get('dominant_mood', 'unknown')
-                        reason = f"strong mood '{mood_name}'"
+                            modules_for_need = need_map.get(need)
+                            if modules_for_need:
+                                if isinstance(modules_for_need, str): 
+                                    modules_for_need = [modules_for_need]
+                                elif isinstance(modules_for_need, tuple):
+                                    modules_for_need = list(modules_for_need)
+                                for mod_name in modules_for_need:
+                                    add_module(mod_name, reason)
+            except Exception as e:
+                logger.error(f"Error checking needs for activation: {e}")
+    
+        if hasattr(self, "mood_manager") and self.mood_manager:
+            try:
+                mood_state_obj = await self.mood_manager.get_current_mood()
+                mood_state = mood_state_obj.model_dump() if hasattr(mood_state_obj, 'model_dump') else mood_state_obj
+    
+                if mood_state and isinstance(mood_state, dict) and mood_state.get('intensity', 0.0) > 0.6:
+                    mood_name = mood_state.get('dominant_mood', 'unknown')
+                    reason = f"strong mood '{mood_name}'"
+                    
                         
                         # --- Mood-to-Module Mapping (EXPANDED) ---
                         mood_map = {
@@ -9547,19 +9594,19 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin, EnhancedNyxBrainMixin)
                             "Analytical": ("reasoning_core", "meta_core", "knowledge_core"),
                         }
                         
-                        modules_for_mood = mood_map.get(mood_name)
-                        if modules_for_mood:
-                            if isinstance(modules_for_mood, str): 
-                                modules_for_mood = [modules_for_mood]
-                            elif isinstance(modules_for_mood, tuple):
-                                modules_for_mood = list(modules_for_mood)
-                            for mod_name in modules_for_mood:
-                                add_module(mod_name, reason)
-                        
-                        # Always activate emotional core for intense moods
-                        add_module("emotional_core", reason)
-                except Exception as e:
-                    logger.error(f"Error checking mood for activation: {e}")
+                    modules_for_mood = mood_map.get(mood_name)
+                    if modules_for_mood:
+                        if isinstance(modules_for_mood, str): 
+                            modules_for_mood = [modules_for_mood]
+                        elif isinstance(modules_for_mood, tuple):
+                            modules_for_mood = list(modules_for_mood)
+                        for mod_name in modules_for_mood:
+                            add_module(mod_name, reason_prefix)
+                    
+                    # Always activate emotional core for intense moods
+                    add_module("emotional_core", reason)
+            except Exception as e:
+                logger.error(f"Error checking mood for activation: {e}")
         
             # --- 8. Meta-Cognitive Activation ---
             if hasattr(self, "meta_core") and self.meta_core:
