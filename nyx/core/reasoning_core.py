@@ -4409,6 +4409,92 @@ class ReasoningCore:
         )
         
         return practicality_score
+
+    async def reason_about(self, text: str) -> Dict[str, Any]:
+        """
+        Perform reasoning about the given text input.
+        This is a simplified reasoning interface for the global workspace.
+        """
+        # Try to find relevant causal models
+        relevant_models = []
+        for model_id, model in self.causal_models.items():
+            # Simple relevance check based on text content
+            if any(node.name.lower() in text.lower() for node in model.nodes.values()):
+                relevant_models.append(model)
+        
+        # If we have relevant models, analyze them
+        if relevant_models:
+            model = relevant_models[0]  # Use most relevant
+            
+            # Find mentioned nodes
+            mentioned_nodes = []
+            for node_id, node in model.nodes.items():
+                if node.name.lower() in text.lower():
+                    mentioned_nodes.append({
+                        "node_id": node_id,
+                        "name": node.name,
+                        "current_state": node.get_current_state(),
+                        "type": node.type
+                    })
+            
+            # Get causal relationships
+            causal_insights = []
+            for node_info in mentioned_nodes:
+                node_id = node_info["node_id"]
+                
+                # Get causes
+                parents = list(model.graph.predecessors(node_id))
+                causes = [model.nodes[p].name for p in parents if p in model.nodes]
+                
+                # Get effects  
+                children = list(model.graph.successors(node_id))
+                effects = [model.nodes[c].name for c in children if c in model.nodes]
+                
+                if causes or effects:
+                    causal_insights.append({
+                        "concept": node_info["name"],
+                        "causes": causes,
+                        "effects": effects
+                    })
+            
+            return {
+                "model_used": model.name,
+                "mentioned_concepts": mentioned_nodes,
+                "causal_insights": causal_insights,
+                "reasoning_type": "causal"
+            }
+        
+        # Try conceptual reasoning if no causal models match
+        relevant_spaces = []
+        for space_id, space in self.concept_spaces.items():
+            if any(concept["name"].lower() in text.lower() for concept in space.concepts.values()):
+                relevant_spaces.append(space)
+        
+        if relevant_spaces:
+            space = relevant_spaces[0]
+            
+            # Find mentioned concepts
+            mentioned_concepts = []
+            for concept_id, concept in space.concepts.items():
+                if concept["name"].lower() in text.lower():
+                    mentioned_concepts.append({
+                        "id": concept_id,
+                        "name": concept["name"],
+                        "properties": concept.get("properties", {})
+                    })
+            
+            return {
+                "space_used": space.name,
+                "mentioned_concepts": mentioned_concepts,
+                "reasoning_type": "conceptual"
+            }
+        
+        # Default response if no models or spaces match
+        return {
+            "reasoning_type": "default",
+            "insight": f"Analyzing: {text[:100]}...",
+            "confidence": 0.5
+        }
     
     def _evaluate_expressiveness(self, blend: ConceptualBlend) -> float:
         """Evaluate expressiveness of a blend"""
