@@ -28,6 +28,11 @@ class Modality(str, Enum):
     SMELL = "smell"
 
 # --- Base Schemas ---
+# Define a concrete type for metadata instead of using forward references
+class MetadataValue(BaseModel):
+    """Wrapper for metadata values to ensure JSON compatibility"""
+    value: Union[str, int, float, bool, None, List["MetadataValue"], Dict[str, "MetadataValue"]]
+
 class SensoryInput(BaseModel):
     """
     Raw sensory payload passed into the process_sensory_input() tool.
@@ -50,8 +55,8 @@ class SensoryInput(BaseModel):
         description="ISO-8601 timestamp when the data was captured"
     )
 
-    # Can contain arbitrary keys/values **as long as the overall value is JSON**
-    metadata: Dict[str, "JSON"] = Field(  # type: ignore[name-defined]
+    # Use explicit model instead of Dict with forward reference
+    metadata: Dict[str, Any] = Field(
         default_factory=dict,
         description="Opaque metadata blob (must be JSON-serialisable)"
     )
@@ -191,7 +196,7 @@ def make_sensory_input(
     modality: Modality,
     data: Union[str, bytes],
     *,
-    metadata: Optional[Dict[str, "JSON"]] = None,  # type: ignore[name-defined]
+    metadata: Optional[Dict[str, Any]] = None,
     confidence: float = 1.0,
 ) -> SensoryInput:
     """
@@ -207,7 +212,6 @@ def make_sensory_input(
         confidence=confidence,
         metadata=metadata or {},
     )
-JSON = Any  
 
 
 # Context class to hold the state and dependencies
@@ -249,6 +253,33 @@ class MultimodalIntegratorContext:
 
 
 # --- Function Tools for Agent SDK ---
+
+# Create parameter models for function tools that need them
+class AddExpectationParams(BaseModel):
+    target_modality: str
+    pattern: Any
+    strength: float = 0.5
+    priority: float = 0.5
+    source: str = "agent"
+
+class ClearExpectationsParams(BaseModel):
+    modality: Optional[str] = None
+
+class GetRecentPerceptsParams(BaseModel):
+    modality: Optional[str] = None
+    limit: int = 10
+
+class ProcessTextParams(BaseModel):
+    text: str
+    metadata: Optional[Dict[str, Any]] = None
+
+class ProcessImageParams(BaseModel):
+    image_data: Any
+    metadata: Optional[Dict[str, Any]] = None
+
+class RegisterFeatureExtractorParams(BaseModel):
+    modality: str
+    extractor_name: str
 
 @function_tool
 async def process_sensory_input(
@@ -370,21 +401,13 @@ async def process_sensory_input(
 @function_tool
 async def add_expectation(
     ctx: RunContextWrapper[MultimodalIntegratorContext],
-    target_modality: str, 
-    pattern: Any, 
-    strength: float = 0.5, 
-    priority: float = 0.5,
-    source: str = "agent"
+    params: AddExpectationParams
 ) -> Dict[str, Any]:
     """
     Add a top-down expectation signal to guide perception.
     
     Args:
-        target_modality: Which modality to apply the expectation to
-        pattern: What to expect (e.g., object name, content, feature)
-        strength: How strongly to apply the expectation (0.0-1.0)
-        priority: Priority relative to other expectations (0.0-1.0)
-        source: Source of the expectation (e.g., "memory", "reasoning")
+        params: Parameters for adding expectation
         
     Returns:
         Result of adding the expectation
@@ -392,20 +415,20 @@ async def add_expectation(
     integrator_ctx = ctx.context
     
     try:
-        modality = Modality(target_modality)
+        modality = Modality(params.target_modality)
     except ValueError:
         return {
             "success": False,
-            "error": f"Invalid modality: {target_modality}. Valid options are: {[m.value for m in Modality]}"
+            "error": f"Invalid modality: {params.target_modality}. Valid options are: {[m.value for m in Modality]}"
         }
         
-    pattern = pattern if isinstance(pattern, str) else json.dumps(pattern)
+    pattern = params.pattern if isinstance(params.pattern, str) else json.dumps(params.pattern)
     expectation = ExpectationSignal(
         target_modality=modality,
         pattern=pattern,
-        strength=min(1.0, max(0.0, strength)),
-        priority=min(1.0, max(0.0, priority)),
-        source=source
+        strength=min(1.0, max(0.0, params.strength)),
+        priority=min(1.0, max(0.0, params.priority)),
+        source=params.source
     )
     
     async with integrator_ctx._lock:
@@ -423,8 +446,8 @@ async def add_expectation(
         "expectation_added": {
             "modality": modality,
             "pattern": str(pattern),
-            "strength": strength,
-            "priority": priority
+            "strength": params.strength,
+            "priority": params.priority
         },
         "active_expectations_count": len(integrator_ctx.active_expectations)
     }
@@ -432,13 +455,13 @@ async def add_expectation(
 @function_tool
 async def clear_expectations(
     ctx: RunContextWrapper[MultimodalIntegratorContext],
-    modality: Optional[str] = None
+    params: ClearExpectationsParams
 ) -> Dict[str, Any]:
     """
     Clear active expectations, optionally for a specific modality.
     
     Args:
-        modality: Optional modality to clear expectations for (if None, clears all)
+        params: Parameters for clearing expectations
         
     Returns:
         Result of clearing expectations
@@ -448,26 +471,26 @@ async def clear_expectations(
     async with integrator_ctx._lock:
         old_count = len(integrator_ctx.active_expectations)
         
-        if modality:
+        if params.modality:
             try:
-                mod = Modality(modality)
+                mod = Modality(params.modality)
                 integrator_ctx.active_expectations = [
                     exp for exp in integrator_ctx.active_expectations 
                     if exp.target_modality != mod
                 ]
                 new_count = len(integrator_ctx.active_expectations)
-                logger.info(f"Cleared {old_count - new_count} expectations for {modality}")
+                logger.info(f"Cleared {old_count - new_count} expectations for {params.modality}")
                 
                 return {
                     "success": True,
                     "cleared_count": old_count - new_count,
                     "remaining_count": new_count,
-                    "modality": modality
+                    "modality": params.modality
                 }
             except ValueError:
                 return {
                     "success": False,
-                    "error": f"Invalid modality: {modality}"
+                    "error": f"Invalid modality: {params.modality}"
                 }
         else:
             integrator_ctx.active_expectations = []
@@ -482,30 +505,28 @@ async def clear_expectations(
 @function_tool
 async def get_recent_percepts(
     ctx: RunContextWrapper[MultimodalIntegratorContext],
-    modality: Optional[str] = None,
-    limit: int = 10
+    params: GetRecentPerceptsParams
 ) -> List[Dict[str, Any]]:
     """
     Get recent percepts, optionally filtered by modality.
     
     Args:
-        modality: Optional modality to filter percepts by
-        limit: Maximum number of percepts to return
+        params: Parameters for getting recent percepts
         
     Returns:
         List of recent percepts
     """
     integrator_ctx = ctx.context
     
-    if modality:
+    if params.modality:
         try:
-            mod = Modality(modality)
+            mod = Modality(params.modality)
             filtered = [p for p in integrator_ctx.perception_buffer if p.modality == mod]
-            return [p.dict() for p in filtered[-limit:]]
+            return [p.dict() for p in filtered[-params.limit:]]
         except ValueError:
             return []
     else:
-        return [p.dict() for p in integrator_ctx.perception_buffer[-limit:]]
+        return [p.dict() for p in integrator_ctx.perception_buffer[-params.limit:]]
 
 @function_tool
 async def get_perception_stats(
@@ -542,44 +563,42 @@ async def get_perception_stats(
 @function_tool
 async def process_text(
     ctx: RunContextWrapper[MultimodalIntegratorContext],
-    text: str,
-    metadata: Optional[Any] = None,        # Dict → Any
+    params: ProcessTextParams
 ) -> Dict[str, Any]:
     input_data = SensoryInput(
         modality=Modality.TEXT,
-        data=text,
-        metadata=metadata or {}
+        data=params.text,
+        metadata=params.metadata or {}
     )
     return await process_sensory_input(ctx, ProcessSensoryInputParams(input_data=input_data))
 
 @function_tool
 async def process_image(
     ctx: RunContextWrapper[MultimodalIntegratorContext],
-    image_data: Any,
-    metadata: Optional[Any] = None,        # Dict → Any
+    params: ProcessImageParams
 ) -> Dict[str, Any]:
-    if isinstance(image_data, bytes):
-        image_data = base64.b64encode(image_data).decode("ascii")
+    if isinstance(params.image_data, bytes):
+        image_data = base64.b64encode(params.image_data).decode("ascii")
+    else:
+        image_data = params.image_data
     
     input_data = make_sensory_input(
         Modality.IMAGE,
         image_data,
-        metadata=metadata or {}
+        metadata=params.metadata or {}
     )
     return await process_sensory_input(ctx, ProcessSensoryInputParams(input_data=input_data))
 
 @function_tool
 async def register_feature_extractor(
     ctx: RunContextWrapper[MultimodalIntegratorContext],
-    modality: str,
-    extractor_name: str
+    params: RegisterFeatureExtractorParams
 ) -> Dict[str, Any]:
     """
     Register a named feature extraction function for a specific modality.
     
     Args:
-        modality: The modality to register the extractor for
-        extractor_name: Name of the extractor to use for this modality
+        params: Parameters for registering feature extractor
         
     Returns:
         Result of the registration
@@ -587,11 +606,11 @@ async def register_feature_extractor(
     integrator_ctx = ctx.context
     
     try:
-        mod = Modality(modality)
+        mod = Modality(params.modality)
     except ValueError:
         return {
             "success": False,
-            "error": f"Invalid modality: {modality}"
+            "error": f"Invalid modality: {params.modality}"
         }
     
     # Map extractor names to functions
@@ -605,19 +624,19 @@ async def register_feature_extractor(
         "smell": _extract_smell_features
     }
     
-    if extractor_name not in extractors:
+    if params.extractor_name not in extractors:
         return {
             "success": False,
-            "error": f"Unknown extractor: {extractor_name}. Available extractors: {list(extractors.keys())}"
+            "error": f"Unknown extractor: {params.extractor_name}. Available extractors: {list(extractors.keys())}"
         }
     
-    integrator_ctx.feature_extractors[mod] = extractors[extractor_name]
-    logger.info(f"Registered {extractor_name} feature extractor for {modality}")
+    integrator_ctx.feature_extractors[mod] = extractors[params.extractor_name]
+    logger.info(f"Registered {params.extractor_name} feature extractor for {params.modality}")
     
     return {
         "success": True,
-        "modality": modality,
-        "extractor": extractor_name
+        "modality": params.modality,
+        "extractor": params.extractor_name
     }
 
 # --- Helper Functions ---
