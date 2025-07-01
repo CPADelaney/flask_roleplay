@@ -68,6 +68,7 @@ class NewGameAgent:
     """Agent for handling new game creation process with Nyx governance integration"""
     
     def __init__(self):
+        # Wrap methods as function tools
         self.environment_agent = Agent(
             name="EnvironmentCreator",
             instructions="""
@@ -86,7 +87,7 @@ class NewGameAgent:
             """,
             output_type=EnvironmentData,
             tools=[
-                self.create_calendar
+                function_tool(self.create_calendar)  # Wrap with function_tool
             ],
             model="gpt-4.1-nano"
         )
@@ -104,8 +105,8 @@ class NewGameAgent:
             Chase's schedule should feel normal yet guided, with subtle overlaps with the NPCs.
             """,
             tools=[
-                self.spawn_npcs,
-                self.create_chase_schedule
+                function_tool(self.spawn_npcs),  # Wrap with function_tool
+                function_tool(self.create_chase_schedule)  # Wrap with function_tool
             ],
             model="gpt-4.1-nano"
         )
@@ -121,6 +122,7 @@ class NewGameAgent:
             
             Address Chase as 'you,' drawing him through the veil with no whisper of retreat.
             """
+            # No tools for this agent
         )
         
         # Main coordinating agent
@@ -147,11 +149,11 @@ class NewGameAgent:
             All actions must be approved by Nyx's governance system.
             """,
             tools=[
-                self.generate_environment,
-                self.create_npcs_and_schedules,
-                self.create_opening_narrative,
-                self.finalize_game_setup,
-                self.generate_lore
+                function_tool(self.generate_environment),  # Wrap with function_tool
+                function_tool(self.create_npcs_and_schedules),  # Wrap with function_tool
+                function_tool(self.create_opening_narrative),  # Wrap with function_tool
+                function_tool(self.finalize_game_setup),  # Wrap with function_tool
+                function_tool(self.generate_lore)  # Wrap with function_tool
             ],
             model="gpt-4.1-nano"
         )
