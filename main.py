@@ -496,7 +496,6 @@ def create_quart_app():
                 sio  # Pass the socketio instance
             )
             app.logger.info(f"Started background_chat_task for sid={sid}, conv_id={conversation_id}")
-        except Exception as e:
     
         except Exception as e:
             app.logger.error(f"Error dispatching background_chat_task for sid={sid}: {e}", exc_info=True)
