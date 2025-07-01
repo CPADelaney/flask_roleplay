@@ -161,8 +161,11 @@ class NyxUnifiedGovernor:
         
         # --- MERGE: Get an instance of the LoreSystem during initialization ---
         # Nyx needs its primary tool to execute its will.
-        self.lore_system = await LoreSystem.get_instance(self.user_id, self.conversation_id)
-
+        self.lore_system = LoreSystem.get_instance(self.user_id, self.conversation_id)
+        
+        # Initialize the lore system
+        await self.lore_system.initialize()
+    
         # Initialize other systems
         self.memory_system = await get_memory_nyx_bridge(self.user_id, self.conversation_id)
         self.game_state = await self.initialize_game_state()
@@ -3141,13 +3144,4 @@ class NyxUnifiedGovernor:
             return True
             
         return True
-        
-async def initialize(self):
-    """Initialize the governance system asynchronously.
-    This must be called after creating a new NyxUnifiedGovernor instance.
     
-    Returns:
-        self for method chaining
-    """
-    await self._initialize_systems()
-    return self
