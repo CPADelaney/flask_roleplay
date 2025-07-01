@@ -44,8 +44,6 @@ from logic.conflict_system.dynamic_stakeholder_agents import process_conflict_st
 from logic.conflict_system.enhanced_conflict_generation import analyze_conflict_pressure
 from logic.conflict_system.enhanced_conflict_generation import generate_organic_conflict
 from logic.conflict_system.dynamic_stakeholder_agents import force_stakeholder_action
-from logic.conflict_system.conflict_integration import evolve_conflict
-
 
 # Configure structured logging
 logger = logging.getLogger(__name__)
@@ -942,6 +940,35 @@ async def reset_story_director(ctx: Union[RunContextWrapper[StoryDirectorContext
 
 
 # ----- Core Agent Functions -----
+
+@function_tool
+async def evolve_conflict(
+    ctx: RunContextWrapper[StoryDirectorContext],
+    conflict_id: int,
+    event_type: str,
+    event_data: Dict[str, Any]
+) -> Dict[str, Any]:
+    """
+    Wrapper for evolving a conflict based on events.
+    """
+    context = ctx.context
+    
+    # Import locally to avoid circular dependency
+    from logic.conflict_system.conflict_integration import ConflictSystemIntegration
+    
+    conflict_system = await ConflictSystemIntegration.get_instance(
+        context.user_id, 
+        context.conversation_id
+    )
+    
+    # Call the method on the instance
+    result = await conflict_system.evolve_conflict(
+        conflict_id,
+        event_type,
+        event_data
+    )
+    
+    return result
 
 @function_tool # This decorator makes it available as a tool for the Agent
 @track_performance("get_story_state_tool") # Use a distinct name for the tool's performance tracking
