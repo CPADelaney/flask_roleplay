@@ -397,10 +397,9 @@ def run_npc_learning_cycle_task():
 
 @celery_app.task
 def process_new_game_task(user_id, conversation_data):
-    """
-    Celery task to run heavy game startup processing with enhanced debugging.
-    """
-    logger.info(f"[DEBUG] Starting process_new_game_task for user_id={user_id}, conversation_data={conversation_data}")
+    # ADD THIS AS THE VERY FIRST LINE
+    print(f"CELERY TASK ACTUALLY CALLED: user_id={user_id}, data={conversation_data}")
+    logger.info(f"[CELERY TASK] ACTUALLY CALLED with user_id={user_id}")
     
     try:
         # Create a NewGameAgent instance
