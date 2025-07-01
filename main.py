@@ -8,6 +8,12 @@ from redis import asyncio as redis_async
 import asyncio
 from typing import Dict, Any, Optional
 
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[logging.StreamHandler(sys.stdout)]
+)
+
 # quart and related imports
 from quart import Quart, render_template, session, request, jsonify, redirect, Response
 import socketio
