@@ -398,22 +398,51 @@ def run_npc_learning_cycle_task():
 @celery_app.task
 def process_new_game_task(user_id, conversation_data):
     """
-    Celery task to run heavy game startup processing.
-    This function uses the NewGameAgent to create a new game with Nyx governance.
+    Celery task to run heavy game startup processing with enhanced debugging.
     """
-    logger.info(f"Starting process_new_game_task for user_id={user_id}")
+    logger.info(f"[DEBUG] Starting process_new_game_task for user_id={user_id}, conversation_data={conversation_data}")
+    
     try:
         # Create a NewGameAgent instance
         agent = NewGameAgent()
+        logger.info("[DEBUG] NewGameAgent instance created successfully")
 
         # Run the async method using asyncio.run
         result = asyncio.run(agent.process_new_game(user_id, conversation_data))
-        logger.info(f"Completed processing new game for user_id={user_id}. Result: {result}")
+        
+        logger.info(f"[DEBUG] process_new_game completed successfully. Result keys: {list(result.keys()) if isinstance(result, dict) else 'Not a dict'}")
+        logger.info(f"[DEBUG] Result status: {result.get('status', 'No status field')}")
+        logger.info(f"[DEBUG] Environment name: {result.get('environment_name', 'No environment_name')}")
+        
         return result
+        
     except Exception as e:
-        logger.exception(f"Error in process_new_game_task for user_id={user_id}")
+        logger.exception(f"[DEBUG] Critical error in process_new_game_task for user_id={user_id}")
+        
+        # Try to update conversation status to failed
+        conversation_id = conversation_data.get("conversation_id")
+        if conversation_id:
+            try:
+                async def update_failed_status():
+                    async with get_db_connection_context() as conn:
+                        await conn.execute("""
+                            UPDATE conversations 
+                            SET status='failed', 
+                                conversation_name='New Game - Task Failed'
+                            WHERE id=$1 AND user_id=$2
+                        """, conversation_id, user_id)
+                
+                asyncio.run(update_failed_status())
+            except Exception as update_error:
+                logger.error(f"[DEBUG] Failed to update conversation status: {update_error}")
+        
         # Return a serializable error structure
-        return {"status": "failed", "error": str(e)}
+        return {
+            "status": "failed", 
+            "error": str(e),
+            "error_type": type(e).__name__,
+            "conversation_id": conversation_id
+        }
 
 @celery_app.task
 def create_npcs_task(user_id, conversation_id, count=10):
