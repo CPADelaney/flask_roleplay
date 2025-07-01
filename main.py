@@ -285,8 +285,10 @@ async def initialize_systems(app: Quart):
             logger.error(f"Failed to initialize Redis: {e}", exc_info=True)
             app.redis_rate_limit_pool = None
             app.redis_ip_block_pool = None
-"""
+
         # --- 3. Core Application Logic (Nyx, MCP, etc.) ---
+        # COMMENTED OUT NYX BRAIN INITIALIZATION
+        """
         logger.info("Initializing Nyx memory system...")
         await initialize_nyx_memory_system()
         logger.info("Nyx memory system initialized successfully.")
@@ -320,15 +322,20 @@ async def initialize_systems(app: Quart):
         if not app.nyx_brain: # Example of a critical check
             # raise RuntimeError("NyxBrain initialization failed, which is critical.")
             logger.warning("NyxBrain initialization failed. Some features might be unavailable.")
-"""
+        """
+        
+        # Set app.nyx_brain to None since we're not initializing it
+        app.nyx_brain = None
+        logger.info("NyxBrain initialization skipped (commented out)")
 
-#        logger.info("Initializing MCP orchestrator...")
-#        try:
- #           app.mcp_orchestrator = MCPOrchestrator()
- #           await app.mcp_orchestrator.initialize()
-#            logger.info("MCP orchestrator initialized.")
-#        except Exception as e:
-#             logger.error(f"Error initializing MCP Orchestrator: {e}", exc_info=True)
+        # COMMENTED OUT MCP ORCHESTRATOR
+        #logger.info("Initializing MCP orchestrator...")
+        #try:
+        #    app.mcp_orchestrator = MCPOrchestrator()
+        #    await app.mcp_orchestrator.initialize()
+        #    logger.info("MCP orchestrator initialized.")
+        #except Exception as e:
+        #     logger.error(f"Error initializing MCP Orchestrator: {e}", exc_info=True)
 
         # --- 4. Other System Initializations ---
         logger.info("Initializing Aggregator SDK singletons...")
