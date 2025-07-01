@@ -17,10 +17,16 @@ async def universal_update():
         return jsonify({"error": "Not logged in"}), 401
 
     # 2) Get JSON payload and conversation_id
-    data = request.get_json()
+    data = await request.get_json()  # Note: added await here
     conversation_id = data.get("conversation_id")
     if not conversation_id:
         return jsonify({"error": "No conversation_id provided"}), 400
+    
+    # Convert conversation_id to int if it's a string
+    try:
+        conversation_id = int(conversation_id)
+    except (ValueError, TypeError):
+        return jsonify({"error": "Invalid conversation_id format"}), 400
 
     # 3) Use the async context manager
     async with get_db_connection_context() as conn:
@@ -45,6 +51,12 @@ async def get_roleplay_value():
     
     if not conversation_id or not key:
         return jsonify({"error": "Missing required parameters"}), 400
+    
+    # Convert conversation_id to integer
+    try:
+        conversation_id = int(conversation_id)
+    except ValueError:
+        return jsonify({"error": "Invalid conversation_id format"}), 400
     
     async with get_db_connection_context() as conn:
         # Change from cursor pattern to direct query
