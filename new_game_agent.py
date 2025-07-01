@@ -26,7 +26,6 @@ from db.connection import get_db_connection_context
 
 # Import Nyx governance integration
 from nyx.governance_helpers import with_governance, with_governance_permission, with_action_reporting
-from story_agent.story_director_agent import initialize_story_director, register_with_governance as register_sd_with_gov
 from nyx.directive_handler import DirectiveHandler
 from nyx.nyx_governance import AgentType, DirectiveType, DirectivePriority
 
@@ -857,6 +856,9 @@ class NewGameAgent:
             logger.info("Scheduling StoryDirector initialization")
             async def _init_story_director():
                 try:
+                    # Import here to avoid circular import
+                    from story_agent.story_director_agent import initialize_story_director, register_with_governance as register_sd_with_gov
+                    
                     await initialize_story_director(user_id, conversation_id)
                     await register_sd_with_gov(user_id, conversation_id)
                     logger.info(f"StoryDirector initialized for {conversation_id}")
@@ -969,7 +971,7 @@ class NewGameAgent:
                     pass
                     
             raise  # Re-raise the exception to be handled by Celery
-            
+                
 # Register with governance system
 async def register_with_governance(user_id: int, conversation_id: int) -> None:
     """
@@ -979,8 +981,10 @@ async def register_with_governance(user_id: int, conversation_id: int) -> None:
         user_id: User ID
         conversation_id: Conversation ID
     """
-    from nyx.integrate import get_central_governance
     try:
+        # Import here to avoid circular import
+        from nyx.integrate import get_central_governance
+        
         # Get the governance system
         governance = await get_central_governance(user_id, conversation_id)
         
