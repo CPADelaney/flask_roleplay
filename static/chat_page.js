@@ -326,52 +326,111 @@ async function loadConversations() {
   }
 }
 
- async function startNewGame() {
-     const chatWindowEl = chatWindow || document.getElementById("chatWindow");
-     const loadingDiv = document.createElement("div");
-     loadingDiv.id = "loadingIndicator"; // Ensure it has an ID for potential removal
-     loadingDiv.innerHTML = '<div style="text-align: center; padding: 20px; font-style: italic; color: #888;">Initializing new game world...</div>';
-     chatWindowEl.appendChild(loadingDiv);
-     chatWindowEl.scrollTop = chatWindowEl.scrollHeight;
+async function startNewGame() {
+    const chatWindowEl = chatWindow || document.getElementById("chatWindow");
+    const loadingDiv = document.createElement("div");
+    loadingDiv.id = "loadingIndicator";
+    loadingDiv.innerHTML = '<div style="text-align: center; padding: 20px; font-style: italic; color: #888;">Initializing new game world...</div>';
+    chatWindowEl.appendChild(loadingDiv);
+    chatWindowEl.scrollTop = chatWindowEl.scrollHeight;
 
-     try {
-         const res = await fetch("/start_new_game", {
-             method: "POST",
-             headers: { "Content-Type": "application/json" },
-             credentials: "include",
-             body: JSON.stringify({})
-         });
-         const data = await res.json();
+    try {
+        const res = await fetch("/start_new_game", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            credentials: "include",
+            body: JSON.stringify({})
+        });
+        const data = await res.json();
 
-         // Always remove loading indicator
-         const existingLoadingDiv = document.getElementById("loadingIndicator");
-         if (existingLoadingDiv) existingLoadingDiv.remove();
+        if (!res.ok) {
+            throw new Error(data.error || "Failed to start new game");
+        }
 
-         if (!res.ok) {
-             throw new Error(data.error || "Failed to start new game");
-         }
+        currentConvId = data.conversation_id;
+        messagesOffset = 0;
 
-         currentConvId = data.conversation_id;
-         messagesOffset = 0; // Reset offset for new conversation
+        // Update loading message
+        loadingDiv.innerHTML = '<div style="text-align: center; padding: 20px; font-style: italic; color: #888;">Creating your world... This may take a minute...</div>';
 
-         if (socket && socket.connected) {
-             socket.emit('join', { conversation_id: currentConvId });
-         }
-         await loadMessages(currentConvId, true); // true to replace messages
-         await checkForWelcomeImage(currentConvId);
-         await loadConversations(); // Refresh conversation list
+        // Poll for completion
+        const maxAttempts = 60; // 60 attempts = 3 minutes max
+        let attempts = 0;
+        let gameReady = false;
 
-         const successMsg = { sender: "system", content: `New game started! Welcome to ${data.game_name || "your new world"}.` };
-         appendMessage(successMsg, true);
+        const pollInterval = setInterval(async () => {
+            attempts++;
+            
+            try {
+                const statusRes = await fetch(`/new_game/conversation_status?conversation_id=${currentConvId}`, {
+                    method: "GET",
+                    credentials: "include"
+                });
+                
+                if (statusRes.ok) {
+                    const statusData = await statusRes.json();
+                    
+                    // Update loading message with status
+                    const statusText = attempts % 3 === 0 ? "Still working..." : 
+                                     attempts % 3 === 1 ? "Building your world..." : 
+                                     "Almost there...";
+                    loadingDiv.innerHTML = `<div style="text-align: center; padding: 20px; font-style: italic; color: #888;">${statusText}</div>`;
+                    
+                    if (statusData.status === "ready") {
+                        gameReady = true;
+                        clearInterval(pollInterval);
+                        
+                        // Remove loading indicator
+                        if (loadingDiv && loadingDiv.parentNode) {
+                            loadingDiv.remove();
+                        }
+                        
+                        // Join socket room
+                        if (socket && socket.connected) {
+                            socket.emit('join', { conversation_id: currentConvId });
+                        }
+                        
+                        // Load the game content
+                        await loadMessages(currentConvId, true);
+                        await checkForWelcomeImage(currentConvId);
+                        await loadConversations();
+                        
+                        // Show success message
+                        const successMsg = { 
+                            sender: "system", 
+                            content: `New game started! Welcome to ${statusData.conversation_name || "your new world"}.` 
+                        };
+                        appendMessage(successMsg, true);
+                        
+                    } else if (statusData.status === "failed" || attempts >= maxAttempts) {
+                        clearInterval(pollInterval);
+                        throw new Error(attempts >= maxAttempts ? "Game creation timed out" : "Game creation failed");
+                    }
+                }
+            } catch (pollError) {
+                console.error("Error polling game status:", pollError);
+                if (attempts >= maxAttempts) {
+                    clearInterval(pollInterval);
+                    throw new Error("Failed to check game status");
+                }
+            }
+        }, 3000); // Check every 3 seconds
 
-     } catch (err) {
-         console.error("startNewGame error:", err);
-         const existingLoadingDiv = document.getElementById("loadingIndicator"); // Try removing again in case of error
-         if (existingLoadingDiv) existingLoadingDiv.remove();
-         const errorMsg = { sender: "system", content: `Error starting new game: ${err.message}` };
-         appendMessage(errorMsg, true);
-     }
- }
+    } catch (err) {
+        console.error("startNewGame error:", err);
+        
+        // Clean up loading indicator
+        const existingLoadingDiv = document.getElementById("loadingIndicator");
+        if (existingLoadingDiv) existingLoadingDiv.remove();
+        
+        // Show error message
+        const errorMsg = { 
+            sender: "system", 
+            content: `Error starting new game: ${err.message}. Please try again.` 
+        };
+        appendMessage(errorMsg, true);
+    }
+}
 
 
 function renderConvoList(conversations) {
