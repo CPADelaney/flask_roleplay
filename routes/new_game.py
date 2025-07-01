@@ -84,18 +84,19 @@ async def conversation_status():
         return jsonify({"error": "Invalid conversation_id parameter"}), 400
 
     async with get_db_connection_context() as conn:
-        async with conn.cursor() as cursor:
-            await cursor.execute(
-                """
-                SELECT conversation_name, status 
-                FROM conversations 
-                WHERE id=%s AND user_id=%s
-                """,
-                (conversation_id, user_id)
-            )
-            row = await cursor.fetchone()
-            
+        row = await conn.fetchrow(
+            """
+            SELECT conversation_name, status 
+            FROM conversations 
+            WHERE id=$1 AND user_id=$2
+            """,
+            conversation_id, user_id
+        )
+        
         if row:
-            return jsonify({"conversation_name": row[0], "status": row[1]})
+            return jsonify({
+                "conversation_name": row['conversation_name'], 
+                "status": row['status']
+            })
         else:
-            return jsonify({"error": "Conversation not found"})
+            return jsonify({"error": "Conversation not found"}), 404
