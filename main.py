@@ -100,18 +100,20 @@ if not DB_DSN:
 ###############################################################################
 
 # Ensure this task ONLY uses asyncpg for DB access
-async def background_chat_task(conversation_id, user_input, user_id, universal_update=None):
+async def background_chat_task(conversation_id, user_input, user_id, universal_update=None, sio=None):
     """
     Background task for processing chat messages using Nyx agent with OpenAI integration.
-    Uses asyncpg for database operations.
     """
     from quart import current_app
+    if not sio:
+        logger.error(f"[BG Task {conversation_id}] No socketio instance provided")
+        return
 
     logger.info(f"[BG Task {conversation_id}] Starting for user {user_id}")
     try:
         # Get aggregator context (ensure this function is async or thread-safe if it hits DB)
         # If sync and hits DB, consider running in an executor or making it async
-        from logic.aggregator import get_aggregated_roleplay_context
+        from logic.aggregator_sdk import get_aggregated_roleplay_context
         aggregator_data = await get_aggregated_roleplay_context(user_id, conversation_id, "Chase") # Adjust player name if needed
 
         context = {
@@ -482,19 +484,19 @@ def create_quart_app():
             return
     
         try:
-            # Acknowledge receipt to the client before starting the long background task
             await sio.emit("processing", {"message": "Your request is being processed..."}, to=sid)
-    
-            # Use the built-in way to run background tasks with python-socketio
-            # This correctly manages the application context for the background task.
+            
+            # Pass sio as a parameter
             sio.start_background_task(
-                background_chat_task, # Your async background function
+                background_chat_task,
                 conversation_id,
                 user_input,
                 user_id,
-                universal_update # Pass this along if your background_chat_task expects it
+                universal_update,
+                sio  # Pass the socketio instance
             )
             app.logger.info(f"Started background_chat_task for sid={sid}, conv_id={conversation_id}")
+        except Exception as e:
     
         except Exception as e:
             app.logger.error(f"Error dispatching background_chat_task for sid={sid}: {e}", exc_info=True)
