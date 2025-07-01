@@ -86,8 +86,9 @@ class NewGameAgent:
             """,
             output_type=EnvironmentData,
             tools=[
-                function_tool(self.create_calendar)
-            ]
+                self.create_calendar
+            ],
+            model="gpt-4.1-nano"
         )
         
         self.npc_creator = Agent(
@@ -103,9 +104,10 @@ class NewGameAgent:
             Chase's schedule should feel normal yet guided, with subtle overlaps with the NPCs.
             """,
             tools=[
-                function_tool(self.spawn_npcs),
-                function_tool(self.create_chase_schedule)
-            ]
+                self.spawn_npcs,
+                self.create_chase_schedule
+            ],
+            model="gpt-4.1-nano"
         )
         
         self.narrative_agent = Agent(
@@ -145,12 +147,13 @@ class NewGameAgent:
             All actions must be approved by Nyx's governance system.
             """,
             tools=[
-                function_tool(self.generate_environment),
-                function_tool(self.create_npcs_and_schedules),
-                function_tool(self.create_opening_narrative),
-                function_tool(self.finalize_game_setup),
-                function_tool(self.generate_lore)
-            ]
+                self.generate_environment,
+                self.create_npcs_and_schedules,
+                self.create_opening_narrative,
+                self.finalize_game_setup,
+                self.generate_lore
+            ],
+            model="gpt-4.1-nano"
         )
         
         # Directive handler for processing Nyx directives
