@@ -862,11 +862,14 @@ def create_quart_app():
             task_result = process_new_game_task.delay(user_id, {"conversation_id": conversation_id})
             logger.info(f"Dispatched Celery task {task_result.id} for new game {conversation_id}")
 
+            logger.info(f"ABOUT TO DISPATCH TASK: user_id={user_id}, conversation_id={conversation_id}")
+            task_result = process_new_game_task.delay(user_id, {"conversation_id": conversation_id})
+            logger.info(f"TASK DISPATCHED: task_id={task_result.id}, status={task_result.status}")
+            
             return jsonify({
-                "status": "processing",
-                "message": "New game creation started.",
+                "job_id": task_result.id,
                 "conversation_id": conversation_id,
-                "task_id": task_result.id
+                "task_status": task_result.status  # Add this
             }), 202
 
         except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as db_err:
