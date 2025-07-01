@@ -37,12 +37,14 @@ from logic.conflict_system.hooks import (
     on_npc_relationship_change,
     on_faction_power_shift,
     on_resource_crisis,
-    on_player_major_action
+    on_player_major_action,
+    resolve_conflict_path
 )
 from logic.conflict_system.dynamic_stakeholder_agents import process_conflict_stakeholder_turns
 from logic.conflict_system.enhanced_conflict_generation import analyze_conflict_pressure
 from logic.conflict_system.enhanced_conflict_generation import generate_organic_conflict
 from logic.conflict_system.dynamic_stakeholder_agents import force_stakeholder_action
+from logic.conflict_system.conflict_integration import evolve_conflict
 
 
 # Configure structured logging
