@@ -259,31 +259,7 @@ from datetime import datetime
 from typing import Dict, List, Any, Optional, Union, Tuple
 from pydantic import BaseModel, Field
 
-# Import all schemas
-from story_agent.schemas import (
-    DimensionChanges,
-    ConflictAnalysis,
-    ManipulationGoal,
-    ManipulationPotential,
-    ManipulationOpportunity,
-    MemorySearchParams,
-    ContextQueryParams,
-    StoreMemoryParams,
-    VectorSearchParams,
-    ResourceCheck,
-    ResourceCommitment,
-    ActivityAnalysisParams,
-    ActivityFilterParams,
-    ActivitySuggestionParams,
-    PlayerInvolvementParams,
-    StoryBeatParams,
-    # Helper models for ConflictAnalysis
-    MentionedNPCTyped,
-    MentionedFaction,
-    NPCRelationship,
-    InternalFactionConflict,
-    FactionAffiliation
-)
+
 
 # Original imports remain the same
 from agents import function_tool, RunContextWrapper
