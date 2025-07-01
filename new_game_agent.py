@@ -158,7 +158,7 @@ class NewGameAgent:
     
     async def initialize_directive_handler(self, user_id: int, conversation_id: int):
         """Initialize the directive handler for this agent"""
-        from nyx.integrate import get_central_governance, register_with_governance
+        from nyx.integrate import get_central_governance
         governance = await get_central_governance(user_id, conversation_id)
         self.directive_handler = DirectiveHandler(
             user_id=user_id,
@@ -803,7 +803,7 @@ class NewGameAgent:
         
         try:
             provided_convo_id = conversation_data.get("conversation_id")
-            from nyx.integrate import get_central_governance, register_with_governance
+            from nyx.integrate import get_central_governance
         
             async with get_db_connection_context() as conn:
                 if not provided_convo_id:
@@ -974,7 +974,7 @@ async def register_with_governance(user_id: int, conversation_id: int) -> None:
         user_id: User ID
         conversation_id: Conversation ID
     """
-    from nyx.integrate import get_central_governance, register_with_governance
+    from nyx.integrate import get_central_governance
     try:
         # Get the governance system
         governance = await get_central_governance(user_id, conversation_id)
