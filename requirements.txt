@@ -7,7 +7,7 @@ tf-keras==2.19.0
 
 # Pin problematic packages to avoid backtracking
 openai==1.84.0
-openai-agents==0.0.17
+openai-agents==0.1.0
 openai-agents-mcp==0.0.8
 instructor==1.8.3
 mcp-agent==0.1.1
