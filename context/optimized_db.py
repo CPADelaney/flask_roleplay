@@ -20,7 +20,7 @@ except ImportError:
     HAVE_VECTOR_DB = False
 
 # Import Render configuration
-from config_render.render_config import get_render_config, configure_render_vector_db
+from context.context_config import get_render_config, configure_render_vector_db
 
 # Set up logging
 logger = logging.getLogger(__name__)
