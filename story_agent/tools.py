@@ -1751,6 +1751,118 @@ async def get_player_journal_entries(
         except Exception as e:
             logger.error(f"Error getting player journal entries: {str(e)}", exc_info=True)
             return []
+
+# Add this function near the other tool functions (around line 1250, before analyze_conflict_potential)
+
+@function_tool
+@track_performance("get_available_npcs")
+async def get_available_npcs(
+    ctx: RunContextWrapper[ContextType],
+    include_unintroduced: bool = False,
+    min_dominance: Optional[int] = None,
+    gender_filter: Optional[str] = None
+) -> List[Dict[str, Any]]:
+    """
+    Get available NPCs that can be involved in conflicts or other interactions.
+    
+    Args:
+        include_unintroduced: Whether to include NPCs that haven't been introduced yet
+        min_dominance: Minimum dominance level filter
+        gender_filter: Filter by gender ("male", "female", or None for all)
+    
+    Returns:
+        List of available NPCs with their details
+    """
+    context = ctx.context
+    user_id = context.user_id
+    conversation_id = context.conversation_id
+    
+    try:
+        # Use the integrated NPC system
+        from logic.fully_integrated_npc_system import IntegratedNPCSystem
+        npc_system = IntegratedNPCSystem(user_id, conversation_id)
+        await npc_system.initialize()
+        
+        # Get NPCs based on criteria
+        async with get_db_connection_context() as conn:
+            query = """
+                SELECT 
+                    n.npc_id, n.npc_name, n.dominance, n.cruelty, 
+                    n.closeness, n.trust, n.respect, n.intensity, 
+                    n.sex, n.faction_affiliations, n.archetype,
+                    n.introduced
+                FROM NPCStats n
+                WHERE n.user_id = $1 AND n.conversation_id = $2
+            """
+            params = [user_id, conversation_id]
+            
+            # Add filters
+            conditions = []
+            if not include_unintroduced:
+                conditions.append("n.introduced = TRUE")
+            
+            if min_dominance is not None:
+                conditions.append(f"n.dominance >= ${len(params) + 1}")
+                params.append(min_dominance)
+            
+            if gender_filter:
+                conditions.append(f"n.sex = ${len(params) + 1}")
+                params.append(gender_filter)
+            
+            if conditions:
+                query += " AND " + " AND ".join(conditions)
+            
+            query += " ORDER BY n.dominance DESC, n.introduced DESC"
+            
+            rows = await conn.fetch(query, *params)
+            
+            npcs = []
+            for row in rows:
+                npc = dict(row)
+                
+                # Parse faction affiliations if stored as JSON string
+                if isinstance(npc['faction_affiliations'], str):
+                    try:
+                        npc['faction_affiliations'] = json.loads(npc['faction_affiliations'])
+                    except:
+                        npc['faction_affiliations'] = []
+                elif npc['faction_affiliations'] is None:
+                    npc['faction_affiliations'] = []
+                
+                # Parse archetype if stored as JSON
+                if isinstance(npc['archetype'], str):
+                    try:
+                        archetype_data = json.loads(npc['archetype'])
+                        if isinstance(archetype_data, list):
+                            npc['archetype_list'] = archetype_data
+                        elif isinstance(archetype_data, dict) and 'types' in archetype_data:
+                            npc['archetype_list'] = archetype_data['types']
+                        else:
+                            npc['archetype_list'] = [npc['archetype']]
+                    except:
+                        npc['archetype_list'] = [npc['archetype']]
+                else:
+                    npc['archetype_list'] = []
+                
+                # Get relationship with player
+                try:
+                    relationship = await npc_system.get_relationship_with_player(npc['npc_id'])
+                    npc['relationship_with_player'] = relationship
+                except:
+                    npc['relationship_with_player'] = {
+                        'closeness': npc.get('closeness', 0),
+                        'trust': npc.get('trust', 0),
+                        'respect': npc.get('respect', 0),
+                        'intensity': npc.get('intensity', 0)
+                    }
+                
+                npcs.append(npc)
+            
+            return npcs
+            
+    except Exception as e:
+        logger.error(f"Error getting available NPCs: {str(e)}", exc_info=True)
+        return []
             
 @function_tool
 async def analyze_conflict_potential(ctx: RunContextWrapper[ContextType], narrative_text: str) -> Dict[str, Any]:
@@ -1786,8 +1898,7 @@ async def analyze_conflict_potential(ctx: RunContextWrapper[ContextType], narrat
         
         # Check for NPC mentions
         conflict_manager = ConflictManager(user_id, conversation_id)
-        # TODO: Consider exposing public wrapper for _get_available_npcs
-        npcs = await conflict_manager._get_available_npcs()
+        npcs = await get_available_npcs(ctx)
         
         mentioned_npcs = []
         for npc in npcs:
@@ -1883,6 +1994,54 @@ async def analyze_npc_manipulation_potential(ctx: RunContextWrapper[ContextType]
         return {"npc_id": npc_id, "conflict_id": conflict_id, "manipulation_potential": {}, "makes_sense": False, "reason": f"Error: {str(e)}", "recommended_goal": {}, "current_involvement": None}
 
 @function_tool
+async def get_npc_details(
+    ctx: RunContextWrapper[ContextType],
+    npc_id: int
+) -> Optional[Dict[str, Any]]:
+    """
+    Get detailed information about a specific NPC.
+    
+    Args:
+        npc_id: ID of the NPC
+        
+    Returns:
+        NPC details or None if not found
+    """
+    context = ctx.context
+    user_id = context.user_id
+    conversation_id = context.conversation_id
+    
+    try:
+        from logic.fully_integrated_npc_system import IntegratedNPCSystem
+        npc_system = IntegratedNPCSystem(user_id, conversation_id)
+        await npc_system.initialize()
+        
+        # Get NPC details
+        npc_data = await npc_system.get_npc(npc_id)
+        
+        if npc_data:
+            # Enhance with additional information
+            npc_data['relationship_with_player'] = await npc_system.get_relationship_with_player(npc_id)
+            
+            # Get conflict involvement
+            async with get_db_connection_context() as conn:
+                conflicts = await conn.fetch("""
+                    SELECT c.conflict_id, c.conflict_name, cs.faction_name, cs.involvement_level
+                    FROM ConflictStakeholders cs
+                    JOIN Conflicts c ON cs.conflict_id = c.conflict_id
+                    WHERE cs.npc_id = $1 AND c.is_active = TRUE
+                        AND c.user_id = $2 AND c.conversation_id = $3
+                """, npc_id, user_id, conversation_id)
+                
+                npc_data['active_conflicts'] = [dict(c) for c in conflicts]
+            
+            return npc_data
+            
+    except Exception as e:
+        logger.error(f"Error getting NPC details: {str(e)}", exc_info=True)
+        return None
+
+@function_tool
 async def suggest_potential_manipulation(ctx: RunContextWrapper[ContextType], narrative_text: str) -> Dict[str, Any]:
     """
     Analyze narrative text and suggest potential NPC manipulation opportunities.
@@ -1903,8 +2062,8 @@ async def suggest_potential_manipulation(ctx: RunContextWrapper[ContextType], na
         if not active_conflicts: return {"opportunities": [], "reason": "No active conflicts"}
 
         conflict_manager = ConflictManager(user_id, conversation_id)
-        # TODO: Consider exposing public wrapper for _get_available_npcs
-        npcs = await conflict_manager._get_available_npcs()
+        # Only get introduced female NPCs with high dominance for manipulation
+        npcs = await get_available_npcs(ctx, include_unintroduced=False, min_dominance=60, gender_filter="female")
         mentioned_npcs = [npc for npc in npcs if npc["npc_name"] in narrative_text]
         if not mentioned_npcs: return {"opportunities": [], "reason": "No NPCs mentioned in narrative"}
 
@@ -1932,7 +2091,9 @@ context_tools = [
     retrieve_relevant_memories,
     store_narrative_memory,
     search_by_vector,
-    get_summarized_narrative_context
+    get_summarized_narrative_context,
+    get_available_npcs,  # Add this
+    get_npc_details      # Add this
 ]
 
 # Activity tools
