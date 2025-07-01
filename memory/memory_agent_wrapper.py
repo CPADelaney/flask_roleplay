@@ -239,6 +239,19 @@ class MemoryAgentWrapper:
             logger.error(f"Error in get_tools: {e}")
             return self.agent.tools if hasattr(self.agent, "tools") else []
 
+    def get_all_tools(self):
+        """Get all tools from the underlying agent."""
+        if hasattr(self.agent, "get_all_tools"):
+            return self.agent.get_all_tools()
+        # If the underlying agent doesn't have get_all_tools, 
+        # fall back to get_tools or tools attribute
+        elif hasattr(self.agent, "get_tools"):
+            return self.agent.get_tools()
+        elif hasattr(self.agent, "tools"):
+            return self.agent.tools
+        else:
+            return []
+  
     def run(self, *args, **kwargs):
         if hasattr(self.agent, "run"):
             return self.agent.run(*args, **kwargs)
