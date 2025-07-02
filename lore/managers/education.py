@@ -409,7 +409,7 @@ class EducationalSystemManager(BaseLoreManager):
             """
         }
         
-        await self.initialize_tables_from_definitions(table_definitions)
+        await self.initialize_tables_for_class(table_definitions)
     
     # Internal helper methods
     async def _check_governance_permission(self, action_type: str, action_details: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
