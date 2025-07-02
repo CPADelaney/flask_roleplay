@@ -6,6 +6,16 @@ Lore System - Main Entry Point (Refactored)
 Now integrates all specialized managers (Education, Religion, LocalLore, etc.)
 alongside existing data access and generator components, to serve as a true
 'unified orchestrator' for all lore operations in the system.
+
+IMPORTANT FIX: This module previously had a circular dependency with NyxUnifiedGovernor.
+The circular dependency has been resolved by:
+1. Adding a re-entry guard (_initializing flag) to prevent infinite recursion
+2. Removing the get_central_governance() call from initialize()
+3. Adding a set_governor() method for dependency injection
+4. Having the governor set itself on the LoreSystem after creation
+
+This ensures a clean, one-way initialization flow:
+Governor → LoreSystem (not LoreSystem ↔ Governor)
 """
 
 import logging
@@ -41,6 +51,16 @@ class LoreSystem:
     """
     Unified interface for *all* lore-related functionality, now referencing
     specialized managers for Education, Religion, LocalLore, Politics, etc.
+    
+    IMPORTANT: To avoid circular dependencies, this class no longer creates its own
+    governor during initialization. Instead, the governor should be set externally
+    via the set_governor() method after both objects are created.
+    
+    Typical usage:
+        lore_system = LoreSystem.get_instance(user_id, conversation_id)
+        governor = NyxUnifiedGovernor(user_id, conversation_id)
+        lore_system.set_governor(governor)
+        await lore_system.initialize()
     """
 
     def __init__(self, user_id: Optional[int] = None, conversation_id: Optional[int] = None):
@@ -104,6 +124,12 @@ class LoreSystem:
             # The governor should be set externally via set_governor()
             
             logger.info("[LoreSystem] Starting initialization of data access components")
+            
+            # Check if governor is set
+            if self.governor:
+                logger.info("[LoreSystem] Governor already set, proceeding with initialization")
+            else:
+                logger.warning("[LoreSystem] No governor set yet, some features may be limited")
 
             # 6. Initialize the data access + integration components
             logger.info("[LoreSystem] Initializing: NPCDataAccess")
@@ -169,8 +195,6 @@ class LoreSystem:
         finally:
             self._initializing = False
 
-
-
     async def register_with_governance(self):
         """Register the lore system with Nyx governance."""
         if not self.governor:
@@ -186,7 +210,6 @@ class LoreSystem:
 
         # Issue standard directives
         await self._issue_standard_directives()
-
 
     async def _issue_standard_directives(self):
         """Issue standard directives for the lore system."""
@@ -218,7 +241,6 @@ class LoreSystem:
             priority=DirectivePriority.MEDIUM,
             duration_minutes=24 * 60
         )
-
 
     # ---------------------------------------------------------------------
     # NPC Lore Methods
@@ -255,7 +277,6 @@ class LoreSystem:
     # ---------------------------------------------------------------------
     # Location Lore Methods
     # ---------------------------------------------------------------------
-
 
     async def get_location_lore(self, location_id: int) -> Dict[str, Any]:
         """Get lore specific to a location."""
