@@ -293,7 +293,6 @@ from context.context_performance import PerformanceMonitor, track_performance
 from context.unified_cache import context_cache
 
 # Conflict imports - consolidated at top level
-from logic.conflict_system.conflict_integration import ConflictSystemIntegration
 from logic.conflict_system.conflict_manager import ConflictManager
 
 logger = logging.getLogger(__name__)
@@ -833,20 +832,15 @@ async def generate_conflict_from_analysis(
     ctx: RunContextWrapper[ContextType],
     analysis: ConflictAnalysis
 ) -> Dict[str, Any]:
-    """
-    Generate a conflict based on analysis provided by analyze_conflict_potential.
-
-    Args:
-        analysis: Conflict potential analysis model
-
-    Returns:
-        Generated conflict details or error dictionary.
-    """
+    """Generate a conflict based on analysis provided by analyze_conflict_potential."""
     context = ctx.context
     user_id = context.user_id
     conversation_id = context.conversation_id
 
     try:
+        # Move import here
+        from logic.conflict_system.conflict_integration import ConflictSystemIntegration
+        
         if not analysis.has_conflict_potential:
             return {
                 "generated": False, 
@@ -898,23 +892,15 @@ async def generate_manipulation_attempt(
     manipulation_type: str,
     goal: ManipulationGoal
 ) -> Dict[str, Any]:
-    """
-    Generate a manipulation attempt by an NPC in a conflict.
-
-    Args:
-        conflict_id: ID of the conflict
-        npc_id: ID of the NPC
-        manipulation_type: Type of manipulation
-        goal: Manipulation goal model
-
-    Returns:
-        Generated manipulation attempt details or error dictionary.
-    """
+    """Generate a manipulation attempt by an NPC in a conflict."""
     context = ctx.context
     user_id = context.user_id
     conversation_id = context.conversation_id
 
     try:
+        # Move import here
+        from logic.conflict_system.conflict_integration import ConflictSystemIntegration
+        
         conflict_integration = ConflictSystemIntegration(user_id, conversation_id)
 
         # Convert model to dict
@@ -1044,20 +1030,15 @@ async def track_conflict_story_beat(
     ctx: RunContextWrapper[ContextType],
     params: StoryBeatParams
 ) -> Dict[str, Any]:
-    """
-    Track a story beat for a resolution path, advancing progress.
-
-    Args:
-        params: Story beat parameters
-
-    Returns:
-        Updated path information or error dictionary.
-    """
+    """Track a story beat for a resolution path, advancing progress."""
     context = ctx.context
     user_id = context.user_id
     conversation_id = context.conversation_id
 
     try:
+        # Move import here
+        from logic.conflict_system.conflict_integration import ConflictSystemIntegration
+        
         conflict_integration = ConflictSystemIntegration(user_id, conversation_id)
 
         result = await conflict_integration.track_story_beat(
@@ -1842,20 +1823,15 @@ async def get_available_npcs(
             
 @function_tool
 async def analyze_conflict_potential(ctx: RunContextWrapper[ContextType], narrative_text: str) -> Dict[str, Any]:
-    """
-    Analyze narrative text for conflict potential.
-
-    Args:
-        narrative_text: The narrative text to analyze
-
-    Returns:
-        Conflict potential analysis
-    """
+    """Analyze narrative text for conflict potential."""
     context = ctx.context
     user_id = context.user_id
     conversation_id = context.conversation_id
     
     try:
+        # Move import here
+        from logic.conflict_system.conflict_integration import ConflictSystemIntegration
+        
         conflict_integration = ConflictSystemIntegration(user_id, conversation_id)
         
         conflict_keywords = [
@@ -1936,21 +1912,15 @@ async def analyze_conflict_potential(ctx: RunContextWrapper[ContextType], narrat
 
 @function_tool
 async def analyze_npc_manipulation_potential(ctx: RunContextWrapper[ContextType], conflict_id: int, npc_id: int) -> Dict[str, Any]:
-    """
-    Analyze an NPC's potential to manipulate the player within a conflict.
-
-    Args:
-        conflict_id: ID of the conflict
-        npc_id: ID of the NPC
-
-    Returns:
-        Manipulation potential analysis
-    """
+    """Analyze an NPC's potential to manipulate the player within a conflict."""
     context = ctx.context
     user_id = context.user_id
     conversation_id = context.conversation_id
 
     try:
+        # Move import here
+        from logic.conflict_system.conflict_integration import ConflictSystemIntegration
+        
         conflict_integration = ConflictSystemIntegration(user_id, conversation_id)
         potential = await conflict_integration.analyze_manipulation_potential(npc_id)
         conflict = await conflict_integration.get_conflict_details(conflict_id)
@@ -2019,20 +1989,15 @@ async def get_npc_details(
 
 @function_tool
 async def suggest_potential_manipulation(ctx: RunContextWrapper[ContextType], narrative_text: str) -> Dict[str, Any]:
-    """
-    Analyze narrative text and suggest potential NPC manipulation opportunities.
-
-    Args:
-        narrative_text: The narrative text to analyze
-
-    Returns:
-        Suggested manipulation opportunities
-    """
+    """Analyze narrative text and suggest potential NPC manipulation opportunities."""
     context = ctx.context
     user_id = context.user_id
     conversation_id = context.conversation_id
 
     try:
+        # Move import here
+        from logic.conflict_system.conflict_integration import ConflictSystemIntegration
+        
         conflict_integration = ConflictSystemIntegration(user_id, conversation_id)
         active_conflicts = await conflict_integration.get_active_conflicts()
         if not active_conflicts: return {"opportunities": [], "reason": "No active conflicts"}
