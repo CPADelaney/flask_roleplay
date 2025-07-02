@@ -828,12 +828,12 @@ def create_story_director_agent():
     """
 
     try:
-        from story_agent.tools import story_tools, conflict_tools, resource_tools, narrative_tools, context_tools
+        from story_agent.tools import conflict_tools, resource_tools, narrative_tools, context_tools
         from story_agent.specialized_agents import initialize_specialized_agents
         specialized_agents = initialize_specialized_agents()
     except ImportError as e:
         logger.error(f"Failed to import tools or specialized agents: {e}", exc_info=True)
-        story_tools, conflict_tools, resource_tools, narrative_tools, context_tools = [], [], [], [], []
+        conflict_tools, resource_tools, narrative_tools, context_tools = [], [], [], [], []
         specialized_agents = {}
 
     all_tools = [
@@ -843,7 +843,6 @@ def create_story_director_agent():
         monitor_conflicts,
         evolve_conflict_from_event,
         trigger_conflict_event,
-        story_tools,
         conflict_tools,
         resource_tools,
         narrative_tools,
