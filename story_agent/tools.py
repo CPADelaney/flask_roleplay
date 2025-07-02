@@ -1,11 +1,58 @@
-# story_agent/schemas.py
+# story_agent/tools.py
 """
-Pydantic models for all story agent tool parameters.
-Following strict schema validation with extra="forbid".
+Refactored tools for the Story Director agent with strict schema validation.
 """
 
-from typing import Optional, Dict, List, Literal, Any
+import logging
+import json
+import asyncio
+import random
+from datetime import datetime
+from typing import Dict, List, Any, Optional, Union, Tuple, Literal, Any
 from pydantic import BaseModel, Field, ConfigDict
+
+
+
+# Original imports remain the same
+from agents import function_tool, RunContextWrapper
+from logic.conflict_system.conflict_tools import _internal_add_conflict_to_narrative_logic
+
+from context.context_config import get_config
+from db.connection import get_db_connection_context
+from logic.narrative_progression import (
+    get_current_narrative_stage,
+    check_for_personal_revelations,
+    check_for_narrative_moments,
+    check_for_npc_revelations,
+    add_dream_sequence,
+    add_moment_of_clarity,
+    NARRATIVE_STAGES
+)
+from logic.social_links import (
+    get_social_link_tool,
+    get_relationship_summary_tool,
+    check_for_crossroads_tool,
+    check_for_ritual_tool,
+    apply_crossroads_choice_tool
+)
+
+# Context system imports
+from context.context_service import get_context_service, get_comprehensive_context
+from context.memory_manager import get_memory_manager, search_memories_tool, MemorySearchRequest
+from context.vector_service import get_vector_service
+from context.context_manager import get_context_manager, ContextDiff
+from context.context_performance import PerformanceMonitor, track_performance
+from context.unified_cache import context_cache
+
+logger = logging.getLogger(__name__)
+
+# Define the context type alias for easier use
+ContextType = Any  # Or StoryDirectorContext
+
+# TODO: Consider injecting random seed for deterministic testing
+# TODO: Expose public wrapper for _get_available_npcs() or document private usage
+
+# ===== REFACTORED CONTEXT TOOLS =====
 
 # ===== Relationship Models =====
 class DimensionChanges(BaseModel):
@@ -245,62 +292,131 @@ class StoryBeatParams(BaseModel):
     
     model_config = ConfigDict(extra="forbid")
 
+class ChoiceOption(BaseModel):
+    """One selectable option at a relationship crossroads."""
+    option_id: int
+    label: str
+    consequence: str
 
-# story_agent/tools.py
-"""
-Refactored tools for the Story Director agent with strict schema validation.
-"""
-
-import logging
-import json
-import asyncio
-import random
-from datetime import datetime
-from typing import Dict, List, Any, Optional, Union, Tuple
-from pydantic import BaseModel, Field
+    model_config = ConfigDict(extra="forbid")
 
 
+class Requirement(BaseModel):
+    """A single prerequisite for a ritual."""
+    name: str
+    value: Any                # widen only the *value*, not the object keys
 
-# Original imports remain the same
-from agents import function_tool, RunContextWrapper
-from logic.conflict_system.conflict_tools import _internal_add_conflict_to_narrative_logic
+    model_config = ConfigDict(extra="forbid")
 
-from context.context_config import get_config
-from db.connection import get_db_connection_context
-from logic.narrative_progression import (
-    get_current_narrative_stage,
-    check_for_personal_revelations,
-    check_for_narrative_moments,
-    check_for_npc_revelations,
-    add_dream_sequence,
-    add_moment_of_clarity,
-    NARRATIVE_STAGES
-)
-from logic.social_links import (
-    get_social_link_tool,
-    get_relationship_summary_tool,
-    check_for_crossroads_tool,
-    check_for_ritual_tool,
-    apply_crossroads_choice_tool
-)
 
-# Context system imports
-from context.context_service import get_context_service, get_comprehensive_context
-from context.memory_manager import get_memory_manager, search_memories_tool, MemorySearchRequest
-from context.vector_service import get_vector_service
-from context.context_manager import get_context_manager, ContextDiff
-from context.context_performance import PerformanceMonitor, track_performance
-from context.unified_cache import context_cache
+class Reward(BaseModel):
+    """A single reward granted by a ritual."""
+    name: str
+    value: Any
 
-logger = logging.getLogger(__name__)
+    model_config = ConfigDict(extra="forbid")
 
-# Define the context type alias for easier use
-ContextType = Any  # Or StoryDirectorContext
 
-# TODO: Consider injecting random seed for deterministic testing
-# TODO: Expose public wrapper for _get_available_npcs() or document private usage
+# ==========  Story-Director models ==========
 
-# ===== REFACTORED CONTEXT TOOLS =====
+class NPCInfo(BaseModel):
+    """Basic information about an NPC."""
+    npc_id: int
+    name: str
+    status: str = "active"
+    relationship_level: int = Field(50, ge=0, le=100)
+    location: Optional[str] = None
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class RelationshipCrossroads(BaseModel):
+    """A decisive relationship fork with an NPC."""
+    link_id: int
+    npc_name: str
+    crossroads_name: str
+    description: str
+    choices: List[ChoiceOption] = Field(default_factory=list)
+    triggered_at: Optional[str] = None     # ISO timestamp
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class RelationshipRitual(BaseModel):
+    """A repeatable ritual that strengthens / alters a relationship."""
+    link_id: int
+    npc_name: str
+    ritual_name: str
+    description: str
+    requirements: List[Requirement] = Field(default_factory=list)
+    rewards: List[Reward] = Field(default_factory=list)
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class TriggerEventData(BaseModel):
+    """Payload passed to `trigger_conflict_event`."""
+    description: str
+    involved_npcs: List[int] = Field(default_factory=list)
+    faction_impacts: Optional[List[Requirement]] = None   # reuse simple KV model
+    severity: int = Field(5, ge=1, le=10)
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class ConflictEvolutionData(BaseModel):
+    """Payload passed to `evolve_conflict`."""
+    description: str
+    involved_npcs: List[int] = Field(default_factory=list)
+    progress_change: float = Field(0.1, ge=0.0, le=1.0)
+    phase_transition: Optional[str] = None
+
+    model_config = ConfigDict(extra="forbid")
+
+
+# ----------  Narrative-event content ----------
+
+class NarrativeEventContent(BaseModel):
+    """Abstract base for event-content payloads."""
+    title: str
+    description: str
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class NarrativeMomentContent(NarrativeEventContent):
+    moment_type: Literal["tension", "revelation", "transition", "climax"]
+    scene_text: str
+    player_realization: Optional[str] = None
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class PersonalRevelationContent(NarrativeEventContent):
+    revelation_type: Literal[
+        "dependency", "obedience", "corruption",
+        "willpower", "confidence", "insight"
+    ]
+    inner_monologue: str
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class DreamSequenceContent(NarrativeEventContent):
+    dream_text: str
+    symbols: List[str] = Field(default_factory=list)
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class NPCRevelationContent(NarrativeEventContent):
+    npc_id: int
+    npc_name: str
+    revelation_type: Literal["secret", "past", "motivation", "truth"]
+    revelation_text: str
+    changes_relationship: bool = False
+
+    model_config = ConfigDict(extra="forbid")
 
 @function_tool
 async def get_optimized_context(
