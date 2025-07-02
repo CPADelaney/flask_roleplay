@@ -247,7 +247,7 @@ class ProcessNewGameResult(BaseModel):
 
 # Module-level wrapper functions to avoid re-registration on instantiation
 @function_tool
-aSYNC def _calendar_tool_wrapper(
+async def _calendar_tool_wrapper(
     ctx: RunContextWrapper[GameContext],
     params: CalendarToolParams,
 ) -> CalendarData:
