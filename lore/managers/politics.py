@@ -516,7 +516,7 @@ class WorldPoliticsManager(BaseLoreManager):
         all_tables = {
             **geo_tables, **conflict_tables, **dynasty_tables, **faction_tables
         }
-        await self.initialize_tables_from_definitions(all_tables)
+        await self.initialize_tables_for_class(all_tables)
 
     async def ensure_initialized(self):
         """Ensure system is initialized with all tables."""
