@@ -73,38 +73,80 @@ lore_system = LoreSystem()
 lore_validator = ValidationManager()
 error_handler = ErrorHandler()
 
-async def get_central_governance(user_id: int, conversation_id: int) -> 'NyxUnifiedGovernor':
+_GOVERNANCE_CACHE: Dict[Tuple[int, int], NyxUnifiedGovernor] = {}
+
+async def get_central_governance(user_id: int, conversation_id: int) -> NyxUnifiedGovernor:
     """
-    Get or create a central governance instance for a specific user and conversation.
+    Get or create the central governance instance for a user/conversation.
+    
+    This function ensures that:
+    1. Only one governance instance exists per user/conversation pair
+    2. The governance system is properly initialized
+    3. All subsystems (including LoreSystem) are initialized in the correct order
     
     Args:
-        user_id: User ID
-        conversation_id: Conversation ID
+        user_id: The user ID
+        conversation_id: The conversation ID
         
     Returns:
-        NyxUnifiedGovernor instance
+        The initialized NyxUnifiedGovernor instance
     """
-    # Import NyxUnifiedGovernor here to avoid circular imports
-    from nyx.nyx_governance import NyxUnifiedGovernor
+    cache_key = (user_id, conversation_id)
     
-    # Check if instance exists in cache
-    cache_key = f"governance_{user_id}_{conversation_id}"
+    # Check cache first
+    if cache_key in _GOVERNANCE_CACHE:
+        governor = _GOVERNANCE_CACHE[cache_key]
+        # Ensure it's initialized (in case it was cached before full init)
+        if hasattr(governor, '_initialized') and governor._initialized:
+            return governor
+        else:
+            # Continue to initialization below
+            logger.info(f"Found uninitialized governor in cache for {cache_key}, initializing now")
+    else:
+        # Create new governor
+        governor = NyxUnifiedGovernor(user_id, conversation_id)
+        _GOVERNANCE_CACHE[cache_key] = governor
+        logger.info(f"Created new governor for user {user_id}, conversation {conversation_id}")
     
-    # Try to get from cache
-    cached = AGENT_DIRECTIVE_CACHE.get(cache_key)
-    if cached:
-        return cached
+    # Initialize the governor
+    # This will:
+    # 1. Create and initialize the LoreSystem (with proper dependency injection)
+    # 2. Initialize the memory system
+    # 3. Initialize the game state
+    # 4. Discover and register agents
+    await governor.initialize()
     
-    # Create new instance
-    governor = NyxUnifiedGovernor(user_id, conversation_id)
-    
-    # Initialize the governor asynchronously
-    await governor._initialize_systems()
-    
-    # Store in cache
-    AGENT_DIRECTIVE_CACHE[cache_key] = governor
-    
+    logger.info(f"Governor fully initialized for user {user_id}, conversation {conversation_id}")
     return governor
+
+def clear_governance_cache(user_id: Optional[int] = None, conversation_id: Optional[int] = None):
+    """
+    Clear governance instances from cache.
+    
+    Args:
+        user_id: If provided, clear only entries for this user
+        conversation_id: If provided with user_id, clear only this specific entry
+    """
+    global _GOVERNANCE_CACHE
+    
+    if user_id is not None and conversation_id is not None:
+        # Clear specific entry
+        cache_key = (user_id, conversation_id)
+        if cache_key in _GOVERNANCE_CACHE:
+            del _GOVERNANCE_CACHE[cache_key]
+            logger.info(f"Cleared governance cache for {cache_key}")
+    elif user_id is not None:
+        # Clear all entries for a user
+        keys_to_remove = [key for key in _GOVERNANCE_CACHE if key[0] == user_id]
+        for key in keys_to_remove:
+            del _GOVERNANCE_CACHE[key]
+        logger.info(f"Cleared {len(keys_to_remove)} governance cache entries for user {user_id}")
+    else:
+        # Clear entire cache
+        count = len(_GOVERNANCE_CACHE)
+        _GOVERNANCE_CACHE.clear()
+        logger.info(f"Cleared entire governance cache ({count} entries)")
+
 
 async def generate_lore_with_governance(
     user_id: int,
