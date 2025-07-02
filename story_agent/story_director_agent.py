@@ -6,19 +6,27 @@ import json
 import time
 from typing import Dict, List, Any, Optional, Union, Tuple
 from dataclasses import dataclass, field
-from pydantic import BaseModel, Field
-from datetime import datetime, timezone # Import timezone
+from pydantic import BaseModel, Field, ConfigDict
+from datetime import datetime, timezone
 from db.connection import get_db_connection_context
 
 from agents import Agent, function_tool, Runner, trace, handoff, ModelSettings, RunContextWrapper, FunctionTool
+
+# Import the new schemas
+from story_agent.schemas import (
+    NPCInfo, RelationshipCrossroads, RelationshipRitual,
+    TriggerEventData, ConflictEvolutionData,
+    NarrativeEventContent, NarrativeMomentContent,
+    PersonalRevelationContent, DreamSequenceContent,
+    NPCRevelationContent
+)
 
 # Nyx governance integration
 from nyx.governance_helpers import with_governance, with_governance_permission, with_action_reporting
 from nyx.directive_handler import DirectiveHandler
 from nyx.nyx_governance import AgentType, DirectiveType, DirectivePriority
-# REMOVED: from nyx.integrate import get_central_governance  <-- Causes circular import
 
-# NEW: Context system integration
+# Context system integration
 from context.context_service import get_context_service, get_comprehensive_context
 from context.context_config import get_config
 from context.memory_manager import get_memory_manager, Memory, add_memory_tool, MemoryAddRequest
@@ -54,8 +62,7 @@ RETRY_DELAY_SECONDS = 1
 DEFAULT_TRACING_GROUP = "story-director"
 
 
-
-# ----- Pydantic Models for Tool Outputs -----
+# ----- Pydantic Models for Tool Outputs (Updated with ConfigDict) -----
 
 class ConflictInfo(BaseModel):
     """Information about a conflict"""
@@ -67,11 +74,17 @@ class ConflictInfo(BaseModel):
     progress: float
     faction_a_name: str
     faction_b_name: str
+    
+    model_config = ConfigDict(extra="forbid")
+
 
 class NarrativeStageInfo(BaseModel):
     """Information about a narrative stage"""
     name: str
     description: str
+    
+    model_config = ConfigDict(extra="forbid")
+
 
 class NarrativeMoment(BaseModel):
     """Information about a narrative moment"""
@@ -79,12 +92,18 @@ class NarrativeMoment(BaseModel):
     name: str
     scene_text: str
     player_realization: str
+    
+    model_config = ConfigDict(extra="forbid")
+
 
 class PersonalRevelation(BaseModel):
     """Information about a personal revelation"""
     type: str
     name: str
     inner_monologue: str
+    
+    model_config = ConfigDict(extra="forbid")
+
 
 class ResourceStatus(BaseModel):
     """Information about player resources"""
@@ -94,32 +113,41 @@ class ResourceStatus(BaseModel):
     energy: int
     hunger: int
     formatted_money: Optional[str] = None
+    
+    model_config = ConfigDict(extra="forbid")
+
 
 class NarrativeEvent(BaseModel):
     """Container for narrative events that can be returned"""
     event_type: str = Field(description="Type of narrative event (revelation, moment, dream, etc.)")
-    content: Dict[str, Any] = Field(description="Content of the narrative event")
+    content: NarrativeEventContent = Field(description="Content of the narrative event")
     should_present: bool = Field(description="Whether this event should be presented to the player now")
     priority: int = Field(description="Priority of this event (1-10, with 10 being highest)")
+    
+    model_config = ConfigDict(extra="forbid")
+
 
 class StoryStateUpdate(BaseModel):
     """Container for a story state update"""
     narrative_stage: Optional[NarrativeStageInfo] = None
-    active_conflicts: List[ConflictInfo] = []
-    narrative_events: List[NarrativeEvent] = []
-    key_npcs: List[Dict[str, Any]] = []
+    active_conflicts: List[ConflictInfo] = Field(default_factory=list)
+    narrative_events: List[NarrativeEvent] = Field(default_factory=list)
+    key_npcs: List[NPCInfo] = Field(default_factory=list)  # Changed from List[Dict[str, Any]]
     resources: Optional[ResourceStatus] = None
     key_observations: List[str] = Field(
-        default=[],
+        default_factory=list,
         description="Key observations about the player's current state or significant changes"
     )
-    relationship_crossroads: Optional[Dict[str, Any]] = None
-    relationship_ritual: Optional[Dict[str, Any]] = None
+    relationship_crossroads: Optional[RelationshipCrossroads] = None  # Changed from Dict[str, Any]
+    relationship_ritual: Optional[RelationshipRitual] = None  # Changed from Dict[str, Any]
     story_direction: str = Field(
         default="",
         description="High-level direction the story should take based on current state"
     )
-    last_updated: datetime = Field(default_factory=lambda: datetime.now(timezone.utc)) # Use timezone aware datetime
+    last_updated: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    
+    model_config = ConfigDict(extra="forbid")
+
 
 class StoryDirectorMetrics(BaseModel):
     """Metrics for monitoring the Story Director's performance"""
@@ -130,6 +158,8 @@ class StoryDirectorMetrics(BaseModel):
     last_run_time: Optional[datetime] = None
     last_error: Optional[str] = None
     token_usage: Dict[str, int] = Field(default_factory=lambda: {"prompt": 0, "completion": 0, "total": 0})
+    
+    model_config = ConfigDict(extra="forbid")
 
     def record_run(self, success: bool, response_time: float, tokens: Dict[str, int]) -> None:
         """Record metrics for a run"""
@@ -140,19 +170,20 @@ class StoryDirectorMetrics(BaseModel):
             self.failed_runs += 1
 
         # Update average response time
-        if self.total_runs > 0: # Avoid division by zero
+        if self.total_runs > 0:
             self.average_response_time = (
                 (self.average_response_time * (self.total_runs - 1) + response_time) /
                 self.total_runs
             )
         else:
-            self.average_response_time = response_time # First run
+            self.average_response_time = response_time
 
-        self.last_run_time = datetime.now(timezone.utc) # Use timezone aware datetime
+        self.last_run_time = datetime.now(timezone.utc)
 
         # Update token usage
         for key, value in tokens.items():
             self.token_usage[key] = self.token_usage.get(key, 0) + value
+
 
 # ----- Context Class for the Agent -----
 
@@ -169,30 +200,27 @@ class StoryDirectorContext:
     metrics: StoryDirectorMetrics = field(default_factory=StoryDirectorMetrics)
     last_state_update: Optional[datetime] = None
 
-    # NEW: Context management components
+    # Context management components
     context_service: Optional[Any] = None
     memory_manager: Optional[Any] = None
     vector_service: Optional[Any] = None
     performance_monitor: Optional[Any] = None
     context_manager: Optional[Any] = None
-    directive_handler: Optional[DirectiveHandler] = None # Add directive handler here
+    directive_handler: Optional[DirectiveHandler] = None
 
-    # NEW: Version tracking for delta updates
+    # Version tracking for delta updates
     last_context_version: Optional[int] = None
-
-    # NOTE: Removed 'initialized' flag here. Initialization is tracked by the StoryDirector class if needed.
 
     def __post_init__(self):
         """Synchronous post-init; cannot contain 'await'."""
         # Ensure managers are initialized synchronously if possible
-        # Avoid circular imports at module level
         try:
             from logic.conflict_system.conflict_integration import ConflictSystemIntegration
             if not self.conflict_manager:
                 self.conflict_manager = ConflictSystemIntegration(self.user_id, self.conversation_id)
         except ImportError:
             logger.warning("ConflictSystemIntegration not found.")
-            self.conflict_manager = None # Explicitly set to None if import fails
+            self.conflict_manager = None
 
         try:
             from logic.resource_management import ResourceManager
@@ -210,11 +238,8 @@ class StoryDirectorContext:
              logger.warning("ActivityAnalyzer not found.")
              self.activity_analyzer = None
 
-        # We'll do governance or further async initialization in an async method below.
-
     async def initialize_context_components(self):
         """Initialize context components that require async calls."""
-        # Ensure components are initialized only once if needed, or re-initialized safely
         if self.context_service is None:
             self.context_service = await get_context_service(self.user_id, self.conversation_id)
         if self.memory_manager is None:
@@ -222,33 +247,21 @@ class StoryDirectorContext:
         if self.vector_service is None:
             self.vector_service = await get_vector_service(self.user_id, self.conversation_id)
 
-        # Initialize performance monitor and context manager (these use singletons)
         self.performance_monitor = PerformanceMonitor.get_instance(self.user_id, self.conversation_id)
-        self.context_manager = get_context_manager() # Assuming this doesn't need async init per-instance
+        self.context_manager = get_context_manager()
 
-        # Subscribe to changes (make sure this is idempotent or handled correctly if called multiple times)
-        # Consider unsubscribing first if re-initializing might happen.
         self.context_manager.subscribe_to_changes("/narrative_stage", self.handle_narrative_stage_change)
         self.context_manager.subscribe_to_changes("/conflicts", self.handle_conflict_change)
 
-        # Initialize the directive handler if not already done
         if self.directive_handler is None:
-            # Retrieve governance inside an async method to avoid circular imports
-            # local import of get_central_governance if needed:
-            # from nyx.integrate import get_central_governance
-
-            # If you do need governance here, do it locally:
-            # governance = await get_central_governance(self.user_id, self.conversation_id)
-
             self.directive_handler = DirectiveHandler(
                 user_id=self.user_id,
                 conversation_id=self.conversation_id,
                 agent_type=AgentType.STORY_DIRECTOR,
                 agent_id="director",
-                governance=None  # Or pass in an instance if needed
+                governance=None
             )
 
-            # Register directive handlers
             self.directive_handler.register_handler(
                 DirectiveType.ACTION,
                 self.handle_action_directive
@@ -258,7 +271,6 @@ class StoryDirectorContext:
                 self.handle_override_directive
             )
             
-            # Start background processing
             await self.directive_handler.start_background_processing()
             logger.info("Directive handler initialized and started.")
         else:
@@ -271,14 +283,12 @@ class StoryDirectorContext:
             if change.operation in ("add", "replace"):
                 stage_info = change.value
                 if isinstance(stage_info, dict) and "name" in stage_info:
-                    # Create a memory about the stage change
                     try:
                         await self.add_narrative_memory(
                             f"Narrative stage progressed to {stage_info['name']}",
                             "narrative_progression",
                             0.8
                         )
-                        # Local import to avoid top-level circular dependency
                         from nyx.integrate import get_central_governance
                         governance = await get_central_governance(self.user_id, self.conversation_id)
                         await governance.process_agent_action_report(
@@ -290,7 +300,6 @@ class StoryDirectorContext:
                     except Exception as e:
                         logger.error(f"Error handling narrative stage change notification: {e}", exc_info=True)
 
-
     async def handle_conflict_change(self, changes: List[ContextDiff]):
         """React to changes in conflicts"""
         logging.info(f"Conflict changed: {changes}")
@@ -298,7 +307,6 @@ class StoryDirectorContext:
             if change.operation == "add":
                 conflict_info = change.value
                 if isinstance(conflict_info, dict) and "conflict_name" in conflict_info:
-                    # Create a memory about the new conflict
                     try:
                         await self.add_narrative_memory(
                             f"New conflict emerged: {conflict_info['conflict_name']}",
@@ -312,13 +320,12 @@ class StoryDirectorContext:
         """Add a memory using the memory manager"""
         if not self.memory_manager:
             logger.warning("Memory manager not initialized. Initializing now.")
-            await self.initialize_context_components() # Try to initialize if needed
+            await self.initialize_context_components()
         if not self.memory_manager:
              logger.error("Failed to initialize memory manager, cannot add memory.")
              return
     
         try:
-            # Create a MemoryAddRequest from the parameters
             request = MemoryAddRequest(
                 content=content,
                 memory_type=memory_type,
@@ -327,11 +334,10 @@ class StoryDirectorContext:
                 metadata={"source": "story_director"}
             )
             
-            # Directly call the internal _add_memory method
             await self.memory_manager._add_memory(request)
         except Exception as e:
             logger.error(f"Failed to add narrative memory: {e}", exc_info=True)
-        
+
     async def handle_action_directive(self, directive: dict) -> dict:
         """Handle an action directive from Nyx"""
         instruction = directive.get("instruction", "")
@@ -343,26 +349,20 @@ class StoryDirectorContext:
                     logger.error("Conflict manager not available.")
                     return {"result": "error", "message": "Conflict manager not initialized"}
                 
-                # Get parameters
                 params = directive.get("parameters", {})
                 conflict_type = params.get("conflict_type", "standard")
                 
-                # NEW: Use LoreSystem to generate conflict
                 from lore.lore_system import LoreSystem
                 lore_system = await LoreSystem.get_instance(self.user_id, self.conversation_id)
                 
-                # Create context for governance
                 ctx = type('obj', (object,), {
                     'user_id': self.user_id, 
                     'conversation_id': self.conversation_id
-                })()  # Note the extra () at the end to instantiate the object
+                })()
                 
-                # Generate conflict through the proper system
                 result = await self.conflict_manager.generate_conflict(conflict_type)
                 
-                # If the conflict manager created entities, ensure they go through canon
                 if result and result.get("conflict_id"):
-                    # Log the conflict generation as a canonical event
                     from lore.core import canon
                     async with get_db_connection_context() as conn:
                         await canon.log_canonical_event(
@@ -375,25 +375,21 @@ class StoryDirectorContext:
                 return {"result": "conflict_generated", "data": result}
     
             elif "advance narrative" in instruction.lower():
-                # Get parameters
                 params = directive.get("parameters", {})
                 stage_name = params.get("target_stage")
                 
-                # NEW: Use LoreSystem for narrative advancement
                 from lore.lore_system import LoreSystem
                 lore_system = await LoreSystem.get_instance(self.user_id, self.conversation_id)
                 
                 ctx = type('obj', (object,), {
                     'user_id': self.user_id, 
                     'conversation_id': self.conversation_id
-                })()  # Note the extra () at the end to instantiate the object
+                })()
                 
                 try:
-                    # The narrative progression module should be refactored to use LoreSystem
                     from logic.narrative_progression import advance_narrative_stage
                     result = await advance_narrative_stage(self.user_id, self.conversation_id, stage_name)
                     
-                    # Log the progression as canonical
                     from lore.core import canon
                     async with get_db_connection_context() as conn:
                         await canon.log_canonical_event(
@@ -411,10 +407,7 @@ class StoryDirectorContext:
                     logger.error(f"Error advancing narrative stage via directive: {e}", exc_info=True)
                     return {"result": "error", "message": str(e)}
 
-
-
             elif "retrieve context" in instruction.lower():
-                # Handle context retrieval
                 params = directive.get("parameters", {})
                 input_text = params.get("input_text", "")
                 use_vector = params.get("use_vector", True)
@@ -443,14 +436,11 @@ class StoryDirectorContext:
         """Handle an override directive from Nyx"""
         logging.info(f"[StoryDirector] Processing override directive")
 
-        # Extract override details
         override_action = directive.get("override_action", {})
 
-        # Apply the override for future operations (Implementation needed)
-        # Example: self.override_settings = override_action
         logger.warning(f"Override directive received, but application logic is not implemented: {override_action}")
 
-        return {"result": "override_applied"} # Or "override_not_implemented"
+        return {"result": "override_applied"}
 
     def invalidate_cache(self, key: Optional[str] = None) -> None:
         """Invalidate specific cache key or entire cache"""
@@ -469,7 +459,6 @@ class StoryDirectorContext:
                 logger.debug(f"Cache hit for key: {key}")
                 return entry['value']
             else:
-                # Expired entry
                 logger.debug(f"Cache expired for key: {key}")
                 del self.cache[key]
         else:
@@ -484,19 +473,17 @@ class StoryDirectorContext:
         }
         logger.debug(f"Added value to cache for key: {key}")
 
-    # NEW: Enhanced context management methods
-
     async def get_comprehensive_context(self, input_text: str = "") -> Dict[str, Any]:
         """Get comprehensive context using the context service"""
         if not self.context_service:
             logger.warning("Context service not initialized. Initializing now.")
-            await self.initialize_context_components() # Ensure it's initialized
+            await self.initialize_context_components()
         if not self.context_service:
             logger.error("Context service failed to initialize. Cannot get comprehensive context.")
             return {"error": "Context service unavailable"}
 
         try:
-            config = await get_config() # Assuming get_config is async or sync ok
+            config = await get_config()
             context_budget = config.get_token_budget("default")
             use_vector = config.is_enabled("use_vector_search")
 
@@ -524,12 +511,11 @@ class StoryDirectorContext:
             logger.error(f"Error getting comprehensive context: {e}", exc_info=True)
             return {"error": f"Failed to get comprehensive context: {e}"}
 
-
     async def get_relevant_memories(self, query: str, limit: int = 5) -> List[Dict[str, Any]]:
         """Get relevant memories using vector search"""
         if not self.memory_manager:
             logger.warning("Memory manager not initialized. Initializing now.")
-            await self.initialize_context_components() # Ensure it's initialized
+            await self.initialize_context_components()
         if not self.memory_manager:
             logger.error("Memory manager failed to initialize. Cannot get relevant memories.")
             return []
@@ -543,7 +529,6 @@ class StoryDirectorContext:
 
             memory_dicts = []
             for memory in memories:
-                # Convert Memory objects (or dicts) to dicts safely
                 if hasattr(memory, 'to_dict') and callable(memory.to_dict):
                     memory_dicts.append(memory.to_dict())
                 elif isinstance(memory, dict):
@@ -556,6 +541,9 @@ class StoryDirectorContext:
             logger.error(f"Error getting relevant memories: {e}", exc_info=True)
             return []
 
+
+# ----- Tool Functions (Updated with Strict Schemas) -----
+
 @function_tool
 async def check_for_conflict_opportunity(ctx: RunContextWrapper[StoryDirectorContext]) -> Dict[str, Any]:
     """
@@ -566,17 +554,14 @@ async def check_for_conflict_opportunity(ctx: RunContextWrapper[StoryDirectorCon
 
     from logic.conflict_system.conflict_integration import ConflictSystemIntegration
     
-    # Get world state analysis
     conflict_system = await ConflictSystemIntegration.get_instance(
         context.user_id, 
         context.conversation_id
     )
     
-    # Analyze current pressure
     from logic.conflict_system.enhanced_conflict_generation import analyze_conflict_pressure
     pressure_analysis = await analyze_conflict_pressure(ctx)
     
-    # Get current conflicts to avoid oversaturation
     active_conflicts = await conflict_system.get_active_conflicts()
     
     return {
@@ -585,6 +570,7 @@ async def check_for_conflict_opportunity(ctx: RunContextWrapper[StoryDirectorCon
         "recommendation": pressure_analysis.get("recommended_action", ""),
         "pressure_score": pressure_analysis.get("total_pressure", 0)
     }
+
 
 @function_tool
 async def generate_conflict(
@@ -598,7 +584,6 @@ async def generate_conflict(
     context = ctx.context
     from logic.conflict_system.conflict_integration import ConflictSystemIntegration
     
-    # Use the conflict system to generate
     conflict_system = await ConflictSystemIntegration.get_instance(
         context.user_id, 
         context.conversation_id
@@ -607,7 +592,6 @@ async def generate_conflict(
     result = await conflict_system.generate_conflict(conflict_type)
     
     if result.get("success"):
-        # Add to narrative memory
         await context.add_narrative_memory(
             f"New conflict emerged: {result.get('conflict_details', {}).get('conflict_name', 'Unknown')} - {reason}",
             "conflict_generation",
@@ -615,6 +599,7 @@ async def generate_conflict(
         )
     
     return result
+
 
 @function_tool  
 async def advance_conflict_naturally(
@@ -633,15 +618,15 @@ async def advance_conflict_naturally(
         context.conversation_id
     )
     
-    # Handle the narrative development's impact on the conflict
     result = await conflict_system.handle_story_beat(
         conflict_id,
-        "narrative", # path_id
+        "narrative",
         narrative_development,
-        [] # involved NPCs will be determined by the system
+        []
     )
     
     return result
+
 
 @function_tool
 async def monitor_conflicts(ctx: RunContextWrapper[StoryDirectorContext]) -> Dict[str, Any]:
@@ -652,16 +637,12 @@ async def monitor_conflicts(ctx: RunContextWrapper[StoryDirectorContext]) -> Dic
     user_id = context.user_id
     conversation_id = context.conversation_id
     
-    # Check world tension
     tension_level = await get_world_tension_level(user_id, conversation_id)
     
-    # Check and potentially generate new conflict
     new_conflict = await check_and_generate_conflict(user_id, conversation_id)
     
-    # Get active player conflicts
     player_conflicts = await get_player_conflicts(user_id, conversation_id)
     
-    # Process stakeholder turns for each active conflict
     stakeholder_actions = {}
     for conflict in player_conflicts:
         conflict_id = conflict['conflict_id']
@@ -679,12 +660,13 @@ async def monitor_conflicts(ctx: RunContextWrapper[StoryDirectorContext]) -> Dic
         "stakeholder_actions": stakeholder_actions
     }
 
+
 @function_tool
 async def evolve_conflict_from_event(
     ctx: RunContextWrapper[StoryDirectorContext], 
     event_description: str,
     event_type: str = "player_action",
-    involved_npcs: List[int] = None
+    involved_npcs: Optional[List[int]] = None
 ) -> Dict[str, Any]:
     """
     Evolve conflicts based on story events.
@@ -693,12 +675,10 @@ async def evolve_conflict_from_event(
     user_id = context.user_id
     conversation_id = context.conversation_id
     
-    # Get active conflicts
     player_conflicts = await get_player_conflicts(user_id, conversation_id)
     
     results = []
     for conflict in player_conflicts:
-        # Advance the conflict story
         result = await advance_conflict_story(
             user_id,
             conversation_id,
@@ -713,11 +693,12 @@ async def evolve_conflict_from_event(
         "evolution_results": results
     }
 
-@function_tool(strict_mode=False)
+
+@function_tool
 async def trigger_conflict_event(
     ctx: RunContextWrapper[StoryDirectorContext],
     event_type: str,
-    event_data: Dict[str, Any]
+    event_data: TriggerEventData  # Changed from Dict[str, Any]
 ) -> Optional[Dict[str, Any]]:
     """
     Trigger conflict generation from specific events.
@@ -726,7 +707,6 @@ async def trigger_conflict_event(
     user_id = context.user_id
     conversation_id = context.conversation_id
     
-    # Determine preferred scale based on event type
     scale_map = {
         "npc_betrayal": "personal",
         "faction_dispute": "local", 
@@ -740,14 +720,42 @@ async def trigger_conflict_event(
         user_id,
         conversation_id,
         event_type,
-        event_data,
+        event_data.model_dump(),  # Convert to dict for the underlying function
         preferred_scale
     )
     
     return new_conflict
 
 
-async def retry_operation(operation, max_retries=MAX_RETRY_ATTEMPTS): # Use constant
+@function_tool
+async def evolve_conflict(
+    ctx: RunContextWrapper[StoryDirectorContext], 
+    conflict_id: int,
+    event_type: str,
+    event_data: ConflictEvolutionData  # Changed from Dict[str, Any]
+) -> Dict[str, Any]:
+    """
+    Wrapper for evolving a conflict based on events.
+    """
+    context = ctx.context
+    
+    from logic.conflict_system.conflict_integration import ConflictSystemIntegration
+    
+    conflict_system = await ConflictSystemIntegration.get_instance(
+        context.user_id, 
+        context.conversation_id
+    )
+    
+    result = await conflict_system.evolve_conflict(
+        conflict_id,
+        event_type,
+        event_data.model_dump()  # Convert to dict for the underlying function
+    )
+    
+    return result
+
+
+async def retry_operation(operation, max_retries=MAX_RETRY_ATTEMPTS):
     """Retry an operation with exponential backoff"""
     retries = 0
     last_exception = None
@@ -759,19 +767,18 @@ async def retry_operation(operation, max_retries=MAX_RETRY_ATTEMPTS): # Use cons
             last_exception = e
             retries += 1
             if retries < max_retries:
-                wait_time = RETRY_DELAY_SECONDS * (2 ** (retries - 1)) # Use constant
+                wait_time = RETRY_DELAY_SECONDS * (2 ** (retries - 1))
                 logger.warning(f"Attempt {retries}/{max_retries} failed, retrying after {wait_time:.2f}s: {str(e)}")
                 await asyncio.sleep(wait_time)
             else:
                 logger.error(f"All {max_retries} attempts failed: {str(e)}")
 
-    # If we reach here, all retries failed
     raise last_exception
+
 
 # ----- Main Agent Creation Function -----
 
 def create_story_director_agent():
-
     """Create the Story Director Agent with all required tools"""
 
     agent_instructions = """
@@ -820,27 +827,22 @@ def create_story_director_agent():
         Remember: conflicts should feel like natural consequences of the unfolding story, not random events.
     """
 
-    # Ensure necessary modules are imported locally if they cause circular dependencies at top level
-    # Example:
     try:
         from story_agent.tools import story_tools, conflict_tools, resource_tools, narrative_tools, context_tools
         from story_agent.specialized_agents import initialize_specialized_agents
-        # from story_agent.story_director_agent import get_story_state # Already defined below
-        specialized_agents = initialize_specialized_agents() # Ensure this doesn't cause cycles
+        specialized_agents = initialize_specialized_agents()
     except ImportError as e:
         logger.error(f"Failed to import tools or specialized agents: {e}", exc_info=True)
-        # Define empty lists or handle gracefully
         story_tools, conflict_tools, resource_tools, narrative_tools, context_tools = [], [], [], [], []
         specialized_agents = {}
-
 
     all_tools = [
         get_story_state,
         update_resource,
         progress_conflict,
-        monitor_conflicts,        # NEW
-        evolve_conflict_from_event,  # NEW
-        trigger_conflict_event,      # NEW
+        monitor_conflicts,
+        evolve_conflict_from_event,
+        trigger_conflict_event,
         story_tools,
         conflict_tools,
         resource_tools,
@@ -852,7 +854,6 @@ def create_story_director_agent():
         resolve_conflict_path,
     ]
 
-    # Filter out any None values in tools list if imports failed partially
     all_tools = [tool for tool in all_tools if tool is not None]
 
     agent = Agent(
@@ -860,32 +861,28 @@ def create_story_director_agent():
         instructions=agent_instructions,
         tools=all_tools,
         handoffs=list(specialized_agents.values()),
-        model="gpt-4.1-nano", # Consider making configurable
+        model="gpt-4.1-nano",
         model_settings=ModelSettings(temperature=0.2, max_tokens=2048),
     )
     return agent
+
 
 # ----- Functional Interface -----
 
 async def initialize_story_director(user_id: int, conversation_id: int) -> Tuple[Agent, StoryDirectorContext]:
     """Initialize the Story Director Agent with context"""
-    context = StoryDirectorContext(user_id=user_id, conversation_id=conversation_id) # Sync init happens here
+    context = StoryDirectorContext(user_id=user_id, conversation_id=conversation_id)
     agent = create_story_director_agent()
 
-    # Initialize async context components
     await context.initialize_context_components()
     logger.info(f"Story Director initialized for user {user_id}, conv {conversation_id}")
 
-    # Note: Directive handler background processing is started within initialize_context_components
-
     return agent, context
 
-from nyx.governance_helpers import with_governance_permission
 
 @with_governance_permission(AgentType.STORY_DIRECTOR, "reset_story_director")
 async def reset_story_director(ctx: Union[RunContextWrapper[StoryDirectorContext], StoryDirectorContext]) -> None:
     """Reset the Story Director's state"""
-    # Handle both context types
     if isinstance(ctx, RunContextWrapper): 
         context = ctx.context
     else: 
@@ -893,7 +890,6 @@ async def reset_story_director(ctx: Union[RunContextWrapper[StoryDirectorContext
 
     logger.info(f"Resetting story director for user {context.user_id}, conversation {context.conversation_id}")
     
-    # NEW: Log the reset as a canonical event
     from lore.core import canon
     governance_ctx = type('obj', (object,), {
         'user_id': context.user_id, 
@@ -908,26 +904,21 @@ async def reset_story_director(ctx: Union[RunContextWrapper[StoryDirectorContext
             significance=6
         )
     
-    # Clear caches
     context.invalidate_cache()
     context.metrics = StoryDirectorMetrics()
     context.last_state_update = None
     context.last_context_version = None
 
-    # Invalidate external cache
     context_cache.invalidate(f"story_state:{context.user_id}:{context.conversation_id}")
 
-    # Re-run synchronous __post_init__ to reset managers
     context.__post_init__()
 
-    # Re-initialize asynchronous components
     if context.directive_handler:
         await context.directive_handler.stop_background_processing()
         context.directive_handler = None
 
     await context.initialize_context_components()
     
-    # Log completion
     async with get_db_connection_context() as conn:
         await canon.log_canonical_event(
             governance_ctx, conn,
@@ -942,36 +933,7 @@ async def reset_story_director(ctx: Union[RunContextWrapper[StoryDirectorContext
 # ----- Core Agent Functions -----
 
 @function_tool
-async def evolve_conflict(
-    ctx: RunContextWrapper[StoryDirectorContext],
-    conflict_id: int,
-    event_type: str,
-    event_data: Dict[str, Any]
-) -> Dict[str, Any]:
-    """
-    Wrapper for evolving a conflict based on events.
-    """
-    context = ctx.context
-    
-    # Import locally to avoid circular dependency
-    from logic.conflict_system.conflict_integration import ConflictSystemIntegration
-    
-    conflict_system = await ConflictSystemIntegration.get_instance(
-        context.user_id, 
-        context.conversation_id
-    )
-    
-    # Call the method on the instance
-    result = await conflict_system.evolve_conflict(
-        conflict_id,
-        event_type,
-        event_data
-    )
-    
-    return result
-
-@function_tool # This decorator makes it available as a tool for the Agent
-@track_performance("get_story_state_tool") # Use a distinct name for the tool's performance tracking
+@track_performance("get_story_state_tool")
 async def get_story_state(ctx: RunContextWrapper[StoryDirectorContext]) -> StoryStateUpdate:
     """
     Tool to get the current state of the story, including active conflicts, narrative stage,
@@ -981,11 +943,8 @@ async def get_story_state(ctx: RunContextWrapper[StoryDirectorContext]) -> Story
     user_id = context.user_id
     conversation_id = context.conversation_id
 
-    # Ensure managers are available, log error if not
     if not context.conflict_manager:
         logger.error("Conflict manager is not initialized in get_story_state.")
-        # Decide how to handle - raise error, return error state?
-        # Returning an error state within the expected model structure:
         return StoryStateUpdate(key_observations=["Error: Conflict manager not available."])
     if not context.resource_manager:
         logger.error("Resource manager is not initialized in get_story_state.")
@@ -995,11 +954,8 @@ async def get_story_state(ctx: RunContextWrapper[StoryDirectorContext]) -> Story
     resource_manager = context.resource_manager
     logger.info(f"Executing get_story_state tool for user {user_id}, conv {conversation_id}")
 
-
     try:
-        # --- Data Fetching ---
-        # Get current narrative stage (Assume helper exists or implement/import)
-        # Example placeholder:
+        # Get current narrative stage
         try:
              from logic.narrative_progression import get_current_narrative_stage as fetch_narrative_stage
              narrative_stage = await fetch_narrative_stage(user_id, conversation_id)
@@ -1008,24 +964,26 @@ async def get_story_state(ctx: RunContextWrapper[StoryDirectorContext]) -> Story
              logger.warning(f"Could not fetch narrative stage: {e}")
              stage_info = None
 
-
         # Get active conflicts
         active_conflicts_raw = await conflict_manager.get_active_conflicts()
-        conflict_infos = [ConflictInfo(**conflict) for conflict in active_conflicts_raw] # Directly validate
+        conflict_infos = [ConflictInfo(**conflict) for conflict in active_conflicts_raw]
 
-        # Get key NPCs (Assume helper exists or implement/import)
-        # Example placeholder:
+        # Get key NPCs - convert to NPCInfo models
         try:
-            # Assuming get_key_npcs is adapted or available
-            # If get_key_npcs needs the agent/context structure, adjust call
-            # from some_module import get_key_npcs_helper
-            # key_npcs = await get_key_npcs_helper(user_id, conversation_id, limit=5)
-             key_npcs = [{"name": "Placeholder NPC", "status": "Unknown"}] # Placeholder
-             logger.warning("Using placeholder for get_key_npcs")
-        except (ImportError, AttributeError, Exception) as e:
+            # Placeholder - replace with actual implementation
+            key_npcs = [
+                NPCInfo(
+                    npc_id=1,
+                    name="Placeholder NPC",
+                    status="Unknown",
+                    relationship_level=50,
+                    location="Unknown"
+                )
+            ]
+            logger.warning("Using placeholder for get_key_npcs")
+        except Exception as e:
             logger.warning(f"Could not fetch key NPCs: {e}")
             key_npcs = []
-
 
         # Get player resources and vitals
         resources_raw = await resource_manager.get_resources()
@@ -1035,66 +993,69 @@ async def get_story_state(ctx: RunContextWrapper[StoryDirectorContext]) -> Story
             money=resources_raw.get('money', 0),
             supplies=resources_raw.get('supplies', 0),
             influence=resources_raw.get('influence', 0),
-            energy=vitals_raw.get('energy', 100), # Default if missing
-            hunger=vitals_raw.get('hunger', 0), # Default if missing
+            energy=vitals_raw.get('energy', 100),
+            hunger=vitals_raw.get('hunger', 0),
             formatted_money=formatted_money
         )
 
-        # Check for narrative events (Assume helpers exist or implement/import)
-        # Example placeholders:
+        # Check for narrative events
         narrative_events = []
         try:
-            # from some_module import check_for_personal_revelations_helper
-            # personal_revelation = await check_for_personal_revelations_helper(user_id, conversation_id)
-            personal_revelation = None # Placeholder
+            # Placeholders - replace with actual implementations
+            personal_revelation = None
             if personal_revelation:
                 narrative_events.append(NarrativeEvent(
                     event_type="personal_revelation",
-                    content=personal_revelation, # Assuming this is already a dict
-                    should_present=True, priority=8
+                    content=PersonalRevelationContent(
+                        revelation_type="insight",
+                        title="New Understanding",
+                        inner_monologue="The player realizes something important..."
+                    ),
+                    should_present=True,
+                    priority=8
                 ))
 
-            # from some_module import check_for_narrative_moments_helper
-            # narrative_moment = await check_for_narrative_moments_helper(user_id, conversation_id)
-            narrative_moment = None # Placeholder
+            narrative_moment = None
             if narrative_moment:
                  narrative_events.append(NarrativeEvent(
                     event_type="narrative_moment",
-                    content=narrative_moment, # Assuming dict
-                    should_present=True, priority=9
+                    content=NarrativeMomentContent(
+                        moment_type="tension",
+                        title="A Critical Moment",
+                        scene_text="The atmosphere becomes heavy with unspoken words..."
+                    ),
+                    should_present=True,
+                    priority=9
                  ))
 
-            # from some_module import check_for_npc_revelations_helper
-            # npc_revelation = await check_for_npc_revelations_helper(user_id, conversation_id)
-            npc_revelation = None # Placeholder
+            npc_revelation = None
             if npc_revelation:
                  narrative_events.append(NarrativeEvent(
                     event_type="npc_revelation",
-                    content=npc_revelation, # Assuming dict
-                    should_present=True, priority=7
+                    content=NPCRevelationContent(
+                        npc_id=1,
+                        revelation_type="secret",
+                        title="Hidden Truth",
+                        revelation_text="The NPC reveals something shocking...",
+                        changes_relationship=True
+                    ),
+                    should_present=True,
+                    priority=7
                  ))
             logger.warning("Using placeholders for narrative event checks")
-        except (ImportError, AttributeError, Exception) as e:
+        except Exception as e:
              logger.warning(f"Could not check for narrative events: {e}")
 
-
-        # Check for relationship events (Assume helpers exist or implement/import)
-        # Example placeholders:
+        # Check for relationship events
         try:
-            # from some_module import check_for_crossroads_tool_helper
-            # crossroads = await check_for_crossroads_tool_helper(user_id, conversation_id)
-            crossroads = None # Placeholder
-
-            # from some_module import check_for_ritual_tool_helper
-            # ritual = await check_for_ritual_tool_helper(user_id, conversation_id)
-            ritual = None # Placeholder
+            crossroads = None  # Placeholder
+            ritual = None  # Placeholder
             logger.warning("Using placeholders for relationship event checks")
-        except (ImportError, AttributeError, Exception) as e:
+        except Exception as e:
             logger.warning(f"Could not check for relationship events: {e}")
             crossroads, ritual = None, None
 
-
-        # --- Analysis & Observation Generation ---
+        # Generate key observations
         key_observations = []
         current_stage_name = stage_info.name if stage_info else "Unknown"
 
@@ -1110,10 +1071,10 @@ async def get_story_state(ctx: RunContextWrapper[StoryDirectorContext]) -> Story
             key_observations.append("Player is low on money.")
         if resource_status.energy < 30:
             key_observations.append("Player energy is low.")
-        if resource_status.hunger > 70: # Assuming higher hunger is bad
+        if resource_status.hunger > 70:
             key_observations.append("Player is significantly hungry.")
 
-        # Determine overall story direction based on stage
+        # Determine story direction
         story_direction_map = {
             "Innocent Beginning": "Introduce subtle hints of control dynamics.",
             "First Doubts": "Highlight inconsistencies, raise questions.",
@@ -1123,8 +1084,7 @@ async def get_story_state(ctx: RunContextWrapper[StoryDirectorContext]) -> Story
         }
         story_direction = story_direction_map.get(current_stage_name, "Maintain current narrative trajectory.")
 
-
-        # --- Construct State Object ---
+        # Construct state object
         state_data = StoryStateUpdate(
             narrative_stage=stage_info,
             active_conflicts=conflict_infos,
@@ -1135,7 +1095,7 @@ async def get_story_state(ctx: RunContextWrapper[StoryDirectorContext]) -> Story
             relationship_crossroads=crossroads,
             relationship_ritual=ritual,
             story_direction=story_direction,
-            last_updated=datetime.now(timezone.utc) # Ensure timezone aware
+            last_updated=datetime.now(timezone.utc)
         )
 
         # Add a memory about retrieving the state
@@ -1148,37 +1108,29 @@ async def get_story_state(ctx: RunContextWrapper[StoryDirectorContext]) -> Story
         except Exception as mem_e:
             logger.warning(f"Failed to add narrative memory after state retrieval: {mem_e}")
 
-        # Track performance if context has performance monitor
-        if context.performance_monitor:
-             # Assuming memory usage tracking happens elsewhere or is integrated
-             pass # context.performance_monitor.record_memory_usage() might be better placed after data fetching
-
         logger.info(f"Successfully executed get_story_state tool for user {user_id}")
         return state_data
 
     except Exception as e:
         logger.error(f"Error executing get_story_state tool: {str(e)}", exc_info=True)
-        # Return a default/error state conforming to StoryStateUpdate
         return StoryStateUpdate(
              key_observations=[f"Error retrieving state: {str(e)}"],
              last_updated=datetime.now(timezone.utc)
         )
 
 
-@track_performance("get_current_story_state_wrapper") # Renamed for clarity
-@with_action_reporting(agent_type=AgentType.STORY_DIRECTOR, action_type="get_story_state_analysis") # Renamed action type
+@track_performance("get_current_story_state_wrapper")
+@with_action_reporting(agent_type=AgentType.STORY_DIRECTOR, action_type="get_story_state_analysis")
 async def get_current_story_state(agent: Agent, ctx: Union[RunContextWrapper[StoryDirectorContext], StoryDirectorContext]) -> Any:
     """Get the current state of the story with caching using UnifiedCache."""
     if isinstance(ctx, RunContextWrapper):
         context = ctx.context
     else:
-        context = ctx # Assuming ctx is StoryDirectorContext
+        context = ctx
 
-    # Define the cache key
     cache_key = f"story_state:{context.user_id}:{context.conversation_id}"
-    cache_ttl = 60 # Example TTL
+    cache_ttl = 60
 
-    # Define the function to execute on cache miss
     async def _fetch_and_process_story_state():
         logger.debug(f"Cache miss for {cache_key}. Fetching fresh story state.")
         start_time = time.time()
@@ -1186,7 +1138,6 @@ async def get_current_story_state(agent: Agent, ctx: Union[RunContextWrapper[Sto
         tokens = {"prompt": 0, "completion": 0, "total": 0}
         fetched_result = None
         try:
-            # --- This is the core logic from your original function ---
             comprehensive_context = await context.get_comprehensive_context()
             prompt = """
             Analyze the current state of the story and provide a detailed report.
@@ -1198,10 +1149,6 @@ async def get_current_story_state(agent: Agent, ctx: Union[RunContextWrapper[Sto
             5. Key NPCs and their relationships
             """
             with trace(workflow_name="StoryDirector", group_id=DEFAULT_TRACING_GROUP):
-                # Note: retry_operation might be complex to put directly here.
-                # Consider if the core operation needs retry or if the cache handles it.
-                # For simplicity here, directly calling Runner.run.
-                # If retry is essential, wrap the Runner.run call.
                 MAX_AGENT_TURNS = 25  
                 operation = lambda: Runner.run(
                     agent,
@@ -1209,8 +1156,7 @@ async def get_current_story_state(agent: Agent, ctx: Union[RunContextWrapper[Sto
                     context=context,
                     max_turns=MAX_AGENT_TURNS
                 )
-                # fetched_result = await retry_operation(operation) # Original retry call
-                fetched_result = await operation() # Simpler call for example
+                fetched_result = await operation()
 
             if hasattr(fetched_result, 'raw_responses') and fetched_result.raw_responses:
                 for response in fetched_result.raw_responses:
@@ -1222,7 +1168,7 @@ async def get_current_story_state(agent: Agent, ctx: Union[RunContextWrapper[Sto
                                  "completion": getattr(usage_data, 'completion_tokens', 0),
                                  "total": getattr(usage_data, 'total_tokens', 0)
                              }
-                             break # Assuming one usage object is enough
+                             break
 
             success = True
             context.last_state_update = datetime.now()
@@ -1231,44 +1177,32 @@ async def get_current_story_state(agent: Agent, ctx: Union[RunContextWrapper[Sto
                 "Analyzed current story state and identified key elements",
                 "story_analysis", 0.5
             )
-            # --- End of core logic ---
-            return fetched_result # Return the fetched result
+            return fetched_result
 
         except Exception as e:
             logger.error(f"Error fetching story state for cache: {str(e)}", exc_info=True)
             context.metrics.last_error = str(e)
-            # Decide what to return on fetch error: None, raise, or an error object?
-            # Returning None might cause issues if None is a valid cached value.
-            # Raising might be better if the caller handles it. Let's raise.
             raise
         finally:
-            # Record metrics even during fetch
             execution_time = time.time() - start_time
-            # Ensure context.metrics exists
             if hasattr(context, 'metrics'):
                  context.metrics.record_run(success, execution_time, tokens)
-            # Ensure performance_monitor exists
             if hasattr(context, 'performance_monitor'):
                  context.performance_monitor.record_token_usage(tokens.get("total", 0))
 
-
-    # --- Call the UnifiedCache.get method CORRECTLY ---
     try:
         story_state_result = await context_cache.get(
             key=cache_key,
-            fetch_func=_fetch_and_process_story_state, # Pass the async function
+            fetch_func=_fetch_and_process_story_state,
             ttl_override=cache_ttl,
-            importance=0.8 # Example importance
+            importance=0.8
         )
-        # The .get method will handle calling _fetch_and_process_story_state on miss
-        # and return either the cached value or the newly fetched value.
         return story_state_result
 
     except Exception as e:
-         # Handle potential errors from the fetch_func if they weren't caught inside
          logger.error(f"Error getting story state (cache wrapper): {str(e)}", exc_info=True)
-         # Re-raise or return an error state
-         raise # Re-raise the exception from the fetch function
+         raise
+
 
 @track_performance("process_narrative_input")
 @with_action_reporting(agent_type=AgentType.STORY_DIRECTOR, action_type="process_narrative_input")
@@ -1284,12 +1218,10 @@ async def process_narrative_input(agent: Agent, ctx: RunContextWrapper[StoryDire
     result = None
 
     try:
-        # Prepare context for the agent
         comprehensive_context_data = await context.get_comprehensive_context(narrative_text)
         relevant_memories = await context.get_relevant_memories(narrative_text, limit=3)
         memory_text = "Relevant memories:\n" + "\n".join([f"- {mem.get('content', '')[:150]}..." for mem in relevant_memories]) if relevant_memories else "No specific relevant memories found."
 
-        # Construct the prompt
         prompt = f"""
         Analyze the following narrative input text and determine the appropriate story director actions.
 
@@ -1316,7 +1248,6 @@ async def process_narrative_input(agent: Agent, ctx: RunContextWrapper[StoryDire
             operation = lambda: Runner.run(agent, prompt, context=context)
             result = await retry_operation(operation)
 
-        # --- TOKEN COUNTING ---
         if result and hasattr(result, 'raw_responses') and result.raw_responses:
             for response in result.raw_responses:
                  if response and hasattr(response, 'usage') and response.usage:
@@ -1328,20 +1259,15 @@ async def process_narrative_input(agent: Agent, ctx: RunContextWrapper[StoryDire
                      tokens["total"] += (current_prompt_tokens + current_completion_tokens) if current_total_tokens == 0 else current_total_tokens
                      logger.debug(f"Accumulated tokens: Prompt={current_prompt_tokens}, Completion={current_completion_tokens}, Total={tokens['total']}")
                  else: logger.warning("ModelResponse missing valid usage object.")
-        # --- END TOKEN COUNTING ---
 
         success = True
         
-        # NEW: Use proper memory creation (already correct in original)
         await context.add_narrative_memory(
             f"Processed narrative input: {narrative_text[:100]}...", 
             "narrative_processing", 
             0.6
         )
 
-        # If the result includes state changes, they should have gone through LoreSystem
-        # via the tool calls made by the agent
-        
         logger.info(f"Narrative input processed for user {context.user_id}")
         return result.final_output if result else "No result from agent run."
 
@@ -1372,12 +1298,10 @@ async def advance_story(agent: Agent, ctx: RunContextWrapper[StoryDirectorContex
     result = None
 
     try:
-        # Prepare context for the agent
         comprehensive_context_data = await context.get_comprehensive_context(player_actions)
         relevant_memories = await context.get_relevant_memories(player_actions, limit=3)
         memory_text = "Relevant memories:\n" + "\n".join([f"- {mem.get('content', '')[:150]}..." for mem in relevant_memories]) if relevant_memories else "No specific relevant memories found."
 
-        # Construct the prompt
         prompt = f"""
         The player has taken the following actions:
         \"\"\"
@@ -1404,7 +1328,6 @@ async def advance_story(agent: Agent, ctx: RunContextWrapper[StoryDirectorContex
             operation = lambda: Runner.run(agent, prompt, context=context)
             result = await retry_operation(operation)
 
-        # --- TOKEN COUNTING ---
         if result and hasattr(result, 'raw_responses') and result.raw_responses:
             for response in result.raw_responses:
                  if response and hasattr(response, 'usage') and response.usage:
@@ -1416,11 +1339,9 @@ async def advance_story(agent: Agent, ctx: RunContextWrapper[StoryDirectorContex
                      tokens["total"] += (current_prompt_tokens + current_completion_tokens) if current_total_tokens == 0 else current_total_tokens
                      logger.debug(f"Accumulated tokens: Prompt={current_prompt_tokens}, Completion={current_completion_tokens}, Total={tokens['total']}")
                  else: logger.warning("ModelResponse missing valid usage object.")
-        # --- END TOKEN COUNTING ---
 
         success = True
         
-        # NEW: Add memory through proper system (already correct)
         await context.add_narrative_memory(
             f"Advanced story based on player actions: {player_actions[:100]}...", 
             "story_advancement", 
@@ -1447,7 +1368,7 @@ def get_story_director_metrics(context: StoryDirectorContext) -> Dict[str, Any]:
     """Get metrics for the Story Director agent"""
     if not context or not context.metrics:
          return {"error": "Context or metrics not available"}
-    base_metrics = context.metrics.dict() # Use model_dump in Pydantic v2
+    base_metrics = context.metrics.dict()
     if context.performance_monitor:
         try:
             perf_metrics = context.performance_monitor.get_metrics()
@@ -1456,6 +1377,7 @@ def get_story_director_metrics(context: StoryDirectorContext) -> Dict[str, Any]:
              logger.warning(f"Could not retrieve performance monitor metrics: {e}")
              base_metrics["performance"] = {"error": str(e)}
     return base_metrics
+
 
 @function_tool
 async def update_resource(ctx: RunContextWrapper[StoryDirectorContext], resource_type: str, amount: int, reason: str) -> Dict[str, Any]:
@@ -1471,16 +1393,13 @@ async def update_resource(ctx: RunContextWrapper[StoryDirectorContext], resource
     user_id = context.user_id
     conversation_id = context.conversation_id
     
-    # Get LoreSystem
     from lore.lore_system import LoreSystem
     lore_system = await LoreSystem.get_instance(user_id, conversation_id)
     
-    # Get current resources first
     resources = await context.resource_manager.get_resources()
     current_value = resources.get(resource_type, 0)
     new_value = current_value + amount
     
-    # Use LoreSystem to update
     governance_ctx = type('obj', (object,), {
         'user_id': user_id, 
         'conversation_id': conversation_id
@@ -1500,6 +1419,7 @@ async def update_resource(ctx: RunContextWrapper[StoryDirectorContext], resource
     
     return result
 
+
 @function_tool
 async def progress_conflict(ctx: RunContextWrapper[StoryDirectorContext], conflict_id: int, progress_amount: float, reason: str) -> Dict[str, Any]:
     """
@@ -1514,7 +1434,6 @@ async def progress_conflict(ctx: RunContextWrapper[StoryDirectorContext], confli
     user_id = context.user_id
     conversation_id = context.conversation_id
     
-    # Get LoreSystem
     from lore.lore_system import LoreSystem
     lore_system = await LoreSystem.get_instance(user_id, conversation_id)
     
@@ -1523,7 +1442,6 @@ async def progress_conflict(ctx: RunContextWrapper[StoryDirectorContext], confli
         'conversation_id': conversation_id
     })()
     
-    # Get current conflict state
     conflict = await context.conflict_manager.get_conflict(conflict_id)
     if not conflict:
         return {"status": "error", "message": f"Conflict {conflict_id} not found"}
@@ -1531,7 +1449,6 @@ async def progress_conflict(ctx: RunContextWrapper[StoryDirectorContext], confli
     current_progress = conflict.get("progress", 0.0)
     new_progress = min(1.0, current_progress + progress_amount)
     
-    # Determine phase based on progress
     if new_progress < 0.25:
         phase = "brewing"
     elif new_progress < 0.5:
@@ -1541,7 +1458,6 @@ async def progress_conflict(ctx: RunContextWrapper[StoryDirectorContext], confli
     else:
         phase = "resolution"
     
-    # Update through LoreSystem
     result = await lore_system.propose_and_enact_change(
         ctx=governance_ctx,
         entity_type="Conflicts",
@@ -1556,42 +1472,36 @@ async def progress_conflict(ctx: RunContextWrapper[StoryDirectorContext], confli
     
     return result
 
+
 async def register_with_governance(user_id: int, conversation_id: int) -> None:
     """
     Register the Story Director Agent with the Nyx governance system.
     """
     try:
-        # Local import to avoid top-level dependency cycle
         from nyx.integrate import get_central_governance
 
         governance = await get_central_governance(user_id, conversation_id)
 
-        # Initialize or retrieve existing agent/context - Ensure init happens
         agent, context = await initialize_story_director(user_id, conversation_id)
 
         await governance.register_agent(
             agent_type=AgentType.STORY_DIRECTOR,
-            agent_instance=agent, # Pass the agent instance
-            agent_id="director" # Consistent ID
+            agent_instance=agent,
+            agent_id="director"
         )
 
-        # Example directive issuance
-        # --- FIX: Revert parameter names ---
         await governance.issue_directive(
-            # target_agent_type=AgentType.STORY_DIRECTOR, # Incorrect parameter name
-            # target_agent_id="director",                 # Incorrect parameter name
-            agent_type=AgentType.STORY_DIRECTOR,  # Corrected: Use 'agent_type'
-            agent_id="director",                # Corrected: Use 'agent_id'
+            agent_type=AgentType.STORY_DIRECTOR,
+            agent_id="director",
             directive_type=DirectiveType.ACTION,
             directive_data={
                 "instruction": "Periodically check for narrative opportunities and report findings.",
                 "scope": "narrative_monitoring",
-                "frequency": "hourly" # Example parameter
+                "frequency": "hourly"
             },
             priority=DirectivePriority.MEDIUM,
-            duration_minutes=24*60 # Example: 1 day
+            duration_minutes=24*60
         )
-        # --- END FIX ---
 
         logging.info(
             f"StoryDirector registered with Nyx governance system "
@@ -1599,11 +1509,9 @@ async def register_with_governance(user_id: int, conversation_id: int) -> None:
         )
     except ImportError as e:
          logger.error(f"Failed to import Nyx components for registration: {e}", exc_info=True)
-    except TypeError as te: # Catch the specific error for better logging
+    except TypeError as te:
          logger.error(f"TypeError during governance interaction (likely incorrect parameter names): {te}", exc_info=True)
-         # Potentially log the expected signature if possible or suggest checking NyxUnifiedGovernor definition
     except Exception as e:
-        # Catch specific exceptions if possible (e.g., governance connection error)
         logger.error(f"Error registering StoryDirector with governance for user {user_id}: {e}", exc_info=True)
 
 
@@ -1616,12 +1524,9 @@ async def check_narrative_opportunities(user_id: int, conversation_id: int) -> D
     logger.info(f"Checking narrative opportunities for user {user_id}, conv {conversation_id}")
     start_time = time.time()
     try:
-        # Initialize necessary components
         agent, context = await initialize_story_director(user_id, conversation_id)
 
-        # Get current state using the agent function (which includes caching)
-        # Pass context directly, get_current_story_state will handle wrapping if needed by tools
-        story_state_result = await get_current_story_state(agent, context) # Use the wrapper function
+        story_state_result = await get_current_story_state(agent, context)
 
         if not isinstance(story_state_result, StoryStateUpdate):
              logger.error("Failed to get valid story state during opportunity check.")
@@ -1632,39 +1537,30 @@ async def check_narrative_opportunities(user_id: int, conversation_id: int) -> D
 
         current_stage_name = story_state_result.narrative_stage.name if story_state_result.narrative_stage else "Unknown"
 
-        # --- Logic to Identify Opportunities (Example) ---
         opportunities_found = False
         potential_actions = []
 
-        # Example: If few conflicts exist in early stages, suggest generating one
         if len(story_state_result.active_conflicts) < 1 and current_stage_name in ["Innocent Beginning", "First Doubts"]:
             opportunities_found = True
             potential_actions.append("Generate introductory conflict")
 
-        # Example: If a conflict is stalled, suggest progressing it
-        stalled_conflicts = [c for c in story_state_result.active_conflicts if c.progress < 0.8 and time.time() - context.cache.get(f"conflict_{c.conflict_id}_last_progress_ts", 0) > 3600 * 6 ] # Stalled for 6 hours
+        stalled_conflicts = [c for c in story_state_result.active_conflicts if c.progress < 0.8 and time.time() - context.cache.get(f"conflict_{c.conflict_id}_last_progress_ts", 0) > 3600 * 6 ]
         if stalled_conflicts:
             opportunities_found = True
             potential_actions.append(f"Progress stalled conflict(s): {[c.conflict_name for c in stalled_conflicts]}")
 
-        # Example: If no narrative events pending and stage allows, check for moments/revelations
         if not story_state_result.narrative_events and current_stage_name != "Innocent Beginning":
-             # Potentially call agent to *check* if a moment/revelation *should* be generated
-             # This might involve another agent call with a specific prompt
-             opportunities_found = True # Tentative
+             opportunities_found = True
              potential_actions.append("Check for potential narrative moment/revelation generation")
 
-
-        # --- Reporting ---
         report_result = {
             "found_opportunities": opportunities_found,
             "potential_actions": potential_actions,
             "narrative_stage": current_stage_name,
             "active_conflicts_count": len(story_state_result.active_conflicts),
-            "context_version": context.last_context_version # Report last used version
+            "context_version": context.last_context_version
         }
 
-        # Report to Governance
         try:
             from nyx.integrate import get_central_governance
             governance = await get_central_governance(user_id, conversation_id)
@@ -1675,13 +1571,12 @@ async def check_narrative_opportunities(user_id: int, conversation_id: int) -> D
                     "type": "check_narrative_opportunities",
                     "description": "Periodic check for story advancement possibilities"
                 },
-                result=report_result # Report findings
+                result=report_result
             )
         except ImportError:
              logger.warning("Nyx governance import failed, skipping report.")
         except Exception as gov_e:
              logger.error(f"Failed to report narrative opportunities to governance: {gov_e}")
-
 
         logger.info(f"Narrative opportunity check complete for user {user_id}. Found: {opportunities_found}. Actions: {potential_actions}")
         return {
@@ -1697,6 +1592,7 @@ async def check_narrative_opportunities(user_id: int, conversation_id: int) -> D
             "opportunities_found": False, "elapsed_time": time.time() - start_time
         }
 
+
 # ----- StoryDirector Wrapper Class -----
 
 class StoryDirector:
@@ -1708,7 +1604,7 @@ class StoryDirector:
         self.agent: Optional[Agent] = None
         self.context: Optional[StoryDirectorContext] = None
         self._initialized: bool = False
-        self._init_lock = asyncio.Lock() # Prevent race conditions during init
+        self._init_lock = asyncio.Lock()
 
     async def initialize(self) -> bool:
         """Initialize the agent and context if not already initialized."""
@@ -1724,9 +1620,9 @@ class StoryDirector:
                     return True
                 except Exception as e:
                     logger.error(f"Failed to initialize StoryDirector for user {self.user_id}: {e}", exc_info=True)
-                    self._initialized = False # Ensure it remains false on error
+                    self._initialized = False
                     return False
-            return True # Already initialized
+            return True
 
     async def _ensure_initialized(self):
         """Internal helper to initialize if needed."""
@@ -1737,33 +1633,25 @@ class StoryDirector:
         if not self.agent or not self.context:
              raise RuntimeError(f"StoryDirector for user {self.user_id} initialized but agent/context is missing.")
 
-
     async def get_current_state(self) -> StoryStateUpdate:
         """Get the current story state, ensuring initialization."""
         await self._ensure_initialized()
-        # Pass context directly, get_current_story_state expects context or RunContextWrapper
-        return await get_current_story_state(self.agent, self.context) # type: ignore
+        return await get_current_story_state(self.agent, self.context)
 
     async def process_input(self, narrative_text: str) -> Any:
         """Process narrative input, ensuring initialization."""
         await self._ensure_initialized()
-        # Wrap context for agent runner automatically
-        return await process_narrative_input(self.agent, RunContextWrapper(context=self.context), narrative_text) # type: ignore
+        return await process_narrative_input(self.agent, RunContextWrapper(context=self.context), narrative_text)
 
     async def advance_story(self, player_actions: str) -> Any:
         """Advance the story based on player actions, ensuring initialization."""
         await self._ensure_initialized()
-        # Wrap context for agent runner automatically
-        return await advance_story(self.agent, RunContextWrapper(context=self.context), player_actions) # type: ignore
+        return await advance_story(self.agent, RunContextWrapper(context=self.context), player_actions)
 
     async def reset(self):
         """Reset the story director state, ensuring initialization first."""
         await self._ensure_initialized()
-        # Pass context directly to reset function
-        await reset_story_director(self.context) # type: ignore
-        # State is reset, but agent/context objects might still exist.
-        # Optionally force re-initialization on next call:
-        # self._initialized = False
+        await reset_story_director(self.context)
 
     def get_metrics(self) -> Dict[str, Any]:
         """Get story director metrics. Returns empty if not initialized."""
