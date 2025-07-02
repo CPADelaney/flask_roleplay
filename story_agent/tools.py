@@ -292,9 +292,6 @@ from context.context_manager import get_context_manager, ContextDiff
 from context.context_performance import PerformanceMonitor, track_performance
 from context.unified_cache import context_cache
 
-# Conflict imports - consolidated at top level
-from logic.conflict_system.conflict_manager import ConflictManager
-
 logger = logging.getLogger(__name__)
 
 # Define the context type alias for easier use
@@ -955,14 +952,24 @@ async def set_player_involvement(
         Updated conflict information or error dictionary.
     """
     context = ctx.context
-    if not hasattr(context, 'conflict_manager') or not hasattr(context, 'resource_manager'):
-        logger.error("Context missing conflict_manager or resource_manager")
-        return {"conflict_id": params.conflict_id, "error": "Internal context setup error", "success": False}
-
-    conflict_manager = context.conflict_manager
-    resource_manager = context.resource_manager
-
+    user_id = context.user_id
+    conversation_id = context.conversation_id
+    
+    # Use the conflict integration directly instead of expecting it on context
+    from logic.conflict_system.conflict_integration import ConflictSystemIntegration
+    from logic.conflict_system.conflict_tools import (
+        get_conflict_details, update_player_involvement as update_involvement
+    )
+    
     try:
+        # Check if we have a resource manager
+        if not hasattr(context, 'resource_manager'):
+            logger.error("Context missing resource_manager")
+            return {"conflict_id": params.conflict_id, "error": "Internal context setup error", "success": False}
+            
+        resource_manager = context.resource_manager
+
+        # Check resources
         resource_check = await resource_manager.check_resources(
             params.money_committed, params.supplies_committed, params.influence_committed
         )
@@ -971,16 +978,22 @@ async def set_player_involvement(
             resource_check['error'] = "Insufficient resources to commit"
             return resource_check
 
-        conflict_info = await conflict_manager.get_conflict(params.conflict_id)
-        result = await conflict_manager.set_player_involvement(
-            params.conflict_id,
-            params.involvement_level,
-            params.faction,
-            params.money_committed,
-            params.supplies_committed,
-            params.influence_committed,
-            params.action
-        )
+        # Get conflict info using the tools
+        conflict_info = await get_conflict_details(ctx, params.conflict_id)
+        
+        # Update player involvement using the tools
+        involvement_data = {
+            "involvement_level": params.involvement_level,
+            "faction": params.faction,
+            "resources_committed": {
+                "money": params.money_committed,
+                "supplies": params.supplies_committed,
+                "influence": params.influence_committed
+            },
+            "actions_taken": [params.action] if params.action else []
+        }
+        
+        result = await update_involvement(ctx, params.conflict_id, involvement_data)
 
         if hasattr(context, 'add_narrative_memory'):
             resources_text = []
@@ -1849,7 +1862,6 @@ async def analyze_conflict_potential(ctx: RunContextWrapper[ContextType], narrat
         conflict_intensity = min(10, len(matched_keywords) * 2)
         
         # Check for NPC mentions
-        conflict_manager = ConflictManager(user_id, conversation_id)
         npcs = await get_available_npcs(ctx)
         
         mentioned_npcs = []
@@ -2002,7 +2014,6 @@ async def suggest_potential_manipulation(ctx: RunContextWrapper[ContextType], na
         active_conflicts = await conflict_integration.get_active_conflicts()
         if not active_conflicts: return {"opportunities": [], "reason": "No active conflicts"}
 
-        conflict_manager = ConflictManager(user_id, conversation_id)
         # Only get introduced female NPCs with high dominance for manipulation
         npcs = await get_available_npcs(ctx, include_unintroduced=False, min_dominance=60, gender_filter="female")
         mentioned_npcs = [npc for npc in npcs if npc["npc_name"] in narrative_text]
