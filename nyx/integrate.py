@@ -27,11 +27,11 @@ from lore.validation import ValidationManager
 import asyncpg
 
 # Import story components
-from flask_roleplay.story_agent.agent_interaction import (
+from story_agent.agent_interaction import (
     orchestrate_conflict_analysis_and_narrative,
     generate_comprehensive_story_beat
 )
-from flask_roleplay.story_agent.story_director_agent import initialize_story_director
+from story_agent.story_director_agent import initialize_story_director
 
 # Import agent processing components for full integration
 from nyx.nyx_governance import NyxUnifiedGovernor, AgentType, DirectiveType, DirectivePriority
