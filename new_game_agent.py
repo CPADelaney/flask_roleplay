@@ -159,7 +159,7 @@ class NewGameAgent:
         
         # Directive handler for processing Nyx directives
         self.directive_handler = None
-    
+
     async def initialize_directive_handler(self, user_id: int, conversation_id: int):
         """Initialize the directive handler for this agent"""
         from nyx.integrate import get_central_governance
@@ -215,7 +215,7 @@ class NewGameAgent:
         
         # Apply the override for future operations
         return {"result": "override_applied"}
-    
+
     @with_governance_permission(AgentType.UNIVERSAL_UPDATER, "create_calendar")
     async def create_calendar(self, ctx, environment_desc):
         """
@@ -232,7 +232,7 @@ class NewGameAgent:
         
         calendar_data = await update_calendar_names(user_id, conversation_id, environment_desc)
         return calendar_data
-    
+
     @with_governance(
         agent_type=AgentType.UNIVERSAL_UPDATER,
         action_type="generate_environment",
@@ -341,6 +341,7 @@ class NewGameAgent:
                 )
         
         return result.final_output
+
     @with_governance_permission(AgentType.UNIVERSAL_UPDATER, "spawn_npcs")
     async def spawn_npcs(self, ctx, environment_desc, day_names, count=5):
         """
@@ -367,7 +368,7 @@ class NewGameAgent:
         )
         
         return npc_ids
-    
+
     @with_governance_permission(AgentType.UNIVERSAL_UPDATER, "create_chase_schedule")
     async def create_chase_schedule(self, ctx, environment_desc, day_names):
         """
@@ -423,7 +424,7 @@ class NewGameAgent:
             logging.error(f"Error storing player schedule in memory system: {e}")
         
         return default_schedule
-        
+
     @with_governance(
         agent_type=AgentType.UNIVERSAL_UPDATER,
         action_type="create_npcs_and_schedules",
@@ -473,7 +474,7 @@ class NewGameAgent:
             "npc_ids": npc_ids,
             "chase_schedule": chase_schedule
         }
-    
+
     @with_governance(
         agent_type=AgentType.UNIVERSAL_UPDATER,
         action_type="create_opening_narrative",
@@ -549,7 +550,7 @@ class NewGameAgent:
             )
         
         return opening_narrative
-    
+
     @with_governance(
         agent_type=AgentType.UNIVERSAL_UPDATER,
         action_type="finalize_game_setup",
@@ -596,6 +597,8 @@ class NewGameAgent:
         # Initialize and generate lore
         try:
             # Get the lore system instance and initialize it
+            # Note: LoreSystem is now properly initialized through governance,
+            # so this should not cause circular dependency issues
             lore_system = DynamicLoreGenerator.get_instance(user_id, conversation_id)
             await lore_system.initialize()
             
@@ -709,7 +712,7 @@ class NewGameAgent:
             "initial_conflict": conflict_name,
             "currency_system": currency_name
         }
-    
+
     async def _get_setting_name(self, ctx):
         """Helper method to get the setting name from the database"""
         user_id = ctx.context["user_id"]
@@ -723,7 +726,7 @@ class NewGameAgent:
             """, user_id, conversation_id)
             
             return row["value"] if row else "Unknown Setting"
-    
+
     @with_governance(
         agent_type=AgentType.UNIVERSAL_UPDATER,
         action_type="generate_lore",
@@ -744,6 +747,8 @@ class NewGameAgent:
         
         try:
             # Get the lore system instance and initialize it
+            # Note: LoreSystem is now properly initialized through governance,
+            # so this should not cause circular dependency issues
             lore_system = DynamicLoreGenerator.get_instance(user_id, conversation_id)
             await lore_system.initialize()
             
@@ -869,13 +874,20 @@ class NewGameAgent:
         
             # Initialize directive handler and register with governance
             await self.initialize_directive_handler(user_id, conversation_id)
+            
+            # Get governance (which will properly initialize LoreSystem internally)
             governance = await get_central_governance(user_id, conversation_id)
+            
+            # Register this agent with governance
             await governance.register_agent(
                 agent_type=NEW_GAME_AGENT_NYX_TYPE,
                 agent_instance=self,
                 agent_id=NEW_GAME_AGENT_NYX_ID
             )
-            await self.directive_handler.process_directives(force_check=True)
+            
+            # Process any pending directives
+            if self.directive_handler:
+                await self.directive_handler.process_directives(force_check=True)
             
             # Gather environment components
             from routes.settings_routes import generate_mega_setting_logic
