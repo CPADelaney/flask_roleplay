@@ -86,11 +86,6 @@ class MemoryAgentWrapper:
             self.agent, [input_msg], context=self.context,
             run_config=RunConfig(trace_metadata=trace_meta or {})
         )
-        
-        return await Runner.run(
-            self.agent, [input_msg], context=self.context,
-            run_config=RunConfig(trace_metadata=trace_meta or {})
-        )
 
     # ------------------------------------------------------------------
     # Public API – Memory operations
@@ -225,10 +220,15 @@ class MemoryAgentWrapper:
             return await self.instructions(run_context, self.agent)  # type: ignore[misc]
         return "You are a memory management assistant that helps manage and retrieve memories."
 
-    def get_tools(self):
+    def get_tools(self, *args, **kwargs):
         """Get the tools and ensure all ctx parameters have proper type annotations."""
         try:
-            tools = self.agent.tools  # Get tools directly from the agent
+            # If the agent has a get_tools method, use it with the provided arguments
+            if hasattr(self.agent, "get_tools") and callable(self.agent.get_tools):
+                tools = self.agent.get_tools(*args, **kwargs)
+            else:
+                tools = self.agent.tools  # Get tools directly from the agent
+                
             for t in tools:
                 if "parameters" in t and "properties" in t["parameters"] and "ctx" in t["parameters"]["properties"]:
                     # Ensure the ctx parameter has a type
@@ -239,26 +239,30 @@ class MemoryAgentWrapper:
             logger.error(f"Error in get_tools: {e}")
             return self.agent.tools if hasattr(self.agent, "tools") else []
 
-    def get_all_tools(self):
+    def get_all_tools(self, *args, **kwargs):
         """Get all tools from the underlying agent."""
         if hasattr(self.agent, "get_all_tools"):
-            return self.agent.get_all_tools()
+            return self.agent.get_all_tools(*args, **kwargs)
         # If the underlying agent doesn't have get_all_tools, 
         # fall back to get_tools or tools attribute
         elif hasattr(self.agent, "get_tools"):
-            return self.agent.get_tools()
+            return self.agent.get_tools(*args, **kwargs)
         elif hasattr(self.agent, "tools"):
             return self.agent.tools
         else:
             return []
   
     def run(self, *args, **kwargs):
+        """Run method that delegates to the underlying agent."""
         if hasattr(self.agent, "run"):
             return self.agent.run(*args, **kwargs)
         raise NotImplementedError("Run method not implemented by underlying agent")
 
-    def get_name(self):
-        return self.agent.get_name() if hasattr(self.agent, "get_name") else self.name
+    def get_name(self, *args, **kwargs):
+        """Get the name of the agent."""
+        if hasattr(self.agent, "get_name") and callable(self.agent.get_name):
+            return self.agent.get_name(*args, **kwargs)
+        return self.name
 
 
 # ----------------------------------------------------------------------
