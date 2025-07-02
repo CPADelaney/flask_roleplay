@@ -48,7 +48,8 @@ class LoreSystem:
         self.user_id = user_id
         self.conversation_id = conversation_id
         self.initialized = False
-        self.governor = None
+        self._initializing = False  # Guard against re-entry
+        self.governor = None  # Will be injected, not created
 
         # 4. Built-in managers from your system
         self.npc_data = NPCDataAccess(user_id, conversation_id)
@@ -68,7 +69,6 @@ class LoreSystem:
         self.geopolitical_manager = GeopoliticalSystemManager(user_id, conversation_id)
         self.regional_culture_system = RegionalCultureSystem(user_id, conversation_id)
         self.world_politics_manager = WorldPoliticsManager(user_id, conversation_id)
-        # Or whichever other managers you'd like to unify
 
         # For the new "dynamics" system as well:
         self.lore_dynamics_system = LoreDynamicsSystem(user_id, conversation_id)
@@ -86,16 +86,24 @@ class LoreSystem:
             LORE_SYSTEM_INSTANCES[key] = cls(user_id, conversation_id)
         return LORE_SYSTEM_INSTANCES[key]
 
+    def set_governor(self, governor: Any) -> None:
+        """Set the governor instance. Should be called by the governor after creation."""
+        self.governor = governor
+        logger.info(f"[LoreSystem] Governor set for user {self.user_id}, conversation {self.conversation_id}")
+
     async def initialize(self) -> bool:
         """Initialize the LoreSystem and all its components."""
-        if self.initialized:
+        # Guard against re-entry
+        if self.initialized or self._initializing:
+            logger.debug("[LoreSystem] Already initialized or initializing, skipping")
             return True
 
+        self._initializing = True
         try:
-            from nyx.integrate import get_central_governance
-
-            logger.info("[LoreSystem] Initializing governance")
-            self.governor = await get_central_governance(self.user_id, self.conversation_id)
+            # REMOVED: We no longer call get_central_governance here
+            # The governor should be set externally via set_governor()
+            
+            logger.info("[LoreSystem] Starting initialization of data access components")
 
             # 6. Initialize the data access + integration components
             logger.info("[LoreSystem] Initializing: NPCDataAccess")
@@ -144,8 +152,12 @@ class LoreSystem:
             logger.info("[LoreSystem] Ensuring: LoreDynamicsSystem")
             await self.lore_dynamics_system.ensure_initialized()
 
-            logger.info("[LoreSystem] Registering with Nyx governance")
-            await self.register_with_governance()
+            # Only register with governance if governor is set
+            if self.governor:
+                logger.info("[LoreSystem] Registering with Nyx governance")
+                await self.register_with_governance()
+            else:
+                logger.warning("[LoreSystem] No governor set, skipping governance registration")
 
             self.initialized = True
             logger.info("[LoreSystem] Initialization successful.")
@@ -154,16 +166,18 @@ class LoreSystem:
         except Exception as e:
             logger.exception(f"[LoreSystem] ERROR during initialization: {e}")
             return False
+        finally:
+            self._initializing = False
+
 
 
     async def register_with_governance(self):
         """Register the lore system with Nyx governance."""
         if not self.governor:
-            from nyx.integrate import get_central_governance
-            self.governor = await get_central_governance(self.user_id, self.conversation_id)
+            logger.warning("[LoreSystem] Cannot register with governance - no governor set")
+            return
 
         # Register this system with governance
-        from nyx.integrate import get_central_governance
         await self.governor.register_agent(
             agent_type=AgentType.NARRATIVE_CRAFTER,
             agent_id="lore_system",
@@ -172,6 +186,7 @@ class LoreSystem:
 
         # Issue standard directives
         await self._issue_standard_directives()
+
 
     async def _issue_standard_directives(self):
         """Issue standard directives for the lore system."""
@@ -203,6 +218,7 @@ class LoreSystem:
             priority=DirectivePriority.MEDIUM,
             duration_minutes=24 * 60
         )
+
 
     # ---------------------------------------------------------------------
     # NPC Lore Methods
@@ -239,6 +255,7 @@ class LoreSystem:
     # ---------------------------------------------------------------------
     # Location Lore Methods
     # ---------------------------------------------------------------------
+
 
     async def get_location_lore(self, location_id: int) -> Dict[str, Any]:
         """Get lore specific to a location."""
@@ -348,9 +365,99 @@ class LoreSystem:
         """Example: call the LoreDynamicsSystem to mature lore over time."""
         return await self.lore_dynamics_system.mature_lore_over_time(days_passed)
     
-# ---------------------------------------------------------------------
-# Cleanup
-# ---------------------------------------------------------------------
+    # ---------------------------------------------------------------------
+    # Canon Methods (NEW) - These are critical for the system to work
+    # ---------------------------------------------------------------------
+    
+    @with_governance(
+        agent_type=AgentType.NARRATIVE_CRAFTER,
+        action_type="propose_and_enact_change",
+        action_description="Proposing change to {entity_type} based on: {reason}",
+        id_from_context=lambda ctx: "lore_system"
+    )
+    async def propose_and_enact_change(
+        self,
+        ctx,
+        entity_type: str,
+        entity_identifier: Dict[str, Any],
+        updates: Dict[str, Any],
+        reason: str
+    ) -> Dict[str, Any]:
+        """
+        The universal method for making a canonical change to the world state.
+        This is the method that NyxUnifiedGovernor calls.
+
+        Args:
+            entity_type (str): The type of entity (e.g., 'Nations', 'Factions').
+            entity_identifier (Dict): A dict to find the entity (e.g., {'id': 123}).
+            updates (Dict): A dict of columns and their new values (e.g., {'leader_npc_id': 456}).
+            reason (str): The narrative reason for the change.
+        """
+        # Import canon module
+        from lore.core import canon
+        from db.connection import get_db_connection_context
+        
+        logger.info(f"Proposing change to {entity_type} ({entity_identifier}) because: {reason}")
+
+        try:
+            async with get_db_connection_context() as conn:
+                async with conn.transaction():
+                    # Step 1: Find the current state of the entity
+                    where_clauses = [f"{key} = ${i+1}" for i, key in enumerate(entity_identifier.keys())]
+                    where_sql = " AND ".join(where_clauses)
+                    select_query = f"SELECT * FROM {entity_type} WHERE {where_sql}"
+                    
+                    existing_entity = await conn.fetchrow(select_query, *entity_identifier.values())
+
+                    if not existing_entity:
+                        return {"status": "error", "message": f"Entity not found: {entity_type} with {entity_identifier}"}
+
+                    # Step 2: Validate for conflicts
+                    conflicts = []
+                    for field, new_value in updates.items():
+                        if field in existing_entity and existing_entity[field] is not None and existing_entity[field] != new_value:
+                            conflict_detail = (
+                                f"Conflict on field '{field}'. "
+                                f"Current value: '{existing_entity[field]}'. "
+                                f"Proposed value: '{new_value}'."
+                            )
+                            conflicts.append(conflict_detail)
+                            logger.warning(f"Conflict detected for {entity_type} ({entity_identifier}): {conflict_detail}")
+
+                    if conflicts:
+                        # Step 3a: Handle conflict by generating a new narrative event
+                        if hasattr(self, 'lore_dynamics_system'):
+                            await self.lore_dynamics_system.evolve_lore_with_event(
+                                f"A conflict arose: {reason}. Details: {', '.join(conflicts)}"
+                            )
+                        return {"status": "conflict_generated", "details": conflicts}
+
+                    # Step 3b: No conflict, commit the change
+                    set_clauses = [f"{key} = ${i+1}" for i, key in enumerate(updates.keys())]
+                    set_sql = ", ".join(set_clauses)
+                    # The entity identifier values come after the update values
+                    update_values = list(updates.values()) + list(entity_identifier.values())
+                    
+                    update_query = f"UPDATE {entity_type} SET {set_sql} WHERE {where_sql}"
+                    await conn.execute(update_query, *update_values)
+
+                    # Step 4: Log the change as a canonical event in unified memory
+                    event_text = f"The {entity_type} identified by {entity_identifier} was updated. Reason: {reason}. Changes: {updates}"
+                    await canon.log_canonical_event(ctx, conn, event_text, tags=[entity_type.lower(), 'state_change'], significance=8)
+            
+            # Step 5: Propagate consequences to other systems (outside the transaction)
+            if hasattr(self, 'lore_dynamics_system'):
+                await self.lore_dynamics_system.evolve_lore_with_event(f"A world state change occurred: {reason}")
+            
+            return {"status": "committed", "entity_type": entity_type, "identifier": entity_identifier, "changes": updates}
+
+        except Exception as e:
+            logger.exception(f"Failed to enact change for {entity_type} ({entity_identifier}): {e}")
+            return {"status": "error", "message": str(e)}
+    
+    # ---------------------------------------------------------------------
+    # Cleanup
+    # ---------------------------------------------------------------------
     async def cleanup(self):
         """Clean up resources used by the LoreSystem (and managers)."""
         try:
