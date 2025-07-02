@@ -2,7 +2,14 @@
 
 """
 Unified governance system for Nyx to control all agents (NPCs and beyond).
-...
+
+IMPORTANT FIX: This module previously had a circular dependency with LoreSystem.
+The circular dependency has been resolved by using dependency injection:
+1. Create LoreSystem instance (without calling get_central_governance)
+2. Set this governor on the LoreSystem via set_governor()
+3. Then initialize the LoreSystem
+
+This ensures a clean one-way flow: Governor → LoreSystem
 """
 
 import logging
@@ -56,7 +63,6 @@ class DirectiveType:
     INFORMATION = "information"  # New addition
 
 
-
 class DirectivePriority:
     """Constants for directive priorities."""
     LOW = 1
@@ -101,7 +107,7 @@ class NyxUnifiedGovernor:
         self.conversation_id = conversation_id
         
         # --- MERGE: Add a placeholder for the LoreSystem ---
-        # Use Optional[Any] instead of Optional[LoreSystem] to avoid needing the import
+        # Will be initialized in _initialize_systems() to avoid circular dependency
         self.lore_system: Optional[Any] = None
 
         # Core systems and state
@@ -145,9 +151,8 @@ class NyxUnifiedGovernor:
         if hasattr(self, '_initialized') and self._initialized:
             return self
 
-        # --- MERGE: Get an instance of the LoreSystem during initialization ---
-        # Nyx needs its primary tool to execute its will.
-        self.lore_system = await LoreSystem.get_instance(self.user_id, self.conversation_id)
+        # --- MERGE: Initialize the lore system is now done in _initialize_systems ---
+        # No need to duplicate it here
 
         # Initialize other systems
         await self._initialize_systems()
@@ -156,12 +161,25 @@ class NyxUnifiedGovernor:
 
     async def _initialize_systems(self):
         """Initialize memory system, game state, and discover agents."""
-        # --- MERGE: Import LoreSystem locally to avoid circular import ---
+        # --- FIXED CIRCULAR DEPENDENCY ---
+        # Previously, LoreSystem would call get_central_governance() during its
+        # initialize() method, which would create this Governor and call this
+        # method, creating an infinite loop.
+        # 
+        # Now we use dependency injection:
+        # 1. Create the LoreSystem instance
+        # 2. Set this governor on it via set_governor()
+        # 3. Then call initialize() on the LoreSystem
+        # This ensures a one-way initialization flow.
+        
+        # Import LoreSystem locally to avoid circular import
         from lore.lore_system import LoreSystem
         
-        # --- MERGE: Get an instance of the LoreSystem during initialization ---
-        # Nyx needs its primary tool to execute its will.
+        # Get an instance of the LoreSystem
         self.lore_system = LoreSystem.get_instance(self.user_id, self.conversation_id)
+        
+        # Set the governor on the lore system (dependency injection)
+        self.lore_system.set_governor(self)
         
         # Initialize the lore system
         await self.lore_system.initialize()
@@ -171,7 +189,6 @@ class NyxUnifiedGovernor:
         self.game_state = await self.initialize_game_state()
         await self.discover_and_register_agents()
         await self._load_initial_state()
-
 
     async def _load_initial_state(self):
         """Load goals and agent state from memory."""
@@ -292,7 +309,9 @@ class NyxUnifiedGovernor:
             return True
         except Exception as e:
             logger.error(f"Error during agent discovery and registration: {e}")
-            return False    
+            return False
+
+    # ... rest of the file remains the same ...
     
     async def _update_performance_metrics(self):
         """Update per-agent performance metrics."""
@@ -335,7 +354,6 @@ class NyxUnifiedGovernor:
                         self.adaptation_patterns[pattern]["total"] += data["total"]
                         self.adaptation_patterns[pattern]["agents"][f"{agent_type}:{agent_id}"] = data
 
-    
     async def coordinate_agents_for_goal(
         self,
         goal: Dict[str, Any],
@@ -406,7 +424,6 @@ class NyxUnifiedGovernor:
         logger.info(f"Directive issued: {directive_id} to {agent_type}/{agent_id}")
         return {"success": True, "directive_id": directive_id, "expires_at": expiration.isoformat()}
 
-    
     async def process_agent_action_report(self, agent_type: str, agent_id: str, action: Dict[str, Any], result: Dict[str, Any]) -> Dict[str, Any]:
         """Store a report of an action taken by an agent."""
         report_id = f"{agent_type}_{agent_id}_{int(datetime.now().timestamp())}"
@@ -420,6 +437,7 @@ class NyxUnifiedGovernor:
         }
         logger.info(f"Action report processed: {report_id} from {agent_type} / {agent_id}")
         return {"success": True, "report_id": report_id}
+
         
     async def _analyze_goal_requirements(self, goal: Dict[str, Any]) -> Dict[str, Any]:
         """Analyze requirements for achieving a goal."""
