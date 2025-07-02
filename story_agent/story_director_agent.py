@@ -13,7 +13,7 @@ from db.connection import get_db_connection_context
 from agents import Agent, function_tool, Runner, trace, handoff, ModelSettings, RunContextWrapper, FunctionTool
 
 # Import the new schemas
-from story_agent.schemas import (
+from story_agent.tools import (
     NPCInfo, RelationshipCrossroads, RelationshipRitual,
     TriggerEventData, ConflictEvolutionData,
     NarrativeEventContent, NarrativeMomentContent,
