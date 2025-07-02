@@ -283,6 +283,15 @@ async def _create_chase_schedule_tool_wrapper(ctx: RunContextWrapper[GameContext
     params = CreateChaseScheduleParams(environment_desc=environment_desc, day_names=day_names)
     return await agent.create_chase_schedule(ctx, params)
 
+@function_tool
+async def generate_environment_tool(
+    ctx: RunContextWrapper[GameContext],
+    params: GenerateEnvironmentParams,
+) -> EnvironmentData:
+    """Module‑level wrapper around NewGameAgent.generate_environment()."""
+    agent = ctx.context.get("agent_instance") or NewGameAgent()
+    return await agent.generate_environment(ctx, params)
+
 class NewGameAgent:
     """Agent for handling new game creation process with Nyx governance integration"""
     
@@ -463,7 +472,6 @@ class NewGameAgent:
         calendar_data = await update_calendar_names(user_id, conversation_id, params.environment_desc)
         return calendar_data
 
-    @function_tool
     @with_governance(
         agent_type=AgentType.UNIVERSAL_UPDATER,
         action_type="generate_environment",
