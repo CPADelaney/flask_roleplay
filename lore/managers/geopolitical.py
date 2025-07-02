@@ -458,7 +458,7 @@ class GeopoliticalSystemManager(BaseLoreManager):
                 ON ConflictSimulations USING ivfflat (embedding vector_cosine_ops);
             """
         }
-        await self._initialize_tables_for_class_impl(table_definitions)
+        await self.initialize_tables_for_class(table_definitions)
 
     # ------------------------------------------------------------------------
     # 1) Add geographic region with specialized handoffs
