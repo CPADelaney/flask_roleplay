@@ -6,9 +6,9 @@ import asyncio
 import os
 import functools
 from datetime import datetime
-from typing import Dict, Any
+from typing import Dict, Any, Optional, List
 
-from agents import Agent, Runner, function_tool, GuardrailFunctionOutput, InputGuardrail
+from agents import Agent, Runner, function_tool, GuardrailFunctionOutput, InputGuardrail, RunContextWrapper
 from pydantic import BaseModel, Field
 
 from memory.wrapper import MemorySystem
@@ -63,10 +63,73 @@ class GameContext(BaseModel):
     conversation_id: int
     db_dsn: str = DB_DSN
 
+# Pydantic models for function parameters (excluding ctx)
+class CalendarToolParams(BaseModel):
+    environment_desc: str
+    setting_name: Optional[str] = None
+    environment_data: Optional[Dict[str, Any]] = None
+
+class CreateCalendarParams(BaseModel):
+    environment_desc: str
+
+class GenerateEnvironmentParams(BaseModel):
+    mega_name: str
+    mega_desc: str
+    env_components: Optional[List[str]] = None
+    enhanced_features: Optional[List[str]] = None
+    stat_modifiers: Optional[Dict[str, Any]] = None
+
+class SpawnNPCsParams(BaseModel):
+    environment_desc: str
+    day_names: List[str]
+    count: int = 5
+
+class CreateChaseScheduleParams(BaseModel):
+    environment_desc: str
+    day_names: List[str]
+
+class CreateNPCsAndSchedulesParams(BaseModel):
+    environment_data: Dict[str, Any]
+
+class CreateOpeningNarrativeParams(BaseModel):
+    environment_data: Dict[str, Any]
+    npc_schedule_data: Dict[str, Any]
+
+class FinalizeGameSetupParams(BaseModel):
+    opening_narrative: str
+
+class GenerateLoreParams(BaseModel):
+    environment_desc: str
+
 class NewGameAgent:
     """Agent for handling new game creation process with Nyx governance integration"""
     
     def __init__(self):
+        # Create wrapper functions for sub-agent tools
+        @function_tool
+        async def _calendar_tool(ctx: RunContextWrapper[Any], params: CalendarToolParams):
+            """Create calendar for the game world"""
+            calendar_params = CreateCalendarParams(environment_desc=params.environment_desc)
+            return await self.create_calendar(ctx, calendar_params)
+        
+        @function_tool
+        async def _spawn_npcs_tool(ctx: RunContextWrapper[Any], count: int = 5):
+            """Spawn NPCs for the game world"""
+            # Note: environment_desc and day_names are not used by spawn_npcs, 
+            # so we create minimal params
+            params = SpawnNPCsParams(
+                environment_desc="",  # Not used internally
+                day_names=[],  # Not used internally  
+                count=count
+            )
+            return await self.spawn_npcs(ctx, params)
+        
+        @function_tool
+        async def _create_chase_schedule_tool(ctx: RunContextWrapper[Any], environment_desc: str, day_names: List[str]):
+            """Create Chase's schedule"""
+            params = CreateChaseScheduleParams(environment_desc=environment_desc, day_names=day_names)
+            return await self.create_chase_schedule(ctx, params)
+        
         # Wrap methods as function tools
         self.environment_agent = Agent(
             name="EnvironmentCreator",
@@ -86,7 +149,7 @@ class NewGameAgent:
             """,
             output_type=EnvironmentData,
             tools=[
-                function_tool(self.create_calendar)  # Wrap with function_tool
+                _calendar_tool  # Use wrapper instead of direct method
             ],
             model="gpt-4.1-nano"
         )
@@ -104,8 +167,8 @@ class NewGameAgent:
             Chase's schedule should feel normal yet guided, with subtle overlaps with the NPCs.
             """,
             tools=[
-                function_tool(self.spawn_npcs),  # Wrap with function_tool
-                function_tool(self.create_chase_schedule)  # Wrap with function_tool
+                _spawn_npcs_tool,  # Use wrapper instead of direct method
+                _create_chase_schedule_tool  # Use wrapper instead of direct method
             ],
             model="gpt-4.1-nano"
         )
@@ -120,8 +183,8 @@ class NewGameAgent:
             that feels like a gentle descent into a comfortable routine while hinting at deeper layers.
             
             Address Chase as 'you,' drawing him through the veil with no whisper of retreat.
-            """
-            # No tools for this agent
+            """,
+            model="gpt-4.1-nano"
         )
         
         # Main coordinating agent
@@ -197,11 +260,20 @@ class NewGameAgent:
             mega_name = params.get("mega_name", "New Setting")
             mega_desc = params.get("mega_desc", "A cozy town with hidden layers")
             
-            # Simulate context
-            ctx = type('obj', (object,), {'context': {'user_id': self.directive_handler.user_id, 'conversation_id': self.directive_handler.conversation_id}})
+            # Simulate context with proper type structure
+            ctx = type('RunContextWrapper', (object,), {
+                'context': {
+                    'user_id': self.directive_handler.user_id, 
+                    'conversation_id': self.directive_handler.conversation_id
+                }
+            })()
             
             # Generate environment
-            result = await self.generate_environment(ctx, mega_name, mega_desc)
+            env_params = GenerateEnvironmentParams(
+                mega_name=mega_name,
+                mega_desc=mega_desc
+            )
+            result = await self.generate_environment(ctx, env_params)
             return {"result": "environment_generated", "data": result.dict()}
         
         return {"result": "action_not_recognized"}
@@ -217,12 +289,12 @@ class NewGameAgent:
         return {"result": "override_applied"}
 
     @with_governance_permission(AgentType.UNIVERSAL_UPDATER, "create_calendar")
-    async def create_calendar(self, ctx, environment_desc):
+    async def create_calendar(self, ctx: RunContextWrapper[GameContext], params: CreateCalendarParams):
         """
         Create an immersive calendar system for the game world.
         
         Args:
-            environment_desc: Description of the environment
+            params: CreateCalendarParams containing environment_desc
             
         Returns:
             Dictionary with calendar details
@@ -230,7 +302,7 @@ class NewGameAgent:
         user_id = ctx.context["user_id"]
         conversation_id = ctx.context["conversation_id"]
         
-        calendar_data = await update_calendar_names(user_id, conversation_id, environment_desc)
+        calendar_data = await update_calendar_names(user_id, conversation_id, params.environment_desc)
         return calendar_data
 
     @with_governance(
@@ -238,7 +310,7 @@ class NewGameAgent:
         action_type="generate_environment",
         action_description="Generated game environment for new game"
     )
-    async def generate_environment(self, ctx, mega_name, mega_desc, env_components=None, enhanced_features=None, stat_modifiers=None):
+    async def generate_environment(self, ctx: RunContextWrapper[GameContext], params: GenerateEnvironmentParams):
         """
         Generate the game environment data using canonical functions.
         """
@@ -248,18 +320,18 @@ class NewGameAgent:
         # Import canon functions
         from lore.core import canon
         
-        env_comp_text = "\n".join(env_components) if env_components else "No components provided"
-        enh_feat_text = ", ".join(enhanced_features) if enhanced_features else "No enhanced features"
-        stat_mod_text = ", ".join([f"{k}: {v}" for k, v in stat_modifiers.items()]) if stat_modifiers else "No stat modifiers"
+        env_comp_text = "\n".join(params.env_components) if params.env_components else "No components provided"
+        enh_feat_text = ", ".join(params.enhanced_features) if params.enhanced_features else "No enhanced features"
+        stat_mod_text = ", ".join([f"{k}: {v}" for k, v in params.stat_modifiers.items()]) if params.stat_modifiers else "No stat modifiers"
         
         # Create prompt for the environment agent
         prompt = f"""
         You are setting up a new daily-life sim environment with subtle, hidden layers of femdom and intrigue.
     
         Below is a merged environment concept:
-        Mega Setting Name: {mega_name}
+        Mega Setting Name: {params.mega_name}
         Mega Description:
-        {mega_desc}
+        {params.mega_desc}
     
         Using this as inspiration, create a cohesive environment with:
         - A creative setting name
@@ -283,8 +355,9 @@ class NewGameAgent:
             context=ctx.context
         )
         
-        # Get calendar data
-        calendar_data = await self.create_calendar(ctx, result.final_output.environment_desc)
+        # Get calendar data - need to use params object
+        calendar_params = CreateCalendarParams(environment_desc=result.final_output.environment_desc)
+        calendar_data = await self.create_calendar(ctx, calendar_params)
         
         # Store environment data canonically
         async with get_db_connection_context() as conn:
@@ -307,50 +380,69 @@ class NewGameAgent:
                 
                 # Create events canonically
                 for event in result.final_output.events:
+                    # Handle both lowercase and capitalized keys
+                    event_name = event.get("name") or event.get("Name") or "Unnamed Event"
+                    event_desc = event.get("description") or event.get("Description") or ""
+                    event_start = event.get("start_time") or event.get("Start_time") or "TBD"
+                    event_end = event.get("end_time") or event.get("End_time") or "TBD"
+                    event_location = event.get("location") or event.get("Location") or "Unknown"
+                    event_year = event.get("year") or event.get("Year") or 1
+                    event_month = event.get("month") or event.get("Month") or 1
+                    event_day = event.get("day") or event.get("Day") or 1
+                    event_time = event.get("time_of_day") or event.get("Time_of_day") or "Morning"
+                    
                     await canon.find_or_create_event(
                         canon_ctx, conn,
-                        event.get("name", "Unnamed Event"),
-                        description=event.get("description", ""),
-                        start_time=event.get("start_time", "TBD"),
-                        end_time=event.get("end_time", "TBD"),
-                        location=event.get("location", "Unknown"),
-                        year=event.get("year", 1),
-                        month=event.get("month", 1),
-                        day=event.get("day", 1),
-                        time_of_day=event.get("time_of_day", "Morning")
+                        event_name,
+                        description=event_desc,
+                        start_time=event_start,
+                        end_time=event_end,
+                        location=event_location,
+                        year=event_year,
+                        month=event_month,
+                        day=event_day,
+                        time_of_day=event_time
                     )
                 
                 # Create locations canonically
                 for location in result.final_output.locations:
+                    # Handle both lowercase and capitalized keys
+                    loc_name = location.get("location_name") or location.get("Location_name") or "Unnamed"
+                    loc_desc = location.get("description") or location.get("Description") or ""
+                    loc_type = location.get("type") or location.get("Type") or "settlement"
+                    loc_features = location.get("features") or location.get("Features") or []
+                    loc_hours = location.get("open_hours") or location.get("Open_hours") or {}
+                    
                     await canon.find_or_create_location(
                         canon_ctx, conn,
-                        location.get("location_name", "Unnamed"),
-                        description=location.get("description", ""),
-                        location_type=location.get("type", "settlement"),
-                        notable_features=location.get("features", []),
-                        open_hours=location.get("open_hours", {})
+                        loc_name,
+                        description=loc_desc,
+                        location_type=loc_type,
+                        notable_features=loc_features,
+                        open_hours=loc_hours
                     )
                 
                 # Create main quest canonically
                 quest_data = result.final_output.quest_data
+                quest_name = quest_data.get("quest_name") or quest_data.get("Quest_name") or "Unnamed Quest"
+                quest_desc = quest_data.get("quest_description") or quest_data.get("Quest_description") or "Quest summary"
+                
                 await canon.find_or_create_quest(
                     canon_ctx, conn,
-                    quest_data.get("quest_name", "Unnamed Quest"),
-                    progress_detail=quest_data.get("quest_description", "Quest summary"),
+                    quest_name,
+                    progress_detail=quest_desc,
                     status="In Progress"
                 )
         
         return result.final_output
 
     @with_governance_permission(AgentType.UNIVERSAL_UPDATER, "spawn_npcs")
-    async def spawn_npcs(self, ctx, environment_desc, day_names, count=5):
+    async def spawn_npcs(self, ctx: RunContextWrapper[GameContext], params: SpawnNPCsParams):
         """
         Spawn multiple NPCs for the game world.
         
         Args:
-            environment_desc: Description of the environment
-            day_names: List of day names for scheduling
-            count: Number of NPCs to spawn
+            params: SpawnNPCsParams with environment_desc, day_names, and count
             
         Returns:
             List of NPC IDs
@@ -364,19 +456,18 @@ class NewGameAgent:
         # Use the class method directly
         npc_ids = await npc_handler.spawn_multiple_npcs(
             ctx=ctx,
-            count=count
+            count=params.count
         )
         
         return npc_ids
 
     @with_governance_permission(AgentType.UNIVERSAL_UPDATER, "create_chase_schedule")
-    async def create_chase_schedule(self, ctx, environment_desc, day_names):
+    async def create_chase_schedule(self, ctx: RunContextWrapper[GameContext], params: CreateChaseScheduleParams):
         """
         Create a schedule for the player "Chase".
         
         Args:
-            environment_desc: Description of the environment
-            day_names: List of day names for scheduling
+            params: CreateChaseScheduleParams with environment_desc and day_names
             
         Returns:
             Dictionary with Chase's schedule
@@ -386,7 +477,7 @@ class NewGameAgent:
         
         # Create a basic schedule structure
         default_schedule = {}
-        for day in day_names:
+        for day in params.day_names:
             default_schedule[day] = {
                 "Morning": f"Chase wakes up and prepares for the day",
                 "Afternoon": f"Chase attends to their responsibilities",
@@ -430,7 +521,7 @@ class NewGameAgent:
         action_type="create_npcs_and_schedules",
         action_description="Created NPCs and schedules for new game"
     )
-    async def create_npcs_and_schedules(self, ctx, environment_data):
+    async def create_npcs_and_schedules(self, ctx: RunContextWrapper[GameContext], params: CreateNPCsAndSchedulesParams):
         """
         Create NPCs and schedules for the game world using canonical functions.
         """
@@ -451,11 +542,22 @@ class NewGameAgent:
             day_names = calendar_data.get("days", ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"])
         
         # Create NPCs (they should already use canonical creation through NPCCreationHandler)
-        environment_desc = environment_data.get("environment_desc", "") + "\n\n" + environment_data.get("environment_history", "")
-        npc_ids = await self.spawn_npcs(ctx, environment_desc, day_names)
+        environment_desc = params.environment_data.get("environment_desc", "") + "\n\n" + params.environment_data.get("environment_history", "")
+        
+        # Create params for spawn_npcs
+        spawn_params = SpawnNPCsParams(
+            environment_desc=environment_desc,
+            day_names=day_names,
+            count=5
+        )
+        npc_ids = await self.spawn_npcs(ctx, spawn_params)
         
         # Create Chase's schedule
-        chase_schedule = await self.create_chase_schedule(ctx, environment_desc, day_names)
+        chase_params = CreateChaseScheduleParams(
+            environment_desc=environment_desc,
+            day_names=day_names
+        )
+        chase_schedule = await self.create_chase_schedule(ctx, chase_params)
         
         # Store Chase's schedule canonically
         async with get_db_connection_context() as conn:
@@ -480,7 +582,7 @@ class NewGameAgent:
         action_type="create_opening_narrative",
         action_description="Created opening narrative for new game"
     )
-    async def create_opening_narrative(self, ctx, environment_data, npc_schedule_data):
+    async def create_opening_narrative(self, ctx: RunContextWrapper[GameContext], params: CreateOpeningNarrativeParams):
         """
         Create the opening narrative for the game using canonical functions.
         """
@@ -556,7 +658,7 @@ class NewGameAgent:
         action_type="finalize_game_setup",
         action_description="Finalized game setup including lore, conflict, currency and image"
     )
-    async def finalize_game_setup(self, ctx, opening_narrative):
+    async def finalize_game_setup(self, ctx: RunContextWrapper[GameContext], params: FinalizeGameSetupParams):
         """
         Finalize game setup including lore generation, conflict generation and image generation.
         """
@@ -713,7 +815,7 @@ class NewGameAgent:
             "currency_system": currency_name
         }
 
-    async def _get_setting_name(self, ctx):
+    async def _get_setting_name(self, ctx: RunContextWrapper[GameContext]):
         """Helper method to get the setting name from the database"""
         user_id = ctx.context["user_id"]
         conversation_id = ctx.context["conversation_id"]
@@ -732,12 +834,12 @@ class NewGameAgent:
         action_type="generate_lore",
         action_description="Generated lore for new game environment"
     )
-    async def generate_lore(self, ctx, environment_desc: str) -> Dict[str, Any]:
+    async def generate_lore(self, ctx: RunContextWrapper[GameContext], params: GenerateLoreParams) -> Dict[str, Any]:
         """
         Generate comprehensive lore for the game environment.
         
         Args:
-            environment_desc: Description of the environment
+            params: GenerateLoreParams with environment_desc
             
         Returns:
             Dictionary with generated lore data
@@ -753,8 +855,8 @@ class NewGameAgent:
             await lore_system.initialize()
             
             # Generate comprehensive lore based on the environment
-            logging.info(f"Generating lore for environment: {environment_desc[:100]}...")
-            lore_result = await lore_system.generate_world_lore(environment_desc)
+            logging.info(f"Generating lore for environment: {params.environment_desc[:100]}...")
+            lore_result = await lore_system.generate_world_lore(params.environment_desc)
             
             # Get NPC IDs for lore integration
             async with get_db_connection_context() as conn:
@@ -941,7 +1043,7 @@ class NewGameAgent:
             
             # Extract data from result
             final_output = result.final_output if hasattr(result, 'final_output') else {}
-            setting_name = final_output.get('setting_name', 'Unknown Setting')
+            setting_name = final_output.get('setting_name') or final_output.get('Setting_name') or 'Unknown Setting'
             
             # Update conversation with final name and ready status
             async with get_db_connection_context() as conn:
@@ -957,12 +1059,12 @@ class NewGameAgent:
             # Return success message and data
             return {
                 "message": f"New game started. environment={setting_name}, conversation_id={conversation_id}",
-                "scenario_name": final_output.get('scenario_name', 'New Game'),
+                "scenario_name": final_output.get('scenario_name') or final_output.get('Scenario_name') or 'New Game',
                 "environment_name": setting_name,
-                "environment_desc": final_output.get('environment_desc', ''),
-                "lore_summary": final_output.get('lore_summary', 'Standard lore generated'),
+                "environment_desc": final_output.get('environment_desc') or final_output.get('Environment_desc') or '',
+                "lore_summary": final_output.get('lore_summary') or final_output.get('Lore_summary') or 'Standard lore generated',
                 "conversation_id": conversation_id,
-                "welcome_image_url": final_output.get('welcome_image_url', None),
+                "welcome_image_url": final_output.get('welcome_image_url') or final_output.get('Welcome_image_url') or None,
                 "status": "ready"
             }
             
