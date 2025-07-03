@@ -869,22 +869,6 @@
     ]
   },
   {
-    "name": "Surprise Me with Your Own Custom Creation",
-    "mood_tone": "Tailored to your current narrative, designed to exploit your specific weaknesses and stats.",
-    "enhanced_features": [
-      "The setting shifts dynamically based on NPC dominance and your own vulnerability."
-    ],
-    "stat_modifiers": {
-      "variable": {
-        "delta": 0,
-        "description": "depends on the NPCs and tasks involved"
-      }
-    },
-    "activity_examples": [
-      "Constructed on the spot to fit the narrative's flow, ensuring maximum humiliation and submission."
-    ]
-  },
-  {
     "name": "Theater",
     "mood_tone": "An ornate setting where every stage and backstage corner can become an arena for dramatic humiliation.",
     "enhanced_features": [
@@ -1557,6 +1541,22 @@
       "Forced participation in corporate 'morale' programs.",
       "Street-level tasks for gangs while corporate drones watch from above.",
       "Digital shaming through hacked personal advertisements."
+    ]
+  },
+  {
+    "name": "Surprise Me with Your Own Custom Creation",
+    "mood_tone": "Tailored to your current narrative, designed to exploit your specific weaknesses and stats.",
+    "enhanced_features": [
+      "The setting shifts dynamically based on NPC dominance and your own vulnerability."
+    ],
+    "stat_modifiers": {
+      "all": {
+        "delta": 0,
+        "description": "dynamically adjusted based on narrative needs"
+      }
+    },
+    "activity_examples": [
+      "Constructed on the spot to fit the narrative's flow, ensuring maximum humiliation and submission."
     ]
   }
 ]
