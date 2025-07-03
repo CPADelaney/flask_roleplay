@@ -1851,12 +1851,13 @@ async def seed_initial_data():
     Ensures the DB has the minimal data set. Assumes called functions are async.
     """
     logger.info("Starting initial data seeding...")
+    from routes.settings_routes import insert_missing_settings
     try:
         # Assuming these functions are defined elsewhere and are async
         # Make sure insert_or_update_game_rules etc. are actually async!
         await insert_or_update_game_rules()
         await insert_stat_definitions()
-        await insert_missing_settings()
+        await insert_missing_settings(is_initial_setup=True)
         await insert_missing_activities()
         await insert_missing_archetypes()
         await create_and_seed_intensity_tiers()
