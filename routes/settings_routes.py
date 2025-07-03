@@ -3,6 +3,7 @@
 import os
 import json
 import logging
+import collections
 import random
 from quart import Blueprint, request, jsonify, session
 from db.connection import get_db_connection_context
@@ -97,16 +98,16 @@ async def insert_settings_route():
         return jsonify({"error": str(e)}), 500
 
 
-async def generate_mega_setting_logic():
-    """Asynchronous version of generate_mega_setting_logic that uses asyncpg"""
+async def generate_mega_setting_logic() -> dict[str, Any]:
     async with get_db_connection_context() as conn:
         rows = await conn.fetch("""
-            SELECT id, name, mood_tone, enhanced_features, stat_modifiers, activity_examples
+            SELECT id, name, mood_tone,
+                   enhanced_features, stat_modifiers, activity_examples
             FROM Settings
         """)
 
     if not rows:
-        return {
+        return {           # unchanged fallback
             "error": "No settings found in DB.",
             "mega_name": "Empty Settings Table",
             "mega_description": "No environment generated",
@@ -115,28 +116,38 @@ async def generate_mega_setting_logic():
             "activity_examples": []
         }
 
-    all_settings = []
+    # ── normalise each row ──────────────────────────────────────────────────
+    all_settings: list[dict[str, Any]] = []
     for row in rows:
-        # Ensure proper type conversion
-        ef_list = row['enhanced_features'] if isinstance(row['enhanced_features'], list) else json.loads(row['enhanced_features'])
-        sm_dict = row['stat_modifiers'] if isinstance(row['stat_modifiers'], dict) else json.loads(row['stat_modifiers'])
-        ae_list = row['activity_examples'] if isinstance(row['activity_examples'], list) else json.loads(row['activity_examples'])
+        ef_list = json.loads(row["enhanced_features"])
+        sm_dict = json.loads(row["stat_modifiers"])
+        ae_list = json.loads(row["activity_examples"])
+
         all_settings.append({
-            "id": row['id'],
-            "name": row['name'],
-            "mood_tone": row['mood_tone'],
+            "id": row["id"],
+            "name": row["name"],
+            "mood_tone": row["mood_tone"],
             "enhanced_features": ef_list,
-            "stat_modifiers": sm_dict,
-            "activity_examples": ae_list
+            "stat_modifiers": {k.lower(): float(v) for k, v in sm_dict.items()},
+            "activity_examples": ae_list,
         })
 
-    # Choose a random number of settings (3-5) to blend.
+    # ── pick & blend ────────────────────────────────────────────────────────
     num_settings = random.choice([3, 4, 5])
     selected = random.sample(all_settings, min(num_settings, len(all_settings)))
     picked_names = [s["name"] for s in selected]
 
-    # Create a preliminary mega name by joining the names.
-    mega_name = " + ".join(picked_names)
+    # numeric merge  ➜  additive; change to mean/max if you prefer
+    combined_modifiers: dict[str, float] = collections.defaultdict(float)
+    for s in selected:
+        for k, v in s["stat_modifiers"].items():
+            combined_modifiers[k] += v
+
+    combined_features: list[str] = []
+    combined_activity_examples: list[str] = []
+    for s in selected:
+        combined_features.extend(s["enhanced_features"])
+        combined_activity_examples.extend(s["activity_examples"])
 
     fusion_prompt = (
         'You are a creative writer tasked with creating a single, immersive world description that blends together a variety of environment elements. '
@@ -148,13 +159,12 @@ async def generate_mega_setting_logic():
     )
     # For each selected setting, format its details on one line (but the instruction is to blend them)
     for s in selected:
-        ef = ", ".join(s["enhanced_features"]) if s["enhanced_features"] else "None"
-        ae = ", ".join(s["activity_examples"]) if s["activity_examples"] else "None"
-        sm = ", ".join([f"{k}: {v}" for k, v in s["stat_modifiers"].items()]) if s["stat_modifiers"] else "None"
+        ef = ", ".join(s["enhanced_features"]) or "None"
+        sm = ", ".join(f"{k}: {v:+}" for k, v in s["stat_modifiers"].items()) or "None"
+        ae = ", ".join(s["activity_examples"])  or "None"
         # Instead of using bullet points, you could simply separate them with a semicolon:
-        fusion_prompt += (
-            f"- {s['name']} (Mood: {s['mood_tone']}; Enhanced features: {ef}; Stat modifiers: {sm}; Activity examples: {ae})\n"
-        )
+        fusion_prompt += f"- {s['name']} (Mood: {s['mood_tone']}; Features: {ef}; " \
+                         f"Stat modifiers: {sm}; Examples: {ae})\n"
     
     fusion_prompt += (
         "\n\nNow, synthesize all of these details into one unified, creative world description that reads naturally as one setting. "
@@ -198,10 +208,10 @@ async def generate_mega_setting_logic():
 
     return {
         "selected_settings": picked_names,
-        "mega_name": mega_name,
+        "mega_name": " + ".join(picked_names),
         "mega_description": unified_description,
-        "enhanced_features": combined_enhanced_features,
-        "stat_modifiers": combined_stat_modifiers,
+        "enhanced_features": combined_features,
+        "stat_modifiers": dict(combined_modifiers),      # ← numbers, not strings
         "activity_examples": combined_activity_examples,
         "message": "Mega setting generated successfully."
     }
