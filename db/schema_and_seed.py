@@ -1049,6 +1049,28 @@ async def create_all_tables():
                     FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
                 );
                 ''',
+                '''
+                CREATE TABLE IF NOT EXISTS CanonicalEvents (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER NOT NULL,
+                    conversation_id INTEGER NOT NULL,
+                    event_text TEXT NOT NULL,
+                    tags TEXT[] DEFAULT '{}',
+                    significance INTEGER DEFAULT 5 CHECK (significance BETWEEN 1 AND 10),
+                    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+                );
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_canonical_events_lookup
+                ON CanonicalEvents(user_id, conversation_id, timestamp DESC);
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_canonical_events_tags
+                ON CanonicalEvents USING GIN (tags);
+                ''',
                 # ---------- TELEMETRY TABLE ----------
                 '''
                 CREATE TABLE IF NOT EXISTS memory_telemetry (
