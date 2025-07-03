@@ -1646,16 +1646,19 @@ async def create_message(ctx, conn, conversation_id: int, sender: str, content: 
     
     return message_id
 
-async def update_current_roleplay(ctx, conn, user_id: int, conversation_id: int, key: str, value: str) -> None:
+async def update_current_roleplay(ctx, conn, key: str, value: str) -> None:
     """
     Update a CurrentRoleplay value canonically.
     """
+    # Ensure we have a proper context
+    ctx = ensure_canonical_context(ctx)
+    
     await conn.execute("""
         INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
         VALUES ($1, $2, $3, $4)
         ON CONFLICT (user_id, conversation_id, key)
         DO UPDATE SET value = EXCLUDED.value
-    """, user_id, conversation_id, key, value)
+    """, ctx.user_id, ctx.conversation_id, key, value)
     
     await log_canonical_event(
         ctx, conn,
