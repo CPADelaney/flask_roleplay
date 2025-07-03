@@ -844,7 +844,7 @@ class NewGameAgent:
         from routes.story_routes import build_aggregator_text 
         
         # Get aggregator data
-        aggregator_data = get_aggregated_roleplay_context(user_id, conversation_id, "Chase")
+        aggregator_data = await get_aggregated_roleplay_context(user_id, conversation_id, "Chase")
         aggregator_text = build_aggregator_text(aggregator_data)
         
         # Get calendar data for first day name
