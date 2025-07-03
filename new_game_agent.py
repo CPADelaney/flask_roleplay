@@ -1169,7 +1169,9 @@ class NewGameAgent:
         action_type="process_new_game",
         action_description="Processed complete new game creation workflow"
     )
-    async def process_new_game(self, user_id: int, conversation_data: Dict[str, Any]) -> ProcessNewGameResult:
+    async def process_new_game(self, ctx, conversation_data: Dict[str, Any]) -> ProcessNewGameResult:
+        # Extract user_id from context
+        user_id = ctx.user_id
         conversation_id = None
         
         try:
