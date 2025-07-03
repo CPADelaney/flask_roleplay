@@ -841,12 +841,13 @@ def create_quart_app():
     # ensure they use asyncpg and potentially start Celery tasks instead of socketio background tasks.
 
     @app.route("/start_new_game", methods=["POST"])
-    # @validate_request({'user_id': {'type': 'integer','required': True}}) # Validation might be redundant if using session
-    async def start_new_game(): # Needs to be async
+    async def start_new_game():
         user_id = session.get("user_id")
-        if not user_id: return jsonify({"error": "Not authenticated"}), 401
+        if not user_id: 
+            return jsonify({"error": "Not authenticated"}), 401
+        
         logger.info(f"User {user_id} starting new game...")
-
+    
         try:
             # Create initial conversation record
             async with get_db_connection_context() as conn:
@@ -860,13 +861,9 @@ def create_quart_app():
                     
                     # Use the existing connection with its transaction
                     await insert_default_player_stats_chase(user_id, conversation_id, conn)
-
-
-            # 2. Trigger the heavy lifting asynchronously via Celery
-            # Pass necessary data to the task
-            from tasks import process_new_game_task # Import task
-            logger.info(f"Dispatched Celery task {task_result.id} for new game {conversation_id}")
-
+    
+            # Trigger the heavy lifting asynchronously via Celery (ONLY ONCE)
+            from tasks import process_new_game_task
             logger.info(f"ABOUT TO DISPATCH TASK: user_id={user_id}, conversation_id={conversation_id}")
             task_result = process_new_game_task.delay(user_id, {"conversation_id": conversation_id})
             logger.info(f"TASK DISPATCHED: task_id={task_result.id}, status={task_result.status}")
@@ -874,9 +871,9 @@ def create_quart_app():
             return jsonify({
                 "job_id": task_result.id,
                 "conversation_id": conversation_id,
-                "task_status": task_result.status  # Add this
+                "task_status": task_result.status
             }), 202
-
+    
         except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as db_err:
             logger.error(f"New game DB error for user {user_id}: {db_err}", exc_info=True)
             return jsonify({"error": "Database error starting game"}), 500
