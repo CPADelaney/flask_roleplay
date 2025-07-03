@@ -22,6 +22,9 @@ from db.connection import get_db_connection_context
 from nyx.core.brain.base import NyxBrain
 from nyx.core.brain.checkpointing_agent import CheckpointingPlannerAgent
 
+_WORKER_LOOP = asyncio.new_event_loop()
+asyncio.set_event_loop(_WORKER_LOOP)
+
 logger = logging.getLogger(__name__)
 
 # Define DSN globally or ensure it's available
@@ -64,20 +67,9 @@ async def is_app_initialized():
 def async_task(func):
     @wraps(func)
     def wrapper(*args, **kwargs):
-        try:
-            loop = asyncio.get_running_loop()
-            # If we can get a running loop, we're already in an async context
-            # This would be an error condition - can't create another loop
-            raise RuntimeError("Cannot run async_task from an async context")
-        except RuntimeError:
-            # No running loop, safe to create a new one
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            try:
-                return loop.run_until_complete(func(*args, **kwargs))
-            finally:
-                loop.close()
-                asyncio.set_event_loop(None)  # Cleanup to avoid potential memory leaks
+        if _WORKER_LOOP.is_closed():
+            raise RuntimeError("Worker event-loop was closed unexpectedly")
+        return _WORKER_LOOP.run_until_complete(func(*args, **kwargs))
     return wrapper
 
 @celery_app.task
@@ -396,24 +388,27 @@ def run_npc_learning_cycle_task():
     return asyncio.run(run_learning_cycle())
 
 @celery_app.task
-def process_new_game_task(user_id, conversation_data):
-    # ADD THIS AS THE VERY FIRST LINE
-    print(f"CELERY TASK ACTUALLY CALLED: user_id={user_id}, data={conversation_data}")
-    logger.info(f"[CELERY TASK] ACTUALLY CALLED with user_id={user_id}")
-    
+@async_task                       #     <-- reuse the decorator you fixed above
+async def process_new_game_task(user_id, conversation_data):
+    logger.info("CELERY – process_new_game_task called")
+    agent = NewGameAgent()
     try:
-        # Create a NewGameAgent instance
-        agent = NewGameAgent()
-        logger.info("[DEBUG] NewGameAgent instance created successfully")
-
-        # Run the async method using asyncio.run
-        result = asyncio.run(agent.process_new_game(user_id, conversation_data))
-        
-        logger.info(f"[DEBUG] process_new_game completed successfully. Result keys: {list(result.keys()) if isinstance(result, dict) else 'Not a dict'}")
-        logger.info(f"[DEBUG] Result status: {result.get('status', 'No status field')}")
-        logger.info(f"[DEBUG] Environment name: {result.get('environment_name', 'No environment_name')}")
-        
+        result = await agent.process_new_game(user_id, conversation_data)
         return result
+    except Exception as e:
+        logger.exception("process_new_game_task failed")
+        # Same failure-handling code, **but await the DB update**:
+        conv_id = conversation_data.get("conversation_id")
+        if conv_id:
+            async with get_db_connection_context() as conn:
+                await conn.execute(
+                    """UPDATE conversations
+                       SET status='failed', conversation_name='New Game - Task Failed'
+                       WHERE id=$1 AND user_id=$2""",
+                    conv_id, user_id
+                )
+        return {"status": "failed", "error": str(e), "error_type": type(e).__name__, "conversation_id": conv_id}
+
         
     except Exception as e:
         logger.exception(f"[DEBUG] Critical error in process_new_game_task for user_id={user_id}")
