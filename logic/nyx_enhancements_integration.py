@@ -155,7 +155,7 @@ async def enhanced_background_chat_task(conversation_id, user_input, universal_u
         
         # Get aggregated context - using the original function
         player_name = "Chase"  # Default player name
-        aggregator_data = get_aggregated_roleplay_context(user_id, conversation_id, player_name)
+        aggregator_data = await get_aggregated_roleplay_context(user_id, conversation_id, player_name)
         
         # Get user model guidance
         user_guidance = await get_response_guidance_for_user(user_id, conversation_id)
