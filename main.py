@@ -865,7 +865,6 @@ def create_quart_app():
             # 2. Trigger the heavy lifting asynchronously via Celery
             # Pass necessary data to the task
             from tasks import process_new_game_task # Import task
-            task_result = process_new_game_task.delay(user_id, {"conversation_id": conversation_id})
             logger.info(f"Dispatched Celery task {task_result.id} for new game {conversation_id}")
 
             logger.info(f"ABOUT TO DISPATCH TASK: user_id={user_id}, conversation_id={conversation_id}")
