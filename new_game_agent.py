@@ -16,6 +16,7 @@ from logic.stats_logic import insert_default_player_stats_chase, apply_stat_chan
 
 # Import your existing modules
 from logic.calendar import update_calendar_names
+from lore.core import canon
 from logic.aggregator_sdk import get_aggregated_roleplay_context
 from npcs.new_npc_creation import NPCCreationHandler
 from routes.ai_image_generator import generate_roleplay_image_from_gpt
