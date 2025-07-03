@@ -244,13 +244,7 @@ async def find_or_create_entity(
     
     return entity_id
 
-# Update log_canonical_event:
-@with_governance(
-    agent_type=AgentType.NARRATIVE_CRAFTER,
-    action_type="log_canonical_event",
-    action_description="Logging canonical event: {event_text}",
-    id_from_context=lambda ctx: "canon"
-)
+
 async def log_canonical_event(ctx, conn, event_text: str, tags: List[str] = None, significance: int = 5):
     """Log a canonical event to establish world history."""
     # Ensure we have a proper context
