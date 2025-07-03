@@ -212,24 +212,36 @@ class NyxUnifiedGovernor:
         await self._update_performance_metrics()
         await self._load_learning_state()
 
-    async def initialize_game_state(self) -> Dict[str, Any]:
-        """Fetch and return the game state for current user/conversation."""
-        logger.info(f"Initializing game state for user {self.user_id}, conversation {self.conversation_id}")
-
-        game_state = dict(
-            user_id=self.user_id,
-            conversation_id=self.conversation_id,
-            current_location=None,
-            current_npcs=[],
-            current_time=None,
-            active_quests=[],
-            player_stats={},
-            narrative_state={},
-            world_state={},
+    async def initialize_game_state(self, *, force: bool = False) -> Dict[str, Any]:
+        """
+        Fetch and return the game-state snapshot for this user/conversation.
+    
+        If it has already been loaded during this governor’s lifetime, return
+        the cached copy unless `force=True`.
+        """
+        if getattr(self, "game_state", None) and not force:
+            logger.info(
+                f"[GAME-STATE] Already initialized for {self.user_id}:{self.conversation_id}; skipping."
+            )
+            return self.game_state
+    
+        logger.info(
+            f"[GAME-STATE] Initializing for {self.user_id}, conversation {self.conversation_id}"
         )
-        
+    
+        game_state = {
+            "user_id": self.user_id,
+            "conversation_id": self.conversation_id,
+            "current_location": None,
+            "current_npcs": [],
+            "current_time": None,
+            "active_quests": [],
+            "player_stats": {},
+            "narrative_state": {},
+            "world_state": {},
+        }
+    
         try:
-            # Fetch current roleplay state from database
             async with get_db_connection_context() as conn:
                 # Get current location
                 row = await conn.fetchrow("""
@@ -266,11 +278,17 @@ class NyxUnifiedGovernor:
                 """, self.user_id, self.conversation_id)
                 game_state["active_quests"] = [dict(r) for r in rows]
 
-            logger.info(f"Game state initialized with {len(game_state['current_npcs'])} NPCs and {len(game_state['active_quests'])} quests.")
-            return game_state
+                logger.info(
+                    f"Game state initialized with "
+                    f"{len(game_state['current_npcs'])} NPCs and "
+                    f"{len(game_state['active_quests'])} quests."
+                )
         except Exception as e:
             logger.error(f"Error initializing game state: {e}")
-            return game_state
+    
+        # cache it so the next call can short-circuit
+        self.game_state = game_state
+        return game_state
 
     async def discover_and_register_agents(self):
         """
