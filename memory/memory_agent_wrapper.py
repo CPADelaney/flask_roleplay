@@ -285,6 +285,29 @@ class MemoryAgentWrapper:
             return self.agent.get_name(*args, **kwargs)
         return self.name
 
+    # -- Passthroughs for SDK internals ---------------------------------
+
+    def reset_tool_choice(self, *args, **kwargs):
+        """
+        Runner.run() calls this after each tool execution to clear any
+        cached decision about which tool to invoke next.  Delegate to the
+        wrapped agent if it implements the method; otherwise it’s a no-op.
+        """
+        if hasattr(self.agent, "reset_tool_choice"):
+            return self.agent.reset_tool_choice(*args, **kwargs)
+        # Safe default: do nothing
+
+    # Generic attribute passthrough so we stop getting bitten by other
+    # missing SDK shims (e.g. `choose_tool`, `stop_reason`, etc.).
+    def __getattr__(self, name):
+        """
+        Fallback for attributes the wrapper doesn’t explicitly expose.
+        Makes the wrapper behave like a transparent proxy for everything
+        we don’t care about.
+        """
+        return getattr(self.agent, name)
+
+
 
 # ----------------------------------------------------------------------
 # Helper functions (module‑level)
