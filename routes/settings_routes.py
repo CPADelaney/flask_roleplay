@@ -28,66 +28,77 @@ def _coerce_mods(raw: dict[str, Any]) -> dict[str, float]:
             logging.warning("Skipping non-numeric stat modifier %s=%s", k, v)
     return clean
 
-async def insert_missing_settings():
-    logging.info("[insert_missing_settings] Starting...")
-
-    # Create context for system operations
-    class SettingsContext:
-        user_id = 0  # System settings
-        conversation_id = 0
+async def insert_missing_settings(is_initial_setup: bool = False):
+    """
+    Insert any missing settings from the settings_data.json file.
     
-    ctx = SettingsContext()
-
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    settings_json_path = os.path.join(current_dir, "..", "data", "settings_data.json")
-    settings_json_path = os.path.normpath(settings_json_path)
-
-    try:
-        with open(settings_json_path, "r", encoding="utf-8") as f:
-            settings_data = json.load(f)
-    except FileNotFoundError:
-        logging.error(f"Settings file not found at {settings_json_path}!")
+    Args:
+        is_initial_setup: If True, skip canonical event logging (used during DB initialization)
+    """
+    import json
+    import os
+    from db.connection import get_db_connection_context
+    
+    # Load settings data
+    settings_file_path = os.path.join('data', 'settings_data.json')
+    
+    if not os.path.exists(settings_file_path):
+        print(f"Settings file not found at {settings_file_path}")
         return
-    except json.JSONDecodeError as e:
-        logging.error(f"Error decoding JSON in {settings_json_path}: {e}")
-        return
-
+    
+    with open(settings_file_path, 'r') as f:
+        settings_data = json.load(f)
+    
     async with get_db_connection_context() as conn:
-        async with conn.transaction():
-            rows = await conn.fetch("SELECT name FROM Settings")
-            existing = {row["name"] for row in rows}
-
-            inserted_count = 0
-            for s in settings_data:
-                sname = s["name"]
-                if sname in existing:
-                    continue
-
-                ef = json.dumps(s["enhanced_features"], ensure_ascii=False)
-                sm = json.dumps(_coerce_mods(s["stat_modifiers"]), ensure_ascii=False)
-                ae = json.dumps(s["activity_examples"],   ensure_ascii=False)
-
-                await conn.execute(
-                    """
-                    INSERT INTO Settings (name, mood_tone, enhanced_features,
-                                          stat_modifiers, activity_examples)
-                    VALUES ($1, $2, $3, $4, $5)
-                    """,
-                    sname, s["mood_tone"], ef, sm, ae
+        # Get existing setting names
+        existing_settings = await conn.fetch("""
+            SELECT name FROM Settings
+        """)
+        existing_names = {row['name'] for row in existing_settings}
+        
+        # Insert missing settings
+        inserted_count = 0
+        for setting in settings_data:
+            if setting['name'] not in existing_names:
+                # Convert stat_modifiers to JSONB format
+                stat_modifiers = json.dumps(setting.get('stat_modifiers', {}))
+                enhanced_features = json.dumps(setting.get('enhanced_features', []))
+                activity_examples = json.dumps(setting.get('activity_examples', []))
+                
+                await conn.execute("""
+                    INSERT INTO Settings (
+                        name, mood_tone, enhanced_features, 
+                        stat_modifiers, activity_examples
+                    )
+                    VALUES ($1, $2, $3::jsonb, $4::jsonb, $5::jsonb)
+                """,
+                    setting['name'],
+                    setting['mood_tone'],
+                    enhanced_features,
+                    stat_modifiers,
+                    activity_examples
                 )
-                logging.info("Inserted new setting: %s", sname)
                 inserted_count += 1
-
-            if inserted_count > 0:
-                # Log the settings update as a canonical event
+                print(f"Inserted setting: {setting['name']}")
+        
+        if inserted_count > 0:
+            print(f"Successfully inserted {inserted_count} new settings.")
+            
+            # Only log canonical event if not during initial setup
+            if not is_initial_setup:
+                # Create a mock context for logging
+                from types import SimpleNamespace
+                ctx = SimpleNamespace(user_id=1, conversation_id=1)
+                
+                from lore.core import canon
                 await canon.log_canonical_event(
                     ctx, conn,
-                    f"Game settings updated: {inserted_count} new settings added",
-                    tags=["system", "settings", "configuration"],
-                    significance=6
+                    f"Inserted {inserted_count} new settings from settings_data.json",
+                    tags=['settings', 'system', 'update'],
+                    significance=5
                 )
-
-    logging.info(f"[insert_missing_settings] Done. Inserted {inserted_count} new settings.")
+        else:
+            print("No new settings to insert.")
 
 
 @settings_bp.route('/insert_settings', methods=['POST'])
