@@ -74,6 +74,7 @@ lore_validator = ValidationManager()
 error_handler = ErrorHandler()
 
 _GOVERNANCE_CACHE: Dict[Tuple[int, int], NyxUnifiedGovernor] = {}
+_GOVERNANCE_INIT_LOCKS: Dict[Tuple[int, int], asyncio.Lock] = {}
 
 async def get_central_governance(user_id: int, conversation_id: int) -> NyxUnifiedGovernor:
     """
@@ -83,6 +84,7 @@ async def get_central_governance(user_id: int, conversation_id: int) -> NyxUnifi
     1. Only one governance instance exists per user/conversation pair
     2. The governance system is properly initialized
     3. All subsystems (including LoreSystem) are initialized in the correct order
+    4. Concurrent calls don't create duplicate instances
     
     Args:
         user_id: The user ID
@@ -93,59 +95,66 @@ async def get_central_governance(user_id: int, conversation_id: int) -> NyxUnifi
     """
     cache_key = (user_id, conversation_id)
     
-    # Check cache first
-    if cache_key in _GOVERNANCE_CACHE:
-        governor = _GOVERNANCE_CACHE[cache_key]
-        # Ensure it's initialized (in case it was cached before full init)
-        if hasattr(governor, '_initialized') and governor._initialized:
-            return governor
+    # Get or create a lock for this cache key to prevent concurrent initialization
+    if cache_key not in _GOVERNANCE_INIT_LOCKS:
+        _GOVERNANCE_INIT_LOCKS[cache_key] = asyncio.Lock()
+    
+    async with _GOVERNANCE_INIT_LOCKS[cache_key]:
+        # Check cache first (inside the lock to ensure thread safety)
+        if cache_key in _GOVERNANCE_CACHE:
+            governor = _GOVERNANCE_CACHE[cache_key]
+            # Ensure it's initialized
+            if hasattr(governor, '_initialized') and governor._initialized:
+                logger.debug(f"Returning cached initialized governor for {cache_key}")
+                return governor
+            else:
+                # Continue to initialization below
+                logger.info(f"Found uninitialized governor in cache for {cache_key}, initializing now")
         else:
-            # Continue to initialization below
-            logger.info(f"Found uninitialized governor in cache for {cache_key}, initializing now")
-    else:
-        # Create new governor
-        governor = NyxUnifiedGovernor(user_id, conversation_id)
-        _GOVERNANCE_CACHE[cache_key] = governor
-        logger.info(f"Created new governor for user {user_id}, conversation {conversation_id}")
-    
-    # Initialize the governor
-    # This will:
-    # 1. Create and initialize the LoreSystem (with proper dependency injection)
-    # 2. Initialize the memory system
-    # 3. Initialize the game state
-    # 4. Discover and register agents
-    await governor.initialize()
-    
-    logger.info(f"Governor fully initialized for user {user_id}, conversation {conversation_id}")
-    return governor
+            # Create new governor
+            governor = NyxUnifiedGovernor(user_id, conversation_id)
+            _GOVERNANCE_CACHE[cache_key] = governor
+            logger.info(f"Created new governor for user {user_id}, conversation {conversation_id}")
+        
+        # Check again if it was initialized while we were waiting for the lock
+        if hasattr(governor, '_initialized') and governor._initialized:
+            logger.debug(f"Governor was initialized while waiting for lock for {cache_key}")
+            return governor
+        
+        # Initialize the governor
+        # This will:
+        # 1. Create and initialize the LoreSystem (with proper dependency injection)
+        # 2. Initialize the memory system
+        # 3. Initialize the game state
+        # 4. Discover and register agents
+        logger.info(f"Initializing governor for user {user_id}, conversation {conversation_id}")
+        await governor.initialize()
+        
+        logger.info(f"Governor fully initialized for user {user_id}, conversation {conversation_id}")
+        return governor
 
 def clear_governance_cache(user_id: Optional[int] = None, conversation_id: Optional[int] = None):
     """
-    Clear governance instances from cache.
+    Clear governance cache entries.
     
     Args:
-        user_id: If provided, clear only entries for this user
-        conversation_id: If provided with user_id, clear only this specific entry
+        user_id: If provided with conversation_id, clear specific entry
+        conversation_id: If provided with user_id, clear specific entry
+        If neither provided, clear entire cache
     """
-    global _GOVERNANCE_CACHE
+    global _GOVERNANCE_CACHE, _GOVERNANCE_INIT_LOCKS
     
     if user_id is not None and conversation_id is not None:
-        # Clear specific entry
         cache_key = (user_id, conversation_id)
         if cache_key in _GOVERNANCE_CACHE:
             del _GOVERNANCE_CACHE[cache_key]
             logger.info(f"Cleared governance cache for {cache_key}")
-    elif user_id is not None:
-        # Clear all entries for a user
-        keys_to_remove = [key for key in _GOVERNANCE_CACHE if key[0] == user_id]
-        for key in keys_to_remove:
-            del _GOVERNANCE_CACHE[key]
-        logger.info(f"Cleared {len(keys_to_remove)} governance cache entries for user {user_id}")
+        if cache_key in _GOVERNANCE_INIT_LOCKS:
+            del _GOVERNANCE_INIT_LOCKS[cache_key]
     else:
-        # Clear entire cache
-        count = len(_GOVERNANCE_CACHE)
         _GOVERNANCE_CACHE.clear()
-        logger.info(f"Cleared entire governance cache ({count} entries)")
+        _GOVERNANCE_INIT_LOCKS.clear()
+        logger.info("Cleared entire governance cache")
 
 
 async def generate_lore_with_governance(
