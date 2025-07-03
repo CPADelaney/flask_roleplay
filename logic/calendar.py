@@ -21,8 +21,8 @@ async def get_chatgpt_response_no_function(conversation_id: int, aggregator_text
     Returns a plain text response.
     """
     client = get_openai_client()
-    messages = build_message_history(conversation_id, aggregator_text, user_input, limit=15)
-    response = client.chat.completions.create(
+    messages = await build_message_history(conversation_id, aggregator_text, user_input, limit=15)
+    response = client.chat.responses.create(
          model="gpt-4.1-nano",
          messages=messages,
          temperature=0.2,
