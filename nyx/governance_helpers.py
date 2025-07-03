@@ -5,6 +5,7 @@ import logging
 import traceback
 from typing import Dict, Any, Optional, Callable, Union, Awaitable
 from functools import wraps
+import inspect
 
 from nyx.nyx_governance import AgentType
 
