@@ -263,6 +263,10 @@ class LoreEvolutionResult(BaseModel):
 class SpecializedAgents:
     """Container for all specialized agents used by LocalLoreManager."""
     
+# ===== SPECIALIZED AGENTS =====
+class SpecializedAgents:
+    """Container for all specialized agents used by LocalLoreManager."""
+    
     def __init__(self):
         # Evolution specialists
         self.folklore_agent = Agent(
@@ -459,14 +463,69 @@ class LocalLoreManager(BaseLoreManager):
     def __init__(self, user_id: int, conversation_id: int):
         super().__init__(user_id, conversation_id)
         self.cache_namespace = "locallore"
-        self.agents = SpecializedAgents()
+        
+        # Keep specialized agents as a separate attribute
+        self.specialized_agents = SpecializedAgents()
+        
+        # Maintain a dictionary for compatibility with base class
+        # This maps agent names to the specialized agent instances
+        self.agents = {
+            # Evolution specialists
+            "folklore": self.specialized_agents.folklore_agent,
+            "historical": self.specialized_agents.historical_agent,
+            "supernatural": self.specialized_agents.supernatural_agent,
+            
+            # Connection specialists
+            "myth_history_connector": self.specialized_agents.myth_history_connector,
+            "history_landmark_connector": self.specialized_agents.history_landmark_connector,
+            
+            # Analysis specialists
+            "consistency": self.specialized_agents.consistency_agent,
+            "transmission": self.specialized_agents.transmission_agent,
+            
+            # Creative specialists
+            "variant": self.specialized_agents.variant_agent,
+            "tourism": self.specialized_agents.tourism_agent,
+            "tradition": self.specialized_agents.tradition_agent,
+            
+            # Master coordinator
+            "myth_evolution": self.specialized_agents.myth_evolution_agent
+        }
         
         # Initialize guardrails as InputGuardrail/OutputGuardrail instances
         self.theme_guardrail = InputGuardrail(matriarchal_theme_guardrail)
         self.coherence_guardrail = OutputGuardrail(content_coherence_guardrail)
+
+    async def initialize_agents(self):
+        """
+        Override agent initialization to handle both dictionary and specialized agents.
+        """
+        try:
+            # Call base class to add foundation agent
+            await super().initialize_agents()
+            
+            # The specialized agents are already initialized via SpecializedAgents()
+            # Add guardrails to all specialized agents
+            for agent_name, agent in self.agents.items():
+                if isinstance(agent, Agent) and agent_name != "foundation":
+                    # Add guardrails if not already present
+                    if not hasattr(agent, 'input_guardrails'):
+                        agent.input_guardrails = []
+                    if not hasattr(agent, 'output_guardrails'):
+                        agent.output_guardrails = []
+            
+            logger.info(f"All agents initialized for {self.__class__.__name__} user {self.user_id}")
+            
+        except Exception as e:
+            logger.error(f"Error initializing agents: {str(e)}")
+            raise
+    
         
-    async def initialize_tables(self):
-        """Ensure all local lore tables exist with enhanced fields."""
+    async def _initialize_tables(self):
+        """
+        Initialize database tables with enhanced fields.
+        Override from base class to handle LocalLoreManager specific tables.
+        """
         table_definitions = {
             "UrbanMyths": """
                 CREATE TABLE IF NOT EXISTS UrbanMyths (
@@ -610,6 +669,29 @@ class LocalLoreManager(BaseLoreManager):
         }
         
         await self.initialize_tables_for_class(table_definitions)
+
+    def get_agent(self, agent_name: str) -> Agent:
+        """
+        Get an agent by name, supporting both dictionary and attribute access.
+        
+        Args:
+            agent_name: Name of the agent to retrieve
+            
+        Returns:
+            Agent instance
+            
+        Raises:
+            KeyError: If agent not found
+        """
+        # First check the dictionary
+        if agent_name in self.agents:
+            return self.agents[agent_name]
+        
+        # Then check if it's accessible via specialized_agents
+        if hasattr(self.specialized_agents, agent_name):
+            return getattr(self.specialized_agents, agent_name)
+        
+        raise KeyError(f"Agent '{agent_name}' not found")
 
     # ===== URBAN MYTH OPERATIONS =====
     
@@ -872,16 +954,16 @@ class LocalLoreManager(BaseLoreManager):
     Return only the evolved description.
     """
             
-            # Select agent based on evolution type
+            # Select agent based on evolution type - now using the new pattern
             agent_map = {
-                EvolutionType.CULTURAL: self.agents.folklore_agent,
-                EvolutionType.POLITICAL: self.agents.historical_agent,
-                EvolutionType.RELIGIOUS: self.agents.supernatural_agent,
-                EvolutionType.TECHNOLOGICAL: self.agents.historical_agent,
-                EvolutionType.NATURAL: self.agents.myth_evolution_agent
+                EvolutionType.CULTURAL: self.specialized_agents.folklore_agent,
+                EvolutionType.POLITICAL: self.specialized_agents.historical_agent,
+                EvolutionType.RELIGIOUS: self.specialized_agents.supernatural_agent,
+                EvolutionType.TECHNOLOGICAL: self.specialized_agents.historical_agent,
+                EvolutionType.NATURAL: self.specialized_agents.myth_evolution_agent
             }
             
-            selected_agent = agent_map.get(evolution_type, self.agents.myth_evolution_agent)
+            selected_agent = agent_map.get(evolution_type, self.specialized_agents.myth_evolution_agent)
             
             # Add guardrails to the agent
             selected_agent.input_guardrails = [self.theme_guardrail]
@@ -1029,16 +1111,7 @@ class LocalLoreManager(BaseLoreManager):
         myth_id: int,
         history_id: int
     ) -> NarrativeConnection:
-        """
-        Create a narrative connection between a myth and historical event.
-        
-        Args:
-            myth_id: ID of the myth
-            history_id: ID of the historical event
-            
-        Returns:
-            NarrativeConnection with connection details
-        """
+        """Create a narrative connection between a myth and historical event."""
         with trace(
             "ConnectMythHistory", 
             group_id=self.trace_group_id,
@@ -1083,9 +1156,9 @@ Create a narrative connection that:
 Be specific and compelling in your connection.
 """
             
-            # Use the connector agent
+            # Use the connector agent via specialized_agents
             result = await Runner.run(
-                self.agents.myth_history_connector,
+                self.specialized_agents.myth_history_connector,
                 connection_prompt,
                 context=run_ctx.context
             )
@@ -1124,16 +1197,7 @@ Be specific and compelling in your connection.
         history_id: int,
         landmark_id: int
     ) -> NarrativeConnection:
-        """
-        Create a narrative connection between a historical event and landmark.
-        
-        Args:
-            history_id: ID of the historical event
-            landmark_id: ID of the landmark
-            
-        Returns:
-            NarrativeConnection with connection details
-        """
+        """Create a narrative connection between a historical event and landmark."""
         with trace(
             "ConnectHistoryLandmark", 
             group_id=self.trace_group_id,
@@ -1187,9 +1251,9 @@ Create a narrative connection that:
 Be historically plausible and culturally sensitive.
 """
             
-            # Use the connector agent
+            # Use the connector agent via specialized_agents
             result = await Runner.run(
-                self.agents.history_landmark_connector,
+                self.specialized_agents.history_landmark_connector,
                 connection_prompt,
                 context=run_ctx.context
             )
@@ -1214,7 +1278,7 @@ Be historically plausible and culturally sensitive.
                     )
             
             return connection
-
+            
     async def _update_cross_references(
         self, conn, type1: str, id1: int, type2: str, id2: int
     ):
@@ -1263,16 +1327,7 @@ Be historically plausible and culturally sensitive.
         location_id: int,
         auto_fix: bool = True
     ) -> ConsistencyCheckResult:
-        """
-        Analyze and optionally fix narrative inconsistencies for a location.
-        
-        Args:
-            location_id: ID of the location to check
-            auto_fix: Whether to automatically apply suggested fixes
-            
-        Returns:
-            ConsistencyCheckResult with analysis and fixes
-        """
+        """Analyze and optionally fix narrative inconsistencies for a location."""
         with trace(
             "EnsureNarrativeConsistency", 
             group_id=self.trace_group_id,
@@ -1321,9 +1376,9 @@ Be historically plausible and culturally sensitive.
             Rate overall consistency and matriarchal coherence (1-10).
             """
             
-            # Run consistency check
+            # Run consistency check using specialized agent
             result = await Runner.run(
-                self.agents.consistency_agent,
+                self.specialized_agents.consistency_agent,
                 consistency_prompt,
                 context=run_ctx.context
             )
@@ -2159,16 +2214,7 @@ Return a JSON object with your analysis and specific recommendations.
         myth_id: int,
         variant_count: int = 3
     ) -> Dict[str, Any]:
-        """
-        Create contradictory versions of a myth.
-        
-        Args:
-            myth_id: ID of the myth
-            variant_count: Number of variants to create
-            
-        Returns:
-            Dictionary with variant details
-        """
+        """Create contradictory versions of a myth."""
         run_ctx = self.create_run_context(ctx)
         
         with trace(
@@ -2209,9 +2255,9 @@ Make the contradictions meaningful - different moral lessons,
 different antagonists, different outcomes, etc.
 """
             
-            # Run variant generation
+            # Run variant generation using specialized agent
             result = await Runner.run(
-                self.agents.variant_agent,
+                self.specialized_agents.variant_agent,
                 variants_prompt,
                 context=run_ctx.context
             )
@@ -2243,7 +2289,7 @@ different antagonists, different outcomes, etc.
                 "variants_created": len(variants),
                 "variants": [v.model_dump() for v in variants]
             }
-
+            
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
         action_type="develop_tourist_attraction",
@@ -2256,15 +2302,7 @@ different antagonists, different outcomes, etc.
         ctx,
         myth_id: int
     ) -> TouristDevelopment:
-        """
-        Transform a myth into a tourist attraction plan.
-        
-        Args:
-            myth_id: ID of the myth
-            
-        Returns:
-            TouristDevelopment with commercialization plan
-        """
+        """Transform a myth into a tourist attraction plan."""
         run_ctx = self.create_run_context(ctx)
         
         with trace(
@@ -2304,9 +2342,9 @@ Create a comprehensive tourism plan that:
 Balance commercialization with cultural preservation.
 """
             
-            # Run tourism development
+            # Run tourism development using specialized agent
             result = await Runner.run(
-                self.agents.tourism_agent,
+                self.specialized_agents.tourism_agent,
                 tourism_prompt,
                 context=run_ctx.context
             )
@@ -2339,15 +2377,7 @@ Balance commercialization with cultural preservation.
         ctx,
         myth_id: int
     ) -> TraditionDynamics:
-        """
-        Compare oral vs written tradition versions of a myth.
-        
-        Args:
-            myth_id: ID of the myth
-            
-        Returns:
-            TraditionDynamics with tradition comparison
-        """
+        """Compare oral vs written tradition versions of a myth."""
         run_ctx = self.create_run_context(ctx)
         
         with trace(
@@ -2384,9 +2414,9 @@ Compare:
 Show specific differences in language, detail, and emphasis.
 """
             
-            # Run tradition analysis
+            # Run tradition analysis using specialized agent
             result = await Runner.run(
-                self.agents.tradition_agent,
+                self.specialized_agents.tradition_agent,
                 tradition_prompt,
                 context=run_ctx.context
             )
@@ -2636,17 +2666,7 @@ Show specific differences in language, detail, and emphasis.
         target_regions: List[str],
         transmission_steps: int = 3
     ) -> MythTransmissionResult:
-        """
-        Simulate how a myth spreads and transforms across regions.
-        
-        Args:
-            myth_id: ID of the myth to transmit
-            target_regions: Regions where the myth will spread
-            transmission_steps: Number of transmission steps to simulate
-            
-        Returns:
-            MythTransmissionResult with transmission details
-        """
+        """Simulate how a myth spreads and transforms across regions."""
         with trace(
             "SimulateMythTransmission", 
             group_id=self.trace_group_id,
@@ -2707,14 +2727,19 @@ Show specific differences in language, detail, and emphasis.
             CULTURAL CONTEXT:
             {self._format_cultural_elements(cultural_elements)}
             
-            5. Creates regional variants
+            Show how the myth transforms as it spreads, including:
+            1. Transmission paths between regions
+            2. Cultural adaptations in each region
+            3. Changes in believability and spread rate
+            4. Creation of regional variants
+            5. Preservation of matriarchal elements
             
             Include specific transmission paths and cultural adaptations.
             """
             
-            # Run transmission simulation
+            # Run transmission simulation using specialized agent
             result = await Runner.run(
-                self.agents.transmission_agent,
+                self.specialized_agents.transmission_agent,
                 transmission_prompt,
                 context=run_ctx.context
             )
