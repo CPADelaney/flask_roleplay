@@ -12,6 +12,19 @@ from lore.lore_system import LoreSystem
 
 settings_bp = Blueprint('settings_bp', __name__)
 
+def _coerce_mods(raw: dict[str, Any]) -> dict[str, float]:
+    """
+    Keep only keys that look like stats and values that can become floats.
+    Invalid items are silently skipped (but logged once).
+    """
+    clean: dict[str, float] = {}
+    for k, v in (raw or {}).items():
+        try:
+            clean[k.lower()] = float(v)
+        except (TypeError, ValueError):
+            logging.warning("Skipping non-numeric stat modifier %s=%s", k, v)
+    return clean
+
 async def insert_missing_settings():
     logging.info("[insert_missing_settings] Starting...")
 
@@ -38,27 +51,29 @@ async def insert_missing_settings():
 
     async with get_db_connection_context() as conn:
         async with conn.transaction():
-            # Fetch existing settings
             rows = await conn.fetch("SELECT name FROM Settings")
-            existing = {row['name'] for row in rows}
+            existing = {row["name"] for row in rows}
 
             inserted_count = 0
             for s in settings_data:
                 sname = s["name"]
-                if sname not in existing:
-                    # Settings are system-level configuration, not world lore
-                    # So direct insert is acceptable, but we can log it
-                    ef = json.dumps(s["enhanced_features"])
-                    sm = json.dumps(s["stat_modifiers"])
-                    ae = json.dumps(s["activity_examples"])
+                if sname in existing:
+                    continue
 
-                    await conn.execute("""
-                        INSERT INTO Settings (name, mood_tone, enhanced_features, stat_modifiers, activity_examples)
-                        VALUES ($1, $2, $3, $4, $5)
-                    """, sname, s["mood_tone"], ef, sm, ae)
-                    
-                    logging.info(f"Inserted new setting: {sname}")
-                    inserted_count += 1
+                ef = json.dumps(s["enhanced_features"], ensure_ascii=False)
+                sm = json.dumps(_coerce_mods(s["stat_modifiers"]), ensure_ascii=False)
+                ae = json.dumps(s["activity_examples"],   ensure_ascii=False)
+
+                await conn.execute(
+                    """
+                    INSERT INTO Settings (name, mood_tone, enhanced_features,
+                                          stat_modifiers, activity_examples)
+                    VALUES ($1, $2, $3, $4, $5)
+                    """,
+                    sname, s["mood_tone"], ef, sm, ae
+                )
+                logging.info("Inserted new setting: %s", sname)
+                inserted_count += 1
 
             if inserted_count > 0:
                 # Log the settings update as a canonical event
