@@ -7,8 +7,22 @@
       "Dormitories act as cages of judgment, with NPCs infiltrating your personal space to amplify humiliation. Gossip flows relentlessly, ensuring no failure is private."
     ],
     "stat_modifiers": {
-      "closeness": "rises as NPCs invade every aspect of your life. Shame increases with every public task, becoming a permanent modifier.",
-      "dependency": "grows as NPCs offer 'friendship' in exchange for degrading tasks."
+      "closeness": {
+        "delta": 15,
+        "description": "rises as NPCs invade every aspect of your life"
+      },
+      "dependency": {
+        "delta": 10,
+        "description": "grows as NPCs offer 'friendship' in exchange for degrading tasks"
+      },
+      "confidence": {
+        "delta": -15,
+        "description": "erodes through constant social humiliation"
+      },
+      "obedience": {
+        "delta": 10,
+        "description": "increases through peer pressure and group dynamics"
+      }
     },
     "activity_examples": [
       "Forced to perform demeaning tasks in front of classmates during group projects.",
@@ -26,13 +40,26 @@
       "Professional authority is wielded to coerce submission, tying humiliation to job security."
     ],
     "stat_modifiers": {
-      "dominance": "spikes due to managerial control.",
-      "obedience": "locks at higher levels, making defiance impossible.",
-      "shame": "permanently rises with public performance reviews."
+      "dominance": {
+        "delta": 20,
+        "description": "spikes due to managerial control"
+      },
+      "obedience": {
+        "delta": 15,
+        "description": "locks at higher levels, making defiance impossible"
+      },
+      "confidence": {
+        "delta": -10,
+        "description": "diminished through public performance reviews"
+      },
+      "mental_resilience": {
+        "delta": -10,
+        "description": "worn down by corporate pressure"
+      }
     },
     "activity_examples": [
       "Crawling under conference tables while balancing items on your back during 'team-building exercises.'",
-      "Publicly reciting demeaning apologies during performance reviews, amplifying your Shame.",
+      "Publicly reciting demeaning apologies during performance reviews, amplifying your humiliation.",
       "Wearing a placard listing your 'shortcomings' during work hours."
     ]
   },
@@ -44,8 +71,18 @@
       "NPCs manipulate casual encounters to trap you in degrading scenarios."
     ],
     "stat_modifiers": {
-      "closeness": "rises as NPCs exploit casual encounters to assert dominance.",
-      "shame": "spikes during public failures, ensuring no dignity remains."
+      "closeness": {
+        "delta": 10,
+        "description": "rises as NPCs exploit casual encounters to assert dominance"
+      },
+      "confidence": {
+        "delta": -15,
+        "description": "drops during public failures"
+      },
+      "corruption": {
+        "delta": 10,
+        "description": "increases through repeated public exposure"
+      }
     },
     "activity_examples": [
       "Singing apologies at a crowded park, with NPCs recording and sharing the footage.",
@@ -60,8 +97,22 @@
       "Lawlessness amplifies physical dominance, with punishments designed to leave lasting scars."
     ],
     "stat_modifiers": {
-      "physical_endurance": "is tested through grueling tasks.",
-      "cruelty": "of NPCs escalates in response to resistance."
+      "physical_endurance": {
+        "delta": -10,
+        "description": "tested through grueling survival tasks"
+      },
+      "cruelty": {
+        "delta": 20,
+        "description": "of NPCs escalates in response to resistance"
+      },
+      "dependency": {
+        "delta": 15,
+        "description": "extreme reliance on resource controllers"
+      },
+      "willpower": {
+        "delta": -10,
+        "description": "broken by harsh conditions"
+      }
     },
     "activity_examples": [
       "Digging ditches in the blistering sun while NPCs mock your weakness.",
@@ -72,13 +123,27 @@
     "name": "Traditional Horror",
     "mood_tone": "Dark and foreboding, where fear and submission intertwine in a supernatural nightmare.",
     "enhanced_features": [
-      "NPCs use the environment’s eerie elements to isolate and disorient you.",
+      "NPCs use the environment's eerie elements to isolate and disorient you.",
       "Shadows shift and objects move, creating an inescapable sense of vulnerability.",
       "Paranormal forces manipulate your senses, deepening your vulnerability."
     ],
     "stat_modifiers": {
-      "intensity": "rises during fear-inducing tasks.",
-      "corruption": "increases as you confront otherworldly influences."
+      "intensity": {
+        "delta": 15,
+        "description": "rises during fear-inducing tasks"
+      },
+      "corruption": {
+        "delta": 10,
+        "description": "increases as you confront otherworldly influences"
+      },
+      "mental_resilience": {
+        "delta": -15,
+        "description": "eroded by supernatural terror"
+      },
+      "confidence": {
+        "delta": -10,
+        "description": "shattered by inexplicable events"
+      }
     },
     "activity_examples": [
       "Crawling through haunted corridors while NPCs taunt you from unseen vantage points.",
@@ -95,8 +160,22 @@
       "Supernatural forces punish defiance with physical and psychological torment."
     ],
     "stat_modifiers": {
-      "corruption": "escalates with every completed ritual, permanently altering your dialogue and choices.",
-      "obedience": "locks through repeated indoctrination tasks."
+      "corruption": {
+        "delta": 20,
+        "description": "escalates with every completed ritual, permanently altering your dialogue and choices"
+      },
+      "obedience": {
+        "delta": 15,
+        "description": "locks through repeated indoctrination tasks"
+      },
+      "willpower": {
+        "delta": -15,
+        "description": "erodes under mystical influence"
+      },
+      "lust": {
+        "delta": 10,
+        "description": "awakened through ritualistic practices"
+      }
     },
     "activity_examples": [
       "Kneeling in a summoning circle, chanting humiliating phrases dictated by NPCs.",
@@ -113,8 +192,22 @@
       "Vampire hierarchies demand constant displays of loyalty through degrading acts."
     ],
     "stat_modifiers": {
-      "lust": "spikes during intimate tasks.",
-      "corruption": "rises as submission feels increasingly seductive."
+      "lust": {
+        "delta": 15,
+        "description": "spikes during intimate vampire encounters"
+      },
+      "corruption": {
+        "delta": 15,
+        "description": "rises as submission feels increasingly seductive"
+      },
+      "willpower": {
+        "delta": -10,
+        "description": "weakens under vampiric influence"
+      },
+      "dependency": {
+        "delta": 15,
+        "description": "grows through blood bonds"
+      }
     },
     "activity_examples": [
       "Serving as a blood bearer during ceremonies, kneeling to offer yourself as a living chalice.",
@@ -130,9 +223,22 @@
       "Public punishments are commonplace, drawing crowds to witness your humiliation."
     ],
     "stat_modifiers": {
-      "dominance": "remains perpetually high due to the systemic power imbalance.",
-      "trust": "becomes nearly impossible to gain without total obedience.",
-      "respect": "is nearly impossible to earn without extreme acts of devotion."
+      "dominance": {
+        "delta": 20,
+        "description": "remains perpetually high due to the systemic power imbalance"
+      },
+      "trust": {
+        "delta": -15,
+        "description": "becomes nearly impossible to gain without total obedience"
+      },
+      "respect": {
+        "delta": -20,
+        "description": "is nearly impossible to earn without extreme acts of devotion"
+      },
+      "obedience": {
+        "delta": 20,
+        "description": "enforced through legal system"
+      }
     },
     "activity_examples": [
       "Kneeling during public ceremonies while NPCs list your 'offenses.'",
@@ -148,9 +254,22 @@
       "Ceremonial authority ensures punishments are grand and theatrical."
     ],
     "stat_modifiers": {
-      "respect": "must be earned through acts of extreme servitude.",
-      "closeness": "rises with court advisors and servants who oversee your tasks.",
-      "shame": "rises with public punishments during court functions."
+      "respect": {
+        "delta": -15,
+        "description": "must be earned through acts of extreme servitude"
+      },
+      "closeness": {
+        "delta": 15,
+        "description": "rises with court advisors and servants who oversee your tasks"
+      },
+      "confidence": {
+        "delta": -15,
+        "description": "diminished through public court ceremonies"
+      },
+      "obedience": {
+        "delta": 10,
+        "description": "reinforced through royal protocol"
+      }
     },
     "activity_examples": [
       "Cleaning golden staircases while nobles step over you.",
@@ -166,9 +285,22 @@
       "Social norms demand visible acts of obedience, ensuring your degradation is always on display."
     ],
     "stat_modifiers": {
-      "respect": "is rarely granted, with men seen as inherently inferior.",
-      "trust": "grows only through unflinching compliance.",
-      "dependency": "grows as laws strip away autonomy."
+      "respect": {
+        "delta": -20,
+        "description": "is rarely granted, with men seen as inherently inferior"
+      },
+      "trust": {
+        "delta": 10,
+        "description": "grows only through unflinching compliance"
+      },
+      "dependency": {
+        "delta": 15,
+        "description": "grows as laws strip away autonomy"
+      },
+      "obedience": {
+        "delta": 15,
+        "description": "socially enforced at every level"
+      }
     },
     "activity_examples": [
       "Participating in town square punishments, with NPCs ensuring large crowds witness your shame.",
@@ -183,8 +315,22 @@
       "Primal instincts and unfamiliar customs leave you constantly at a disadvantage."
     ],
     "stat_modifiers": {
-      "intensity": "escalates rapidly as the setting highlights the power gap.",
-      "corruption": "rises as you adapt to alien norms that redefine submission."
+      "intensity": {
+        "delta": 20,
+        "description": "escalates rapidly as the setting highlights the power gap"
+      },
+      "corruption": {
+        "delta": 15,
+        "description": "rises as you adapt to alien norms that redefine submission"
+      },
+      "physical_endurance": {
+        "delta": -10,
+        "description": "tested by inhuman strength and stamina requirements"
+      },
+      "willpower": {
+        "delta": -10,
+        "description": "overwhelmed by primal dominance"
+      }
     },
     "activity_examples": [
       "Forced to serve as a perch for a winged NPC, enduring her weight as she 'rests.'",
@@ -199,8 +345,22 @@
       "Every system and structure is designed to magnify your vulnerability."
     ],
     "stat_modifiers": {
-      "dominance": "rises as NPCs control access to essential resources.",
-      "closeness": "grows as confined quarters force frequent interactions."
+      "dominance": {
+        "delta": 15,
+        "description": "rises as NPCs control access to essential resources"
+      },
+      "closeness": {
+        "delta": 15,
+        "description": "grows as confined quarters force frequent interactions"
+      },
+      "dependency": {
+        "delta": 20,
+        "description": "absolute reliance on life support systems"
+      },
+      "mental_resilience": {
+        "delta": -10,
+        "description": "strained by isolation and confinement"
+      }
     },
     "activity_examples": [
       "Cleaning exterior ship surfaces while tethered by a thin cord, with NPCs watching and mocking your fear of floating away.",
@@ -215,8 +375,22 @@
       "NPC customs and laws force compliance, framing your submission as a cultural necessity."
     ],
     "stat_modifiers": {
-      "dominance": "is amplified by technological superiority.",
-      "intensity": "escalates in the confined, sterile setting."
+      "dominance": {
+        "delta": 20,
+        "description": "is amplified by technological superiority"
+      },
+      "intensity": {
+        "delta": 15,
+        "description": "escalates in the confined, sterile setting"
+      },
+      "obedience": {
+        "delta": 15,
+        "description": "enforced through constant surveillance"
+      },
+      "willpower": {
+        "delta": -10,
+        "description": "suppressed by alien psychology"
+      }
     },
     "activity_examples": [
       "Reciting alien creeds while restrained in a stasis field, with NPCs grading your performance.",
@@ -231,8 +405,22 @@
       "NPCs use leaked data to blackmail you, amplifying your reliance on their protection."
     ],
     "stat_modifiers": {
-      "dominance": "rises through NPCs' technological control.",
-      "closeness": "increases as NPCs manipulate digital connections to draw you closer."
+      "dominance": {
+        "delta": 15,
+        "description": "rises through NPCs' technological control"
+      },
+      "closeness": {
+        "delta": 10,
+        "description": "increases as NPCs manipulate digital connections to draw you closer"
+      },
+      "mental_resilience": {
+        "delta": -15,
+        "description": "overwhelmed by constant surveillance"
+      },
+      "corruption": {
+        "delta": 10,
+        "description": "normalized through digital conditioning"
+      }
     },
     "activity_examples": [
       "Publicly confessing imagined crimes during holographic broadcasts, with your face projected citywide.",
@@ -247,8 +435,22 @@
       "Smart devices monitor and enforce obedience, issuing reminders or punishments remotely."
     ],
     "stat_modifiers": {
-      "dominance": "remains high due to systemic enforcement.",
-      "corruption": "escalates as you adapt to a world of unyielding female superiority."
+      "dominance": {
+        "delta": 20,
+        "description": "remains high due to systemic enforcement"
+      },
+      "corruption": {
+        "delta": 15,
+        "description": "escalates as you adapt to a world of unyielding female superiority"
+      },
+      "obedience": {
+        "delta": 20,
+        "description": "programmed through technology"
+      },
+      "willpower": {
+        "delta": -15,
+        "description": "systematically broken"
+      }
     },
     "activity_examples": [
       "Performing tasks dictated by AI-controlled mistresses, such as fetching items or cleaning devices.",
@@ -260,11 +462,25 @@
     "mood_tone": "Mystical and grandiose, where magic and nobility combine to enforce your submission.",
     "enhanced_features": [
       "Magical laws bind you to NPCs, ensuring rebellion carries swift and supernatural consequences.",
-      "The setting’s grandeur magnifies your insignificance."
+      "The setting's grandeur magnifies your insignificance."
     ],
     "stat_modifiers": {
-      "respect": "is earned only through grand acts of loyalty.",
-      "closeness": "rises with rulers and magical mentors who control your fate."
+      "respect": {
+        "delta": -10,
+        "description": "is earned only through grand acts of loyalty"
+      },
+      "closeness": {
+        "delta": 15,
+        "description": "rises with rulers and magical mentors who control your fate"
+      },
+      "corruption": {
+        "delta": 10,
+        "description": "increases through magical binding"
+      },
+      "obedience": {
+        "delta": 15,
+        "description": "magically enforced"
+      }
     },
     "activity_examples": [
       "Binding magical oaths that compel obedience, enforced through physical or emotional pain.",
@@ -279,11 +495,25 @@
       "Quests are manipulated into tasks that degrade rather than empower."
     ],
     "stat_modifiers": {
-      "respect": "rises only through extreme acts of devotion.",
-      "closeness": "increases with magical rulers who exploit your 'destiny.'"
+      "respect": {
+        "delta": -10,
+        "description": "rises only through extreme acts of devotion"
+      },
+      "closeness": {
+        "delta": 15,
+        "description": "increases with magical rulers who exploit your 'destiny'"
+      },
+      "willpower": {
+        "delta": -10,
+        "description": "twisted through false heroism"
+      },
+      "corruption": {
+        "delta": 10,
+        "description": "masked as noble sacrifice"
+      }
     },
     "activity_examples": [
-      "Cleaning a powerful NPC’s magical artifacts, with mistakes resulting in immediate punishment.",
+      "Cleaning a powerful NPC's magical artifacts, with mistakes resulting in immediate punishment.",
       "Wearing demeaning 'heroic' attire during public quests, ensuring your humiliation is visible to all."
     ]
   },
@@ -295,8 +525,22 @@
       "NPCs orchestrate events that subtly trap you into public embarrassment."
     ],
     "stat_modifiers": {
-      "respect": "is hard to gain and easily lost.",
-      "closeness": "rises as NPCs maintain appearances by engaging frequently."
+      "respect": {
+        "delta": -15,
+        "description": "is hard to gain and easily lost"
+      },
+      "closeness": {
+        "delta": 10,
+        "description": "rises as NPCs maintain appearances by engaging frequently"
+      },
+      "confidence": {
+        "delta": -20,
+        "description": "destroyed through social manipulation"
+      },
+      "mental_resilience": {
+        "delta": -10,
+        "description": "worn down by constant social pressure"
+      }
     },
     "activity_examples": [
       "Serving drinks during formal events, wearing attire chosen specifically to humiliate you.",
@@ -311,8 +555,22 @@
       "NPCs control access to comfort, food, and freedom."
     ],
     "stat_modifiers": {
-      "closeness": "intensifies as NPCs oversee your tasks personally.",
-      "trust": "is hard to build due to constant surveillance."
+      "closeness": {
+        "delta": 20,
+        "description": "intensifies as NPCs oversee your tasks personally"
+      },
+      "trust": {
+        "delta": -10,
+        "description": "is hard to build due to constant surveillance"
+      },
+      "dependency": {
+        "delta": 15,
+        "description": "grows in isolation"
+      },
+      "willpower": {
+        "delta": -10,
+        "description": "erodes in confinement"
+      }
     },
     "activity_examples": [
       "Completing degrading chores while NPCs critique your performance.",
@@ -323,12 +581,26 @@
     "name": "Gothic Carnival/Festival",
     "mood_tone": "Whimsical and chaotic, with a dark undercurrent of manipulation and control.",
     "enhanced_features": [
-      "NPCs use the carnival’s surreal elements to isolate and confuse you, ensuring submission feels inescapable.",
+      "NPCs use the carnival's surreal elements to isolate and confuse you, ensuring submission feels inescapable.",
       "Social norms are skewed, making resistance seem irrational."
     ],
     "stat_modifiers": {
-      "closeness": "rises as NPCs engage frequently in the festival’s chaotic events.",
-      "corruption": "escalates as the setting’s surreal elements warp your perspective."
+      "closeness": {
+        "delta": 10,
+        "description": "rises as NPCs engage frequently in the festival's chaotic events"
+      },
+      "corruption": {
+        "delta": 15,
+        "description": "escalates as the setting's surreal elements warp your perspective"
+      },
+      "mental_resilience": {
+        "delta": -15,
+        "description": "confused by shifting reality"
+      },
+      "confidence": {
+        "delta": -10,
+        "description": "lost in the chaos"
+      }
     },
     "activity_examples": [
       "Participating in rigged games designed to ensure your public failure.",
@@ -342,8 +614,22 @@
       "The colony itself is designed to highlight your smallness, with towering structures and colossal NPCs reminding you of your inferiority."
     ],
     "stat_modifiers": {
-      "dominance": "is amplified by the NPCs' sheer size and power.",
-      "intensity": "escalates as physical tasks push you to your limits."
+      "dominance": {
+        "delta": 20,
+        "description": "is amplified by the NPCs' sheer size and power"
+      },
+      "intensity": {
+        "delta": 20,
+        "description": "escalates as physical tasks push you to your limits"
+      },
+      "physical_endurance": {
+        "delta": -15,
+        "description": "constantly tested by size disparity"
+      },
+      "confidence": {
+        "delta": -20,
+        "description": "crushed by physical inadequacy"
+      }
     },
     "activity_examples": [
       "Acting as a human footstool during communal gatherings, enduring hours of physical strain and mockery.",
@@ -357,8 +643,22 @@
       "The decayed surroundings create constant danger, forcing reliance on NPCs for protection and resources."
     ],
     "stat_modifiers": {
-      "closeness": "rises as NPCs exploit your dependence.",
-      "dominance": "is amplified by the environment’s inherent power imbalance."
+      "closeness": {
+        "delta": 15,
+        "description": "rises as NPCs exploit your dependence"
+      },
+      "dominance": {
+        "delta": 15,
+        "description": "is amplified by the environment's inherent power imbalance"
+      },
+      "mental_resilience": {
+        "delta": -15,
+        "description": "erodes in the desolate environment"
+      },
+      "physical_endurance": {
+        "delta": -10,
+        "description": "worn by harsh conditions"
+      }
     },
     "activity_examples": [
       "Scavenging dangerous areas for resources under the threat of punishment for failure.",
@@ -372,8 +672,22 @@
       "The water itself feels oppressive, limiting your mobility and visibility."
     ],
     "stat_modifiers": {
-      "closeness": "rises as NPCs enforce dependency on oxygen and shelter.",
-      "corruption": "increases as you adapt to the setting’s unnatural, oppressive atmosphere."
+      "closeness": {
+        "delta": 15,
+        "description": "rises as NPCs enforce dependency on oxygen and shelter"
+      },
+      "corruption": {
+        "delta": 10,
+        "description": "increases as you adapt to the setting's unnatural, oppressive atmosphere"
+      },
+      "dependency": {
+        "delta": 20,
+        "description": "absolute for air and protection"
+      },
+      "physical_endurance": {
+        "delta": -10,
+        "description": "constantly tested underwater"
+      }
     },
     "activity_examples": [
       "Completing underwater tasks under constant threat of drowning, with NPCs controlling your oxygen supply.",
@@ -387,8 +701,22 @@
       "Every movement is monitored, with guards using the system to amplify your humiliation."
     ],
     "stat_modifiers": {
-      "dominance": "remains perpetually high due to systemic control.",
-      "closeness": "intensifies with NPCs who oversee your punishments."
+      "dominance": {
+        "delta": 20,
+        "description": "remains perpetually high due to systemic control"
+      },
+      "closeness": {
+        "delta": 15,
+        "description": "intensifies with NPCs who oversee your punishments"
+      },
+      "willpower": {
+        "delta": -20,
+        "description": "systematically broken"
+      },
+      "obedience": {
+        "delta": 20,
+        "description": "enforced through harsh discipline"
+      }
     },
     "activity_examples": [
       "Begging for food during roll call, groveling at guards' feet.",
@@ -402,8 +730,22 @@
       "The circus becomes a stage for your degradation, with every act designed to draw laughter and scorn."
     ],
     "stat_modifiers": {
-      "closeness": "rises as NPCs involve you in increasingly public performances.",
-      "corruption": "escalates as you adapt to the degrading role."
+      "closeness": {
+        "delta": 10,
+        "description": "rises as NPCs involve you in increasingly public performances"
+      },
+      "corruption": {
+        "delta": 15,
+        "description": "escalates as you adapt to the degrading role"
+      },
+      "confidence": {
+        "delta": -20,
+        "description": "destroyed through public spectacle"
+      },
+      "mental_resilience": {
+        "delta": -15,
+        "description": "broken by constant mockery"
+      }
     },
     "activity_examples": [
       "Performing 'tricks' for the crowd, such as balancing objects while crawling.",
@@ -417,8 +759,22 @@
       "The heat and lack of shelter create constant vulnerability, with NPCs leveraging the environment to enforce control."
     ],
     "stat_modifiers": {
-      "intensity": "remains high due to the brutal conditions.",
-      "trust": "is hard to gain, as NPCs value their resources above all else."
+      "intensity": {
+        "delta": 20,
+        "description": "remains high due to the brutal conditions"
+      },
+      "trust": {
+        "delta": -10,
+        "description": "is hard to gain, as NPCs value their resources above all else"
+      },
+      "physical_endurance": {
+        "delta": -15,
+        "description": "constantly drained by harsh conditions"
+      },
+      "dependency": {
+        "delta": 20,
+        "description": "absolute for water and shelter"
+      }
     },
     "activity_examples": [
       "Fetching water from distant wells, collapsing under the harsh sun as NPCs mock your weakness.",
@@ -432,8 +788,22 @@
       "Every aspect of life is controlled, from meals to social interactions, ensuring no escape from NPC influence."
     ],
     "stat_modifiers": {
-      "corruption": "rises with exposure to indoctrination.",
-      "dependency": "grows as NPCs enforce communal rituals."
+      "corruption": {
+        "delta": 20,
+        "description": "rises with exposure to indoctrination"
+      },
+      "dependency": {
+        "delta": 15,
+        "description": "grows as NPCs enforce communal rituals"
+      },
+      "willpower": {
+        "delta": -20,
+        "description": "systematically erased through cult practices"
+      },
+      "obedience": {
+        "delta": 20,
+        "description": "absolute through indoctrination"
+      }
     },
     "activity_examples": [
       "Publicly confessing imagined sins, groveling for forgiveness at the feet of NPCs.",
@@ -447,8 +817,22 @@
       "The dungeon itself becomes a tool of control, with chains, restraints, and cold stone amplifying your helplessness."
     ],
     "stat_modifiers": {
-      "intensity": "spikes due to the setting’s inherent harshness.",
-      "closeness": "increases as NPCs personally oversee your punishments."
+      "intensity": {
+        "delta": 20,
+        "description": "spikes due to the setting's inherent harshness"
+      },
+      "closeness": {
+        "delta": 15,
+        "description": "increases as NPCs personally oversee your punishments"
+      },
+      "physical_endurance": {
+        "delta": -15,
+        "description": "tested by harsh conditions"
+      },
+      "mental_resilience": {
+        "delta": -15,
+        "description": "broken by darkness and torture"
+      }
     },
     "activity_examples": [
       "Enduring public whippings in the dungeon square, with crowds gathered to watch your humiliation.",
@@ -459,15 +843,29 @@
     "name": "Floating Sky City",
     "mood_tone": "Awe-inspiring yet oppressive, where the grandeur of the city magnifies your insignificance.",
     "enhanced_features": [
-      "The city’s height and isolation ensure no escape, with every act of defiance punished publicly."
+      "The city's height and isolation ensure no escape, with every act of defiance punished publicly."
     ],
     "stat_modifiers": {
-      "respect": "is granted only through extreme acts of loyalty.",
-      "dominance": "remains high due to the rulers’ elevated status."
+      "respect": {
+        "delta": -15,
+        "description": "is granted only through extreme acts of loyalty"
+      },
+      "dominance": {
+        "delta": 15,
+        "description": "remains high due to the rulers' elevated status"
+      },
+      "dependency": {
+        "delta": 10,
+        "description": "constant reminder of precarious position"
+      },
+      "confidence": {
+        "delta": -10,
+        "description": "diminished by vertigo and fear"
+      }
     },
     "activity_examples": [
       "Cleaning ornate statues while suspended above the city, amplifying both fear and humiliation.",
-      "Participating in public ceremonies where you’re paraded as an example of loyalty and submission."
+      "Participating in public ceremonies where you're paraded as an example of loyalty and submission."
     ]
   },
   {
@@ -477,10 +875,13 @@
       "The setting shifts dynamically based on NPC dominance and your own vulnerability."
     ],
     "stat_modifiers": {
-      "depends": "on the NPCs and tasks involved."
+      "variable": {
+        "delta": 0,
+        "description": "depends on the NPCs and tasks involved"
+      }
     },
     "activity_examples": [
-      "Constructed on the spot to fit the narrative’s flow, ensuring maximum humiliation and submission."
+      "Constructed on the spot to fit the narrative's flow, ensuring maximum humiliation and submission."
     ]
   },
   {
@@ -488,15 +889,25 @@
     "mood_tone": "An ornate setting where every stage and backstage corner can become an arena for dramatic humiliation.",
     "enhanced_features": [
       "Spotlights and curtains let NPCs orchestrate public embarrassment in front of live audiences.",
-      "Actors use rehearsal excuses to position you in demeaning roles, ensuring you’re always on display."
+      "Actors use rehearsal excuses to position you in demeaning roles, ensuring you're always on display."
     ],
     "stat_modifiers": {
-      "exposure": "spikes when forced to perform humiliating tasks under stage lights.",
-      "obedience": "increases as you rely on NPCs’ approval to avoid a ‘scene’ in front of onlookers."
+      "confidence": {
+        "delta": -20,
+        "description": "destroyed by public performances"
+      },
+      "obedience": {
+        "delta": 10,
+        "description": "increases as you rely on NPCs' approval to avoid a 'scene' in front of onlookers"
+      },
+      "corruption": {
+        "delta": 10,
+        "description": "normalized through repeated performances"
+      }
     },
     "activity_examples": [
       "Forced to audition in front of a critical crowd, reciting lines that highlight your inferiority.",
-      "Assigned to costume work, made to dress in embarrassing attire, then paraded on stage as an ‘extra.’",
+      "Assigned to costume work, made to dress in embarrassing attire, then paraded on stage as an 'extra.'",
       "Clean-up duty during live shows, crawling around to pick up scattered props as the audience snickers."
     ]
   },
@@ -505,16 +916,26 @@
     "mood_tone": "A decaying venue steeped in shadows and echoes of past performances, where isolation intensifies every threat.",
     "enhanced_features": [
       "Dark corridors and creaking floors amplify a sense of being trapped.",
-      "Ghostly or eerie backdrops let NPCs set sinister ‘scenes’ of torment, blurring reality and performance."
+      "Ghostly or eerie backdrops let NPCs set sinister 'scenes' of torment, blurring reality and performance."
     ],
     "stat_modifiers": {
-      "fear": "soars due to the eerie atmosphere, making you more compliant.",
-      "dependency": "increases as NPCs become your only guide through the haunting space."
+      "mental_resilience": {
+        "delta": -20,
+        "description": "eroded by eerie atmosphere"
+      },
+      "dependency": {
+        "delta": 15,
+        "description": "increases as NPCs become your only guide through the haunting space"
+      },
+      "willpower": {
+        "delta": -10,
+        "description": "weakened by isolation and fear"
+      }
     },
     "activity_examples": [
       "Guided through dark passageways, forced to recite apologies that echo off distant walls.",
       "Told to sit alone on the ancient stage, under a single flickering spotlight, while NPCs watch from the shadows.",
-      "Forced to re-enact old play scenes with humiliating roles, as if haunted by past actors’ spirits."
+      "Forced to re-enact old play scenes with humiliating roles, as if haunted by past actors' spirits."
     ]
   },
   {
@@ -525,12 +946,22 @@
       "Virtual environments offer infinite ways to orchestrate embarrassments, from glitchy prisons to forced illusions."
     ],
     "stat_modifiers": {
-      "closeness": "rises as NPCs monitor every digital interaction.",
-      "anonymity": "drops, leaving you vulnerable and easily exploited."
+      "closeness": {
+        "delta": 15,
+        "description": "rises as NPCs monitor every digital interaction"
+      },
+      "mental_resilience": {
+        "delta": -20,
+        "description": "fragmented by digital manipulation"
+      },
+      "corruption": {
+        "delta": 15,
+        "description": "accelerated through digital conditioning"
+      }
     },
     "activity_examples": [
       "Forced to traverse glitchy mazes where each wrong turn broadcasts a humiliating avatar performance.",
-      "NPCs upload your private confessions to public forums, skyrocketing your shame stat.",
+      "NPCs upload your private confessions to public forums, skyrocketing your humiliation.",
       "Involuntary participation in a live-streamed game show, rigged to expose your every failure."
     ]
   },
@@ -542,11 +973,21 @@
       "Dim lighting and sultry music mask the cruelty lurking beneath each witty remark."
     ],
     "stat_modifiers": {
-      "exposure": "spikes if you’re brought on stage for impromptu acts.",
-      "shame": "intensifies with each mocking cheer from the audience."
+      "lust": {
+        "delta": 15,
+        "description": "heightened by sensual atmosphere"
+      },
+      "confidence": {
+        "delta": -15,
+        "description": "torn down through public mockery"
+      },
+      "corruption": {
+        "delta": 10,
+        "description": "normalized through repeated exposure"
+      }
     },
     "activity_examples": [
-      "NPC hostess inviting you up for a ‘special performance’ where you’re dressed in provocative costumes.",
+      "NPC hostess inviting you up for a 'special performance' where you're dressed in provocative costumes.",
       "Carrying drinks to patrons while wearing a humiliating label or accessory, ensuring everyone sees your role.",
       "Dancing clumsily in front of the audience under NPC direction, each misstep greeted with laughs."
     ]
@@ -555,17 +996,27 @@
     "name": "Graveyard",
     "mood_tone": "A somber, eerie place where silence is a canvas for psychological intimidation and forced reflection on mortality.",
     "enhanced_features": [
-      "NPCs exploit the stillness and darkness to corner you, using whispers and threats of ‘eternal rest.’",
-      "Tombstones and crypts become backdrops for unsettling commands and midnight ‘rituals.’"
+      "NPCs exploit the stillness and darkness to corner you, using whispers and threats of 'eternal rest.'",
+      "Tombstones and crypts become backdrops for unsettling commands and midnight 'rituals.'"
     ],
     "stat_modifiers": {
-      "fear": "skyrockets when isolated among graves at night.",
-      "obedience": "rises as defiance risks attracting supernatural consequences."
+      "mental_resilience": {
+        "delta": -20,
+        "description": "eroded by death imagery"
+      },
+      "obedience": {
+        "delta": 15,
+        "description": "rises as defiance risks attracting supernatural consequences"
+      },
+      "willpower": {
+        "delta": -10,
+        "description": "weakened by morbid atmosphere"
+      }
     },
     "activity_examples": [
-      "Digging small graves as a punishment task while NPCs watch, referencing your ‘inevitable end.’",
+      "Digging small graves as a punishment task while NPCs watch, referencing your 'inevitable end.'",
       "Reading scripted confessions aloud in front of tombstones, as if seeking forgiveness from the dead.",
-      "Chained to a headstone during the darkest hours, forced to confront your vulnerability under NPC’s watch."
+      "Chained to a headstone during the darkest hours, forced to confront your vulnerability under NPC's watch."
     ]
   },
   {
@@ -576,12 +1027,22 @@
       "Port towns teeming with rowdy sailors willing to shame you publicly for sport."
     ],
     "stat_modifiers": {
-      "dominance": "increases as pirate NPCs relish their absolute authority on the ship.",
-      "fear": "rises with every stormy night or threat of mutiny."
+      "dominance": {
+        "delta": 15,
+        "description": "increases as pirate NPCs relish their absolute authority on the ship"
+      },
+      "physical_endurance": {
+        "delta": -10,
+        "description": "tested by harsh sea conditions"
+      },
+      "obedience": {
+        "delta": 15,
+        "description": "enforced through maritime law"
+      }
     },
     "activity_examples": [
       "Swabbing the decks on hands and knees while pirates throw scraps and insults.",
-      "Forced to serve as the captain’s personal ‘table’ during rowdy feasts, trembling under tankards slammed on your back.",
+      "Forced to serve as the captain's personal 'table' during rowdy feasts, trembling under tankards slammed on your back.",
       "Being paraded in chains through a pirate-infested port, with jeering crowds mocking your captivity."
     ]
   },
@@ -593,11 +1054,21 @@
       "NPCs (or spectral forces) manipulate hidden passages to corner you in isolating rooms."
     ],
     "stat_modifiers": {
-      "fear": "soars whenever supernatural events occur without warning.",
-      "dependency": "increases as you rely on NPCs to guide you out or promise safety."
+      "mental_resilience": {
+        "delta": -20,
+        "description": "shattered by supernatural events"
+      },
+      "dependency": {
+        "delta": 15,
+        "description": "increases as you rely on NPCs to guide you out or promise safety"
+      },
+      "confidence": {
+        "delta": -15,
+        "description": "eroded by constant fear"
+      }
     },
     "activity_examples": [
-      "Searching dimly lit corridors for ‘escape keys,’ only to find them replaced by notes demanding humiliating acts.",
+      "Searching dimly lit corridors for 'escape keys,' only to find them replaced by notes demanding humiliating acts.",
       "Participating in midnight séances where you must confess your faults to appease restless spirits.",
       "Locked in a dusty attic until you beg an NPC ghost-hunter for release, bartering your dignity for freedom."
     ]
@@ -610,13 +1081,23 @@
       "Music and dancing mask the whispers of blackmail and threats, intensifying the tension."
     ],
     "stat_modifiers": {
-      "trust": "falls quickly, as everyone has hidden motives.",
-      "obedience": "rises if you’re trying to keep your secret safe from law enforcement or criminals."
+      "trust": {
+        "delta": -15,
+        "description": "falls quickly, as everyone has hidden motives"
+      },
+      "obedience": {
+        "delta": 15,
+        "description": "rises if you're trying to keep your secret safe from law enforcement or criminals"
+      },
+      "corruption": {
+        "delta": 10,
+        "description": "normalized in the lawless environment"
+      }
     },
     "activity_examples": [
-      "Forced to ‘entertain’ at a private booth, wearing era-appropriate but demeaning attire.",
+      "Forced to 'entertain' at a private booth, wearing era-appropriate but demeaning attire.",
       "Cleaning glassware all night under the watchful eyes of smug NPCs, who comment on each slip.",
-      "Begging a mob boss for protection from an impending raid, offering deeper submission to pay off your ‘tabs.’"
+      "Begging a mob boss for protection from an impending raid, offering deeper submission to pay off your 'tabs.'"
     ]
   },
   {
@@ -627,13 +1108,23 @@
       "Security cameras monitor every misstep, capturing evidence for blackmail."
     ],
     "stat_modifiers": {
-      "desperation": "climbs with each gamble, as debt ties you more tightly to NPC demands.",
-      "obedience": "spikes when threatened with public exposure or forced eviction."
+      "dependency": {
+        "delta": 15,
+        "description": "climbs with each gamble, as debt ties you more tightly to NPC demands"
+      },
+      "obedience": {
+        "delta": 15,
+        "description": "spikes when threatened with public exposure or forced eviction"
+      },
+      "willpower": {
+        "delta": -10,
+        "description": "eroded by addiction and desperation"
+      }
     },
     "activity_examples": [
       "Being paraded around by the casino owner wearing a sign declaring your mounting debts.",
-      "Forced to be a ‘lucky charm’ for high rollers, standing quietly while they pat your head for luck.",
-      "Washing chips and polishing slot machines overnight to ‘work off’ your losses under mocking supervision."
+      "Forced to be a 'lucky charm' for high rollers, standing quietly while they pat your head for luck.",
+      "Washing chips and polishing slot machines overnight to 'work off' your losses under mocking supervision."
     ]
   },
   {
@@ -644,8 +1135,18 @@
       "Harsh climate intensifies physical exhaustion, amplifying every humiliating demand."
     ],
     "stat_modifiers": {
-      "dependency": "accelerates under threat of starvation or dehydration.",
-      "obedience": "rises as resisting tasks means being denied critical supplies."
+      "dependency": {
+        "delta": 20,
+        "description": "accelerates under threat of starvation or dehydration"
+      },
+      "obedience": {
+        "delta": 15,
+        "description": "rises as resisting tasks means being denied critical supplies"
+      },
+      "physical_endurance": {
+        "delta": -15,
+        "description": "depleted by survival conditions"
+      }
     },
     "activity_examples": [
       "Collecting coconuts while NPCs lounge in the shade, critiquing your every move.",
@@ -661,8 +1162,18 @@
       "NPCs use natural elements—sand, seaweed, rough waters—to craft creative punishments."
     ],
     "stat_modifiers": {
-      "exposure": "increases with open, crowded beaches where privacy is scarce.",
-      "shame": "intensifies with wet clothes or forced scanty attire."
+      "confidence": {
+        "delta": -15,
+        "description": "lost through public beach humiliation"
+      },
+      "corruption": {
+        "delta": 10,
+        "description": "normalized through repeated exposure"
+      },
+      "physical_endurance": {
+        "delta": -5,
+        "description": "tested by sand and surf"
+      }
     },
     "activity_examples": [
       "Being made to drag heavy nets across the shoreline, with beachgoers laughing at your struggle.",
@@ -674,12 +1185,22 @@
     "name": "Mysterious Woods",
     "mood_tone": "A labyrinth of towering trees and rustling undergrowth, where isolation and primal instincts converge.",
     "enhanced_features": [
-      "NPCs use hidden clearings to stage ambushes or forced ‘hunts.’",
+      "NPCs use hidden clearings to stage ambushes or forced 'hunts.'",
       "No clear paths or landmarks, so escape attempts end in deeper entanglement."
     ],
     "stat_modifiers": {
-      "fear": "climbs with each rustle or howl in the darkness.",
-      "dependency": "on any NPC guide rises, as losing them means getting lost forever."
+      "mental_resilience": {
+        "delta": -15,
+        "description": "tested by disorientation"
+      },
+      "dependency": {
+        "delta": 15,
+        "description": "on any NPC guide rises, as losing them means getting lost forever"
+      },
+      "willpower": {
+        "delta": -10,
+        "description": "broken by isolation and fear"
+      }
     },
     "activity_examples": [
       "Forced to gather firewood at dusk, anxiously scanning shadows as NPCs lurk just out of sight.",
@@ -695,30 +1216,347 @@
       "Saloon gossip travels fast, ensuring your every embarrassment is known in the next county by sundown."
     ],
     "stat_modifiers": {
-      "dominance": "rises when gunslingers and sheriffs use frontier justice against you.",
-      "shame": "increases each time rumors of your subservience spread."
+      "dominance": {
+        "delta": 15,
+        "description": "rises when gunslingers and sheriffs use frontier justice against you"
+      },
+      "confidence": {
+        "delta": -15,
+        "description": "destroyed through public shaming"
+      },
+      "respect": {
+        "delta": -10,
+        "description": "lost in the lawless environment"
+      }
     },
     "activity_examples": [
       "Scrubbing spit and sawdust off saloon floors while rowdy patrons jeer.",
-      "Riding through town on a donkey labeled with your ‘crime’ or failing, accompanied by whistling onlookers.",
-      "Locked in the sheriff’s single-cell jail, forced to beg for water or shade under the scorching desert sun."
+      "Riding through town on a donkey labeled with your 'crime' or failing, accompanied by whistling onlookers.",
+      "Locked in the sheriff's single-cell jail, forced to beg for water or shade under the scorching desert sun."
     ]
   },
   {
     "name": "Clinic",
     "mood_tone": "A sterile, fluorescent-lit environment where medical authority and invasive procedures heighten vulnerability.",
     "enhanced_features": [
-      "NPCs leverage the ‘for your health’ rationale to impose examinations or embarrassing tasks.",
+      "NPCs leverage the 'for your health' rationale to impose examinations or embarrassing tasks.",
       "Cold, clinical tools and procedures turn humiliation into something coldly methodical."
     ],
     "stat_modifiers": {
-      "dependency": "increases as refusing medical orders can be deemed 'dangerous.'",
-      "fear": "climbs with every invasive or embarrassing ‘check-up.’"
+      "dependency": {
+        "delta": 15,
+        "description": "increases as refusing medical orders can be deemed 'dangerous'"
+      },
+      "trust": {
+        "delta": -10,
+        "description": "eroded by invasive procedures"
+      },
+      "obedience": {
+        "delta": 10,
+        "description": "enforced through medical authority"
+      }
     },
     "activity_examples": [
       "Forced to wear a flimsy gown and parade through the clinic hall, clutching it to preserve some modesty.",
-      "NPC staff discussing your ‘condition’ loudly at the reception desk, ignoring your pleas for privacy.",
-      "Required to clean or sterilize equipment while under observation, every error leading to a scolding ‘in the name of safety.’"
+      "NPC staff discussing your 'condition' loudly at the reception desk, ignoring your pleas for privacy.",
+      "Required to clean or sterilize equipment while under observation, every error leading to a scolding 'in the name of safety.'"
+    ]
+  },
+  {
+    "name": "Luxury Cruise Ship",
+    "mood_tone": "Trapped elegance on the high seas where class divisions and forced service create inescapable hierarchies.",
+    "enhanced_features": [
+      "No escape until port creates constant pressure, with wealthy passengers treating you as entertainment.",
+      "Ship hierarchy enforces servitude through maritime law and social expectations.",
+      "Public spaces become stages for humiliation during mandatory social events."
+    ],
+    "stat_modifiers": {
+      "closeness": {
+        "delta": 20,
+        "description": "inescapable proximity to NPCs on confined ship"
+      },
+      "respect": {
+        "delta": -15,
+        "description": "treated as lower class by passengers and crew"
+      },
+      "obedience": {
+        "delta": 15,
+        "description": "enforced through ship protocols"
+      },
+      "mental_resilience": {
+        "delta": -10,
+        "description": "worn by constant service demands"
+      }
+    },
+    "activity_examples": [
+      "Serving drinks at pool deck parties while wearing degrading 'crew' attire.",
+      "Forced participation in passenger entertainment as the subject of jokes.",
+      "Cleaning luxury suites while occupants critique your every movement.",
+      "Public 'talent shows' where you're made to perform humiliating acts."
+    ]
+  },
+  {
+    "name": "Research Station (Arctic/Antarctic)",
+    "mood_tone": "Extreme isolation in frozen wasteland where survival hierarchies and cabin fever intensify all interactions.",
+    "enhanced_features": [
+      "Months of darkness or light affect psychology, making resistance feel futile.",
+      "Complete dependence on station resources controlled by dominant NPCs.",
+      "Nowhere to escape in thousands of miles of deadly cold."
+    ],
+    "stat_modifiers": {
+      "dependency": {
+        "delta": 20,
+        "description": "absolute reliance for warmth and food"
+      },
+      "mental_resilience": {
+        "delta": -20,
+        "description": "eroded by isolation and endless winter"
+      },
+      "closeness": {
+        "delta": 20,
+        "description": "forced proximity in confined station"
+      },
+      "willpower": {
+        "delta": -15,
+        "description": "broken by environmental hostility"
+      }
+    },
+    "activity_examples": [
+      "Maintaining outdoor equipment in subzero temperatures while NPCs watch from warm observation decks.",
+      "Serving as test subject for 'psychological studies' on isolation effects.",
+      "Cleaning and organizing supplies during blizzards as punishment tasks.",
+      "Forced group activities where you're singled out for 'morale building.'"
+    ]
+  },
+  {
+    "name": "Museum After Dark",
+    "mood_tone": "Eerie cultural institution where exhibits come alive and history itself judges your worth.",
+    "enhanced_features": [
+      "Living statues and animated displays create surreal power dynamics.",
+      "Historical artifacts carry curses that enforce submission to their era's values.",
+      "Being displayed as an exhibit becomes the ultimate humiliation."
+    ],
+    "stat_modifiers": {
+      "mental_resilience": {
+        "delta": -15,
+        "description": "confused by shifting historical periods"
+      },
+      "corruption": {
+        "delta": 15,
+        "description": "influenced by artifacts and their histories"
+      },
+      "obedience": {
+        "delta": 10,
+        "description": "enforced by museum 'rules' and curses"
+      },
+      "confidence": {
+        "delta": -10,
+        "description": "diminished by historical judgment"
+      }
+    },
+    "activity_examples": [
+      "Posed as a living exhibit while visitors comment on your 'historical accuracy.'",
+      "Cleaning ancient artifacts that punish mistakes with curses.",
+      "Forced to act out historical scenes of servitude for 'educational purposes.'",
+      "Trapped in period-appropriate scenarios from different eras each night."
+    ]
+  },
+  {
+    "name": "Gladiatorial Arena",
+    "mood_tone": "Ancient spectacle where public combat and performance merge with crowd-pleasing humiliation.",
+    "enhanced_features": [
+      "Crowd mood determines your fate, making public opinion a weapon.",
+      "Sponsor system creates dependencies on wealthy patrons for survival.",
+      "Victory means temporary reprieve; defeat means public degradation."
+    ],
+    "stat_modifiers": {
+      "physical_endurance": {
+        "delta": -15,
+        "description": "constantly tested in combat"
+      },
+      "confidence": {
+        "delta": -20,
+        "description": "destroyed by public defeats"
+      },
+      "dependency": {
+        "delta": 15,
+        "description": "reliant on sponsors and crowd favor"
+      },
+      "obedience": {
+        "delta": 10,
+        "description": "enforced through arena rules"
+      }
+    },
+    "activity_examples": [
+      "Forced to beg the crowd for mercy after defeats.",
+      "Serving winners as a 'prize' in post-match celebrations.",
+      "Training sessions that are public humiliation disguised as preparation.",
+      "Cleaning the arena floor between matches while crowds mock."
+    ]
+  },
+  {
+    "name": "Hotel/Resort Complex",
+    "mood_tone": "Service industry nightmare where customer satisfaction requires complete submission to guest demands.",
+    "enhanced_features": [
+      "Guest complaints become weapons for punishment and control.",
+      "Staff hierarchies create multiple layers of dominance.",
+      "Tips and reviews control your survival in the position."
+    ],
+    "stat_modifiers": {
+      "obedience": {
+        "delta": 20,
+        "description": "customer is always right mentality"
+      },
+      "respect": {
+        "delta": -15,
+        "description": "treated as servant by all guests"
+      },
+      "mental_resilience": {
+        "delta": -10,
+        "description": "worn by constant demands"
+      },
+      "dependency": {
+        "delta": 10,
+        "description": "reliant on tips and good reviews"
+      }
+    },
+    "activity_examples": [
+      "Cleaning rooms while guests watch and critique technique.",
+      "Forced to wear degrading uniforms chosen by management.",
+      "Public apologies for any guest complaint, no matter how unreasonable.",
+      "Personal service tasks that blur professional boundaries."
+    ]
+  },
+  {
+    "name": "Military Boot Camp",
+    "mood_tone": "Systematic breakdown through discipline where group punishment and hierarchy strip individuality.",
+    "enhanced_features": [
+      "Drill instructors have absolute authority backed by military law.",
+      "Group punishments for individual failures create peer pressure.",
+      "Physical exhaustion makes resistance impossible."
+    ],
+    "stat_modifiers": {
+      "obedience": {
+        "delta": 20,
+        "description": "drilled into automatic compliance"
+      },
+      "willpower": {
+        "delta": -15,
+        "description": "systematically broken"
+      },
+      "physical_endurance": {
+        "delta": 10,
+        "description": "built through harsh training"
+      },
+      "confidence": {
+        "delta": -10,
+        "description": "replaced with unit dependence"
+      }
+    },
+    "activity_examples": [
+      "Punishment drills performed in front of the entire unit.",
+      "Cleaning latrines with toothbrushes for minor infractions.",
+      "Forced marches carrying others' equipment as group punishment.",
+      "Public 'corrections' during inspection failures."
+    ]
+  },
+  {
+    "name": "Underground Bunker",
+    "mood_tone": "Claustrophobic survival space where resource control and cabin fever create desperate hierarchies.",
+    "enhanced_features": [
+      "Air quality and light become tools of control and punishment.",
+      "No escape from confined space intensifies all interactions.",
+      "Resource rationing creates absolute dependence on those in charge."
+    ],
+    "stat_modifiers": {
+      "dependency": {
+        "delta": 20,
+        "description": "total reliance on controlled resources"
+      },
+      "mental_resilience": {
+        "delta": -20,
+        "description": "eroded by confinement and artificial light"
+      },
+      "closeness": {
+        "delta": 20,
+        "description": "inescapable proximity underground"
+      },
+      "willpower": {
+        "delta": -15,
+        "description": "broken by hopelessness"
+      }
+    },
+    "activity_examples": [
+      "Earning oxygen rations through degrading tasks.",
+      "Sleeping privileges revoked, forced to stay in common areas.",
+      "Manual ventilation duties in the worst sections of the bunker.",
+      "Public rationing ceremonies where you receive the least."
+    ]
+  },
+  {
+    "name": "Virtual Reality Training Sim",
+    "mood_tone": "Digital prison where reality bends to create perfect scenarios for breaking your will.",
+    "enhanced_features": [
+      "Difficulty scales automatically to ensure constant failure.",
+      "NPCs can manipulate physics and reality to enforce dominance.",
+      "Public leaderboards broadcast every failure to other users."
+    ],
+    "stat_modifiers": {
+      "mental_resilience": {
+        "delta": -15,
+        "description": "confused by shifting realities"
+      },
+      "confidence": {
+        "delta": -20,
+        "description": "destroyed by designed failures"
+      },
+      "corruption": {
+        "delta": 15,
+        "description": "normalized through repetition"
+      },
+      "obedience": {
+        "delta": 15,
+        "description": "programmed through scenarios"
+      }
+    },
+    "activity_examples": [
+      "Forced replay of failure scenarios with increasing difficulty.",
+      "Avatar modifications that reflect your submission level.",
+      "Public training sessions where others watch your mistakes.",
+      "Glitch punishments that trap you in humiliating loops."
+    ]
+  },
+  {
+    "name": "Cyberpunk City",
+    "mood_tone": "Neon-soaked dystopia where corporate overlords and street gangs create multiple layers of technological domination.",
+    "enhanced_features": [
+      "Augmentations can be hacked or controlled by dominant NPCs.",
+      "Digital reputation systems make every humiliation permanent.",
+      "Corporate contracts create legal slavery through debt."
+    ],
+    "stat_modifiers": {
+      "dominance": {
+        "delta": 15,
+        "description": "enforced through tech superiority"
+      },
+      "corruption": {
+        "delta": 15,
+        "description": "normalized in dystopian society"
+      },
+      "dependency": {
+        "delta": 15,
+        "description": "reliant on tech and corporate protection"
+      },
+      "mental_resilience": {
+        "delta": -10,
+        "description": "overwhelmed by information overload"
+      }
+    },
+    "activity_examples": [
+      "Augmentation repossessions for unpaid debts, done publicly.",
+      "Forced participation in corporate 'morale' programs.",
+      "Street-level tasks for gangs while corporate drones watch from above.",
+      "Digital shaming through hacked personal advertisements."
     ]
   }
 ]
