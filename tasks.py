@@ -388,28 +388,15 @@ def run_npc_learning_cycle_task():
     return asyncio.run(run_learning_cycle())
 
 @celery_app.task
-@async_task                       #     <-- reuse the decorator you fixed above
+@async_task
 async def process_new_game_task(user_id, conversation_data):
     logger.info("CELERY – process_new_game_task called")
     agent = NewGameAgent()
+    conversation_id = None
+    
     try:
         result = await agent.process_new_game(user_id, conversation_data)
         return result
-    except Exception as e:
-        logger.exception("process_new_game_task failed")
-        # Same failure-handling code, **but await the DB update**:
-        conv_id = conversation_data.get("conversation_id")
-        if conv_id:
-            async with get_db_connection_context() as conn:
-                await conn.execute(
-                    """UPDATE conversations
-                       SET status='failed', conversation_name='New Game - Task Failed'
-                       WHERE id=$1 AND user_id=$2""",
-                    conv_id, user_id
-                )
-        return {"status": "failed", "error": str(e), "error_type": type(e).__name__, "conversation_id": conv_id}
-
-        
     except Exception as e:
         logger.exception(f"[DEBUG] Critical error in process_new_game_task for user_id={user_id}")
         
@@ -417,16 +404,14 @@ async def process_new_game_task(user_id, conversation_data):
         conversation_id = conversation_data.get("conversation_id")
         if conversation_id:
             try:
-                async def update_failed_status():
-                    async with get_db_connection_context() as conn:
-                        await conn.execute("""
-                            UPDATE conversations 
-                            SET status='failed', 
-                                conversation_name='New Game - Task Failed'
-                            WHERE id=$1 AND user_id=$2
-                        """, conversation_id, user_id)
-                
-                asyncio.run(update_failed_status())
+                # Don't use asyncio.run() here - we're already in an async context
+                async with get_db_connection_context() as conn:
+                    await conn.execute("""
+                        UPDATE conversations 
+                        SET status='failed', 
+                            conversation_name='New Game - Task Failed'
+                        WHERE id=$1 AND user_id=$2
+                    """, conversation_id, user_id)
             except Exception as update_error:
                 logger.error(f"[DEBUG] Failed to update conversation status: {update_error}")
         
@@ -437,7 +422,7 @@ async def process_new_game_task(user_id, conversation_data):
             "error_type": type(e).__name__,
             "conversation_id": conversation_id
         }
-
+        
 @celery_app.task
 def create_npcs_task(user_id, conversation_id, count=10):
     """Celery task to create NPCs using async logic."""
