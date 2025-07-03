@@ -194,7 +194,7 @@ async def enhanced_background_chat_task(conversation_id, user_input, universal_u
                     )
                 
                 # Refresh context after updates
-                aggregator_data = get_aggregated_roleplay_context(user_id, conversation_id, player_name)
+                aggregator_data = await get_aggregated_roleplay_context(user_id, conversation_id, player_name)
                 context_data["aggregator_data"] = aggregator_data
                 context_data["location"] = aggregator_data.get("current_location", "Unknown")
                 context_data["time_of_day"] = aggregator_data.get("time_of_day", "Morning")
