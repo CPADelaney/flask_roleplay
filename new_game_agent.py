@@ -1220,26 +1220,11 @@ class NewGameAgent:
                     WHERE id=$1 AND user_id=$2
                 """, conversation_id, user_id)
         
-            # Initialize StoryDirector asynchronously
-            logger.info("Scheduling StoryDirector initialization")
-            async def _init_story_director():
-                try:
-                    # Import here to avoid circular import
-                    from story_agent.story_director_agent import initialize_story_director, register_with_governance as register_sd_with_gov
-                    
-                    await initialize_story_director(user_id, conversation_id)
-                    await register_sd_with_gov(user_id, conversation_id)
-                    logger.info(f"StoryDirector initialized for {conversation_id}")
-                except Exception as e:
-                    logger.error(f"StoryDirector init failed: {e}", exc_info=True)
-                    
-            asyncio.create_task(_init_story_director())
-        
+            # Get governance ONCE - this will handle all initialization
+            governance = await get_central_governance(user_id, conversation_id)
+            
             # Initialize directive handler and register with governance
             await self.initialize_directive_handler(user_id, conversation_id)
-            
-            # Get governance (which will properly initialize LoreSystem internally)
-            governance = await get_central_governance(user_id, conversation_id)
             
             # Register this agent with governance
             await governance.register_agent(
@@ -1247,6 +1232,21 @@ class NewGameAgent:
                 agent_instance=self,
                 agent_id=NEW_GAME_AGENT_NYX_ID
             )
+            
+            # Initialize StoryDirector WITHOUT creating a new governor
+            logger.info("Initializing StoryDirector")
+            try:
+                from story_agent.story_director_agent import StoryDirector
+                story_director = StoryDirector(user_id, conversation_id)
+                # Register it with the EXISTING governance
+                await governance.register_agent(
+                    agent_type=AgentType.STORY_DIRECTOR,
+                    agent_instance=story_director,
+                    agent_id="story_director"
+                )
+                logger.info(f"StoryDirector initialized and registered for {conversation_id}")
+            except Exception as e:
+                logger.error(f"StoryDirector init failed: {e}", exc_info=True)
             
             # Process any pending directives
             if self.directive_handler:
