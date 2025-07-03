@@ -1244,21 +1244,20 @@ class NewGameAgent:
                     "Floating archaic ruins steeped in ancient rituals",
                     "Futuristic tech hubs that blend magic and machinery"
                 ]
-            enh_feats = mega_data.get("enhanced_features", [])
-            stat_mods_raw = mega_data.get("stat_modifiers", {})
+            enh_feats         = mega_data.get("enhanced_features", [])
+            stat_mods_raw     = mega_data.get("stat_modifiers", {})   # already numeric!
             
-            # Convert stat modifiers to proper model
-            stat_mods = []
-            for stat_name, modifier_value in stat_mods_raw.items():
-                stat_mods.append(StatModifier(
-                    stat_name=stat_name,
-                    modifier_value=float(modifier_value)
-                ))
-                
+            # Build pydantic StatModifier objects
+            stat_mods = [
+                StatModifier(stat_name=k, modifier_value=v)
+                for k, v in stat_mods_raw.items()
+            ]
+            
+            # Apply them to the DB / player stats
             await self._apply_setting_stat_modifiers(
                 user_id,
                 conversation_id,
-                stat_mods
+                stat_mods,
             )
             
             mega_name = mega_data.get("mega_name", "Untitled Mega Setting")
