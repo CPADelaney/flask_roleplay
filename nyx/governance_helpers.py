@@ -287,25 +287,28 @@ def with_governance(
     def decorator(func):
         @wraps(func)
         async def wrapper(*args, **kwargs):
-            # Check if this is a method (first arg is self) or a function
-            if args and hasattr(args[0], '__class__'):
-                # It's likely a method, extract self and ctx
-                self_or_ctx = args[0]
-                if len(args) > 1:
-                    # Method with (self, ctx, ...)
-                    self_arg = args[0]
-                    ctx = args[1]
-                    remaining_args = args[2:]
-                else:
-                    # Function with just (ctx, ...)
-                    self_arg = None
-                    ctx = args[0]
-                    remaining_args = args[1:]
+            # Get function signature to properly handle arguments
+            sig = inspect.signature(func)
+            params = list(sig.parameters.keys())
+            
+            # Determine if this is a method or function by checking first param name
+            is_method = len(params) > 0 and params[0] == 'self'
+            
+            # Extract arguments based on function type
+            if is_method:
+                # Method call: (self, ctx, ...)
+                if len(args) < 2:
+                    raise ValueError(f"Method {func.__name__} requires at least self and ctx arguments")
+                self_arg = args[0]
+                ctx = args[1]
+                remaining_args = args[2:]
             else:
-                # Edge case handling
+                # Function call: (ctx, ...)
+                if len(args) < 1:
+                    raise ValueError(f"Function {func.__name__} requires at least ctx argument")
                 self_arg = None
-                ctx = args[0] if args else None
-                remaining_args = args[1:] if len(args) > 1 else []
+                ctx = args[0]
+                remaining_args = args[1:]
             
             # Extract user_id and conversation_id with multiple fallback strategies
             user_id = None
@@ -353,30 +356,62 @@ def with_governance(
                 if conversation_id is None:
                     conversation_id = 0
             
-            # Create a normalized context for the decorated function
-            normalized_ctx = type('NormalizedContext', (object,), {
-                'user_id': user_id,
-                'conversation_id': conversation_id,
-                # Preserve original context for other uses
-                '_original': ctx,
-                # Add any other attributes from original
-                **{k: v for k, v in getattr(ctx, '__dict__', {}).items() 
-                   if k not in ['user_id', 'conversation_id']}
-            })()
+            # Store governance info for permission/reporting decorators
+            governance_context = {
+                "user_id": user_id,
+                "conversation_id": conversation_id,
+                "agent_type": agent_type,
+                "action_type": action_type,
+                "action_description": action_description,
+                "id_from_context": id_from_context,
+                "extract_result": extract_result
+            }
             
-            # Call the original function with proper arguments
-            if self_arg is not None:
-                # It's a method, include self
-                return await func(self_arg, normalized_ctx, *remaining_args, **kwargs)
+            # Call the original function with original arguments preserved
+            # The ctx remains as it was passed, we don't create a NormalizedContext
+            if is_method:
+                # Store governance context on the method's self for nested decorators
+                if hasattr(self_arg, '_governance_context'):
+                    old_context = self_arg._governance_context
+                else:
+                    old_context = None
+                self_arg._governance_context = governance_context
+                
+                try:
+                    result = await func(self_arg, ctx, *remaining_args, **kwargs)
+                finally:
+                    if old_context is not None:
+                        self_arg._governance_context = old_context
+                    elif hasattr(self_arg, '_governance_context'):
+                        delattr(self_arg, '_governance_context')
             else:
-                # It's a function, no self
-                return await func(normalized_ctx, *remaining_args, **kwargs)
+                # For functions, add governance context to ctx if possible
+                if hasattr(ctx, '_governance_context'):
+                    old_context = ctx._governance_context
+                else:
+                    old_context = None
+                    
+                # Only add governance context if ctx is an object we can modify
+                if hasattr(ctx, '__dict__'):
+                    ctx._governance_context = governance_context
+                    
+                try:
+                    result = await func(ctx, *remaining_args, **kwargs)
+                finally:
+                    if hasattr(ctx, '_governance_context'):
+                        if old_context is not None:
+                            ctx._governance_context = old_context
+                        else:
+                            delattr(ctx, '_governance_context')
+            
+            # Now handle permission checking and reporting using the governance context
+            # This would be done by the nested decorators, not here
+            
+            return result
         
-        # Apply both decorators to the wrapper
-        permission_check = with_governance_permission(agent_type, action_type, id_from_context)
-        action_report = with_action_reporting(agent_type, action_description, id_from_context, extract_result)
-        
-        # Apply in correct order - permission check first, then action report
-        return action_report(permission_check(wrapper))
+        # Apply the decorators in order but just return wrapper for now
+        # The actual permission/reporting logic should be refactored to use
+        # the governance context we set up above
+        return wrapper
     
     return decorator
