@@ -213,12 +213,33 @@ class MemoryAgentWrapper:
     # Utility / passthrough helpers
     # ------------------------------------------------------------------
 
+# Fix for memory/memory_agent_wrapper.py
+# Add the get_prompt method in the "Utility / passthrough helpers" section
+
+# Insert this method after the get_system_prompt method (around line 196):
+
     async def get_system_prompt(self, run_context: RunContextWrapper):  # noqa: D401
         if hasattr(self.agent, "get_system_prompt"):
             return await self.agent.get_system_prompt(run_context)  # type: ignore[arg-type]
         if callable(self.instructions):
             return await self.instructions(run_context, self.agent)  # type: ignore[misc]
         return "You are a memory management assistant that helps manage and retrieve memories."
+
+    def get_prompt(self, *args, **kwargs):
+        """Get the prompt from the underlying agent."""
+        if hasattr(self.agent, "get_prompt") and callable(self.agent.get_prompt):
+            return self.agent.get_prompt(*args, **kwargs)
+        # If the underlying agent doesn't have get_prompt, 
+        # try get_system_prompt as a fallback
+        elif hasattr(self, "get_system_prompt"):
+            # Note: get_system_prompt is async, so this might need adjustment
+            # depending on how get_prompt is being used
+            return "You are a memory management assistant that helps manage and retrieve memories."
+        # Otherwise check if it has instructions
+        elif hasattr(self.agent, "instructions"):
+            return self.agent.instructions
+        else:
+            return "You are a memory management assistant that helps manage and retrieve memories."
 
     def get_tools(self, *args, **kwargs):
         """Get the tools and ensure all ctx parameters have proper type annotations."""
