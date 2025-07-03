@@ -284,17 +284,66 @@ def with_governance(
 ):
     """
     Combined decorator for both permission checks and action reporting.
-    
-    Args:
-        agent_type: Type of agent (use AgentType constants)
-        action_type: Type of action being performed
-        action_description: Description of the action
-        id_from_context: Optional function to extract agent_id from context
-        extract_result: Optional function to extract result details
-        
-    Returns:
-        Decorator function
     """
+    def decorator(func):
+        @wraps(func)
+        async def wrapper(ctx, *args, **kwargs):
+            # Extract user_id and conversation_id with multiple fallback strategies
+            user_id = None
+            conversation_id = None
+            
+            # Strategy 1: Check if ctx has a context dict
+            if hasattr(ctx, "context") and isinstance(ctx.context, dict):
+                user_id = ctx.context.get("user_id")
+                conversation_id = ctx.context.get("conversation_id")
+            
+            # Strategy 2: Check if ctx has direct attributes
+            if user_id is None:
+                user_id = getattr(ctx, "user_id", None)
+            if conversation_id is None:
+                conversation_id = getattr(ctx, "conversation_id", None)
+            
+            # Strategy 3: Check if ctx is dict-like
+            if user_id is None and hasattr(ctx, "get"):
+                user_id = ctx.get("user_id")
+            if conversation_id is None and hasattr(ctx, "get"):
+                conversation_id = ctx.get("conversation_id")
+            
+            # Strategy 4: Check if ctx is dict-like with __getitem__
+            if user_id is None and hasattr(ctx, "__getitem__"):
+                try:
+                    user_id = ctx["user_id"]
+                except (KeyError, TypeError):
+                    pass
+            if conversation_id is None and hasattr(ctx, "__getitem__"):
+                try:
+                    conversation_id = ctx["conversation_id"]
+                except (KeyError, TypeError):
+                    pass
+            
+            # Final validation
+            if user_id is None or conversation_id is None:
+                logger.warning(
+                    f"Missing user_id or conversation_id in context for {func.__name__}. "
+                    f"user_id={user_id}, conversation_id={conversation_id}, "
+                    f"ctx type={type(ctx)}, ctx attrs={dir(ctx) if hasattr(ctx, '__dir__') else 'unknown'}"
+                )
+                # For system-level operations, use defaults
+                if user_id is None:
+                    user_id = 0
+                if conversation_id is None:
+                    conversation_id = 0
+            
+            # Create a normalized context for the decorated function
+            normalized_ctx = type('NormalizedContext', (object,), {
+                'user_id': user_id,
+                'conversation_id': conversation_id,
+                # Preserve original context for other uses
+                '_original': ctx,
+                # Add any other attributes from original
+                **{k: v for k, v in getattr(ctx, '__dict__', {}).items() 
+                   if k not in ['user_id', 'conversation_id']}
+            })()
     def decorator(func):
         # Apply both decorators
         permission_check = with_governance_permission(agent_type, action_type, id_from_context)
@@ -302,5 +351,14 @@ def with_governance(
         
         # Apply in correct order - permission check first, then action report
         return action_report(permission_check(func))
+    
+            return await func(normalized_ctx, *args, **kwargs)
+        
+        # Apply both decorators
+        permission_check = with_governance_permission(agent_type, action_type, id_from_context)
+        action_report = with_action_reporting(agent_type, action_type, action_description, id_from_context, extract_result)
+        
+        # Apply in correct order - permission check first, then action report
+        return action_report(permission_check(wrapper))
     
     return decorator
