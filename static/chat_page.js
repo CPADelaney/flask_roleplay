@@ -12,6 +12,8 @@ let currentConvId = null;
 let messagesOffset = 0;
 const MESSAGES_PER_LOAD = 20;
 let isDarkMode = false;
+let isCreatingGame = false;
+let isSelectingConversation = false;
 
 // Universal updates object
 let pendingUniversalUpdates = {
@@ -327,6 +329,21 @@ async function loadConversations() {
 }
 
 async function startNewGame() {
+    // Prevent multiple simultaneous game creations
+    if (isCreatingGame) {
+        console.log("Game creation already in progress");
+        return;
+    }
+    
+    // Get the button and disable it
+    const newGameBtnEl = newGameBtn || document.getElementById("newGameBtn");
+    if (newGameBtnEl) {
+        newGameBtnEl.disabled = true;
+        newGameBtnEl.textContent = "Creating...";
+    }
+    
+    isCreatingGame = true;
+    
     const chatWindowEl = chatWindow || document.getElementById("chatWindow");
     const loadingDiv = document.createElement("div");
     loadingDiv.id = "loadingIndicator";
@@ -429,6 +446,14 @@ async function startNewGame() {
             content: `Error starting new game: ${err.message}. Please try again.` 
         };
         appendMessage(errorMsg, true);
+    } finally {
+        // Always re-enable the button and reset the flag
+        isCreatingGame = false;
+        const newGameBtnEl = newGameBtn || document.getElementById("newGameBtn");
+        if (newGameBtnEl) {
+            newGameBtnEl.disabled = false;
+            newGameBtnEl.textContent = "New Game";
+        }
     }
 }
 
@@ -445,8 +470,23 @@ function renderConvoList(conversations) {
     btn.style.flex = "1";
     btn.dataset.convId = conv.id; // Store convId for easier access
 
-    // Left-click
-    btn.addEventListener("click", () => selectConversation(conv.id));
+    // Left-click with protection
+    btn.addEventListener("click", async () => {
+      if (isSelectingConversation) {
+        console.log("Already selecting a conversation");
+        return;
+      }
+      isSelectingConversation = true;
+      btn.disabled = true;
+      
+      try {
+        await selectConversation(conv.id);
+      } finally {
+        isSelectingConversation = false;
+        btn.disabled = false;
+      }
+    });
+    
     // Right-click
     btn.addEventListener("contextmenu", (e) => {
       e.preventDefault();
