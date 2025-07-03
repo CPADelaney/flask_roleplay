@@ -274,7 +274,6 @@ def with_action_reporting(
     
     return decorator
 
-
 def with_governance(
     agent_type: str,
     action_type: str,
@@ -287,7 +286,27 @@ def with_governance(
     """
     def decorator(func):
         @wraps(func)
-        async def wrapper(ctx, *args, **kwargs):
+        async def wrapper(*args, **kwargs):
+            # Check if this is a method (first arg is self) or a function
+            if args and hasattr(args[0], '__class__'):
+                # It's likely a method, extract self and ctx
+                self_or_ctx = args[0]
+                if len(args) > 1:
+                    # Method with (self, ctx, ...)
+                    self_arg = args[0]
+                    ctx = args[1]
+                    remaining_args = args[2:]
+                else:
+                    # Function with just (ctx, ...)
+                    self_arg = None
+                    ctx = args[0]
+                    remaining_args = args[1:]
+            else:
+                # Edge case handling
+                self_arg = None
+                ctx = args[0] if args else None
+                remaining_args = args[1:] if len(args) > 1 else []
+            
             # Extract user_id and conversation_id with multiple fallback strategies
             user_id = None
             conversation_id = None
@@ -345,8 +364,13 @@ def with_governance(
                    if k not in ['user_id', 'conversation_id']}
             })()
             
-            # Call the original function with normalized context
-            return await func(normalized_ctx, *args, **kwargs)
+            # Call the original function with proper arguments
+            if self_arg is not None:
+                # It's a method, include self
+                return await func(self_arg, normalized_ctx, *remaining_args, **kwargs)
+            else:
+                # It's a function, no self
+                return await func(normalized_ctx, *remaining_args, **kwargs)
         
         # Apply both decorators to the wrapper
         permission_check = with_governance_permission(agent_type, action_type, id_from_context)
