@@ -62,6 +62,30 @@ async def is_app_initialized():
 
     return False
 
+def serialize_for_celery(obj):
+    """
+    Convert Pydantic models or other objects to JSON-serializable format for Celery.
+    
+    Args:
+        obj: The object to serialize (Pydantic model, dict, or other)
+        
+    Returns:
+        JSON-serializable representation of the object
+    """
+    if hasattr(obj, 'model_dump'):
+        # Pydantic v2
+        return obj.model_dump()
+    elif hasattr(obj, 'dict'):
+        # Pydantic v1
+        return obj.dict()
+    elif hasattr(obj, '__dict__'):
+        # Generic object with __dict__
+        return obj.__dict__
+    else:
+        # Already serializable (dict, list, str, etc.)
+        return obj
+
+
 
 # Helper decorator to run async functions in Celery tasks
 def async_task(func):
@@ -387,16 +411,36 @@ def run_npc_learning_cycle_task():
     # Run the async function in the sync task
     return asyncio.run(run_learning_cycle())
 
+
 @celery_app.task
 @async_task
 async def process_new_game_task(user_id, conversation_data):
+    """
+    Celery task to process new game creation.
+    
+    Args:
+        user_id: The user ID for the new game
+        conversation_data: Dict containing conversation setup data
+        
+    Returns:
+        Dict with game creation results (JSON-serializable)
+    """
     logger.info("CELERY – process_new_game_task called")
     agent = NewGameAgent()
     conversation_id = None
     
     try:
+        # Call the agent's process_new_game method
         result = await agent.process_new_game(user_id, conversation_data)
-        return result
+        
+        # Convert the Pydantic model result to a JSON-serializable dict
+        serialized_result = serialize_for_celery(result)
+        
+        logger.info(f"Successfully created new game for user_id={user_id}, "
+                   f"conversation_id={serialized_result.get('conversation_id')}")
+        
+        return serialized_result
+        
     except Exception as e:
         logger.exception(f"[DEBUG] Critical error in process_new_game_task for user_id={user_id}")
         
@@ -412,16 +456,20 @@ async def process_new_game_task(user_id, conversation_data):
                             conversation_name='New Game - Task Failed'
                         WHERE id=$1 AND user_id=$2
                     """, conversation_id, user_id)
+                    logger.info(f"Updated conversation {conversation_id} status to 'failed'")
             except Exception as update_error:
                 logger.error(f"[DEBUG] Failed to update conversation status: {update_error}")
         
         # Return a serializable error structure
-        return {
+        error_result = {
             "status": "failed", 
             "error": str(e),
             "error_type": type(e).__name__,
             "conversation_id": conversation_id
         }
+        
+        logger.error(f"Returning error result: {error_result}")
+        return error_result
         
 @celery_app.task
 def create_npcs_task(user_id, conversation_id, count=10):
