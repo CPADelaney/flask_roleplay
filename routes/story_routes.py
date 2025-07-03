@@ -1647,7 +1647,7 @@ async def next_storybeat():
 
         # 2) Build aggregator context
         tracker.start_phase("get_context")
-        aggregator_data = get_aggregated_roleplay_context(user_id, conv_id, player_name)
+        aggregator_data = await get_aggregated_roleplay_context(user_id, conv_id, player_name)
         context = {
             "location": aggregator_data.get("currentRoleplay", {}).get("CurrentLocation", "Unknown"),
             "time_of_day": aggregator_data.get("timeOfDay", "Morning"),
