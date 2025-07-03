@@ -1,6 +1,7 @@
 # memory/integrated.py
 
 import logging
+import random
 import json
 import asyncio
 from datetime import datetime
@@ -245,6 +246,8 @@ class IntegratedMemorySystem:
         current_context = current_context or {}
         results = {"query": query}
         
+        logger.debug(f"retrieve_memories called with entity_type={entity_type}, entity_id={entity_id}, query={query}")
+        
         try:
             # Different retrieval strategies based on current emotional state
             emotional_state = None
@@ -263,7 +266,7 @@ class IntegratedMemorySystem:
                         text=trigger_text
                     )
                     
-                    if trigger_result.get("triggered", False):
+                    if trigger_result and trigger_result.get("triggered", False):
                         results["trauma_triggered"] = trigger_result
                         # If trauma triggered, we prioritize these memories
                         trauma_memories = trigger_result.get("triggered_memories", [])
@@ -272,8 +275,15 @@ class IntegratedMemorySystem:
                             results["memories"] = trauma_memories
                             
                             # Record this memory event
+                            trauma_memory_ids = []
+                            for m in trauma_memories:
+                                if isinstance(m, dict) and "id" in m:
+                                    trauma_memory_ids.append(m["id"])
+                                elif hasattr(m, 'id'):
+                                    trauma_memory_ids.append(m.id)
+                            
                             self._record_memory_event("traumatic_recall", entity_type, entity_id, 
-                                                     [m["id"] for m in trauma_memories], 
+                                                     trauma_memory_ids, 
                                                      trigger_result)
                             
                             # Early return with trauma memories
@@ -289,14 +299,21 @@ class IntegratedMemorySystem:
                         limit=retrieval_kwargs.get("limit", 5)
                     )
                     
-                    if mood_memories:
+                    if mood_memories and isinstance(mood_memories, list):
                         results["mood_congruent_recall"] = True
                         results["current_emotion"] = current_emotion
                         results["memories"] = mood_memories
                         
                         # Record this memory event
+                        mood_memory_ids = []
+                        for m in mood_memories:
+                            if isinstance(m, dict) and "id" in m:
+                                mood_memory_ids.append(m["id"])
+                            elif hasattr(m, 'id'):
+                                mood_memory_ids.append(m.id)
+                        
                         self._record_memory_event("mood_congruent_recall", entity_type, entity_id,
-                                                 [m["id"] for m in mood_memories],
+                                                 mood_memory_ids,
                                                  {"current_emotion": current_emotion})
                         
                         # Only use mood-congruent recall if specifically requested or emotion is very strong
@@ -326,22 +343,25 @@ class IntegratedMemorySystem:
                     competition_count=limit
                 )
                 
-                results["memory_competition"] = True
-                results["winner"] = competition_result.get("winner")
-                results["competing_memories"] = competition_result.get("competing_memories", [])
-                
-                # Possibly include a memory blend
-                if "memory_blend" in competition_result:
-                    results["memory_blend"] = competition_result["memory_blend"]
-                
-                # Record this memory event
-                self._record_memory_event("memory_competition", entity_type, entity_id,
-                                         competition_result.get("winner", {}).get("id"),
-                                         competition_result)
-                
-                # If only wanting the strongest memory, return just the winner
-                if retrieval_kwargs.get("competition_only", False):
-                    return results
+                if competition_result:
+                    results["memory_competition"] = True
+                    results["winner"] = competition_result.get("winner")
+                    results["competing_memories"] = competition_result.get("competing_memories", [])
+                    
+                    # Possibly include a memory blend
+                    if "memory_blend" in competition_result:
+                        results["memory_blend"] = competition_result["memory_blend"]
+                    
+                    # Record this memory event
+                    winner_memory = competition_result.get("winner", {})
+                    winner_id = winner_memory.get("id") if winner_memory else None
+                    self._record_memory_event("memory_competition", entity_type, entity_id,
+                                             winner_id,
+                                             competition_result)
+                    
+                    # If only wanting the strongest memory, return just the winner
+                    if retrieval_kwargs.get("competition_only", False):
+                        return results
             
             # Standard memory retrieval
             memories = await memory_manager.retrieve_memories(
@@ -352,20 +372,27 @@ class IntegratedMemorySystem:
                 limit=limit
             )
             
+            # Ensure memories is a list
+            if not memories:
+                memories = []
+            
             # Get memory details
             detailed_memories = []
             for memory in memories:
+                if not memory:
+                    continue
+                    
                 # Get schema interpretations if available
                 interpretation = None
                 if retrieval_kwargs.get("include_schema_interpretation", True):
                     try:
                         interpretation_result = await self.schema_manager.interpret_memory_with_schemas(
-                            memory_id=memory.id,
+                            memory_id=getattr(memory, 'id', None),
                             entity_type=entity_type,
                             entity_id=entity_id
                         )
                         
-                        if "interpretation" in interpretation_result:
+                        if interpretation_result and "interpretation" in interpretation_result:
                             interpretation = interpretation_result["interpretation"]
                     except Exception as e:
                         logger.error(f"Error getting schema interpretation: {e}")
@@ -380,7 +407,7 @@ class IntegratedMemorySystem:
                         
                         # Subtle reconsolidation
                         await self.reconsolidation_manager.reconsolidate_memory(
-                            memory_id=memory.id,
+                            memory_id=getattr(memory, 'id', None),
                             entity_type=entity_type,
                             entity_id=entity_id,
                             emotional_context=recon_context,
@@ -391,53 +418,64 @@ class IntegratedMemorySystem:
                         logger.error(f"Error in memory reconsolidation: {e}")
                 
                 # Add to detailed memories
-                detailed_memories.append({
-                    "id": memory.id,
-                    "text": memory.text,
-                    "type": memory.memory_type,
-                    "significance": memory.significance,
-                    "emotional_intensity": memory.emotional_intensity,
-                    "timestamp": memory.timestamp.isoformat() if memory.timestamp else None,
-                    "tags": memory.tags,
+                memory_dict = {
+                    "id": getattr(memory, 'id', None),
+                    "text": getattr(memory, 'text', ''),
+                    "type": getattr(memory, 'memory_type', 'unknown'),
+                    "significance": getattr(memory, 'significance', 0),
+                    "emotional_intensity": getattr(memory, 'emotional_intensity', 0),
+                    "timestamp": memory.timestamp.isoformat() if hasattr(memory, 'timestamp') and memory.timestamp else None,
+                    "tags": getattr(memory, 'tags', []),
                     "schema_interpretation": interpretation
-                })
+                }
+                detailed_memories.append(memory_dict)
             
             # Check for random flashback opportunity
             if retrieval_kwargs.get("allow_flashbacks", True) and random.random() < 0.15:  # 15% chance
-                flashback = await self.flashback_manager.generate_flashback(
-                    entity_type=entity_type,
-                    entity_id=entity_id,
-                    current_context=current_context.get("text", query or "")
-                )
-                
-                if flashback:
-                    results["flashback"] = flashback
+                try:
+                    flashback = await self.flashback_manager.generate_flashback(
+                        entity_type=entity_type,
+                        entity_id=entity_id,
+                        current_context=current_context.get("text", query or "")
+                    )
+                    
+                    if flashback:
+                        results["flashback"] = flashback
+                except Exception as e:
+                    logger.error(f"Error generating flashback: {e}")
             
             # Check for intrusive memory opportunity
             if retrieval_kwargs.get("allow_intrusive", True) and random.random() < 0.1:  # 10% chance
-                intrusion = await self.interference_manager.generate_intrusive_memory(
-                    entity_type=entity_type,
-                    entity_id=entity_id,
-                    context=current_context.get("text", query or "")
-                )
-                
-                if intrusion and intrusion.get("intrusion_generated", False):
-                    results["intrusive_memory"] = intrusion
+                try:
+                    intrusion = await self.interference_manager.generate_intrusive_memory(
+                        entity_type=entity_type,
+                        entity_id=entity_id,
+                        context=current_context.get("text", query or "")
+                    )
+                    
+                    if intrusion and intrusion.get("intrusion_generated", False):
+                        results["intrusive_memory"] = intrusion
+                except Exception as e:
+                    logger.error(f"Error generating intrusive memory: {e}")
             
             results["memories"] = detailed_memories
             
             # Record this memory event
+            memory_ids = [m.id if hasattr(m, 'id') else m.get('id', None) for m in memories if m]
+            memory_ids = [mid for mid in memory_ids if mid is not None]
             self._record_memory_event("recall", entity_type, entity_id,
-                                     [m["id"] for m in memories],
+                                     memory_ids,
                                      {"query": query, "count": len(memories)})
             
             return results
             
         except Exception as e:
+            import traceback
             logger.error(f"Error in integrated memory retrieval: {e}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
             results["error"] = str(e)
             return results
-    
+        
     async def update_emotional_state_from_memory(self,
                                              entity_type: str,
                                              entity_id: int,
