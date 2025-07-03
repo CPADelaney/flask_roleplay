@@ -254,8 +254,8 @@ class IntegratedMemorySystem:
                     entity_id=entity_id
                 )
                 
-                # Check for traumatic triggers first
-                if "text" in current_context:
+                # Check for traumatic triggers first - only if emotional_state exists
+                if emotional_state and "text" in current_context:
                     trigger_text = current_context["text"]
                     trigger_result = await self.emotional_manager.process_traumatic_triggers(
                         entity_type=entity_type,
@@ -280,7 +280,7 @@ class IntegratedMemorySystem:
                             return results
                 
                 # If in a strong emotional state, use mood-congruent recall
-                current_emotion = emotional_state.get("current_emotion", {})
+                current_emotion = emotional_state.get("current_emotion", {}) if emotional_state else {}
                 if current_emotion.get("intensity", 0) > 0.6:
                     mood_memories = await self.emotional_manager.retrieve_mood_congruent_memories(
                         entity_type=entity_type,
