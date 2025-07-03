@@ -113,7 +113,7 @@ async def background_chat_task_with_memory(conversation_id, user_input, user_id,
     try:
         # Get aggregator context
         from logic.aggregator import get_aggregated_roleplay_context
-        aggregator_data = get_aggregated_roleplay_context(user_id, conversation_id, "Chase")
+        aggregator_data = await get_aggregated_roleplay_context(user_id, conversation_id, "Chase")
 
         context = {
             "location": aggregator_data.get("currentRoleplay", {}).get("CurrentLocation", "Unknown"),
@@ -137,7 +137,7 @@ async def background_chat_task_with_memory(conversation_id, user_input, user_id,
                     )
                 logger.info(f"[BG Task {conversation_id}] Applied universal updates.")
                 # Refresh aggregator data post-update
-                aggregator_data = get_aggregated_roleplay_context(user_id, conversation_id, context["player_name"])
+                aggregator_data = await get_aggregated_roleplay_context(user_id, conversation_id, context["player_name"])
                 context["aggregator_data"] = aggregator_data
             except Exception as update_err:
                 logger.error(f"[BG Task {conversation_id}] Error applying universal updates: {update_err}", exc_info=True)
