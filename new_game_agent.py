@@ -12,7 +12,7 @@ from agents import Agent, Runner, function_tool, GuardrailFunctionOutput, InputG
 from pydantic import BaseModel, Field, ConfigDict, field_validator
 
 from memory.wrapper import MemorySystem
-from logic.stats_logic import insert_default_player_stats_chase
+from logic.stats_logic import insert_default_player_stats_chase, apply_stat_change
 
 # Import your existing modules
 from logic.calendar import update_calendar_names
@@ -595,6 +595,70 @@ class NewGameAgent:
                 )
         
         return result.final_output
+
+    async def _apply_setting_stat_modifiers(
+        self,
+        user_id: int,
+        conversation_id: int,
+        stat_mods: list["StatModifier"],
+    ) -> None:
+        """
+        Persist the 'setting-based' stat modifiers and apply them once at game start.
+
+        * `stat_mods` is the list you built earlier (List[StatModifier]).
+        * Each modifier value is assumed to be an **absolute point delta**
+          (-10 … +10).  If you want percentage, convert here.
+        """
+        # --- normalise to a {stat_name: delta} dict -------------------------
+        clean: dict[str, float] = {}
+        for sm in stat_mods:
+            try:
+                delta = float(sm.modifier_value)
+                if delta == 0:
+                    continue
+                clean[sm.stat_name.lower()] = delta
+            except (ValueError, TypeError):
+                logging.warning(
+                    "[NewGameAgent] Ignored non-numeric modifier %s=%s",
+                    sm.stat_name, sm.modifier_value
+                )
+
+        if not clean:
+            logging.info("[NewGameAgent] No valid setting modifiers to apply.")
+            return
+
+        # --- store a canonical copy for later systems ----------------------
+        canon_ctx = type(
+            "Ctx", (),
+            {"user_id": user_id, "conversation_id": conversation_id}
+        )()
+
+        async with get_db_connection_context() as conn:
+            await canon.update_current_roleplay(
+                canon_ctx, conn,
+                user_id, conversation_id,
+                "SettingStatModifiers",
+                json.dumps(clean),
+            )
+
+        # --- apply the changes to PlayerStats -----------------------------
+        logging.info(
+            "[NewGameAgent] Applying initial setting modifiers: %s", clean
+        )
+        result = await apply_stat_change(
+            user_id,
+            conversation_id,
+            changes=clean,
+            cause="initial_setting_modifier",
+        )
+        if not result.get("success"):
+            logging.error(
+                "[NewGameAgent] Failed to apply setting modifiers: %s", result
+            )
+        else:
+            logging.info(
+                "[NewGameAgent] Setting modifiers applied and recorded."
+            )
 
     @with_governance_permission(AgentType.UNIVERSAL_UPDATER, "spawn_npcs")
     async def spawn_npcs(self, ctx: RunContextWrapper[GameContext], params: SpawnNPCsParams) -> List[str]:
@@ -1190,6 +1254,12 @@ class NewGameAgent:
                     stat_name=stat_name,
                     modifier_value=float(modifier_value)
                 ))
+                
+            await self._apply_setting_stat_modifiers(
+                user_id,
+                conversation_id,
+                stat_mods
+            )
             
             mega_name = mega_data.get("mega_name", "Untitled Mega Setting")
             mega_desc = mega_data.get("mega_description", "No environment generated")
