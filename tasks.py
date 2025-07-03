@@ -431,7 +431,9 @@ async def process_new_game_task(user_id, conversation_data):
     
     try:
         # Call the agent's process_new_game method
-        result = await agent.process_new_game(user_id, conversation_data)
+        from lore.core.context import CanonicalContext  # or create inline
+        ctx = CanonicalContext(user_id, conversation_data.get('conversation_id', 0))
+        result = await agent.process_new_game(ctx, conversation_data)
         
         # Convert the Pydantic model result to a JSON-serializable dict
         serialized_result = serialize_for_celery(result)
