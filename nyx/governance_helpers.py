@@ -344,19 +344,13 @@ def with_governance(
                 **{k: v for k, v in getattr(ctx, '__dict__', {}).items() 
                    if k not in ['user_id', 'conversation_id']}
             })()
-    def decorator(func):
-        # Apply both decorators
-        permission_check = with_governance_permission(agent_type, action_type, id_from_context)
-        action_report = with_action_reporting(agent_type, action_description, id_from_context, extract_result)
-        
-        # Apply in correct order - permission check first, then action report
-        return action_report(permission_check(func))
-    
+            
+            # Call the original function with normalized context
             return await func(normalized_ctx, *args, **kwargs)
         
-        # Apply both decorators
+        # Apply both decorators to the wrapper
         permission_check = with_governance_permission(agent_type, action_type, id_from_context)
-        action_report = with_action_reporting(agent_type, action_type, action_description, id_from_context, extract_result)
+        action_report = with_action_reporting(agent_type, action_description, id_from_context, extract_result)
         
         # Apply in correct order - permission check first, then action report
         return action_report(permission_check(wrapper))
