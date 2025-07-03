@@ -397,7 +397,20 @@ class ProgressiveNarrativeSummarizer:
                 logger.info("ProgressiveNarrativeSummarizer: Ensuring database tables and loading data...")
                 # Use a single connection for all setup DB operations
                 async with get_db_connection_context() as conn:
-                    # --- Create tables (keep this as infrastructure) ---
+                    # --- Create tables with migration support ---
+                    
+                    # Helper function to check if column exists
+                    async def column_exists(table_name: str, column_name: str) -> bool:
+                        result = await conn.fetchval('''
+                            SELECT EXISTS (
+                                SELECT 1 
+                                FROM information_schema.columns 
+                                WHERE table_name = $1 AND column_name = $2
+                            )
+                        ''', table_name, column_name)
+                        return result
+                    
+                    # Create narrative_events table
                     await conn.execute('''
                     CREATE TABLE IF NOT EXISTS narrative_events (
                         id SERIAL PRIMARY KEY,
@@ -410,11 +423,19 @@ class ProgressiveNarrativeSummarizer:
                         metadata JSONB DEFAULT '{}',
                         summaries JSONB DEFAULT '{}',
                         last_accessed TIMESTAMPTZ NOT NULL,
-                        access_count INTEGER NOT NULL DEFAULT 0,
-                        user_id INTEGER,
-                        conversation_id INTEGER
+                        access_count INTEGER NOT NULL DEFAULT 0
                     );''')
                     
+                    # Add user_id and conversation_id if they don't exist
+                    if not await column_exists('narrative_events', 'user_id'):
+                        logger.info("Adding user_id column to narrative_events table...")
+                        await conn.execute('ALTER TABLE narrative_events ADD COLUMN user_id INTEGER;')
+                    
+                    if not await column_exists('narrative_events', 'conversation_id'):
+                        logger.info("Adding conversation_id column to narrative_events table...")
+                        await conn.execute('ALTER TABLE narrative_events ADD COLUMN conversation_id INTEGER;')
+                    
+                    # Create story_arcs table
                     await conn.execute('''
                     CREATE TABLE IF NOT EXISTS story_arcs (
                         id SERIAL PRIMARY KEY,
@@ -429,24 +450,46 @@ class ProgressiveNarrativeSummarizer:
                         event_ids JSONB DEFAULT '[]',
                         summaries JSONB DEFAULT '{}',
                         last_accessed TIMESTAMPTZ NOT NULL,
-                        access_count INTEGER NOT NULL DEFAULT 0,
-                        user_id INTEGER,
-                        conversation_id INTEGER
+                        access_count INTEGER NOT NULL DEFAULT 0
                     );''')
                     
+                    # Add user_id and conversation_id if they don't exist
+                    if not await column_exists('story_arcs', 'user_id'):
+                        logger.info("Adding user_id column to story_arcs table...")
+                        await conn.execute('ALTER TABLE story_arcs ADD COLUMN user_id INTEGER;')
+                    
+                    if not await column_exists('story_arcs', 'conversation_id'):
+                        logger.info("Adding conversation_id column to story_arcs table...")
+                        await conn.execute('ALTER TABLE story_arcs ADD COLUMN conversation_id INTEGER;')
+                    
+                    # Create event_arc_relationships table
                     await conn.execute('''
                     CREATE TABLE IF NOT EXISTS event_arc_relationships (
                         id SERIAL PRIMARY KEY,
                         event_id TEXT NOT NULL,
                         arc_id TEXT NOT NULL,
-                        user_id INTEGER,
-                        conversation_id INTEGER,
                         UNIQUE (event_id, arc_id)
                     );''')
                     
+                    # Add user_id and conversation_id if they don't exist
+                    if not await column_exists('event_arc_relationships', 'user_id'):
+                        logger.info("Adding user_id column to event_arc_relationships table...")
+                        await conn.execute('ALTER TABLE event_arc_relationships ADD COLUMN user_id INTEGER;')
+                    
+                    if not await column_exists('event_arc_relationships', 'conversation_id'):
+                        logger.info("Adding conversation_id column to event_arc_relationships table...")
+                        await conn.execute('ALTER TABLE event_arc_relationships ADD COLUMN conversation_id INTEGER;')
+                    
+                    # Create indexes
                     await conn.execute("CREATE INDEX IF NOT EXISTS narrative_events_timestamp_idx ON narrative_events (timestamp);")
                     await conn.execute("CREATE INDEX IF NOT EXISTS narrative_events_type_idx ON narrative_events (event_type);")
                     await conn.execute("CREATE INDEX IF NOT EXISTS story_arcs_status_idx ON story_arcs (status);")
+                    
+                    # Add new indexes for user_id and conversation_id
+                    await conn.execute("CREATE INDEX IF NOT EXISTS narrative_events_user_conv_idx ON narrative_events (user_id, conversation_id);")
+                    await conn.execute("CREATE INDEX IF NOT EXISTS story_arcs_user_conv_idx ON story_arcs (user_id, conversation_id);")
+                    await conn.execute("CREATE INDEX IF NOT EXISTS event_arc_relationships_user_conv_idx ON event_arc_relationships (user_id, conversation_id);")
+                    
                     logger.info("ProgressiveNarrativeSummarizer: Database tables checked/created.")
     
                     # --- Load data using the SAME connection ---
