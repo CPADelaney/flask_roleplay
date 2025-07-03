@@ -1165,235 +1165,235 @@ class NewGameAgent:
             )
 
     @with_governance(
-            agent_type=AgentType.UNIVERSAL_UPDATER,
-            action_type="process_new_game",
-            action_description="Processed complete new game creation workflow"
-        )
-        async def process_new_game(self, user_id: int, conversation_data: Dict[str, Any]) -> ProcessNewGameResult:
-            conversation_id = None
-            
-            try:
-                provided_convo_id = conversation_data.get("conversation_id")
-                from nyx.integrate import get_central_governance
-            
-                async with get_db_connection_context() as conn:
-                    if not provided_convo_id:
-                        row = await conn.fetchrow("""
-                            INSERT INTO conversations (user_id, conversation_name, status)
-                            VALUES ($1, 'New Game - Initializing', 'processing')
-                            RETURNING id
-                        """, user_id)
-                        conversation_id = row["id"]
-                    else:
-                        conversation_id = provided_convo_id
-                        row = await conn.fetchrow("""
-                            SELECT id FROM conversations WHERE id=$1 AND user_id=$2
-                        """, conversation_id, user_id)
-                        if not row:
-                            raise Exception(f"Conversation {conversation_id} not found or unauthorized")
-                        
-                        # Update status to processing
-                        await conn.execute("""
-                            UPDATE conversations 
-                            SET status='processing', conversation_name='New Game - Initializing'
-                            WHERE id=$1 AND user_id=$2
-                        """, conversation_id, user_id)
-            
-                    # Clear old data
-                    logger.info(f"Clearing old data for conversation {conversation_id}")
-                    tables = ["Events", "PlannedEvents", "PlayerInventory", "Quests",
-                              "NPCStats", "Locations", "SocialLinks", "CurrentRoleplay"]
-                    for t in tables:
-                        await conn.execute(f"DELETE FROM {t} WHERE user_id=$1 AND conversation_id=$2",
-                                           user_id, conversation_id)
-                                           
-                # Initialize player stats
-                await insert_default_player_stats_chase(user_id, conversation_id)
-                logger.info(f"Default player stats for Chase inserted")
+        agent_type=AgentType.UNIVERSAL_UPDATER,
+        action_type="process_new_game",
+        action_description="Processed complete new game creation workflow"
+    )
+    async def process_new_game(self, user_id: int, conversation_data: Dict[str, Any]) -> ProcessNewGameResult:
+        conversation_id = None
         
-                # Update status - environment generation
-                async with get_db_connection_context() as conn:
-                    await conn.execute("""
-                        UPDATE conversations 
-                        SET conversation_name='New Game - Creating Environment'
-                        WHERE id=$1 AND user_id=$2
-                    """, conversation_id, user_id)
-            
-                # Initialize StoryDirector asynchronously
-                logger.info("Scheduling StoryDirector initialization")
-                async def _init_story_director():
-                    try:
-                        # Import here to avoid circular import
-                        from story_agent.story_director_agent import initialize_story_director, register_with_governance as register_sd_with_gov
-                        
-                        await initialize_story_director(user_id, conversation_id)
-                        await register_sd_with_gov(user_id, conversation_id)
-                        logger.info(f"StoryDirector initialized for {conversation_id}")
-                    except Exception as e:
-                        logger.error(f"StoryDirector init failed: {e}", exc_info=True)
-                        
-                asyncio.create_task(_init_story_director())
-            
-                # Initialize directive handler and register with governance
-                await self.initialize_directive_handler(user_id, conversation_id)
-                
-                # Get governance (which will properly initialize LoreSystem internally)
-                governance = await get_central_governance(user_id, conversation_id)
-                
-                # Register this agent with governance
-                await governance.register_agent(
-                    agent_type=NEW_GAME_AGENT_NYX_TYPE,
-                    agent_instance=self,
-                    agent_id=NEW_GAME_AGENT_NYX_ID
-                )
-                
-                # Process any pending directives
-                if self.directive_handler:
-                    await self.directive_handler.process_directives(force_check=True)
-                
-                # Gather environment components
-                from routes.settings_routes import generate_mega_setting_logic
-                mega_data = await generate_mega_setting_logic()
-                env_comps = mega_data.get("selected_settings") or mega_data.get("unique_environments") or []
-                if not env_comps:
-                    env_comps = [
-                        "A sprawling cyberpunk metropolis under siege by monstrous clans",
-                        "Floating archaic ruins steeped in ancient rituals",
-                        "Futuristic tech hubs that blend magic and machinery"
-                    ]
-                enh_feats         = mega_data.get("enhanced_features", [])
-                stat_mods_raw     = mega_data.get("stat_modifiers", {})   # already numeric!
-                
-                # Build pydantic StatModifier objects
-                stat_mods = [
-                    StatModifier(stat_name=k, modifier_value=v)
-                    for k, v in stat_mods_raw.items()
-                ]
-                
-                # Apply them to the DB / player stats
-                await self._apply_setting_stat_modifiers(
-                    user_id,
-                    conversation_id,
-                    stat_mods,
-                )
-                
-                mega_name = mega_data.get("mega_name", "Untitled Mega Setting")
-                mega_desc = mega_data.get("mega_description", "No environment generated")
-                
-                # Set up context for the agent
-                context = GameContext(
-                    user_id=user_id,
-                    conversation_id=conversation_id,
-                    db_dsn=DB_DSN
-                )
-                
-                # Add agent instance to context
-                context_dict = context.dict()
-                context_dict["agent_instance"] = self
-                
-                # Update status - running agent
-                async with get_db_connection_context() as conn:
-                    await conn.execute("""
-                        UPDATE conversations 
-                        SET conversation_name='New Game - Building World'
-                        WHERE id=$1 AND user_id=$2
-                    """, conversation_id, user_id)
-                
-                # Run the game creation process
-                prompt = f"""
-                Create a new game world with the following components:
-                
-                Mega Setting Name: {mega_name}
-                Mega Description: {mega_desc}
-                
-                Environment Components: {env_comps}
-                Enhanced Features: {enh_feats}
-                Stat Modifiers: {[f"{sm.stat_name}: {sm.modifier_value}" for sm in stat_mods]}
-                
-                Create a complete game world with environment, NPCs, and an opening narrative.
-                """
-                
-                result = await Runner.run(
-                    self.agent,
-                    prompt,
-                    context=context_dict
-                )
-                
-                # Extract data from result - handle structured output properly
-                if hasattr(result, 'final_output'):
-                    if hasattr(result.final_output, 'setting_name'):
-                        # It's a GameCreationResult object
-                        final_output = result.final_output
-                        setting_name = final_output.setting_name
-                        scenario_name = final_output.scenario_name
-                        environment_desc = final_output.environment_desc
-                        lore_summary = final_output.lore_summary
-                        welcome_image_url = final_output.welcome_image_url
-                    elif isinstance(result.final_output, dict):
-                        # Backward compatibility - dict output
-                        final_output = result.final_output
-                        setting_name = final_output.get('setting_name', 'Unknown Setting')
-                        scenario_name = final_output.get('scenario_name', 'New Game')
-                        environment_desc = final_output.get('environment_desc', '')
-                        lore_summary = final_output.get('lore_summary', 'Standard lore generated')
-                        welcome_image_url = final_output.get('welcome_image_url')
-                    else:
-                        # Unexpected output type
-                        logger.warning(f"Unexpected output type: {type(result.final_output)}")
-                        setting_name = 'Unknown Setting'
-                        scenario_name = 'New Game'
-                        environment_desc = ''
-                        lore_summary = 'Standard lore generated'
-                        welcome_image_url = None
+        try:
+            provided_convo_id = conversation_data.get("conversation_id")
+            from nyx.integrate import get_central_governance
+        
+            async with get_db_connection_context() as conn:
+                if not provided_convo_id:
+                    row = await conn.fetchrow("""
+                        INSERT INTO conversations (user_id, conversation_name, status)
+                        VALUES ($1, 'New Game - Initializing', 'processing')
+                        RETURNING id
+                    """, user_id)
+                    conversation_id = row["id"]
                 else:
-                    # No final_output attribute
-                    logger.warning("No final_output in result")
+                    conversation_id = provided_convo_id
+                    row = await conn.fetchrow("""
+                        SELECT id FROM conversations WHERE id=$1 AND user_id=$2
+                    """, conversation_id, user_id)
+                    if not row:
+                        raise Exception(f"Conversation {conversation_id} not found or unauthorized")
+                    
+                    # Update status to processing
+                    await conn.execute("""
+                        UPDATE conversations 
+                        SET status='processing', conversation_name='New Game - Initializing'
+                        WHERE id=$1 AND user_id=$2
+                    """, conversation_id, user_id)
+        
+                # Clear old data
+                logger.info(f"Clearing old data for conversation {conversation_id}")
+                tables = ["Events", "PlannedEvents", "PlayerInventory", "Quests",
+                          "NPCStats", "Locations", "SocialLinks", "CurrentRoleplay"]
+                for t in tables:
+                    await conn.execute(f"DELETE FROM {t} WHERE user_id=$1 AND conversation_id=$2",
+                                       user_id, conversation_id)
+                                       
+            # Initialize player stats
+            await insert_default_player_stats_chase(user_id, conversation_id)
+            logger.info(f"Default player stats for Chase inserted")
+    
+            # Update status - environment generation
+            async with get_db_connection_context() as conn:
+                await conn.execute("""
+                    UPDATE conversations 
+                    SET conversation_name='New Game - Creating Environment'
+                    WHERE id=$1 AND user_id=$2
+                """, conversation_id, user_id)
+        
+            # Initialize StoryDirector asynchronously
+            logger.info("Scheduling StoryDirector initialization")
+            async def _init_story_director():
+                try:
+                    # Import here to avoid circular import
+                    from story_agent.story_director_agent import initialize_story_director, register_with_governance as register_sd_with_gov
+                    
+                    await initialize_story_director(user_id, conversation_id)
+                    await register_sd_with_gov(user_id, conversation_id)
+                    logger.info(f"StoryDirector initialized for {conversation_id}")
+                except Exception as e:
+                    logger.error(f"StoryDirector init failed: {e}", exc_info=True)
+                    
+            asyncio.create_task(_init_story_director())
+        
+            # Initialize directive handler and register with governance
+            await self.initialize_directive_handler(user_id, conversation_id)
+            
+            # Get governance (which will properly initialize LoreSystem internally)
+            governance = await get_central_governance(user_id, conversation_id)
+            
+            # Register this agent with governance
+            await governance.register_agent(
+                agent_type=NEW_GAME_AGENT_NYX_TYPE,
+                agent_instance=self,
+                agent_id=NEW_GAME_AGENT_NYX_ID
+            )
+            
+            # Process any pending directives
+            if self.directive_handler:
+                await self.directive_handler.process_directives(force_check=True)
+            
+            # Gather environment components
+            from routes.settings_routes import generate_mega_setting_logic
+            mega_data = await generate_mega_setting_logic()
+            env_comps = mega_data.get("selected_settings") or mega_data.get("unique_environments") or []
+            if not env_comps:
+                env_comps = [
+                    "A sprawling cyberpunk metropolis under siege by monstrous clans",
+                    "Floating archaic ruins steeped in ancient rituals",
+                    "Futuristic tech hubs that blend magic and machinery"
+                ]
+            enh_feats         = mega_data.get("enhanced_features", [])
+            stat_mods_raw     = mega_data.get("stat_modifiers", {})   # already numeric!
+            
+            # Build pydantic StatModifier objects
+            stat_mods = [
+                StatModifier(stat_name=k, modifier_value=v)
+                for k, v in stat_mods_raw.items()
+            ]
+            
+            # Apply them to the DB / player stats
+            await self._apply_setting_stat_modifiers(
+                user_id,
+                conversation_id,
+                stat_mods,
+            )
+            
+            mega_name = mega_data.get("mega_name", "Untitled Mega Setting")
+            mega_desc = mega_data.get("mega_description", "No environment generated")
+            
+            # Set up context for the agent
+            context = GameContext(
+                user_id=user_id,
+                conversation_id=conversation_id,
+                db_dsn=DB_DSN
+            )
+            
+            # Add agent instance to context
+            context_dict = context.dict()
+            context_dict["agent_instance"] = self
+            
+            # Update status - running agent
+            async with get_db_connection_context() as conn:
+                await conn.execute("""
+                    UPDATE conversations 
+                    SET conversation_name='New Game - Building World'
+                    WHERE id=$1 AND user_id=$2
+                """, conversation_id, user_id)
+            
+            # Run the game creation process
+            prompt = f"""
+            Create a new game world with the following components:
+            
+            Mega Setting Name: {mega_name}
+            Mega Description: {mega_desc}
+            
+            Environment Components: {env_comps}
+            Enhanced Features: {enh_feats}
+            Stat Modifiers: {[f"{sm.stat_name}: {sm.modifier_value}" for sm in stat_mods]}
+            
+            Create a complete game world with environment, NPCs, and an opening narrative.
+            """
+            
+            result = await Runner.run(
+                self.agent,
+                prompt,
+                context=context_dict
+            )
+            
+            # Extract data from result - handle structured output properly
+            if hasattr(result, 'final_output'):
+                if hasattr(result.final_output, 'setting_name'):
+                    # It's a GameCreationResult object
+                    final_output = result.final_output
+                    setting_name = final_output.setting_name
+                    scenario_name = final_output.scenario_name
+                    environment_desc = final_output.environment_desc
+                    lore_summary = final_output.lore_summary
+                    welcome_image_url = final_output.welcome_image_url
+                elif isinstance(result.final_output, dict):
+                    # Backward compatibility - dict output
+                    final_output = result.final_output
+                    setting_name = final_output.get('setting_name', 'Unknown Setting')
+                    scenario_name = final_output.get('scenario_name', 'New Game')
+                    environment_desc = final_output.get('environment_desc', '')
+                    lore_summary = final_output.get('lore_summary', 'Standard lore generated')
+                    welcome_image_url = final_output.get('welcome_image_url')
+                else:
+                    # Unexpected output type
+                    logger.warning(f"Unexpected output type: {type(result.final_output)}")
                     setting_name = 'Unknown Setting'
                     scenario_name = 'New Game'
                     environment_desc = ''
                     lore_summary = 'Standard lore generated'
                     welcome_image_url = None
-                
-                # Update conversation with final name and ready status
-                async with get_db_connection_context() as conn:
-                    await conn.execute("""
-                        UPDATE conversations 
-                        SET status='ready', 
-                            conversation_name=$3
-                        WHERE id=$1 AND user_id=$2
-                    """, conversation_id, user_id, f"Game: {setting_name}")
-                
-                logger.info(f"New game creation completed for conversation {conversation_id}")
-                
-                # Return structured result
-                return ProcessNewGameResult(
-                    message=f"New game started. environment={setting_name}, conversation_id={conversation_id}",
-                    scenario_name=scenario_name,
-                    environment_name=setting_name,
-                    environment_desc=environment_desc,
-                    lore_summary=lore_summary,
-                    conversation_id=conversation_id,
-                    welcome_image_url=welcome_image_url,
-                    status="ready"
-                )
-                
-            except Exception as e:
-                logger.error(f"Error in process_new_game: {e}", exc_info=True)
-                
-                # Update conversation status to failed
-                if conversation_id:
-                    try:
-                        async with get_db_connection_context() as conn:
-                            await conn.execute("""
-                                UPDATE conversations 
-                                SET status='failed', 
-                                    conversation_name='New Game - Creation Failed'
-                                WHERE id=$1 AND user_id=$2
-                            """, conversation_id, user_id)
-                    except:
-                        pass
-                        
-                raise  # Re-raise the exception to be handled by Celery
+            else:
+                # No final_output attribute
+                logger.warning("No final_output in result")
+                setting_name = 'Unknown Setting'
+                scenario_name = 'New Game'
+                environment_desc = ''
+                lore_summary = 'Standard lore generated'
+                welcome_image_url = None
+            
+            # Update conversation with final name and ready status
+            async with get_db_connection_context() as conn:
+                await conn.execute("""
+                    UPDATE conversations 
+                    SET status='ready', 
+                        conversation_name=$3
+                    WHERE id=$1 AND user_id=$2
+                """, conversation_id, user_id, f"Game: {setting_name}")
+            
+            logger.info(f"New game creation completed for conversation {conversation_id}")
+            
+            # Return structured result
+            return ProcessNewGameResult(
+                message=f"New game started. environment={setting_name}, conversation_id={conversation_id}",
+                scenario_name=scenario_name,
+                environment_name=setting_name,
+                environment_desc=environment_desc,
+                lore_summary=lore_summary,
+                conversation_id=conversation_id,
+                welcome_image_url=welcome_image_url,
+                status="ready"
+            )
+            
+        except Exception as e:
+            logger.error(f"Error in process_new_game: {e}", exc_info=True)
+            
+            # Update conversation status to failed
+            if conversation_id:
+                try:
+                    async with get_db_connection_context() as conn:
+                        await conn.execute("""
+                            UPDATE conversations 
+                            SET status='failed', 
+                                conversation_name='New Game - Creation Failed'
+                            WHERE id=$1 AND user_id=$2
+                        """, conversation_id, user_id)
+                except:
+                    pass
+                    
+            raise  # Re-raise the exception to be handled by Celery
                     
 # Register with governance system
 async def register_with_governance(user_id: int, conversation_id: int) -> None:
