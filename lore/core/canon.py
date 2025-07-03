@@ -7,6 +7,7 @@ from db.connection import get_db_connection_context
 from nyx.nyx_governance import AgentType
 from nyx.governance_helpers import with_governance
 from embedding.vector_store import generate_embedding # Assuming you have this
+from lore.core.context import CanonicalContext
 
 from typing import List, Dict, Any, Union, Optional
 from datetime import datetime
@@ -49,6 +50,16 @@ async def _find_semantically_similar_npc(conn, name: str, role: Optional[str], t
         return most_similar['npc_id']
 
     return None
+
+def ensure_canonical_context(ctx) -> CanonicalContext:
+    """Convert any context to a CanonicalContext."""
+    if isinstance(ctx, CanonicalContext):
+        return ctx
+    elif isinstance(ctx, dict):
+        return CanonicalContext.from_dict(ctx)
+    else:
+        return CanonicalContext.from_object(ctx)
+
 
 # --- Upgraded NPC Canon Function ---
 @with_governance(
@@ -233,6 +244,7 @@ async def find_or_create_entity(
     
     return entity_id
 
+# Update log_canonical_event:
 @with_governance(
     agent_type=AgentType.NARRATIVE_CRAFTER,
     action_type="log_canonical_event",
@@ -241,6 +253,9 @@ async def find_or_create_entity(
 )
 async def log_canonical_event(ctx, conn, event_text: str, tags: List[str] = None, significance: int = 5):
     """Log a canonical event to establish world history."""
+    # Ensure we have a proper context
+    ctx = ensure_canonical_context(ctx)
+    
     tags = tags or []
     
     await conn.execute("""
