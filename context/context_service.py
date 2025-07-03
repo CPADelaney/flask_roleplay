@@ -920,7 +920,6 @@ class ContextService:
     # ---------------------------------------------------------------------
     # Public (non-tool) Methods used by get_context / get_summarized_context
     # ---------------------------------------------------------------------
-
     async def get_context(
         self,
         input_text: str = "",
@@ -958,23 +957,24 @@ class ContextService:
             summary_level=summary_level
         )
         
-        # Example: we might orchestrate specialized calls, but let's do a direct approach for demonstration.
-        base_context = await self._get_base_context(location)
+        # Get base context and convert to dict
+        base_context_model = await self._get_base_context(location)
+        context = base_context_model.dict()  # Convert Pydantic model to dictionary
         
         # Possibly get relevant NPCs
         if include_npcs:
             npcs = await self._get_relevant_npcs(input_text=input_text, location=location)
-            base_context["npcs"] = [npc.dict() for npc in npcs]
+            context["npcs"] = [npc.dict() for npc in npcs]
         
         # Possibly get location details
         if include_location:
             loc_data = await self._get_location_details(location)
-            base_context["location_details"] = loc_data.dict()
+            context["location_details"] = loc_data.dict()
         
         # Possibly get quest info
         if include_quests:
             quests = await self._get_quest_information()
-            base_context["quests"] = [q.dict() for q in quests]
+            context["quests"] = [q.dict() for q in quests]
         
         # Possibly get memories from memory manager
         if include_memories:
@@ -986,15 +986,15 @@ class ContextService:
         if use_delta and source_version is not None:
             # For demonstration, let's just store a partial delta
             delta_context = await self.context_manager._get_context(source_version)
-            base_context["is_delta"] = delta_context.get("is_incremental", False)
+            context["is_delta"] = delta_context.get("is_incremental", False)
             if "delta_context" in delta_context:
-                base_context["delta_changes"] = delta_context["delta_context"]
-            base_context["version"] = delta_context["version"]
+                context["delta_changes"] = delta_context["delta_context"]
+            context["version"] = delta_context["version"]
         else:
-            base_context["version"] = self.context_manager.version
+            context["version"] = self.context_manager.version
         
         # Trim to budget
-        final_context = await self._trim_to_budget(base_context, context_budget)
+        final_context = await self._trim_to_budget(context, context_budget)
         
         # Return final
         return final_context
