@@ -412,7 +412,7 @@ def run_npc_learning_cycle_task():
     return asyncio.run(run_learning_cycle())
 
 
-@celery_app.task
+@celery_app.task(expires=3600)
 @async_task
 async def process_new_game_task(user_id, conversation_data):
     """
