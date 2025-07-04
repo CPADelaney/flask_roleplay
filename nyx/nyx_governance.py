@@ -161,17 +161,6 @@ class NyxUnifiedGovernor:
 
     async def _initialize_systems(self):
         """Initialize memory system, game state, and discover agents."""
-        # --- FIXED CIRCULAR DEPENDENCY ---
-        # Previously, LoreSystem would call get_central_governance() during its
-        # initialize() method, which would create this Governor and call this
-        # method, creating an infinite loop.
-        # 
-        # Now we use dependency injection:
-        # 1. Create the LoreSystem instance
-        # 2. Set this governor on it via set_governor()
-        # 3. Then call initialize() on the LoreSystem
-        # This ensures a one-way initialization flow.
-        
         # Import LoreSystem locally to avoid circular import
         from lore.lore_system import LoreSystem
         
@@ -181,8 +170,8 @@ class NyxUnifiedGovernor:
         # Set the governor on the lore system (dependency injection)
         self.lore_system.set_governor(self)
         
-        # Initialize the lore system
-        await self.lore_system.initialize()
+        # Initialize the lore system WITH the governor reference
+        await self.lore_system.initialize(governor=self)  # Pass self as governor
     
         # Initialize other systems
         self.memory_system = await get_memory_nyx_bridge(self.user_id, self.conversation_id)
