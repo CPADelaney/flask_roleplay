@@ -111,17 +111,19 @@ class LoreSystem:
         self.governor = governor
         logger.info(f"[LoreSystem] Governor set for user {self.user_id}, conversation {self.conversation_id}")
 
-    async def initialize(self) -> bool:
+    async def initialize(self, governor=None) -> bool:
         """Initialize the LoreSystem and all its components."""
         # Guard against re-entry
         if self.initialized or self._initializing:
             logger.debug("[LoreSystem] Already initialized or initializing, skipping")
             return True
-
+    
         self._initializing = True
         try:
-            # REMOVED: We no longer call get_central_governance here
-            # The governor should be set externally via set_governor()
+            # Use provided governor if available
+            if governor:
+                self.governor = governor
+                logger.info("[LoreSystem] Using provided governor instance")
             
             logger.info("[LoreSystem] Starting initialization of data access components")
             
@@ -130,70 +132,100 @@ class LoreSystem:
                 logger.info("[LoreSystem] Governor already set, proceeding with initialization")
             else:
                 logger.warning("[LoreSystem] No governor set yet, some features may be limited")
-
+    
             # 6. Initialize the data access + integration components
             logger.info("[LoreSystem] Initializing: NPCDataAccess")
             await self.npc_data.initialize()
-
+    
             logger.info("[LoreSystem] Initializing: LocationDataAccess")
             await self.location_data.initialize()
-
+    
             logger.info("[LoreSystem] Initializing: FactionDataAccess")
             await self.faction_data.initialize()
-
+    
             logger.info("[LoreSystem] Initializing: LoreKnowledgeAccess")
             await self.lore_knowledge.initialize()
-
+    
             logger.info("[LoreSystem] Initializing: NPCLoreIntegration")
+            # Pass governor to NPCLoreIntegration to prevent it from trying to get_central_governance
+            if hasattr(self.npc_integration, 'set_governor'):
+                self.npc_integration.set_governor(self.governor)
+            if hasattr(self.npc_integration, 'set_user_conversation'):
+                self.npc_integration.set_user_conversation(self.user_id, self.conversation_id)
             await self.npc_integration.initialize()
-
+    
             logger.info("[LoreSystem] Initializing: ConflictIntegration")
             await self.conflict_integration.initialize()
-
+    
             logger.info("[LoreSystem] Initializing: ContextEnhancer")
             await self.context_enhancer.initialize()
-
+    
             logger.info("[LoreSystem] Initializing: DynamicLoreGenerator")
             await self.generator.initialize()
-
+    
             # 7. Initialize additional integrated managers
             logger.info("[LoreSystem] Ensuring: EducationalSystemManager")
+            # Pass governor if the manager supports it
+            if hasattr(self.education_manager, 'set_governor'):
+                self.education_manager.set_governor(self.governor)
             await self.education_manager.ensure_initialized()
-
+    
             logger.info("[LoreSystem] Ensuring: ReligionManager")
+            if hasattr(self.religion_manager, 'set_governor'):
+                self.religion_manager.set_governor(self.governor)
             await self.religion_manager.ensure_initialized()
-
+    
             logger.info("[LoreSystem] Ensuring: LocalLoreManager")
+            if hasattr(self.local_lore_manager, 'set_governor'):
+                self.local_lore_manager.set_governor(self.governor)
             await self.local_lore_manager.ensure_initialized()
-
+    
             logger.info("[LoreSystem] Ensuring: GeopoliticalSystemManager")
+            if hasattr(self.geopolitical_manager, 'set_governor'):
+                self.geopolitical_manager.set_governor(self.governor)
             await self.geopolitical_manager.ensure_initialized()
-
+    
             logger.info("[LoreSystem] Ensuring: RegionalCultureSystem")
+            if hasattr(self.regional_culture_system, 'set_governor'):
+                self.regional_culture_system.set_governor(self.governor)
             await self.regional_culture_system.ensure_initialized()
-
+    
             logger.info("[LoreSystem] Ensuring: WorldPoliticsManager")
+            if hasattr(self.world_politics_manager, 'set_governor'):
+                self.world_politics_manager.set_governor(self.governor)
             await self.world_politics_manager.ensure_initialized()
-
+    
             logger.info("[LoreSystem] Ensuring: LoreDynamicsSystem")
+            if hasattr(self.lore_dynamics_system, 'set_governor'):
+                self.lore_dynamics_system.set_governor(self.governor)
             await self.lore_dynamics_system.ensure_initialized()
-
+    
             # Only register with governance if governor is set
             if self.governor:
                 logger.info("[LoreSystem] Registering with Nyx governance")
                 await self.register_with_governance()
             else:
                 logger.warning("[LoreSystem] No governor set, skipping governance registration")
-
+    
             self.initialized = True
             logger.info("[LoreSystem] Initialization successful.")
             return True
-
+    
         except Exception as e:
             logger.exception(f"[LoreSystem] ERROR during initialization: {e}")
+            self.initialized = False  # Ensure we're not marked as initialized on error
             return False
         finally:
             self._initializing = False
+    
+    # Also add this method to help with debugging:
+    def is_initializing(self) -> bool:
+        """Check if the LoreSystem is currently initializing."""
+        return self._initializing
+    
+    def is_initialized(self) -> bool:
+        """Check if the LoreSystem has been initialized."""
+        return self.initialized
 
     async def register_with_governance(self):
         """Register the lore system with Nyx governance."""
