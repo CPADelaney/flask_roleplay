@@ -43,7 +43,7 @@ class BaseIntegration:
         """
         self.user_id = user_id
         self.conversation_id = conversation_id
-        self.governor = None
+        self.governor = None  # Will be set externally
         self.initialized = False
         
         # Initialize data access components
@@ -52,6 +52,10 @@ class BaseIntegration:
         self.faction_data = FactionDataAccess(user_id, conversation_id)
         self.lore_knowledge = LoreKnowledgeAccess(user_id, conversation_id)
     
+    def set_governor(self, governor):
+        """Set the governor externally to avoid circular dependencies."""
+        self.governor = governor
+        
     async def initialize(self) -> bool:
         """
         Initialize the integration component.
@@ -63,11 +67,10 @@ class BaseIntegration:
             return True
             
         try:
-            # Import here instead
-            from nyx.integrate import get_central_governance
-            
-            # Initialize governance
-            self.governor = await get_central_governance(self.user_id, self.conversation_id)
+            # Don't try to get governance here - it should be set externally
+            # Remove this line:
+            # from nyx.integrate import get_central_governance
+            # self.governor = await get_central_governance(self.user_id, self.conversation_id)
             
             # Initialize data access components
             await self.npc_data.initialize()
@@ -140,6 +143,11 @@ class NPCLoreIntegration(BaseIntegration):
     
     async def register_with_nyx_governance(self):
         """Register with Nyx governance system."""
+        # Only register if governor is set
+        if not self.governor:
+            logger.warning(f"Cannot register NPCLoreIntegration - no governor set")
+            return
+            
         # Register this integration with governance
         await self.governor.register_agent(
             agent_type=AgentType.NPC,
