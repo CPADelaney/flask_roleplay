@@ -48,6 +48,7 @@ from .data_access import (
 from .error_manager import LoreError, ErrorHandler, handle_errors
 
 logger = logging.getLogger(__name__)
+_LORE_GENERATOR_INSTANCES: Dict[Tuple[int, int], "DynamicLoreGenerator"] = {}
 
 #---------------------------
 # Function Tool Definitions with Nyx Governance
@@ -244,17 +245,18 @@ class ComponentConfig:
 class BaseGenerator:
     """Base class for all generator components."""
     
-    def __init__(self, user_id: Optional[int] = None, conversation_id: Optional[int] = None):
+    def __init__(self, user_id: Optional[int] = None, conversation_id: Optional[int] = None, governor=None):
         """
         Initialize the base generator component.
         
         Args:
             user_id: Optional user ID for filtering
             conversation_id: Optional conversation ID for filtering
+            governor: Optional pre-initialized governor to avoid circular deps
         """
         self.user_id = user_id
         self.conversation_id = conversation_id
-        self.governor = None
+        self.governor = governor  # Accept injected governor
         self.initialized = False
         self._cache = {}
         
@@ -275,9 +277,10 @@ class BaseGenerator:
             return True
             
         try:
-            # Initialize governance
-            from nyx.integrate import get_central_governance
-            self.governor = await get_central_governance(self.user_id, self.conversation_id)
+            # Only get governance if not already provided
+            if self.governor is None:
+                from nyx.integrate import get_central_governance
+                self.governor = await get_central_governance(self.user_id, self.conversation_id)
             
             # Initialize data access components
             await self.npc_data.initialize()
@@ -575,6 +578,17 @@ class ComponentGeneratorFactory:
 class WorldBuilder(BaseGenerator):
     """Generates foundation world lore."""
     
+    def __init__(self, user_id: Optional[int] = None, conversation_id: Optional[int] = None, governor=None):
+        """
+        Initialize the world builder with optional governor.
+        
+        Args:
+            user_id: User ID
+            conversation_id: Conversation ID
+            governor: Optional pre-initialized governor to avoid circular deps
+        """
+        super().__init__(user_id, conversation_id, governor)
+    
     async def initialize_world_lore(self, environment_desc: str) -> Dict[str, Any]:
         """
         Initialize core foundation lore (cosmology, magic system, world history, etc.)
@@ -726,6 +740,17 @@ class WorldBuilder(BaseGenerator):
 
 class FactionGenerator(BaseGenerator):
     """Generates faction and related lore content."""
+    
+    def __init__(self, user_id: Optional[int] = None, conversation_id: Optional[int] = None, governor=None):
+        """
+        Initialize the faction generator with optional governor.
+        
+        Args:
+            user_id: User ID
+            conversation_id: Conversation ID
+            governor: Optional pre-initialized governor to avoid circular deps
+        """
+        super().__init__(user_id, conversation_id, governor)
     
     async def generate_factions(self, environment_desc: str, 
                               world_lore: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -1088,9 +1113,16 @@ class FactionGenerator(BaseGenerator):
 class LoreEvolution(BaseGenerator):
     """Handles lore evolution over time."""
     
-    def __init__(self, user_id: Optional[int] = None, conversation_id: Optional[int] = None):
-        """Initialize the lore evolution component."""
-        super().__init__(user_id, conversation_id)
+    def __init__(self, user_id: Optional[int] = None, conversation_id: Optional[int] = None, governor=None):
+        """
+        Initialize the lore evolution component with optional governor.
+        
+        Args:
+            user_id: User ID
+            conversation_id: Conversation ID
+            governor: Optional pre-initialized governor to avoid circular deps
+        """
+        super().__init__(user_id, conversation_id, governor)
         self.active_triggers = set()
         self.evolution_history = []
     
@@ -1422,14 +1454,26 @@ class LoreEvolution(BaseGenerator):
 class DynamicLoreGenerator(BaseGenerator):
     """
     Main lore generation coordinator.
-    
-    This class orchestrates the complete lore generation process by delegating
-    to specialized components for different aspects of lore generation.
     """
     
-    def __init__(self, user_id: Optional[int] = None, conversation_id: Optional[int] = None):
+    @classmethod
+    def get_instance(cls, user_id: Optional[int] = None, conversation_id: Optional[int] = None, governor=None) -> "DynamicLoreGenerator":
+        """Get or create a singleton instance for the given user/conversation."""
+        key = (user_id or 0, conversation_id or 0)
+        
+        if key not in _LORE_GENERATOR_INSTANCES:
+            _LORE_GENERATOR_INSTANCES[key] = cls(user_id, conversation_id, governor)
+        else:
+            # Update governor if provided and not already set
+            instance = _LORE_GENERATOR_INSTANCES[key]
+            if governor and instance.governor is None:
+                instance.governor = governor
+                
+        return _LORE_GENERATOR_INSTANCES[key]
+    
+    def __init__(self, user_id: Optional[int] = None, conversation_id: Optional[int] = None, governor=None):
         """Initialize the dynamic lore generator."""
-        super().__init__(user_id, conversation_id)
+        super().__init__(user_id, conversation_id, governor)
         self.world_builder = None
         self.faction_generator = None
         self.lore_evolution = None
@@ -1441,14 +1485,14 @@ class DynamicLoreGenerator(BaseGenerator):
             return False
             
         try:
-            # Initialize specialized components
-            self.world_builder = WorldBuilder(self.user_id, self.conversation_id)
+            # Initialize specialized components with the same governor
+            self.world_builder = WorldBuilder(self.user_id, self.conversation_id, self.governor)
             await self.world_builder.initialize()
             
-            self.faction_generator = FactionGenerator(self.user_id, self.conversation_id)
+            self.faction_generator = FactionGenerator(self.user_id, self.conversation_id, self.governor)
             await self.faction_generator.initialize()
             
-            self.lore_evolution = LoreEvolution(self.user_id, self.conversation_id)
+            self.lore_evolution = LoreEvolution(self.user_id, self.conversation_id, self.governor)
             await self.lore_evolution.initialize()
             
             # Initialize error handler
