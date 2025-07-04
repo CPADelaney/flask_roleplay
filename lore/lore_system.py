@@ -80,7 +80,6 @@ class LoreSystem:
         self.npc_integration = NPCLoreIntegration(user_id, conversation_id)
         self.conflict_integration = ConflictIntegration(user_id, conversation_id)
         self.context_enhancer = ContextEnhancer(user_id, conversation_id)
-        self.generator = DynamicLoreGenerator(user_id, conversation_id)
 
         # 5. Additional specialized managers from your code base
         self.education_manager = EducationalSystemManager(user_id, conversation_id)
@@ -157,6 +156,11 @@ class LoreSystem:
             if hasattr(self.conflict_integration, 'set_governor'):
                 self.conflict_integration.set_governor(self.governor)
             await self.conflict_integration.initialize()
+
+            logger.info("[LoreSystem] Initializing: DynamicLoreGenerator")
+            # Get the instance with the governor to avoid circular dependency
+            self.generator = DynamicLoreGenerator.get_instance(user_id, conversation_id, self.governor)
+            await self.generator.initialize()
     
             logger.info("[LoreSystem] Initializing: ContextEnhancer")
             # Set governor if the component supports it
