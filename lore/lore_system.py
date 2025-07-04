@@ -147,17 +147,21 @@ class LoreSystem:
             await self.lore_knowledge.initialize()
     
             logger.info("[LoreSystem] Initializing: NPCLoreIntegration")
-            # Pass governor to NPCLoreIntegration to prevent it from trying to get_central_governance
+            # IMPORTANT: Set the governor on NPCLoreIntegration before initializing
             if hasattr(self.npc_integration, 'set_governor'):
                 self.npc_integration.set_governor(self.governor)
-            if hasattr(self.npc_integration, 'set_user_conversation'):
-                self.npc_integration.set_user_conversation(self.user_id, self.conversation_id)
             await self.npc_integration.initialize()
     
             logger.info("[LoreSystem] Initializing: ConflictIntegration")
+            # Set governor if the component supports it
+            if hasattr(self.conflict_integration, 'set_governor'):
+                self.conflict_integration.set_governor(self.governor)
             await self.conflict_integration.initialize()
     
             logger.info("[LoreSystem] Initializing: ContextEnhancer")
+            # Set governor if the component supports it
+            if hasattr(self.context_enhancer, 'set_governor'):
+                self.context_enhancer.set_governor(self.governor)
             await self.context_enhancer.initialize()
     
             logger.info("[LoreSystem] Initializing: DynamicLoreGenerator")
