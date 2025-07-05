@@ -159,7 +159,7 @@ class LoreSystem:
 
             logger.info("[LoreSystem] Initializing: DynamicLoreGenerator")
             # Get the instance with the governor to avoid circular dependency
-            self.generator = DynamicLoreGenerator.get_instance(user_id, conversation_id, self.governor)
+            self.generator = DynamicLoreGenerator.get_instance(self.user_id, self.conversation_id, self.governor)
             await self.generator.initialize()
     
             logger.info("[LoreSystem] Initializing: ContextEnhancer")
