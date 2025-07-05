@@ -1163,6 +1163,8 @@ class NewGameAgent:
                 error=f"Failed to generate lore: {str(e)}"
             )
 
+    # Update the process_new_game method in new_game_agent.py
+    
     @with_governance(
         agent_type=AgentType.UNIVERSAL_UPDATER,
         action_type="process_new_game",
@@ -1300,19 +1302,41 @@ class NewGameAgent:
                     WHERE id=$1 AND user_id=$2
                 """, conversation_id, user_id)
             
-            # Run the game creation process
+            # Run the game creation process with explicit step-by-step instructions
             prompt = f"""
-            Create a new game world with the following components:
-            
-            Mega Setting Name: {mega_name}
-            Mega Description: {mega_desc}
-            
-            Environment Components: {env_comps}
-            Enhanced Features: {enh_feats}
-            Stat Modifiers: {[f"{sm.stat_name}: {sm.modifier_value}" for sm in stat_mods]}
-            
-            Create a complete game world with environment, NPCs, and an opening narrative.
+            Create a new game world by executing ALL of the following steps in order:
+    
+            1. First, generate the environment using the generate_environment tool with these components:
+               - Mega Setting Name: {mega_name}
+               - Mega Description: {mega_desc}
+               - Environment Components: {env_comps}
+               - Enhanced Features: {enh_feats}
+               - Stat Modifiers: {[f"{sm.stat_name}: {sm.modifier_value}" for sm in stat_mods]}
+    
+            2. Then, create NPCs and schedules using the create_npcs_and_schedules tool.
+    
+            3. Next, generate the opening narrative using the create_opening_narrative tool.
+    
+            4. Finally, finalize the game setup using the finalize_game_setup tool (this will generate lore, conflict, currency, and welcome image).
+    
+            You MUST call all four tools in this exact order to complete the game creation process.
+            Do not stop after any single step - complete all four steps.
+    
+            The final output should include:
+            - setting_name: The name of the created setting
+            - scenario_name: The scenario title
+            - environment_desc: The environment description
+            - lore_summary: Summary of generated lore
+            - welcome_image_url: URL of the welcome image (if generated)
+            - initial_conflict: The initial conflict name
+            - currency_system: The currency system name
+            - npc_count: Number of NPCs created
+            - quest_name: Name of the initial quest
+            - status: Should be "ready" when all steps complete
             """
+            
+            # Log the detailed prompt for debugging
+            logger.info(f"Running NewGameDirector agent with detailed instructions for conversation {conversation_id}")
             
             result = await Runner.run(
                 self.agent,
