@@ -1,4 +1,13 @@
 # new_game_agent.py
+#
+# REFACTORED TO FIX RACE CONDITIONS:
+# 1. Deterministic pipeline - tools called directly in sequence, not via LLM decision
+# 2. Optional environment_data with auto-loading from DB if missing
+# 3. Completeness check before marking conversation as ready
+# 4. Background processing delayed until after setup complete
+# 5. StoryDirector initialization deferred to avoid heavy ops during setup
+# 6. Proper parameter passing for PostgreSQL queries (no raw Python lists in ANY())
+# 7. Pydantic V2 compatible field validators with mode="after"
 
 import logging
 import json
@@ -18,7 +27,7 @@ from logic.stats_logic import insert_default_player_stats_chase, apply_stat_chan
 from logic.calendar import update_calendar_names
 from lore.core import canon
 from logic.aggregator_sdk import get_aggregated_roleplay_context
-from npcs.new_npc_creation import NPCCreationHandler
+from npcs.new_npc_creation import NPCCreationHandler  # Must properly await all async operations
 from routes.ai_image_generator import generate_roleplay_image_from_gpt
 from lore.lore_generator import DynamicLoreGenerator
 
@@ -64,7 +73,7 @@ class Location(BaseModel):
     open_hours_json: str = "{}"  # Store as JSON string instead of dict
     model_config = ConfigDict(extra="forbid")
     
-    @field_validator("open_hours_json")
+    @field_validator("open_hours_json", mode="after")
     @classmethod
     def validate_open_hours_json(cls, v: str) -> str:
         """Validate that open_hours_json is valid JSON"""
@@ -93,7 +102,7 @@ class WeekSchedule(BaseModel):
     custom_schedule_json: Optional[str] = None
     model_config = ConfigDict(extra="forbid")
     
-    @field_validator("custom_schedule_json")
+    @field_validator("custom_schedule_json", mode="after")
     @classmethod
     def validate_custom_schedule_json(cls, v: Optional[str]) -> Optional[str]:
         """Validate that custom_schedule_json is valid JSON if provided"""
@@ -186,8 +195,9 @@ class CreateChaseScheduleParams(BaseModel):
     day_names: List[str]
     model_config = ConfigDict(extra="forbid")
 
+# Make environment_data optional as suggested in fixes
 class CreateNPCsAndSchedulesParams(BaseModel):
-    environment_data: EnvironmentInfo
+    environment_data: Optional[EnvironmentInfo] = None
     model_config = ConfigDict(extra="forbid")
 
 class NPCScheduleData(BaseModel):
@@ -195,7 +205,7 @@ class NPCScheduleData(BaseModel):
     chase_schedule_json: str = "{}"  # Store schedule as JSON string
     model_config = ConfigDict(extra="forbid")
     
-    @field_validator("chase_schedule_json")
+    @field_validator("chase_schedule_json", mode="after")
     @classmethod
     def validate_chase_schedule_json(cls, v: str) -> str:
         """Validate that chase_schedule_json is valid JSON"""
@@ -428,8 +438,7 @@ class NewGameAgent:
             self.handle_override_directive
         )
         
-        # Start background processing of directives
-        await self.directive_handler.start_background_processing()
+        # Don't start background processing here - do it after game setup is complete
 
     async def handle_action_directive(self, directive: dict) -> dict:
         """Handle an action directive from Nyx"""
@@ -693,11 +702,25 @@ class NewGameAgent:
         # Create an instance of NPCCreationHandler
         npc_handler = NPCCreationHandler()
         
-        # Use the class method directly
+        # Use the class method directly - ensure we await properly
+        # This MUST await all internal async operations to avoid race conditions
+        # Per fix #3: NPCCreationHandler.spawn_multiple_npcs must use:
+        #   npc_ids = await asyncio.gather(*coros)  # MUST await
+        #   await self._commit_all(npc_ids)         # transaction/flush
         npc_ids = await npc_handler.spawn_multiple_npcs(
             ctx=ctx,
             count=params.count
         )
+        
+        # Verify NPCs were actually created and committed to DB
+        async with get_db_connection_context() as conn:
+            actual_count = await conn.fetchval("""
+                SELECT COUNT(*) FROM NPCStats
+                WHERE user_id = $1 AND conversation_id = $2
+            """, user_id, conversation_id)
+            
+            if actual_count < params.count:
+                logger.warning(f"Expected {params.count} NPCs but only found {actual_count}")
         
         return npc_ids
 
@@ -757,6 +780,37 @@ class NewGameAgent:
         # Return as JSON string to avoid dict issues
         return json.dumps(default_schedule)
 
+    async def _load_environment_from_db(self, user_id: int, conversation_id: int) -> EnvironmentInfo:
+        """Load environment data from database if not provided"""
+        async with get_db_connection_context() as conn:
+            # Get setting info
+            setting_row = await conn.fetchrow("""
+                SELECT value FROM CurrentRoleplay
+                WHERE user_id = $1 AND conversation_id = $2 AND key = 'CurrentSetting'
+            """, user_id, conversation_id)
+            
+            desc_row = await conn.fetchrow("""
+                SELECT value FROM CurrentRoleplay
+                WHERE user_id = $1 AND conversation_id = $2 AND key = 'EnvironmentDesc'
+            """, user_id, conversation_id)
+            
+            history_row = await conn.fetchrow("""
+                SELECT value FROM CurrentRoleplay
+                WHERE user_id = $1 AND conversation_id = $2 AND key = 'EnvironmentHistory'
+            """, user_id, conversation_id)
+            
+            scenario_row = await conn.fetchrow("""
+                SELECT value FROM CurrentRoleplay
+                WHERE user_id = $1 AND conversation_id = $2 AND key = 'ScenarioName'
+            """, user_id, conversation_id)
+            
+            return EnvironmentInfo(
+                setting_name=setting_row["value"] if setting_row else "Unknown Setting",
+                environment_desc=desc_row["value"] if desc_row else "A mysterious environment",
+                environment_history=history_row["value"] if history_row else "History unknown",
+                scenario_name=scenario_row["value"] if scenario_row else "New Adventure"
+            )
+
     @with_governance(
         agent_type=AgentType.UNIVERSAL_UPDATER,
         action_type="create_npcs_and_schedules",
@@ -770,6 +824,10 @@ class NewGameAgent:
         conversation_id = ctx.context["conversation_id"]
         
         from lore.core import canon
+        
+        # If environment_data is None, load it from DB
+        if params.environment_data is None:
+            params.environment_data = await self._load_environment_from_db(user_id, conversation_id)
         
         # Get calendar data for day names
         async with get_db_connection_context() as conn:
@@ -904,6 +962,39 @@ class NewGameAgent:
         
         return opening_narrative
 
+    async def _is_setup_complete(self, user_id: int, conversation_id: int) -> bool:
+        """Check if the game setup is complete before marking as ready"""
+        async with get_db_connection_context() as conn:
+            # Check NPCs
+            npc_count = await conn.fetchval("""
+                SELECT COUNT(*) FROM NPCStats 
+                WHERE user_id = $1 AND conversation_id = $2
+            """, user_id, conversation_id)
+            
+            # Check locations
+            location_count = await conn.fetchval("""
+                SELECT COUNT(*) FROM Locations 
+                WHERE user_id = $1 AND conversation_id = $2
+            """, user_id, conversation_id)
+            
+            # Check key roleplay data - loop through keys to avoid array type issues
+            roleplay_keys = ['CurrentSetting', 'EnvironmentDesc', 'ChaseSchedule', 'LoreSummary']
+            roleplay_count = 0
+            for key in roleplay_keys:
+                exists = await conn.fetchval("""
+                    SELECT EXISTS(
+                        SELECT 1 FROM CurrentRoleplay 
+                        WHERE user_id = $1 AND conversation_id = $2 AND key = $3
+                    )
+                """, user_id, conversation_id, key)  # Parameters: $1=user_id, $2=conversation_id, $3=key
+                if exists:
+                    roleplay_count += 1
+            
+            logger.info(f"Setup check - NPCs: {npc_count}, Locations: {location_count}, Roleplay keys: {roleplay_count}/{len(roleplay_keys)}")
+            
+            # Require at least 5 NPCs, 10 locations, and all key roleplay data
+            return npc_count >= 5 and location_count >= 10 and roleplay_count >= len(roleplay_keys)
+
     @with_governance(
         agent_type=AgentType.UNIVERSAL_UPDATER,
         action_type="finalize_game_setup",
@@ -918,14 +1009,13 @@ class NewGameAgent:
         
         from lore.core import canon
         
-        # Mark conversation as ready
+        # Get the environment description for lore generation
         async with get_db_connection_context() as conn:
             canon_ctx = type('obj', (object,), {
                 'user_id': user_id, 
                 'conversation_id': conversation_id
             })
             
-            # Get the environment description for lore generation
             row = await conn.fetchrow("""
                 SELECT value FROM CurrentRoleplay
                 WHERE user_id = $1 AND conversation_id = $2 AND key = 'EnvironmentDesc'
@@ -941,17 +1031,9 @@ class NewGameAgent:
             
             npc_ids = [row["npc_id"] for row in rows] if rows else []
             
-            await conn.execute("""
-                UPDATE conversations
-                SET status='ready'
-                WHERE id=$1 AND user_id=$2
-            """, conversation_id, user_id)
-            
         # Initialize and generate lore
         try:
             # Get the lore system instance and initialize it
-            # Note: LoreSystem is now properly initialized through governance,
-            # so this should not cause circular dependency issues
             lore_system = DynamicLoreGenerator.get_instance(user_id, conversation_id)
             await lore_system.initialize()
             
@@ -1062,9 +1144,9 @@ class NewGameAgent:
                     'WelcomeImageUrl', welcome_image_url
                 )
         
-        # Return structured result
+        # Return structured result - but DON'T mark as ready yet
         return FinalizeResult(
-            status="ready",
+            status="finalized",  # Not "ready" yet
             welcome_image_url=welcome_image_url,
             lore_summary=lore_summary,
             initial_conflict=conflict_name,
@@ -1105,8 +1187,6 @@ class NewGameAgent:
         
         try:
             # Get the lore system instance and initialize it
-            # Note: LoreSystem is now properly initialized through governance,
-            # so this should not cause circular dependency issues
             lore_system = DynamicLoreGenerator.get_instance(user_id, conversation_id)
             await lore_system.initialize()
             
@@ -1165,8 +1245,7 @@ class NewGameAgent:
                 error=f"Failed to generate lore: {str(e)}"
             )
 
-    # Update the process_new_game method in new_game_agent.py
-    
+    # Update the process_new_game method to be deterministic
     @with_governance(
         agent_type=AgentType.UNIVERSAL_UPDATER,
         action_type="process_new_game",
@@ -1227,7 +1306,7 @@ class NewGameAgent:
             # Get governance ONCE - this will handle all initialization
             governance = await get_central_governance(user_id, conversation_id)
             
-            # Initialize directive handler and register with governance
+            # Initialize directive handler WITHOUT starting background processing yet
             await self.initialize_directive_handler(user_id, conversation_id)
             
             # Register this agent with governance
@@ -1237,20 +1316,7 @@ class NewGameAgent:
                 agent_id=NEW_GAME_AGENT_NYX_ID
             )
             
-            # Initialize StoryDirector WITHOUT creating a new governor
-            logger.info("Initializing StoryDirector")
-            try:
-                from story_agent.story_director_agent import StoryDirector
-                story_director = StoryDirector(user_id, conversation_id)
-                # Register it with the EXISTING governance
-                await governance.register_agent(
-                    agent_type=AgentType.STORY_DIRECTOR,
-                    agent_instance=story_director,
-                    agent_id="story_director"
-                )
-                logger.info(f"StoryDirector initialized and registered for {conversation_id}")
-            except Exception as e:
-                logger.error(f"StoryDirector init failed: {e}", exc_info=True)
+            # Note: StoryDirector initialization moved to after game setup is complete
             
             # Process any pending directives
             if self.directive_handler:
@@ -1285,16 +1351,15 @@ class NewGameAgent:
             mega_name = mega_data.get("mega_name", "Untitled Mega Setting")
             mega_desc = mega_data.get("mega_description", "No environment generated")
             
-            # Set up context for the agent
-            context = GameContext(
-                user_id=user_id,
-                conversation_id=conversation_id,
-                db_dsn=DB_DSN
-            )
-            
-            # Add agent instance to context
-            context_dict = context.dict()
-            context_dict["agent_instance"] = self
+            # Set up context wrapper for the agent methods
+            ctx_wrap = type('RunContextWrapper', (object,), {
+                'context': {
+                    'user_id': user_id,
+                    'conversation_id': conversation_id,
+                    'db_dsn': DB_DSN,
+                    'agent_instance': self
+                }
+            })()
             
             # Update status - running agent
             async with get_db_connection_context() as conn:
@@ -1304,82 +1369,84 @@ class NewGameAgent:
                     WHERE id=$1 AND user_id=$2
                 """, conversation_id, user_id)
             
-            # Run the game creation process with explicit step-by-step instructions
-            prompt = f"""
-            Create a new game world by executing ALL of the following steps in order:
-    
-            1. First, generate the environment using the generate_environment tool with these components:
-               - Mega Setting Name: {mega_name}
-               - Mega Description: {mega_desc}
-               - Environment Components: {env_comps}
-               - Enhanced Features: {enh_feats}
-               - Stat Modifiers: {[f"{sm.stat_name}: {sm.modifier_value}" for sm in stat_mods]}
-    
-            2. Then, create NPCs and schedules using the create_npcs_and_schedules tool.
-    
-            3. Next, generate the opening narrative using the create_opening_narrative tool.
-    
-            4. Finally, finalize the game setup using the finalize_game_setup tool (this will generate lore, conflict, currency, and welcome image).
-    
-            You MUST call all four tools in this exact order to complete the game creation process.
-            Do not stop after any single step - complete all four steps.
-    
-            The final output should include:
-            - setting_name: The name of the created setting
-            - scenario_name: The scenario title
-            - environment_desc: The environment description
-            - lore_summary: Summary of generated lore
-            - welcome_image_url: URL of the welcome image (if generated)
-            - initial_conflict: The initial conflict name
-            - currency_system: The currency system name
-            - npc_count: Number of NPCs created
-            - quest_name: Name of the initial quest
-            - status: Should be "ready" when all steps complete
-            """
+            # DETERMINISTIC PIPELINE - Call tools directly instead of using Runner.run
+            logger.info(f"Starting deterministic game creation pipeline for conversation {conversation_id}")
             
-            # Log the detailed prompt for debugging
-            logger.info(f"Running NewGameDirector agent with detailed instructions for conversation {conversation_id}")
-            
-            result = await Runner.run(
-                self.agent,
-                prompt,
-                context=context_dict
+            # 1. Generate Environment
+            logger.info("Step 1: Generating environment...")
+            env_params = GenerateEnvironmentParams(
+                mega_name=mega_name,
+                mega_desc=mega_desc,
+                env_components=env_comps,
+                enhanced_features=enh_feats,
+                stat_modifiers=stat_mods
             )
+            env = await self.generate_environment(ctx_wrap, env_params)
+            logger.info(f"Environment generated: {env.setting_name}")
             
-            # Extract data from result - handle structured output properly
-            if hasattr(result, 'final_output'):
-                if hasattr(result.final_output, 'setting_name'):
-                    # It's a GameCreationResult object
-                    final_output = result.final_output
-                    setting_name = final_output.setting_name
-                    scenario_name = final_output.scenario_name
-                    environment_desc = final_output.environment_desc
-                    lore_summary = final_output.lore_summary
-                    welcome_image_url = final_output.welcome_image_url
-                elif isinstance(result.final_output, dict):
-                    # Backward compatibility - dict output
-                    final_output = result.final_output
-                    setting_name = final_output.get('setting_name', 'Unknown Setting')
-                    scenario_name = final_output.get('scenario_name', 'New Game')
-                    environment_desc = final_output.get('environment_desc', '')
-                    lore_summary = final_output.get('lore_summary', 'Standard lore generated')
-                    welcome_image_url = final_output.get('welcome_image_url')
-                else:
-                    # Unexpected output type
-                    logger.warning(f"Unexpected output type: {type(result.final_output)}")
-                    setting_name = 'Unknown Setting'
-                    scenario_name = 'New Game'
-                    environment_desc = ''
-                    lore_summary = 'Standard lore generated'
-                    welcome_image_url = None
-            else:
-                # No final_output attribute
-                logger.warning("No final_output in result")
-                setting_name = 'Unknown Setting'
-                scenario_name = 'New Game'
-                environment_desc = ''
-                lore_summary = 'Standard lore generated'
-                welcome_image_url = None
+            # Update status
+            async with get_db_connection_context() as conn:
+                await conn.execute("""
+                    UPDATE conversations 
+                    SET conversation_name='New Game - Creating NPCs'
+                    WHERE id=$1 AND user_id=$2
+                """, conversation_id, user_id)
+            
+            # 2. Create NPCs & schedules
+            logger.info("Step 2: Creating NPCs and schedules...")
+            npc_params = CreateNPCsAndSchedulesParams(
+                environment_data=EnvironmentInfo(
+                    setting_name=env.setting_name,
+                    environment_desc=env.environment_desc,
+                    environment_history=env.environment_history,
+                    scenario_name=env.scenario_name
+                )
+            )
+            npc_sched = await self.create_npcs_and_schedules(ctx_wrap, npc_params)
+            logger.info(f"Created {len(npc_sched.npc_ids)} NPCs")
+            
+            # Update status
+            async with get_db_connection_context() as conn:
+                await conn.execute("""
+                    UPDATE conversations 
+                    SET conversation_name='New Game - Writing Narrative'
+                    WHERE id=$1 AND user_id=$2
+                """, conversation_id, user_id)
+            
+            # 3. Create opening narrative
+            logger.info("Step 3: Creating opening narrative...")
+            narrative_params = CreateOpeningNarrativeParams(
+                environment_data=EnvironmentInfo(
+                    setting_name=env.setting_name,
+                    environment_desc=env.environment_desc,
+                    environment_history=env.environment_history,
+                    scenario_name=env.scenario_name
+                ),
+                npc_schedule_data=npc_sched
+            )
+            opening = await self.create_opening_narrative(ctx_wrap, narrative_params)
+            logger.info("Opening narrative created")
+            
+            # Update status
+            async with get_db_connection_context() as conn:
+                await conn.execute("""
+                    UPDATE conversations 
+                    SET conversation_name='New Game - Finalizing'
+                    WHERE id=$1 AND user_id=$2
+                """, conversation_id, user_id)
+            
+            # 4. Finalize game setup
+            logger.info("Step 4: Finalizing game setup...")
+            finalize_params = FinalizeGameSetupParams(
+                opening_narrative=opening
+            )
+            final = await self.finalize_game_setup(ctx_wrap, finalize_params)
+            logger.info(f"Game setup finalized: {final.lore_summary}")
+            
+            # 5. Verify setup is complete before marking ready
+            logger.info("Step 5: Verifying game setup completeness...")
+            if not await self._is_setup_complete(user_id, conversation_id):
+                raise Exception("Game setup incomplete - missing required components")
             
             # Update conversation with final name and ready status
             async with get_db_connection_context() as conn:
@@ -1388,19 +1455,40 @@ class NewGameAgent:
                     SET status='ready', 
                         conversation_name=$3
                     WHERE id=$1 AND user_id=$2
-                """, conversation_id, user_id, f"Game: {setting_name}")
+                """, conversation_id, user_id, f"Game: {env.setting_name}")
+            
+            # Initialize StoryDirector AFTER game setup is complete
+            logger.info("Initializing StoryDirector")
+            try:
+                from story_agent.story_director_agent import StoryDirector
+                story_director = StoryDirector(user_id, conversation_id)
+                # Register it with the EXISTING governance
+                await governance.register_agent(
+                    agent_type=AgentType.STORY_DIRECTOR,
+                    agent_instance=story_director,
+                    agent_id="story_director"
+                )
+                logger.info(f"StoryDirector initialized and registered for {conversation_id}")
+            except Exception as e:
+                logger.error(f"StoryDirector init failed: {e}", exc_info=True)
+                # Don't fail the entire game creation if StoryDirector fails
+            
+            # NOW start background directive processing after everything is set up
+            if self.directive_handler:
+                await self.directive_handler.start_background_processing()
+                logger.info("Started background directive processing")
             
             logger.info(f"New game creation completed for conversation {conversation_id}")
             
             # Return structured result
             return ProcessNewGameResult(
-                message=f"New game started. environment={setting_name}, conversation_id={conversation_id}",
-                scenario_name=scenario_name,
-                environment_name=setting_name,
-                environment_desc=environment_desc,
-                lore_summary=lore_summary,
+                message=f"New game started. environment={env.setting_name}, conversation_id={conversation_id}",
+                scenario_name=env.scenario_name,
+                environment_name=env.setting_name,
+                environment_desc=env.environment_desc,
+                lore_summary=final.lore_summary,
                 conversation_id=conversation_id,
-                welcome_image_url=welcome_image_url,
+                welcome_image_url=final.welcome_image_url,
                 status="ready"
             )
             
