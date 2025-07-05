@@ -1,4 +1,4 @@
-# lore/core/base_manager.py
+# lore/managers/base_manager.py
 
 import logging
 import json
@@ -162,6 +162,10 @@ class BaseLoreManager:
     """
     Consolidated base class for all lore managers providing common functionality.
     Integrates agent capabilities, database access, caching, and governance oversight.
+    
+    IMPORTANT: Governance initialization has been removed from ensure_initialized()
+    to prevent circular dependencies. Governance should be set externally via
+    set_governor() and registered after all components are initialized.
     """
 
     def __init__(self, user_id: int, conversation_id: int, cache_size: int = 100, ttl: int = 3600):
@@ -180,6 +184,7 @@ class BaseLoreManager:
         self._cache_max = cache_size
         self._default_ttl = ttl
         self.initialized = False
+        self._initializing = False  # Re-entry guard
         self.cache_namespace = self.__class__.__name__.lower()
         
         # Governance integration
@@ -223,16 +228,48 @@ class BaseLoreManager:
             "manager_type": self.__class__.__name__
         }
 
+    def set_governor(self, governor):
+        """
+        Set the governor externally to avoid circular dependencies.
+        This should be called by the LoreSystem after creating the manager.
+        """
+        self.governor = governor
+        if governor:
+            # Initialize directive handler when governor is set
+            self.directive_handler = DirectiveHandler(
+                self.user_id,
+                self.conversation_id,
+                self._get_agent_type(),
+                self._get_agent_id()
+            )
+
     async def ensure_initialized(self):
         """
-        Ensure governance is initialized and any necessary tables exist.
+        Ensure the manager is initialized.
+        Note: Governance registration is now deferred until after initialization.
         """
-        if not self.initialized:
+        if self.initialized:
+            return True
+            
+        # Re-entry guard
+        if self._initializing:
+            logger.warning(f"Re-entry into {self.__class__.__name__}.ensure_initialized()")
+            return True
+            
+        self._initializing = True
+        try:
             await self.initialize_agents()
-            await self._initialize_governance()
             await self._initialize_tables()
             self.maintenance_task = asyncio.create_task(self._maintenance_loop())
             self.initialized = True
+            logger.info(f"{self.__class__.__name__} initialized successfully")
+            return True
+        except Exception as e:
+            logger.error(f"Error initializing {self.__class__.__name__}: {e}")
+            self.initialized = False
+            raise
+        finally:
+            self._initializing = False
 
     async def initialize_agents(self):
         """
@@ -250,27 +287,6 @@ class BaseLoreManager:
             logger.info(f"Agents initialized for {self.__class__.__name__} user {self.user_id}")
         except Exception as e:
             logger.error(f"Error initializing agents: {str(e)}")
-            raise
-
-    async def _initialize_governance(self):
-        """Initialize Nyx governance connection."""
-        try:
-            from nyx.integrate import get_central_governance
-            
-            if not self.governor:
-                self.governor = await get_central_governance(self.user_id, self.conversation_id)
-                
-            # Initialize directive handler
-            self.directive_handler = DirectiveHandler(
-                self.user_id,
-                self.conversation_id,
-                AgentType.NARRATIVE_CRAFTER,
-                f"{self.__class__.__name__.lower()}"
-            )
-            
-            logger.info(f"Governance initialized for {self.__class__.__name__}")
-        except Exception as e:
-            logger.error(f"Error initializing governance: {str(e)}")
             raise
 
     async def _initialize_tables(self):
@@ -304,48 +320,40 @@ class BaseLoreManager:
                 except Exception as e:
                     logger.error(f"Error creating table {table_name}: {e}")
 
-    async def register_with_governance(
-        self, 
-        agent_type: AgentType = None, 
-        agent_id: str = None, 
-        directive_text: str = None, 
-        scope: str = "world_building",
-        priority: DirectivePriority = DirectivePriority.MEDIUM
-    ):
+    async def register_with_governance_deferred(self):
         """
-        Register with Nyx governance system with sensible defaults.
+        Register with governance system after initialization is complete.
+        This should be called by the LoreSystem after all components are initialized.
         """
-        await self.ensure_initialized()
-        
-        # Default values if not provided
-        agent_type = agent_type or AgentType.NARRATIVE_CRAFTER
-        agent_id = agent_id or self.__class__.__name__.lower()
-        directive_text = directive_text or f"Manage {self.__class__.__name__} for the world setting."
-        
-        # Register this system with governance
-        await self.governor.register_agent(
-            agent_type=agent_type,
-            agent_id=agent_id,
-            agent_instance=self
-        )
-        
-        # Issue a directive
-        await self.governor.issue_directive(
-            agent_type=agent_type,
-            agent_id=agent_id,
-            directive_type=DirectiveType.ACTION,
-            directive_data={
-                "instruction": directive_text,
-                "scope": scope
-            },
-            priority=priority,
-            duration_minutes=24*60  # 24 hours
-        )
-        
-        logging.info(
-            f"{agent_id} registered with governance for "
-            f"user {self.user_id}, conversation {self.conversation_id}"
-        )
+        if not self.governor:
+            logger.warning(f"Cannot register {self.__class__.__name__} - no governor set")
+            return False
+            
+        try:
+            await self.governor.register_agent(
+                agent_type=self._get_agent_type(),
+                agent_id=self._get_agent_id(),
+                agent_instance=self
+            )
+            logger.info(f"{self.__class__.__name__} registered with governance")
+            return True
+        except Exception as e:
+            logger.error(f"Error registering {self.__class__.__name__} with governance: {e}")
+            return False
+
+    def _get_agent_type(self) -> AgentType:
+        """
+        Get the agent type for this manager.
+        Override in subclasses to provide specific agent type.
+        """
+        return AgentType.NARRATIVE_CRAFTER
+
+    def _get_agent_id(self) -> str:
+        """
+        Get the agent ID for this manager.
+        Override in subclasses to provide specific agent ID.
+        """
+        return self.__class__.__name__.lower()
 
     # ---------------------------
     # Helper Methods
