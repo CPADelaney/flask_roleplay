@@ -13,12 +13,14 @@ The circular dependency has been resolved by:
 2. Removing the get_central_governance() call from initialize()
 3. Adding a set_governor() method for dependency injection
 4. Having the governor set itself on the LoreSystem after creation
+5. Deferring all governance registration until after component initialization
 
 This ensures a clean, one-way initialization flow:
 Governor → LoreSystem (not LoreSystem ↔ Governor)
 """
 
 import logging
+import asyncio
 from typing import Dict, List, Any, Optional, Tuple, Union
 from datetime import datetime
 
@@ -96,6 +98,9 @@ class LoreSystem:
         self.prohibited_actions = []
         # Store modifications from directives
         self.action_modifications = {}
+        
+        # Track which managers need governance registration
+        self._managers_needing_registration = []
 
     @classmethod
     def get_instance(cls, user_id: Optional[int] = None, conversation_id: Optional[int] = None) -> "LoreSystem":
@@ -132,89 +137,13 @@ class LoreSystem:
             else:
                 logger.warning("[LoreSystem] No governor set yet, some features may be limited")
     
-            # 6. Initialize the data access + integration components
-            logger.info("[LoreSystem] Initializing: NPCDataAccess")
-            await self.npc_data.initialize()
-    
-            logger.info("[LoreSystem] Initializing: LocationDataAccess")
-            await self.location_data.initialize()
-    
-            logger.info("[LoreSystem] Initializing: FactionDataAccess")
-            await self.faction_data.initialize()
-    
-            logger.info("[LoreSystem] Initializing: LoreKnowledgeAccess")
-            await self.lore_knowledge.initialize()
-    
-            logger.info("[LoreSystem] Initializing: NPCLoreIntegration")
-            # IMPORTANT: Set the governor on NPCLoreIntegration before initializing
-            if hasattr(self.npc_integration, 'set_governor'):
-                self.npc_integration.set_governor(self.governor)
-            await self.npc_integration.initialize()
-    
-            logger.info("[LoreSystem] Initializing: ConflictIntegration")
-            # Set governor if the component supports it
-            if hasattr(self.conflict_integration, 'set_governor'):
-                self.conflict_integration.set_governor(self.governor)
-            await self.conflict_integration.initialize()
-
-            logger.info("[LoreSystem] Initializing: DynamicLoreGenerator")
-            # Get the instance with the governor to avoid circular dependency
-            self.generator = DynamicLoreGenerator.get_instance(self.user_id, self.conversation_id, self.governor)
-            await self.generator.initialize()
-    
-            logger.info("[LoreSystem] Initializing: ContextEnhancer")
-            # Set governor if the component supports it
-            if hasattr(self.context_enhancer, 'set_governor'):
-                self.context_enhancer.set_governor(self.governor)
-            await self.context_enhancer.initialize()
-    
-            logger.info("[LoreSystem] Initializing: DynamicLoreGenerator")
-            await self.generator.initialize()
-    
-            # 7. Initialize additional integrated managers
-            logger.info("[LoreSystem] Ensuring: EducationalSystemManager")
-            # Pass governor if the manager supports it
-            if hasattr(self.education_manager, 'set_governor'):
-                self.education_manager.set_governor(self.governor)
-            await self.education_manager.ensure_initialized()
-    
-            logger.info("[LoreSystem] Ensuring: ReligionManager")
-            if hasattr(self.religion_manager, 'set_governor'):
-                self.religion_manager.set_governor(self.governor)
-            await self.religion_manager.ensure_initialized()
-    
-            logger.info("[LoreSystem] Ensuring: LocalLoreManager")
-            if hasattr(self.local_lore_manager, 'set_governor'):
-                self.local_lore_manager.set_governor(self.governor)
-            await self.local_lore_manager.ensure_initialized()
-    
-            logger.info("[LoreSystem] Ensuring: GeopoliticalSystemManager")
-            if hasattr(self.geopolitical_manager, 'set_governor'):
-                self.geopolitical_manager.set_governor(self.governor)
-            await self.geopolitical_manager.ensure_initialized()
-    
-            logger.info("[LoreSystem] Ensuring: RegionalCultureSystem")
-            if hasattr(self.regional_culture_system, 'set_governor'):
-                self.regional_culture_system.set_governor(self.governor)
-            await self.regional_culture_system.ensure_initialized()
-    
-            logger.info("[LoreSystem] Ensuring: WorldPoliticsManager")
-            if hasattr(self.world_politics_manager, 'set_governor'):
-                self.world_politics_manager.set_governor(self.governor)
-            await self.world_politics_manager.ensure_initialized()
-    
-            logger.info("[LoreSystem] Ensuring: LoreDynamicsSystem")
-            if hasattr(self.lore_dynamics_system, 'set_governor'):
-                self.lore_dynamics_system.set_governor(self.governor)
-            await self.lore_dynamics_system.ensure_initialized()
-    
-            # Only register with governance if governor is set
+            # Initialize all components WITHOUT governance registration
+            await self._initialize_components()
+            
+            # Now that all components are initialized, register with governance
             if self.governor:
-                logger.info("[LoreSystem] Registering with Nyx governance")
-                await self.register_with_governance()
-            else:
-                logger.warning("[LoreSystem] No governor set, skipping governance registration")
-    
+                await self._register_all_with_governance()
+            
             self.initialized = True
             logger.info("[LoreSystem] Initialization successful.")
             return True
@@ -225,15 +154,112 @@ class LoreSystem:
             return False
         finally:
             self._initializing = False
-    
-    # Also add this method to help with debugging:
-    def is_initializing(self) -> bool:
-        """Check if the LoreSystem is currently initializing."""
-        return self._initializing
-    
-    def is_initialized(self) -> bool:
-        """Check if the LoreSystem has been initialized."""
-        return self.initialized
+
+    async def _initialize_components(self):
+        """Initialize all components WITHOUT governance registration."""
+        # 6. Initialize the data access + integration components
+        logger.info("[LoreSystem] Initializing: NPCDataAccess")
+        await self.npc_data.initialize()
+
+        logger.info("[LoreSystem] Initializing: LocationDataAccess")
+        await self.location_data.initialize()
+
+        logger.info("[LoreSystem] Initializing: FactionDataAccess")
+        await self.faction_data.initialize()
+
+        logger.info("[LoreSystem] Initializing: LoreKnowledgeAccess")
+        await self.lore_knowledge.initialize()
+
+        logger.info("[LoreSystem] Initializing: NPCLoreIntegration")
+        # Set the governor on NPCLoreIntegration before initializing
+        if hasattr(self.npc_integration, 'set_governor'):
+            self.npc_integration.set_governor(self.governor)
+        await self.npc_integration.initialize()
+        self._managers_needing_registration.append(('npc_integration', self.npc_integration))
+
+        logger.info("[LoreSystem] Initializing: ConflictIntegration")
+        # Set governor if the component supports it
+        if hasattr(self.conflict_integration, 'set_governor'):
+            self.conflict_integration.set_governor(self.governor)
+        await self.conflict_integration.initialize()
+        self._managers_needing_registration.append(('conflict_integration', self.conflict_integration))
+
+        logger.info("[LoreSystem] Initializing: ContextEnhancer")
+        # Set governor if the component supports it
+        if hasattr(self.context_enhancer, 'set_governor'):
+            self.context_enhancer.set_governor(self.governor)
+        await self.context_enhancer.initialize()
+        self._managers_needing_registration.append(('context_enhancer', self.context_enhancer))
+
+        logger.info("[LoreSystem] Initializing: DynamicLoreGenerator")
+        # Get the instance with the governor to avoid circular dependency
+        self.generator = DynamicLoreGenerator.get_instance(self.user_id, self.conversation_id, self.governor)
+        await self.generator.initialize()
+        self._managers_needing_registration.append(('generator', self.generator))
+
+        # 7. Initialize additional integrated managers
+        await self._initialize_specialized_managers()
+
+    async def _initialize_specialized_managers(self):
+        """Initialize specialized managers with timeout protection."""
+        managers = [
+            ("EducationalSystemManager", self.education_manager),
+            ("ReligionManager", self.religion_manager),
+            ("LocalLoreManager", self.local_lore_manager),
+            ("GeopoliticalSystemManager", self.geopolitical_manager),
+            ("RegionalCultureSystem", self.regional_culture_system),
+            ("WorldPoliticsManager", self.world_politics_manager),
+            ("LoreDynamicsSystem", self.lore_dynamics_system)
+        ]
+        
+        for manager_name, manager in managers:
+            logger.info(f"[LoreSystem] Ensuring: {manager_name}")
+            
+            # Pass governor if the manager supports it
+            if hasattr(manager, 'set_governor'):
+                manager.set_governor(self.governor)
+            
+            try:
+                # Add timeout to catch hanging initializations
+                await asyncio.wait_for(
+                    manager.ensure_initialized(),
+                    timeout=15.0
+                )
+                self._managers_needing_registration.append((manager_name.lower(), manager))
+                logger.info(f"[LoreSystem] {manager_name} initialized successfully")
+                
+            except asyncio.TimeoutError:
+                logger.error(f"[LoreSystem] {manager_name} init timed-out - dumping tasks...")
+                for task in asyncio.all_tasks():
+                    logger.error(f"↳ {task} - {task.get_stack(limit=5)}")
+                raise RuntimeError(f"{manager_name} initialization timed out")
+            except Exception as e:
+                logger.error(f"[LoreSystem] Error initializing {manager_name}: {e}")
+                raise
+
+    async def _register_all_with_governance(self):
+        """Register all components with governance after they're initialized."""
+        logger.info("[LoreSystem] Registering all components with Nyx governance")
+        
+        # First register the LoreSystem itself
+        await self.register_with_governance()
+        
+        # Then register all managers that need it
+        for manager_id, manager in self._managers_needing_registration:
+            try:
+                if hasattr(manager, 'register_with_governance_deferred'):
+                    await manager.register_with_governance_deferred()
+                elif hasattr(manager, '_get_agent_type') and hasattr(manager, '_get_agent_id'):
+                    # Use the base pattern
+                    await self.governor.register_agent(
+                        agent_type=manager._get_agent_type(),
+                        agent_id=manager._get_agent_id(),
+                        agent_instance=manager
+                    )
+                    logger.info(f"[LoreSystem] Registered {manager_id} with governance")
+            except Exception as e:
+                logger.warning(f"[LoreSystem] Failed to register {manager_id} with governance: {e}")
+                # Continue with other registrations even if one fails
 
     async def register_with_governance(self):
         """Register the lore system with Nyx governance."""
@@ -281,6 +307,15 @@ class LoreSystem:
             priority=DirectivePriority.MEDIUM,
             duration_minutes=24 * 60
         )
+
+    # Also add this method to help with debugging:
+    def is_initializing(self) -> bool:
+        """Check if the LoreSystem is currently initializing."""
+        return self._initializing
+    
+    def is_initialized(self) -> bool:
+        """Check if the LoreSystem has been initialized."""
+        return self.initialized
 
     # ---------------------------------------------------------------------
     # NPC Lore Methods
