@@ -6,6 +6,9 @@ import logging
 import asyncio
 from db.connection import get_db_connection_context
 from logic.chatgpt_integration import get_chatgpt_response
+from logic.gpt_image_prompting import get_system_prompt_with_image_guidance
+
+logger = logging.getLogger(__name__)
 
 class CurrencyGenerator:
     """
