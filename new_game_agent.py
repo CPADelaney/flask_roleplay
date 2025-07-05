@@ -957,7 +957,8 @@ class NewGameAgent:
             
             # Generate comprehensive lore based on the environment
             logging.info(f"Generating lore for new game (user_id={user_id}, conversation_id={conversation_id})")
-            lore_result = await lore_system.generate_world_lore(environment_desc)
+            lore_result = await lore_system.generate_complete_lore(environment_desc)
+
             
             # Integrate lore with NPCs if we have any
             if npc_ids:
@@ -1111,7 +1112,8 @@ class NewGameAgent:
             
             # Generate comprehensive lore based on the environment
             logging.info(f"Generating lore for environment: {params.environment_desc[:100]}...")
-            lore_result = await lore_system.generate_world_lore(params.environment_desc)
+            lore_result = await lore_system.generate_complete_lore(params.environment_desc)
+
             
             # Get NPC IDs for lore integration
             async with get_db_connection_context() as conn:
