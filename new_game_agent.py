@@ -509,23 +509,22 @@ class NewGameAgent:
         params: GenerateEnvironmentParams,
     ) -> EnvironmentData:
         """
-        Generate the game environment data using canonical functions.
+        Generate a game environment and guarantee every location.open_hours_json
+        is valid JSON, even if the LLM slips and outputs a plain string.
         """
-        user_id = ctx.context["user_id"]
+        user_id         = ctx.context["user_id"]
         conversation_id = ctx.context["conversation_id"]
-        
-        # Import canon functions
-        from lore.core import canon
-        
+    
+        # ------------------------------------------------------------------ #
+        # 1. Build the prompt with the strict open_hours_json instruction    #
+        # ------------------------------------------------------------------ #
         env_comp_text = "\n".join(params.env_components) if params.env_components else "No components provided"
         enh_feat_text = ", ".join(params.enhanced_features) if params.enhanced_features else "No enhanced features"
-        
-        # Convert stat modifiers to text
-        stat_mod_text = "No stat modifiers"
-        if params.stat_modifiers:
-            stat_mod_text = ", ".join([f"{sm.stat_name}: {sm.modifier_value}" for sm in params.stat_modifiers])
-        
-        # Create prompt for the environment agent
+        stat_mod_text = (
+            ", ".join(f"{sm.stat_name}: {sm.modifier_value}" for sm in params.stat_modifiers)
+            if params.stat_modifiers else "No stat modifiers"
+        )
+    
         prompt = f"""
         You are setting up a new daily-life sim environment with subtle, hidden layers of femdom and intrigue.
     
@@ -539,7 +538,10 @@ class NewGameAgent:
         - A vivid environment description (1-3 paragraphs)
         - A brief history
         - Community events throughout the year
-        - At least 10 distinct locations
+        - **At least 10 distinct locations.  
+          Each location MUST include "open_hours_json" that is VALID JSON, e.g.  
+          {{ "Mon-Sun": "24/7" }} or {{ "open": "18:00", "close": "23:59" }}.  
+          Plain strings like "24/7" are NOT allowed.**
         - A scenario name
         - Initial quest data
     
@@ -548,79 +550,96 @@ class NewGameAgent:
         Enhanced features: {enh_feat_text}
         Stat modifiers: {stat_mod_text}
         """
-        
-        # Add agent instance to context for sub-tools
+    
+        # ------------------------------------------------------------------ #
+        # 2. Run the EnvironmentCreator **without** a schema                 #
+        # ------------------------------------------------------------------ #
         ctx.context["agent_instance"] = self
-        
-        # Run the environment agent
-        result = await Runner.run(
-            self.environment_agent,
-            prompt,
-            context=ctx.context
+    
+        # Re-use the same instructions/tools but drop the output_type
+        env_agent_raw = Agent(
+            name="EnvironmentCreatorRaw",
+            instructions=self.environment_agent.instructions,
+            tools=[_calendar_tool_wrapper],
+            model="gpt-4.1-nano",
+            output_type=None,          # <-- no schema validation yet
         )
-        
-        # Get calendar data - need to use params object
-        calendar_params = CreateCalendarParams(environment_desc=result.final_output.environment_desc)
-        calendar_data = await self.create_calendar(ctx, calendar_params)
-        
-        # Store environment data canonically
-        async with get_db_connection_context() as conn:
-            async with conn.transaction():
-                # Create context object for canon functions
-                canon_ctx = type('obj', (object,), {
-                    'user_id': user_id, 
-                    'conversation_id': conversation_id
-                })
-                
-                # Store game setting
-                await canon.create_game_setting(
-                    canon_ctx, conn, 
-                    result.final_output.setting_name,
-                    environment_desc=result.final_output.environment_desc,
-                    environment_history=result.final_output.environment_history,
-                    calendar_data=calendar_data,
-                    scenario_name=result.final_output.scenario_name
-                )
-                
-                # Create events canonically
-                for event in result.final_output.events:
-                    await canon.find_or_create_event(
-                        canon_ctx, conn,
-                        event.name,
-                        description=event.description,
-                        start_time=event.start_time,
-                        end_time=event.end_time,
-                        location=event.location,
-                        year=event.year,
-                        month=event.month,
-                        day=event.day,
-                        time_of_day=event.time_of_day
-                    )
-                
-                # Create locations canonically
-                for location in result.final_output.locations:
-                    # Parse open_hours from JSON string (already validated by model)
-                    open_hours = json.loads(location.open_hours_json)
-                        
-                    await canon.find_or_create_location(
-                        canon_ctx, conn,
-                        location.location_name,
-                        description=location.description,
-                        location_type=location.type,
-                        notable_features=location.features,
-                        open_hours=open_hours
-                    )
-                
-                # Create main quest canonically
-                quest_data = result.final_output.quest_data
-                await canon.find_or_create_quest(
+    
+        raw_run = await Runner.run(env_agent_raw, prompt, context=ctx.context)
+    
+        # raw_run.final_output is either str or dict; ensure we have a dict
+        raw_data: Dict[str, Any] = (
+            raw_run.final_output
+            if isinstance(raw_run.final_output, dict)
+            else json.loads(raw_run.final_output)
+        )
+    
+        # ------------------------------------------------------------------ #
+        # 3. Sanity-wrap any bad open_hours_json literals                     #
+        # ------------------------------------------------------------------ #
+        for loc in raw_data.get("locations", []):
+            oh = loc.get("open_hours_json")
+            if isinstance(oh, dict):
+                continue                       # already good
+            if isinstance(oh, str):
+                try:
+                    json.loads(oh)             # does it parse?
+                except json.JSONDecodeError:
+                    loc["open_hours_json"] = {"fallback": oh}
+    
+        # ------------------------------------------------------------------ #
+        # 4. Validate with EnvironmentData (now guaranteed clean)             #
+        # ------------------------------------------------------------------ #
+        env_obj: EnvironmentData = EnvironmentData.model_validate(raw_data)
+    
+        # ------------------------------------------------------------------ #
+        # 5. Calendar + canonical DB writes (same as your old code)           #
+        # ------------------------------------------------------------------ #
+        calendar_params = CreateCalendarParams(environment_desc=env_obj.environment_desc)
+        calendar_data   = await self.create_calendar(ctx, calendar_params)
+    
+        from lore.core import canon
+        async with get_db_connection_context() as conn, conn.transaction():
+            canon_ctx = type("Ctx", (), {"user_id": user_id, "conversation_id": conversation_id})
+    
+            await canon.create_game_setting(
+                canon_ctx, conn,
+                env_obj.setting_name,
+                environment_desc   = env_obj.environment_desc,
+                environment_history= env_obj.environment_history,
+                calendar_data      = calendar_data,
+                scenario_name      = env_obj.scenario_name,
+            )
+    
+            for ev in env_obj.events:
+                await canon.find_or_create_event(
                     canon_ctx, conn,
-                    quest_data.quest_name,
-                    progress_detail=quest_data.quest_description,
-                    status="In Progress"
+                    ev.name, description=ev.description,
+                    start_time=ev.start_time, end_time=ev.end_time,
+                    location=ev.location, year=ev.year,
+                    month=ev.month, day=ev.day, time_of_day=ev.time_of_day,
                 )
-        
-        return result.final_output
+    
+            for loc in env_obj.locations:
+                await canon.find_or_create_location(
+                    canon_ctx, conn,
+                    loc.location_name,
+                    description      = loc.description,
+                    location_type    = loc.type,
+                    notable_features = loc.features,
+                    open_hours       = loc.open_hours_json,   # dict — ready to store
+                )
+    
+            qd = env_obj.quest_data
+            await canon.find_or_create_quest(
+                canon_ctx, conn,
+                qd.quest_name,
+                progress_detail=qd.quest_description,
+                status="In Progress",
+            )
+    
+        return env_obj
+
 
     async def _apply_setting_stat_modifiers(
         self,
