@@ -271,6 +271,67 @@ class BaseLoreManager:
         finally:
             self._initializing = False
 
+    async def register_with_governance(
+        self,
+        agent_type: AgentType,
+        agent_id: str,
+        directive_text: str,
+        scope: str = "world_building",
+        priority: DirectivePriority = DirectivePriority.MEDIUM
+    ) -> bool:
+        """
+        Register with Nyx governance system.
+        
+        Args:
+            agent_type: Type of agent
+            agent_id: Unique ID for this agent
+            directive_text: Directive text describing agent's purpose
+            scope: Scope of operations
+            priority: Priority level
+            
+        Returns:
+            True if registration successful
+        """
+        if not self.governor:
+            logger.warning(f"Cannot register {self.__class__.__name__} - no governor set")
+            return False
+            
+        try:
+            # Store the agent type and ID for later use
+            self._agent_type = agent_type
+            self._agent_id = agent_id
+            
+            # Register with the governor
+            result = await self.governor.register_agent(
+                agent_type=agent_type,
+                agent_instance=self,
+                agent_id=agent_id
+            )
+            
+            if result.get("success", False):
+                # Also register the directive
+                await self.governor.issue_directive(
+                    agent_type=agent_type,
+                    agent_id=agent_id,
+                    directive_type=DirectiveType.INFORMATION,
+                    directive_data={
+                        "text": directive_text,
+                        "scope": scope
+                    },
+                    priority=priority,
+                    duration_minutes=60 * 24 * 365  # 1 year
+                )
+                
+                logger.info(f"{self.__class__.__name__} registered with governance as {agent_type}/{agent_id}")
+                return True
+            else:
+                logger.error(f"Failed to register {self.__class__.__name__} with governance")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Error registering {self.__class__.__name__} with governance: {e}")
+            return False
+
     async def initialize_agents(self):
         """
         Initialize agent definitions. Override in subclasses to define specific agents.
@@ -346,14 +407,14 @@ class BaseLoreManager:
         Get the agent type for this manager.
         Override in subclasses to provide specific agent type.
         """
-        return AgentType.NARRATIVE_CRAFTER
-
+        return getattr(self, '_agent_type', AgentType.NARRATIVE_CRAFTER)
+    
     def _get_agent_id(self) -> str:
         """
         Get the agent ID for this manager.
         Override in subclasses to provide specific agent ID.
         """
-        return self.__class__.__name__.lower()
+        return getattr(self, '_agent_id', self.__class__.__name__.lower())
 
     # ---------------------------
     # Helper Methods
