@@ -47,7 +47,7 @@ class OpenAISummarizer(NarrativeSummarizer):
     """
     Summarizer using OpenAI API
     """
-    def __init__(self, api_key: str, model: str = "gpt-4-mini"):
+    def __init__(self, api_key: str, model: str = "gpt-4.1-nano"):
         if not HAVE_OPENAI:
             raise ImportError("openai is required for OpenAISummarizer")
         self.client = openai.AsyncClient(api_key=api_key)
