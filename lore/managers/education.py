@@ -27,6 +27,16 @@ from db.connection import get_db_connection_context
 
 logger = logging.getLogger(__name__)
 
+# Import the matriarchal theming utilities if they exist
+try:
+    from lore.managers.utils import MatriarchalThemingUtils
+except ImportError:
+    # Create a simple placeholder if the utils don't exist
+    class MatriarchalThemingUtils:
+        @staticmethod
+        def apply_matriarchal_theme(theme_type: str, text: str) -> str:
+            return text
+
 # ---------------------------------------------------------------------
 # Context Type for SDK
 # ---------------------------------------------------------------------
@@ -172,6 +182,9 @@ class EducationalSystemManager(BaseLoreManager):
     """
     Enhanced manager for educational systems with streaming support,
     agent-to-agent knowledge exchange, structured outputs, and censorship guardrails.
+    
+    IMPORTANT: Governance initialization has been removed from ensure_initialized()
+    to prevent circular dependencies. Governance is now handled externally by LoreSystem.
     """
     
     def __init__(self, user_id: int, conversation_id: int):
@@ -188,10 +201,14 @@ class EducationalSystemManager(BaseLoreManager):
         self.religious_education_agent = None
         self.education_agent = None
         self.knowledge_exchange_agent = None
-        
-        # Governance
-        self.governor = None
-        self.directive_handler = None
+    
+    def _get_agent_type(self) -> AgentType:
+        """Override to provide specific agent type."""
+        return AgentType.NARRATIVE_CRAFTER
+    
+    def _get_agent_id(self) -> str:
+        """Override to provide specific agent ID."""
+        return "educational_system_manager"
     
     async def initialize_agents(self):
         """Initialize all specialized agents."""
@@ -287,31 +304,6 @@ class EducationalSystemManager(BaseLoreManager):
         )
         
         logger.info(f"Educational agents initialized for user {self.user_id}")
-    
-    async def initialize_governance(self):
-        """Initialize Nyx governance integration."""
-        try:
-            from nyx.integrate import get_central_governance
-            
-            self.governor = await get_central_governance(self.user_id, self.conversation_id)
-            
-            self.directive_handler = DirectiveHandler(
-                self.user_id,
-                self.conversation_id,
-                AgentType.NARRATIVE_CRAFTER,
-                "educational_system_manager"
-            )
-            
-            await self.governor.register_agent(
-                agent_type=AgentType.NARRATIVE_CRAFTER,
-                agent_id="educational_system_manager",
-                agent_instance=self
-            )
-            
-            logger.info(f"Education governance initialized for user {self.user_id}")
-        except Exception as e:
-            logger.error(f"Error initializing education governance: {str(e)}")
-            # Governance is optional - continue without it
     
     async def _initialize_tables(self):
         """Initialize database tables for educational systems."""
@@ -409,7 +401,21 @@ class EducationalSystemManager(BaseLoreManager):
             """
         }
         
-        await self.initialize_tables_for_class(table_definitions)
+        logger.info(f"Initializing tables for {self.__class__.__name__}")
+        
+        # Add timeout protection to table creation
+        try:
+            await asyncio.wait_for(
+                self.initialize_tables_for_class(table_definitions),
+                timeout=10.0
+            )
+            logger.info(f"Table initialization complete for {self.__class__.__name__}")
+        except asyncio.TimeoutError:
+            logger.error(f"Table initialization timed out for {self.__class__.__name__}")
+            raise RuntimeError("Table initialization timed out")
+        except Exception as e:
+            logger.error(f"Error during table initialization: {e}")
+            raise
     
     # Internal helper methods
     async def _check_governance_permission(self, action_type: str, action_details: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
@@ -589,6 +595,25 @@ class EducationalSystemManager(BaseLoreManager):
             manager=self,
             governance_enabled=self.governor is not None
         )
+
+    # Public methods for external use
+    async def generate_educational_systems(self, _=None) -> List[Dict[str, Any]]:
+        """
+        Generate educational systems.
+        This is a public method that can be called by LoreSystem.
+        """
+        # Run the generate_educational_systems tool function with proper context
+        ctx = RunContextWrapper(context=self.create_context().__dict__)
+        return await generate_educational_systems(ctx)
+    
+    async def generate_knowledge_traditions(self, _=None) -> List[Dict[str, Any]]:
+        """
+        Generate knowledge traditions.
+        This is a public method that can be called by LoreSystem.
+        """
+        # Run the generate_knowledge_traditions tool function with proper context
+        ctx = RunContextWrapper(context=self.create_context().__dict__)
+        return await generate_knowledge_traditions(ctx)
 
 # ---------------------------------------------------------------------
 # Global Registry
