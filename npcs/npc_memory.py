@@ -243,131 +243,10 @@ class MemoryContext:
                     del self.cache_timestamps[cache_type][key]
 
 # -------------------------------------------------------
-# Tool Functions
+# Implementation Functions (not decorated)
 # -------------------------------------------------------
 
-@function_tool(strict_mode=False)
-async def add_memory(
-    ctx: RunContextWrapper[MemoryContext],
-    memory_input: MemoryInput
-) -> Dict[str, Any]:
-    """
-    Add a new memory for the NPC with enhanced femdom (feminine dominance) context handling.
-    
-    Args:
-        memory_input: The memory data to add
-    """
-    with function_span("add_memory"):
-        start_time = time.time()
-        
-        try:
-            # Auto-extract content tags
-            content_tags = await analyze_memory_content(ctx, memory_input.memory_text)
-            updated_tags = list(memory_input.tags)
-            updated_tags.extend(content_tags)
-            
-            # Femdom context: add relevant tags and boost significance
-            if memory_input.feminine_context:
-                femdom_tags = extract_femdom_tags(memory_input.memory_text)
-                updated_tags.extend(femdom_tags)
-                if femdom_tags and memory_input.significance < 5:
-                    memory_input.significance += 1
-            
-            # If emotional_intensity is not provided, try to derive it
-            emotional_intensity = memory_input.emotional_intensity
-            if emotional_intensity is None:
-                try:
-                    memory_system = await ctx.context.get_memory_system()
-                    emotion_analysis = await memory_system.emotional_manager.analyze_emotional_content(
-                        memory_input.memory_text
-                    )
-                    primary_emotion = emotion_analysis.get("primary_emotion", "neutral")
-                    analyzed_intensity = emotion_analysis.get("intensity", 0.5)
-                    emotional_intensity = int(analyzed_intensity * 100)
-                except Exception as e:
-                    logger.error(f"Error analyzing emotional content: {e}")
-                    # Fallback
-                    emotional_intensity = await calculate_emotional_intensity(
-                        ctx, 
-                        memory_input.memory_text, 
-                        memory_input.emotional_valence
-                    )
-            
-            # Create memory with memory system
-            memory_system = await ctx.context.get_memory_system()
-            
-            # Determine importance
-            if memory_input.significance >= 7:
-                importance = "high"
-            elif memory_input.significance <= 2:
-                importance = "low"
-            else:
-                importance = "medium"
-            
-            # Check if it's an emotional memory
-            is_emotional = (emotional_intensity > 50) or ("emotional" in updated_tags)
-            
-            # If femdom context, possibly boost importance
-            if memory_input.feminine_context and importance != "high":
-                if importance == "low":
-                    importance = "medium"
-                elif importance == "medium":
-                    importance = "high"
-            
-            # Create the memory
-            memory_result = await memory_system.remember(
-                entity_type="npc",
-                entity_id=ctx.context.npc_id,
-                memory_text=memory_input.memory_text,
-                importance=importance,
-                emotional=is_emotional,
-                tags=updated_tags
-            )
-            
-            memory_id = memory_result.get("memory_id")
-            
-            # Apply schema if memory was created
-            if memory_id:
-                try:
-                    await memory_system.schema_manager.apply_schema_to_memory(
-                        memory_id=memory_id,
-                        entity_type="npc",
-                        entity_id=ctx.context.npc_id,
-                        auto_detect=True
-                    )
-                except Exception as e:
-                    logger.error(f"Error applying schemas to memory {memory_id}: {e}")
-            
-            # If high significance or femdom context, propagate
-            if memory_input.significance >= 4 or memory_input.feminine_context:
-                try:
-                    await propagate_memory(
-                        ctx,
-                        memory_input.memory_text,
-                        updated_tags,
-                        memory_input.significance,
-                        emotional_intensity
-                    )
-                except Exception as e:
-                    logger.error(f"Error propagating memory: {e}")
-            
-            # Record performance
-            elapsed = time.time() - start_time
-            ctx.context.record_operation("add_memory", elapsed)
-            
-            # Invalidate memory cache
-            ctx.context.invalidate_cache("memory")
-            
-            return memory_result
-            
-        except Exception as e:
-            logger.error(f"Error adding memory: {e}")
-            elapsed = time.time() - start_time
-            ctx.context.record_operation("add_memory", elapsed)
-            return {"error": str(e)}
-
-@function_tool(strict_mode=False)
-async def analyze_memory_content(
+async def analyze_memory_content_impl(
     ctx: RunContextWrapper[MemoryContext],
     memory_text: str
 ) -> List[str]:
@@ -467,8 +346,7 @@ def extract_femdom_tags(memory_text: str) -> List[str]:
     
     return femdom_tags
 
-@function_tool(strict_mode=False)
-async def calculate_emotional_intensity(
+async def calculate_emotional_intensity_impl(
     ctx: RunContextWrapper[MemoryContext],
     memory_text: str,
     base_valence: float
@@ -516,8 +394,126 @@ async def calculate_emotional_intensity(
         # Clamp [0..100]
         return float(min(100, max(0, intensity)))
 
-@function_tool(strict_mode=False)
-async def retrieve_memories(
+async def add_memory_impl(
+    ctx: RunContextWrapper[MemoryContext],
+    memory_input: MemoryInput
+) -> Dict[str, Any]:
+    """
+    Add a new memory for the NPC with enhanced femdom (feminine dominance) context handling.
+    
+    Args:
+        memory_input: The memory data to add
+    """
+    with function_span("add_memory"):
+        start_time = time.time()
+        
+        try:
+            # Auto-extract content tags
+            content_tags = await analyze_memory_content_impl(ctx, memory_input.memory_text)
+            updated_tags = list(memory_input.tags)
+            updated_tags.extend(content_tags)
+            
+            # Femdom context: add relevant tags and boost significance
+            if memory_input.feminine_context:
+                femdom_tags = extract_femdom_tags(memory_input.memory_text)
+                updated_tags.extend(femdom_tags)
+                if femdom_tags and memory_input.significance < 5:
+                    memory_input.significance += 1
+            
+            # If emotional_intensity is not provided, try to derive it
+            emotional_intensity = memory_input.emotional_intensity
+            if emotional_intensity is None:
+                try:
+                    memory_system = await ctx.context.get_memory_system()
+                    emotion_analysis = await memory_system.emotional_manager.analyze_emotional_content(
+                        memory_input.memory_text
+                    )
+                    primary_emotion = emotion_analysis.get("primary_emotion", "neutral")
+                    analyzed_intensity = emotion_analysis.get("intensity", 0.5)
+                    emotional_intensity = int(analyzed_intensity * 100)
+                except Exception as e:
+                    logger.error(f"Error analyzing emotional content: {e}")
+                    # Fallback
+                    emotional_intensity = await calculate_emotional_intensity_impl(
+                        ctx, 
+                        memory_input.memory_text, 
+                        memory_input.emotional_valence
+                    )
+            
+            # Create memory with memory system
+            memory_system = await ctx.context.get_memory_system()
+            
+            # Determine importance
+            if memory_input.significance >= 7:
+                importance = "high"
+            elif memory_input.significance <= 2:
+                importance = "low"
+            else:
+                importance = "medium"
+            
+            # Check if it's an emotional memory
+            is_emotional = (emotional_intensity > 50) or ("emotional" in updated_tags)
+            
+            # If femdom context, possibly boost importance
+            if memory_input.feminine_context and importance != "high":
+                if importance == "low":
+                    importance = "medium"
+                elif importance == "medium":
+                    importance = "high"
+            
+            # Create the memory
+            memory_result = await memory_system.remember(
+                entity_type="npc",
+                entity_id=ctx.context.npc_id,
+                memory_text=memory_input.memory_text,
+                importance=importance,
+                emotional=is_emotional,
+                tags=updated_tags
+            )
+            
+            memory_id = memory_result.get("memory_id")
+            
+            # Apply schema if memory was created
+            if memory_id:
+                try:
+                    await memory_system.schema_manager.apply_schema_to_memory(
+                        memory_id=memory_id,
+                        entity_type="npc",
+                        entity_id=ctx.context.npc_id,
+                        auto_detect=True
+                    )
+                except Exception as e:
+                    logger.error(f"Error applying schemas to memory {memory_id}: {e}")
+            
+            # If high significance or femdom context, propagate
+            if memory_input.significance >= 4 or memory_input.feminine_context:
+                try:
+                    await propagate_memory_impl(
+                        ctx,
+                        memory_input.memory_text,
+                        updated_tags,
+                        memory_input.significance,
+                        emotional_intensity
+                    )
+                except Exception as e:
+                    logger.error(f"Error propagating memory: {e}")
+            
+            # Record performance
+            elapsed = time.time() - start_time
+            ctx.context.record_operation("add_memory", elapsed)
+            
+            # Invalidate memory cache
+            ctx.context.invalidate_cache("memory")
+            
+            return memory_result
+            
+        except Exception as e:
+            logger.error(f"Error adding memory: {e}")
+            elapsed = time.time() - start_time
+            ctx.context.record_operation("add_memory", elapsed)
+            return {"error": str(e)}
+
+async def retrieve_memories_impl(
     ctx: RunContextWrapper[MemoryContext],
     query: MemoryQuery
 ) -> MemoryResult:
@@ -634,8 +630,7 @@ async def retrieve_memories_with_femdom_focus(
     final_memories = final_memories[:limit]
     return {"memories": final_memories, "count": len(final_memories)}
 
-@function_tool(strict_mode=False)
-async def search_memories(
+async def search_memories_impl(
     ctx: RunContextWrapper[MemoryContext],
     entity_type: str,
     entity_id: int,
@@ -708,8 +703,7 @@ async def search_memories(
             logger.error(f"Error searching memories: {e}")
             return []
 
-@function_tool(strict_mode=False)
-async def update_emotional_state(
+async def update_emotional_state_impl(
     ctx: RunContextWrapper[MemoryContext],
     update: EmotionalStateUpdate
 ) -> Dict[str, Any]:
@@ -771,8 +765,7 @@ async def update_emotional_state(
             ctx.context.record_operation("update_emotion", elapsed)
             return {"error": str(e)}
 
-@function_tool(strict_mode=False)
-async def get_emotional_state(
+async def get_emotional_state_impl(
     ctx: RunContextWrapper[MemoryContext]
 ) -> Dict[str, Any]:
     """
@@ -805,8 +798,7 @@ async def get_emotional_state(
             ctx.context.record_operation("update_emotion", elapsed)
             return {"error": str(e)}
 
-@function_tool(strict_mode=False)
-async def generate_mask_slippage(
+async def generate_mask_slippage_impl(
     ctx: RunContextWrapper[MemoryContext],
     input_data: MaskSlippageInput
 ) -> Dict[str, Any]:
@@ -874,8 +866,7 @@ async def generate_mask_slippage(
             ctx.context.record_operation("mask_operations", elapsed)
             return {"error": str(e)}
 
-@function_tool(strict_mode=False)
-async def get_npc_mask(
+async def get_npc_mask_impl(
     ctx: RunContextWrapper[MemoryContext]
 ) -> Dict[str, Any]:
     """
@@ -907,8 +898,7 @@ async def get_npc_mask(
             ctx.context.record_operation("mask_operations", elapsed)
             return {"error": str(e)}
 
-@function_tool(strict_mode=False)
-async def create_belief(
+async def create_belief_impl(
     ctx: RunContextWrapper[MemoryContext],
     input_data: BeliefInput
 ) -> Dict[str, Any]:
@@ -976,8 +966,7 @@ async def create_belief(
             ctx.context.record_operation("belief_operations", elapsed)
             return {"error": str(e)}
 
-@function_tool(strict_mode=False)
-async def get_beliefs(
+async def get_beliefs_impl(
     ctx: RunContextWrapper[MemoryContext],
     topic: Optional[str] = None,
     min_confidence: float = 0.0
@@ -1025,8 +1014,7 @@ async def get_beliefs(
             ctx.context.record_operation("belief_operations", elapsed)
             return []
 
-@function_tool(strict_mode=False)
-async def get_femdom_beliefs(
+async def get_femdom_beliefs_impl(
     ctx: RunContextWrapper[MemoryContext],
     min_confidence: float = 0.3
 ) -> List[Dict[str, Any]]:
@@ -1048,7 +1036,7 @@ async def get_femdom_beliefs(
         start_time = time.time()
         
         try:
-            all_beliefs = await get_beliefs(ctx, None, 0.0)
+            all_beliefs = await get_beliefs_impl(ctx, None, 0.0)
             femdom_keywords = [
                 "dominance", "submission", "control", "obedience",
                 "discipline", "service", "power", "humiliation",
@@ -1078,8 +1066,7 @@ async def get_femdom_beliefs(
             ctx.context.record_operation("belief_operations", elapsed)
             return []
 
-@function_tool(strict_mode=False)
-async def run_femdom_maintenance(
+async def run_femdom_maintenance_impl(
     ctx: RunContextWrapper[MemoryContext]
 ) -> Dict[str, Any]:
     """
@@ -1159,7 +1146,7 @@ async def run_femdom_maintenance(
                             results["submission_memories_consolidated"] += 1
             
             # 2) Reinforce power-related beliefs if enough supporting memories
-            femdom_beliefs = await get_femdom_beliefs(ctx)
+            femdom_beliefs = await get_femdom_beliefs_impl(ctx)
             for belief in femdom_beliefs:
                 b_text = belief.get("belief", "")
                 conf = belief.get("confidence", 0.5)
@@ -1192,8 +1179,7 @@ async def run_femdom_maintenance(
             logger.error(f"Error in femdom maintenance: {e}")
             return {"error": str(e)}
 
-@function_tool(strict_mode=False)
-async def propagate_memory(
+async def propagate_memory_impl(
     ctx: RunContextWrapper[MemoryContext],
     memory_text: str,
     tags: List[str],
@@ -1357,8 +1343,7 @@ def distort_text(original_text: str, severity=0.3) -> str:
     # Re-join, removing empties
     return " ".join([w for w in words if w])
 
-@function_tool(strict_mode=False)
-async def run_memory_maintenance(
+async def run_memory_maintenance_impl(
     ctx: RunContextWrapper[MemoryContext],
     options: MaintenanceOptions
 ) -> Dict[str, Any]:
@@ -1461,7 +1446,7 @@ async def run_memory_maintenance(
                         results["batch_operations"] += 1
             
             if options.include_femdom_maintenance:
-                femdom_results = await run_femdom_maintenance(ctx)
+                femdom_results = await run_femdom_maintenance_impl(ctx)
                 results["femdom_maintenance"] = femdom_results
             
             # Clear caches after maintenance
@@ -1478,6 +1463,210 @@ async def run_memory_maintenance(
             elapsed = time.time() - start_time
             logger.info(f"Memory maintenance failed after {elapsed:.2f}s")
             return {"error": str(e)}
+
+# -------------------------------------------------------
+# Tool Functions (wrappers around implementations)
+# -------------------------------------------------------
+
+@function_tool(strict_mode=False)
+async def add_memory(
+    ctx: RunContextWrapper[MemoryContext],
+    memory_input: MemoryInput
+) -> Dict[str, Any]:
+    """
+    Add a new memory for the NPC with enhanced femdom (feminine dominance) context handling.
+    
+    Args:
+        memory_input: The memory data to add
+    """
+    return await add_memory_impl(ctx, memory_input)
+
+@function_tool(strict_mode=False)
+async def analyze_memory_content(
+    ctx: RunContextWrapper[MemoryContext],
+    memory_text: str
+) -> List[str]:
+    """
+    Basic textual analysis to assign tags (including femdom themes).
+    
+    Args:
+        memory_text: The memory text to analyze
+    """
+    return await analyze_memory_content_impl(ctx, memory_text)
+
+@function_tool(strict_mode=False)
+async def calculate_emotional_intensity(
+    ctx: RunContextWrapper[MemoryContext],
+    memory_text: str,
+    base_valence: float
+) -> float:
+    """
+    Compute an emotional intensity from textual signals plus a base valence offset.
+    
+    Args:
+        memory_text: The memory text
+        base_valence: Base emotional valence (-10 to 10)
+    """
+    return await calculate_emotional_intensity_impl(ctx, memory_text, base_valence)
+
+@function_tool(strict_mode=False)
+async def retrieve_memories(
+    ctx: RunContextWrapper[MemoryContext],
+    query: MemoryQuery
+) -> MemoryResult:
+    """
+    Retrieve memories matching certain criteria, with optional femdom focus.
+    
+    Args:
+        query: Memory retrieval query
+    """
+    return await retrieve_memories_impl(ctx, query)
+
+@function_tool(strict_mode=False)
+async def search_memories(
+    ctx: RunContextWrapper[MemoryContext],
+    entity_type: str,
+    entity_id: int,
+    query: str,
+    limit: int = 10
+) -> List[Dict[str, Any]]:
+    """
+    Search memories with specific criteria beyond standard recall.
+    
+    Args:
+        entity_type: 'npc' or 'player'
+        entity_id: ID of the entity
+        query: text search or tag-based search
+        limit: max results
+    """
+    return await search_memories_impl(ctx, entity_type, entity_id, query, limit)
+
+@function_tool(strict_mode=False)
+async def update_emotional_state(
+    ctx: RunContextWrapper[MemoryContext],
+    update: EmotionalStateUpdate
+) -> Dict[str, Any]:
+    """
+    Update the NPC's emotional state with optional trigger and secondary emotions.
+    
+    Args:
+        update: The emotional state update data
+    """
+    return await update_emotional_state_impl(ctx, update)
+
+@function_tool(strict_mode=False)
+async def get_emotional_state(
+    ctx: RunContextWrapper[MemoryContext]
+) -> Dict[str, Any]:
+    """
+    Get the NPC's current emotional state, using a short-lived cache.
+    """
+    return await get_emotional_state_impl(ctx)
+
+@function_tool(strict_mode=False)
+async def generate_mask_slippage(
+    ctx: RunContextWrapper[MemoryContext],
+    input_data: MaskSlippageInput
+) -> Dict[str, Any]:
+    """
+    Trigger a mask slippage event, possibly more severe in femdom contexts.
+    
+    Args:
+        input_data: Data for generating mask slippage
+    """
+    return await generate_mask_slippage_impl(ctx, input_data)
+
+@function_tool(strict_mode=False)
+async def get_npc_mask(
+    ctx: RunContextWrapper[MemoryContext]
+) -> Dict[str, Any]:
+    """
+    Get NPC mask info, with caching.
+    """
+    return await get_npc_mask_impl(ctx)
+
+@function_tool(strict_mode=False)
+async def create_belief(
+    ctx: RunContextWrapper[MemoryContext],
+    input_data: BeliefInput
+) -> Dict[str, Any]:
+    """
+    Create a new belief for this NPC. If in femdom context, optionally record reflection memories.
+    
+    Args:
+        input_data: The belief data to create
+    """
+    return await create_belief_impl(ctx, input_data)
+
+@function_tool(strict_mode=False)
+async def get_beliefs(
+    ctx: RunContextWrapper[MemoryContext],
+    topic: Optional[str] = None,
+    min_confidence: float = 0.0
+) -> List[Dict[str, Any]]:
+    """
+    Retrieve beliefs for this NPC, optionally filtered by topic and confidence threshold.
+    
+    Args:
+        topic: Optional topic filter
+        min_confidence: Minimum confidence threshold
+    """
+    return await get_beliefs_impl(ctx, topic, min_confidence)
+
+@function_tool(strict_mode=False)
+async def get_femdom_beliefs(
+    ctx: RunContextWrapper[MemoryContext],
+    min_confidence: float = 0.3
+) -> List[Dict[str, Any]]:
+    """
+    Return beliefs relevant to femdom (power dynamics, submission, etc.).
+    
+    Args:
+        min_confidence: Minimum confidence threshold
+    """
+    return await get_femdom_beliefs_impl(ctx, min_confidence)
+
+@function_tool(strict_mode=False)
+async def run_femdom_maintenance(
+    ctx: RunContextWrapper[MemoryContext]
+) -> Dict[str, Any]:
+    """
+    Perform extra maintenance logic relevant to femdom (power dynamics) memories/beliefs.
+    """
+    return await run_femdom_maintenance_impl(ctx)
+
+@function_tool(strict_mode=False)
+async def propagate_memory(
+    ctx: RunContextWrapper[MemoryContext],
+    memory_text: str,
+    tags: List[str],
+    significance: int,
+    emotional_intensity: float
+) -> Dict[str, Any]:
+    """
+    Propagate an important memory to related NPCs as secondhand info, with distortions.
+    
+    Args:
+        memory_text: The memory text
+        tags: Memory tags
+        significance: Memory significance (1-10)
+        emotional_intensity: Emotional intensity (0-100)
+    """
+    return await propagate_memory_impl(ctx, memory_text, tags, significance, emotional_intensity)
+
+@function_tool(strict_mode=False)
+async def run_memory_maintenance(
+    ctx: RunContextWrapper[MemoryContext],
+    options: MaintenanceOptions
+) -> Dict[str, Any]:
+    """
+    Run maintenance tasks on this NPC's memory system (consolidation, decay, etc.).
+    Optimized with batched DB operations.
+    
+    Args:
+        options: Options for what maintenance to perform
+    """
+    return await run_memory_maintenance_impl(ctx, options)
 
 # -------------------------------------------------------
 # Memory Manager Agent
@@ -1639,7 +1828,7 @@ class NPCMemoryManager:
             feminine_context=feminine_context
         )
         
-        result = await add_memory(
+        result = await add_memory_impl(
             RunContextWrapper(self.context),
             memory_input
         )
@@ -1675,7 +1864,7 @@ class NPCMemoryManager:
             femdom_focus=femdom_focus
         )
         
-        result = await retrieve_memories(
+        result = await retrieve_memories_impl(
             RunContextWrapper(self.context),
             memory_query
         )
@@ -1705,7 +1894,7 @@ class NPCMemoryManager:
             secondary_emotions=secondary_emotions
         )
         
-        result = await update_emotional_state(
+        result = await update_emotional_state_impl(
             RunContextWrapper(self.context),
             update
         )
@@ -1716,7 +1905,7 @@ class NPCMemoryManager:
         """
         Get the NPC's current emotional state.
         """
-        return await get_emotional_state(RunContextWrapper(self.context))
+        return await get_emotional_state_impl(RunContextWrapper(self.context))
     
     async def generate_mask_slippage(
         self,
@@ -1738,7 +1927,7 @@ class NPCMemoryManager:
             femdom_context=femdom_context
         )
         
-        result = await generate_mask_slippage(
+        result = await generate_mask_slippage_impl(
             RunContextWrapper(self.context),
             input_data
         )
@@ -1749,7 +1938,7 @@ class NPCMemoryManager:
         """
         Get NPC mask info.
         """
-        return await get_npc_mask(RunContextWrapper(self.context))
+        return await get_npc_mask_impl(RunContextWrapper(self.context))
     
     async def create_belief(
         self,
@@ -1774,7 +1963,7 @@ class NPCMemoryManager:
             femdom_context=femdom_context
         )
         
-        result = await create_belief(
+        result = await create_belief_impl(
             RunContextWrapper(self.context),
             input_data
         )
@@ -1793,7 +1982,7 @@ class NPCMemoryManager:
             topic: Optional topic filter
             min_confidence: Minimum confidence threshold
         """
-        return await get_beliefs(
+        return await get_beliefs_impl(
             RunContextWrapper(self.context),
             topic,
             min_confidence
@@ -1809,7 +1998,7 @@ class NPCMemoryManager:
         Args:
             min_confidence: Minimum confidence threshold
         """
-        return await get_femdom_beliefs(
+        return await get_femdom_beliefs_impl(
             RunContextWrapper(self.context),
             min_confidence
         )
@@ -1828,7 +2017,7 @@ class NPCMemoryManager:
             include_femdom_maintenance=include_femdom_maintenance
         )
         
-        result = await run_memory_maintenance(
+        result = await run_memory_maintenance_impl(
             RunContextWrapper(self.context),
             options
         )
@@ -1851,7 +2040,7 @@ class NPCMemoryManager:
             query: Search query
             limit: Maximum number of results
         """
-        return await search_memories(
+        return await search_memories_impl(
             RunContextWrapper(self.context),
             entity_type,
             entity_id,
