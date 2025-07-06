@@ -10,6 +10,7 @@ including dynamic generation, evolution, component generation, and governance in
 import logging
 import json
 import asyncio
+import os
 import random
 from typing import Dict, List, Any, Optional, Tuple, Union, Set
 from datetime import datetime
@@ -1626,7 +1627,12 @@ class DynamicLoreGenerator(BaseGenerator):
             await self.lore_evolution.cleanup()
 
 
-openai_client = AsyncOpenAI()
+api_key = os.getenv("OPENAI_API_KEY")
+if not api_key:
+    raise RuntimeError("OPENAI_API_KEY not found in environment")
+
+# Create the client with explicit API key
+openai_client = AsyncOpenAI(api_key=api_key)
 
 # Agent definitions for reference in the function tools
 foundation_lore_agent = Agent(
