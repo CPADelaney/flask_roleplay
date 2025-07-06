@@ -1632,19 +1632,6 @@ class DynamicLoreGenerator(BaseGenerator):
             await self.lore_evolution.cleanup()
 
 
-# Lazy initialization for OpenAI client
-_openai_client = None
-
-def get_openai_client():
-    """Get or create the OpenAI client instance."""
-    global _openai_client
-    if _openai_client is None:
-        api_key = os.getenv("OPENAI_API_KEY")
-        if not api_key:
-            raise RuntimeError("OPENAI_API_KEY not found in environment")
-        _openai_client = AsyncOpenAI(api_key=api_key)
-    return _openai_client
-
 # Agent getter functions
 def get_foundation_lore_agent():
     """Get or create the foundation lore agent."""
@@ -1748,3 +1735,28 @@ def get_quests_agent():
         model_settings=ModelSettings(temperature=0.7),
         output_type=QuestsOutput,
     )
+    
+_openai_client = None
+_client_error = None
+
+class DeferredOpenAIClient:
+    """A placeholder that defers API key checking until actual use."""
+    def __init__(self, error_msg):
+        self.error_msg = error_msg
+    
+    def __getattr__(self, name):
+        raise RuntimeError(self.error_msg)
+
+def get_openai_client():
+    """Get or create the OpenAI client instance."""
+    global _openai_client, _client_error
+    
+    if _openai_client is None:
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            # Don't raise immediately - return a placeholder that will raise when used
+            if _client_error is None:
+                _client_error = DeferredOpenAIClient("OPENAI_API_KEY not found in environment")
+            return _client_error
+        _openai_client = AsyncOpenAI(api_key=api_key)
+    return _openai_client
