@@ -2780,16 +2780,16 @@ async def create_game_setting(ctx, conn, setting_name: str, **kwargs) -> None:
     env_history = kwargs.get('environment_history', '')
     full_desc = f"{env_desc}\n\nHistory: {env_history}" if env_history else env_desc
     
-    await update_current_roleplay(ctx, conn, ctx.user_id, ctx.conversation_id, 
+    await update_current_roleplay(ctx, conn,
                                  'EnvironmentDesc', full_desc)
     
     # Store setting name
-    await update_current_roleplay(ctx, conn, ctx.user_id, ctx.conversation_id,
+    await update_current_roleplay(ctx, conn,
                                  'CurrentSetting', setting_name)
     
     # Store calendar data if provided
     if 'calendar_data' in kwargs:
-        await update_current_roleplay(ctx, conn, ctx.user_id, ctx.conversation_id,
+        await update_current_roleplay(ctx, conn,
                                      'CalendarNames', json.dumps(kwargs['calendar_data']))
     
     # Update conversation name if scenario name provided
@@ -2813,7 +2813,7 @@ async def store_player_schedule(ctx, conn, player_name: str, schedule: Dict[str,
     """
     schedule_json = json.dumps(schedule)
     
-    await update_current_roleplay(ctx, conn, ctx.user_id, ctx.conversation_id,
+    await update_current_roleplay(ctx, conn, 
                                  f'{player_name}Schedule', schedule_json)
     
     # Also create a journal entry for the schedule
