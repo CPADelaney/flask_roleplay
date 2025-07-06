@@ -1,13 +1,4 @@
 # new_game_agent.py
-#
-# REFACTORED TO FIX RACE CONDITIONS:
-# 1. Deterministic pipeline - tools called directly in sequence, not via LLM decision
-# 2. Optional environment_data with auto-loading from DB if missing
-# 3. Completeness check before marking conversation as ready
-# 4. Background processing delayed until after setup complete
-# 5. StoryDirector initialization deferred to avoid heavy ops during setup
-# 6. Proper parameter passing for PostgreSQL queries (no raw Python lists in ANY())
-# 7. Pydantic V2 compatible field validators with mode="after"
 
 import logging
 import json
