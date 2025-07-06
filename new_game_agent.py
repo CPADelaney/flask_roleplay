@@ -498,6 +498,30 @@ class NewGameAgent:
         calendar_data = await update_calendar_names(user_id, conversation_id, params.environment_desc)
         return calendar_data
 
+    async def _require_day_names(self, user_id: int, conversation_id: int,
+                                 timeout: float = 15.0) -> List[str]:
+        start = asyncio.get_running_loop().time()
+        while True:
+            async with get_db_connection_context() as conn:
+                row = await conn.fetchrow("""
+                    SELECT value
+                    FROM   CurrentRoleplay
+                    WHERE  user_id=$1 AND conversation_id=$2
+                           AND key='CalendarNames'
+                """, user_id, conversation_id)
+                if row:
+                    days = json.loads(row["value"]).get("days") or []
+                    if days:
+                        return days              # ✅ got them
+            if asyncio.get_running_loop().time() - start > timeout:
+                raise RuntimeError(
+                    "Calendar day names not generated in time."
+                )
+            await asyncio.sleep(0.5)
+
+    # --------------------------------------------------------------------- #
+    #  main function                                                        #
+    # --------------------------------------------------------------------- #
     @with_governance(
         agent_type=AgentType.UNIVERSAL_UPDATER,
         action_type="generate_environment",
@@ -509,135 +533,136 @@ class NewGameAgent:
         params: GenerateEnvironmentParams,
     ) -> EnvironmentData:
         """
-        Generate a game environment and guarantee every location.open_hours_json
-        is valid JSON, even if the LLM slips and outputs a plain string.
+        Create the environment, guarantee JSON-safe `open_hours_json`, and
+        *block* until custom calendar day-names exist.
         """
-        user_id         = ctx.context["user_id"]
-        conversation_id = ctx.context["conversation_id"]
-    
-        # ------------------------------------------------------------------ #
-        # 1. Build the prompt with the strict open_hours_json instruction    #
-        # ------------------------------------------------------------------ #
+        user_id, conversation_id = ctx.context["user_id"], ctx.context["conversation_id"]
+
+        # ---------- 1. Build strict prompt ---------------------------------
         env_comp_text = "\n".join(params.env_components) if params.env_components else "No components provided"
         enh_feat_text = ", ".join(params.enhanced_features) if params.enhanced_features else "No enhanced features"
         stat_mod_text = (
             ", ".join(f"{sm.stat_name}: {sm.modifier_value}" for sm in params.stat_modifiers)
             if params.stat_modifiers else "No stat modifiers"
         )
-    
+
         prompt = f"""
         You are setting up a new daily-life sim environment with subtle, hidden layers of femdom and intrigue.
-    
+
         Below is a merged environment concept:
         Mega Setting Name: {params.mega_name}
         Mega Description:
         {params.mega_desc}
-    
+
         Using this as inspiration, create a cohesive environment with:
-        - A creative setting name
-        - A vivid environment description (1-3 paragraphs)
-        - A brief history
-        - Community events throughout the year
-        - **At least 10 distinct locations.  
-          Each location MUST include "open_hours_json" that is VALID JSON, e.g.  
-          {{ "Mon-Sun": "24/7" }} or {{ "open": "18:00", "close": "23:59" }}.  
-          Plain strings like "24/7" are NOT allowed.**
-        - A scenario name
-        - Initial quest data
-    
+        1. A creative setting name
+        2. A vivid environment description (1-3 paragraphs)
+        3. A brief history
+        4. Community events throughout the year
+        5. **At least 10 distinct locations.  
+           Each location MUST include "open_hours_json" that is VALID JSON, e.g.  
+           {{ "Mon-Sun": "24/7" }} or {{ "open": "18:00", "close": "23:59" }}.  
+           Plain strings like "24/7" are NOT allowed.**
+        6. A scenario name
+        7. Initial quest data
+
         Reference these details:
         Environment components: {env_comp_text}
         Enhanced features: {enh_feat_text}
         Stat modifiers: {stat_mod_text}
         """
-    
-        # ------------------------------------------------------------------ #
-        # 2. Run the EnvironmentCreator **without** a schema                 #
-        # ------------------------------------------------------------------ #
+
+        # ---------- 2. Run a *raw* agent (no schema) -----------------------
         ctx.context["agent_instance"] = self
-    
-        # Re-use the same instructions/tools but drop the output_type
         env_agent_raw = Agent(
             name="EnvironmentCreatorRaw",
             instructions=self.environment_agent.instructions,
             tools=[_calendar_tool_wrapper],
             model="gpt-4.1-nano",
-            output_type=None,          # <-- no schema validation yet
+            output_type=None,          # <- no automatic validation yet
         )
-    
         raw_run = await Runner.run(env_agent_raw, prompt, context=ctx.context)
-    
-        # raw_run.final_output is either str or dict; ensure we have a dict
+
         raw_data: Dict[str, Any] = (
-            raw_run.final_output
-            if isinstance(raw_run.final_output, dict)
+            raw_run.final_output if isinstance(raw_run.final_output, dict)
             else json.loads(raw_run.final_output)
         )
-    
-        # ------------------------------------------------------------------ #
-        # 3. Sanity-wrap any bad open_hours_json literals                     #
-        # ------------------------------------------------------------------ #
+
+        # ---------- 3. Patch any bad open_hours_json -----------------------
         for loc in raw_data.get("locations", []):
             oh = loc.get("open_hours_json")
             if isinstance(oh, dict):
-                continue                       # already good
+                # Convert dict → str so it passes the model
+                loc["open_hours_json"] = json.dumps(oh)
+                continue
+        
             if isinstance(oh, str):
                 try:
-                    json.loads(oh)             # does it parse?
+                    json.loads(oh)          # parses fine → leave it
                 except json.JSONDecodeError:
-                    loc["open_hours_json"] = {"fallback": oh}
-    
-        # ------------------------------------------------------------------ #
-        # 4. Validate with EnvironmentData (now guaranteed clean)             #
-        # ------------------------------------------------------------------ #
+                    loc["open_hours_json"] = json.dumps({"fallback": oh})
+
+        # ---------- 4. Validate against EnvironmentData --------------------
         env_obj: EnvironmentData = EnvironmentData.model_validate(raw_data)
-    
-        # ------------------------------------------------------------------ #
-        # 5. Calendar + canonical DB writes (same as your old code)           #
-        # ------------------------------------------------------------------ #
-        calendar_params = CreateCalendarParams(environment_desc=env_obj.environment_desc)
-        calendar_data   = await self.create_calendar(ctx, calendar_params)
-    
+
+        # ---------- 5. Create calendar *and* persist it --------------------
+        cal_data = await self.create_calendar(
+            ctx, CreateCalendarParams(environment_desc=env_obj.environment_desc)
+        )
+        # immediately persist so downstream steps can rely on it
+        async with get_db_connection_context() as conn:
+            await conn.execute("""
+                INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
+                VALUES ($1,$2,'CalendarNames',$3)
+                ON CONFLICT (user_id,conversation_id,key)
+                DO UPDATE SET value = EXCLUDED.value
+            """, user_id, conversation_id, json.dumps(cal_data))
+
+        # block until the day-names are really there
+        await self._require_day_names(user_id, conversation_id)
+
+        # ---------- 6. Canonical DB writes (unchanged) ---------------------
         from lore.core import canon
         async with get_db_connection_context() as conn, conn.transaction():
-            canon_ctx = type("Ctx", (), {"user_id": user_id, "conversation_id": conversation_id})
-    
+            cctx = type("Ctx", (), {"user_id": user_id, "conversation_id": conversation_id})
+
             await canon.create_game_setting(
-                canon_ctx, conn,
+                cctx, conn,
                 env_obj.setting_name,
                 environment_desc   = env_obj.environment_desc,
                 environment_history= env_obj.environment_history,
-                calendar_data      = calendar_data,
+                calendar_data      = cal_data,
                 scenario_name      = env_obj.scenario_name,
             )
-    
+
             for ev in env_obj.events:
                 await canon.find_or_create_event(
-                    canon_ctx, conn,
+                    cctx, conn,
                     ev.name, description=ev.description,
                     start_time=ev.start_time, end_time=ev.end_time,
                     location=ev.location, year=ev.year,
                     month=ev.month, day=ev.day, time_of_day=ev.time_of_day,
                 )
-    
+                
             for loc in env_obj.locations:
+                open_hours = json.loads(loc.open_hours_json)   # ← dict
                 await canon.find_or_create_location(
-                    canon_ctx, conn,
+                    cctx, conn,
                     loc.location_name,
                     description      = loc.description,
                     location_type    = loc.type,
                     notable_features = loc.features,
-                    open_hours       = loc.open_hours_json,   # dict — ready to store
+                    open_hours       = open_hours,             # dict → DB
                 )
-    
+
             qd = env_obj.quest_data
             await canon.find_or_create_quest(
-                canon_ctx, conn,
+                cctx, conn,
                 qd.quest_name,
                 progress_detail=qd.quest_description,
                 status="In Progress",
             )
-    
+
         return env_obj
 
 
