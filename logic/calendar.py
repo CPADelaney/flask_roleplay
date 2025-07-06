@@ -15,30 +15,30 @@ from lore.core import canon
 # Configure logging as needed.
 logging.basicConfig(level=logging.INFO)
 
-async def get_chatgpt_response_no_function(conversation_id: int, aggregator_text: str, user_input: str) -> dict:
-    """
-    A local version of the GPT call that does not enforce a function call.
-    Returns a plain text response.
-    """
-    client = get_openai_client()
-    messages = await build_message_history(conversation_id, aggregator_text, user_input, limit=15)
-    
-    # OpenAI Agent SDK responses.create() expects 'input' and 'model'
-    response = client.responses.create(
-        input=messages,
-        model="gpt-4.1-nano"
+async def get_chatgpt_response_no_function(
+    conversation_id: int,
+    aggregator_text: str,
+    user_input: str
+) -> dict:
+    client = get_openai_client()          # returns OpenAI() or AsyncOpenAI()
+
+    # NOTE: Responses API needs `input=...`, not `messages=...`
+    response = await client.responses.create(   # await if you use AsyncOpenAI
+        model="gpt-4.1-nano",
+        input=await build_message_history(
+            conversation_id, aggregator_text, user_input, limit=15
+        )
     )
-    
-    # In OpenAI Agent SDK, the response has a 'response' attribute (not 'choices')
-    response_text = response.response
-    
-    # Get token usage from the usage attribute
-    tokens_used = response.usage.total_tokens if hasattr(response, 'usage') else 0
+
+    # ---- CHANGES START HERE ---------------------------------------------
+    response_text = response.output_text          # <-- was response.response
+    tokens_used   = response.usage.total_tokens   # defensive fallback not needed
+    # ---- CHANGES END HERE -----------------------------------------------
 
     return {
         "type": "text",
         "response": response_text,
-        "tokens_used": tokens_used
+        "tokens_used": tokens_used,
     }
     
 async def generate_calendar_names(environment_desc, conversation_id):
