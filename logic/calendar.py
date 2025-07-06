@@ -26,21 +26,22 @@ async def get_chatgpt_response_no_function(conversation_id: int, aggregator_text
     # Fixed: Based on the error, the API expects 'input' instead of 'messages'
     response = client.responses.create(
         input=messages,
-        model="gpt-4.1-nano",
-        temperature=0.2,
-        max_tokens=4000,
-        frequency_penalty=0.0
+        model="gpt-4.1-nano"
+        # Removed: temperature, max_tokens, frequency_penalty as they're not supported
     )
     
     msg = response.choices[0].message
-    tokens_used = response.usage.total_tokens
+    
+    # Handle tokens_used if it exists, otherwise default to 0
+    tokens_used = 0
+    if hasattr(response, 'usage') and hasattr(response.usage, 'total_tokens'):
+        tokens_used = response.usage.total_tokens
 
     return {
         "type": "text",
         "response": msg.content,
         "tokens_used": tokens_used
     }
-    
 async def generate_calendar_names(environment_desc, conversation_id):
     """
     Use GPT to generate immersive calendar names for the in-game time system.
