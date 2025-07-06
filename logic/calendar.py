@@ -23,25 +23,24 @@ async def get_chatgpt_response_no_function(conversation_id: int, aggregator_text
     client = get_openai_client()
     messages = await build_message_history(conversation_id, aggregator_text, user_input, limit=15)
     
-    # Fixed: Based on the error, the API expects 'input' instead of 'messages'
+    # OpenAI Agent SDK responses.create() expects 'input' and 'model'
     response = client.responses.create(
         input=messages,
         model="gpt-4.1-nano"
-        # Removed: temperature, max_tokens, frequency_penalty as they're not supported
     )
     
-    msg = response.choices[0].message
+    # In OpenAI Agent SDK, the response has a 'response' attribute (not 'choices')
+    response_text = response.response
     
-    # Handle tokens_used if it exists, otherwise default to 0
-    tokens_used = 0
-    if hasattr(response, 'usage') and hasattr(response.usage, 'total_tokens'):
-        tokens_used = response.usage.total_tokens
+    # Get token usage from the usage attribute
+    tokens_used = response.usage.total_tokens if hasattr(response, 'usage') else 0
 
     return {
         "type": "text",
-        "response": msg.content,
+        "response": response_text,
         "tokens_used": tokens_used
     }
+    
 async def generate_calendar_names(environment_desc, conversation_id):
     """
     Use GPT to generate immersive calendar names for the in-game time system.
