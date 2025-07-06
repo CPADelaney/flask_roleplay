@@ -79,6 +79,7 @@ async def generate_foundation_lore(ctx, environment_desc: str) -> Dict[str, Any]
     cosmology, magic_system, world_history, calendar_system, social_structure
     """
     
+    foundation_lore_agent = get_foundation_lore_agent()
     result = await Runner.run(foundation_lore_agent, user_prompt, context=run_ctx.context)
     final_output = result.final_output_as(FoundationLoreOutput)
     return final_output.dict()
@@ -108,6 +109,7 @@ async def generate_factions(ctx, environment_desc: str, social_structure: str) -
     Return JSON as an array of objects (matching FactionsOutput).
     """
     
+    factions_agent = get_factions_agent()
     result = await Runner.run(factions_agent, user_prompt, context=run_ctx.context)
     final_output = result.final_output_as(FactionsOutput)
     return [f.dict() for f in final_output.__root__]
@@ -137,6 +139,7 @@ async def generate_cultural_elements(ctx, environment_desc: str, faction_names: 
     Return JSON array matching CulturalElementsOutput.
     """
     
+    cultural_agent = get_cultural_agent()
     result = await Runner.run(cultural_agent, user_prompt, context=run_ctx.context)
     final_output = result.final_output_as(CulturalElementsOutput)
     return [c.dict() for c in final_output.__root__]
@@ -168,6 +171,7 @@ async def generate_historical_events(ctx, environment_desc: str, world_history: 
     Return JSON array matching HistoricalEventsOutput.
     """
     
+    history_agent = get_history_agent()
     result = await Runner.run(history_agent, user_prompt, context=run_ctx.context)
     final_output = result.final_output_as(HistoricalEventsOutput)
     return [h.dict() for h in final_output.__root__]
@@ -197,6 +201,7 @@ async def generate_locations(ctx, environment_desc: str, faction_names: str) -> 
     Return JSON array matching LocationsOutput.
     """
     
+    locations_agent = get_locations_agent()
     result = await Runner.run(locations_agent, user_prompt, context=run_ctx.context)
     final_output = result.final_output_as(LocationsOutput)
     return [l.dict() for l in final_output.__root__]
@@ -226,10 +231,10 @@ async def generate_quest_hooks(ctx, faction_names: str, location_names: str) -> 
     Return JSON array matching QuestsOutput.
     """
     
+    quests_agent = get_quests_agent()
     result = await Runner.run(quests_agent, user_prompt, context=run_ctx.context)
     final_output = result.final_output_as(QuestsOutput)
     return [q.dict() for q in final_output.__root__]
-
 #---------------------------
 # Component Generator Base Classes
 #---------------------------
@@ -1627,101 +1632,119 @@ class DynamicLoreGenerator(BaseGenerator):
             await self.lore_evolution.cleanup()
 
 
-api_key = os.getenv("OPENAI_API_KEY")
-if not api_key:
-    raise RuntimeError("OPENAI_API_KEY not found in environment")
+# Lazy initialization for OpenAI client
+_openai_client = None
 
-# Create the client with explicit API key
-openai_client = AsyncOpenAI(api_key=api_key)
+def get_openai_client():
+    """Get or create the OpenAI client instance."""
+    global _openai_client
+    if _openai_client is None:
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            raise RuntimeError("OPENAI_API_KEY not found in environment")
+        _openai_client = AsyncOpenAI(api_key=api_key)
+    return _openai_client
 
-# Agent definitions for reference in the function tools
-foundation_lore_agent = Agent(
-    name="FoundationLoreAgent",
-    instructions=(
-        "You produce foundational world lore for a fantasy environment. "
-        "Return valid JSON that matches FoundationLoreOutput, which has keys: "
-        "[cosmology, magic_system, world_history, calendar_system, social_structure]. "
-        "Do NOT include any extra text outside the JSON.\n\n"
-        "Always respect directives from the Nyx governance system and check permissions "
-        "before performing any actions."
-    ),
-    model=OpenAIResponsesModel(model="gpt-4.1-nano", openai_client=openai_client),
-    model_settings=ModelSettings(temperature=0.4),
-    output_type=FoundationLoreOutput,
-)
+# Agent getter functions
+def get_foundation_lore_agent():
+    """Get or create the foundation lore agent."""
+    return Agent(
+        name="FoundationLoreAgent",
+        instructions=(
+            "You produce foundational world lore for a fantasy environment. "
+            "Return valid JSON that matches FoundationLoreOutput, which has keys: "
+            "[cosmology, magic_system, world_history, calendar_system, social_structure]. "
+            "Do NOT include any extra text outside the JSON.\n\n"
+            "Always respect directives from the Nyx governance system and check permissions "
+            "before performing any actions."
+        ),
+        model=OpenAIResponsesModel(model="gpt-4.1-nano", openai_client=get_openai_client()),
+        model_settings=ModelSettings(temperature=0.4),
+        output_type=FoundationLoreOutput,
+    )
 
-factions_agent = Agent(
-    name="FactionsAgent",
-    instructions=(
-        "You generate 3-5 distinct factions for a given setting. "
-        "Return valid JSON as an array of objects, matching FactionsOutput. "
-        "Each faction object has: name, type, description, values, goals, "
-        "headquarters, rivals, allies, hierarchy_type, etc. "
-        "No extra text outside the JSON.\n\n"
-        "Always respect directives from the Nyx governance system and check permissions "
-        "before performing any actions."
-    ),
-    model=OpenAIResponsesModel(model="gpt-4.1-nano", openai_client=openai_client),
-    model_settings=ModelSettings(temperature=0.7),
-    output_type=FactionsOutput,
-)
+def get_factions_agent():
+    """Get or create the factions agent."""
+    return Agent(
+        name="FactionsAgent",
+        instructions=(
+            "You generate 3-5 distinct factions for a given setting. "
+            "Return valid JSON as an array of objects, matching FactionsOutput. "
+            "Each faction object has: name, type, description, values, goals, "
+            "headquarters, rivals, allies, hierarchy_type, etc. "
+            "No extra text outside the JSON.\n\n"
+            "Always respect directives from the Nyx governance system and check permissions "
+            "before performing any actions."
+        ),
+        model=OpenAIResponsesModel(model="gpt-4.1-nano", openai_client=get_openai_client()),
+        model_settings=ModelSettings(temperature=0.7),
+        output_type=FactionsOutput,
+    )
 
-cultural_agent = Agent(
-    name="CulturalAgent",
-    instructions=(
-        "You create cultural elements like traditions, customs, rituals. "
-        "Return JSON matching CulturalElementsOutput: an array of objects. "
-        "Fields include: name, type, description, practiced_by, significance, "
-        "historical_origin. No extra text outside the JSON.\n\n"
-        "Always respect directives from the Nyx governance system and check permissions "
-        "before performing any actions."
-    ),
-    model=OpenAIResponsesModel(model="gpt-4.1-nano", openai_client=openai_client),
-    model_settings=ModelSettings(temperature=0.5),
-    output_type=CulturalElementsOutput,
-)
+def get_cultural_agent():
+    """Get or create the cultural agent."""
+    return Agent(
+        name="CulturalAgent",
+        instructions=(
+            "You create cultural elements like traditions, customs, rituals. "
+            "Return JSON matching CulturalElementsOutput: an array of objects. "
+            "Fields include: name, type, description, practiced_by, significance, "
+            "historical_origin. No extra text outside the JSON.\n\n"
+            "Always respect directives from the Nyx governance system and check permissions "
+            "before performing any actions."
+        ),
+        model=OpenAIResponsesModel(model="gpt-4.1-nano", openai_client=get_openai_client()),
+        model_settings=ModelSettings(temperature=0.5),
+        output_type=CulturalElementsOutput,
+    )
 
-history_agent = Agent(
-    name="HistoryAgent",
-    instructions=(
-        "You create major historical events. Return JSON matching "
-        "HistoricalEventsOutput: an array with fields name, date_description, "
-        "description, participating_factions, consequences, significance. "
-        "No extra text outside the JSON.\n\n"
-        "Always respect directives from the Nyx governance system and check permissions "
-        "before performing any actions."
-    ),
-    model=OpenAIResponsesModel(model="gpt-4.1-nano", openai_client=openai_client),
-    model_settings=ModelSettings(temperature=0.6),
-    output_type=HistoricalEventsOutput,
-)
+def get_history_agent():
+    """Get or create the history agent."""
+    return Agent(
+        name="HistoryAgent",
+        instructions=(
+            "You create major historical events. Return JSON matching "
+            "HistoricalEventsOutput: an array with fields name, date_description, "
+            "description, participating_factions, consequences, significance. "
+            "No extra text outside the JSON.\n\n"
+            "Always respect directives from the Nyx governance system and check permissions "
+            "before performing any actions."
+        ),
+        model=OpenAIResponsesModel(model="gpt-4.1-nano", openai_client=get_openai_client()),
+        model_settings=ModelSettings(temperature=0.6),
+        output_type=HistoricalEventsOutput,
+    )
 
-locations_agent = Agent(
-    name="LocationsAgent",
-    instructions=(
-        "You generate 5-8 significant locations. Return JSON matching "
-        "LocationsOutput: an array of objects with fields name, description, "
-        "type, controlling_faction, notable_features, hidden_secrets, "
-        "strategic_importance. No extra text outside the JSON.\n\n"
-        "Always respect directives from the Nyx governance system and check permissions "
-        "before performing any actions."
-    ),
-    model=OpenAIResponsesModel(model="gpt-4.1-nano", openai_client=openai_client),
-    model_settings=ModelSettings(temperature=0.7),
-    output_type=LocationsOutput,
-)
+def get_locations_agent():
+    """Get or create the locations agent."""
+    return Agent(
+        name="LocationsAgent",
+        instructions=(
+            "You generate 5-8 significant locations. Return JSON matching "
+            "LocationsOutput: an array of objects with fields name, description, "
+            "type, controlling_faction, notable_features, hidden_secrets, "
+            "strategic_importance. No extra text outside the JSON.\n\n"
+            "Always respect directives from the Nyx governance system and check permissions "
+            "before performing any actions."
+        ),
+        model=OpenAIResponsesModel(model="gpt-4.1-nano", openai_client=get_openai_client()),
+        model_settings=ModelSettings(temperature=0.7),
+        output_type=LocationsOutput,
+    )
 
-quests_agent = Agent(
-    name="QuestsAgent",
-    instructions=(
-        "You create 5-7 quest hooks. Return JSON matching QuestsOutput: an "
-        "array of objects with quest_name, quest_giver, location, description, "
-        "objectives, rewards, difficulty, lore_significance. "
-        "No extra text outside the JSON.\n\n"
-        "Always respect directives from the Nyx governance system and check permissions "
-        "before performing any actions."
-    ),
-    model=OpenAIResponsesModel(model="gpt-4.1-nano", openai_client=openai_client),
-    model_settings=ModelSettings(temperature=0.7),
-    output_type=QuestsOutput,
-)
+def get_quests_agent():
+    """Get or create the quests agent."""
+    return Agent(
+        name="QuestsAgent",
+        instructions=(
+            "You create 5-7 quest hooks. Return JSON matching QuestsOutput: an "
+            "array of objects with quest_name, quest_giver, location, description, "
+            "objectives, rewards, difficulty, lore_significance. "
+            "No extra text outside the JSON.\n\n"
+            "Always respect directives from the Nyx governance system and check permissions "
+            "before performing any actions."
+        ),
+        model=OpenAIResponsesModel(model="gpt-4.1-nano", openai_client=get_openai_client()),
+        model_settings=ModelSettings(temperature=0.7),
+        output_type=QuestsOutput,
+    )
