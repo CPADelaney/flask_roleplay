@@ -3,6 +3,7 @@
 import logging
 import json
 import asyncio
+import uuid
 import os
 import functools
 from datetime import datetime
@@ -269,9 +270,44 @@ async def _calendar_tool_wrapper(
     params: CalendarToolParams,
 ) -> CalendarData:
     """Create calendar for the game world."""
+    call_id = str(uuid.uuid4())[:8]
+    
+    # Log the call with unique ID
+    logger.info(f"[{call_id}] _calendar_tool_wrapper called with env_desc length: {len(params.environment_desc) if params.environment_desc else 0}")
+    
+    # Validate environment description
+    if not params.environment_desc or params.environment_desc.strip() == "":
+        logger.warning(f"[{call_id}] Empty environment description received, using fallback")
+        params.environment_desc = "A mysterious environment with hidden layers of intrigue and control"
+    
     agent = ctx.context.get("agent_instance") or NewGameAgent()
     cal_params = CreateCalendarParams(environment_desc=params.environment_desc)
+    
+    # Prevent duplicate calls by checking if calendar already exists
+    user_id = ctx.context["user_id"]
+    conversation_id = ctx.context["conversation_id"]
+    
+    async with get_db_connection_context() as conn:
+        existing = await conn.fetchrow("""
+            SELECT value FROM CurrentRoleplay
+            WHERE user_id=$1 AND conversation_id=$2 AND key='CalendarNames'
+        """, user_id, conversation_id)
+        
+        if existing:
+            logger.info(f"[{call_id}] Calendar already exists, returning cached data")
+            try:
+                cal_data = json.loads(existing["value"])
+                return CalendarData(
+                    days=cal_data.get("days", []),
+                    months=cal_data.get("months", []),
+                    seasons=cal_data.get("seasons", [])
+                )
+            except:
+                pass
+    
+    logger.info(f"[{call_id}] Creating new calendar")
     return await agent.create_calendar(ctx, cal_params)
+
 
 @function_tool
 async def _spawn_npcs_tool_wrapper(ctx: RunContextWrapper[GameContext], count: int = 5) -> List[str]:
@@ -513,9 +549,59 @@ class NewGameAgent:
     # --------------------------------------------------------------------- #
     #  main function                                                        #
     # --------------------------------------------------------------------- #
+    # Fix for new_game_agent.py - Update the calendar tool wrapper
+    
+    import uuid  # Add this import at the top
+    
+    # Replace the existing _calendar_tool_wrapper with this:
+    @function_tool
+    async def _calendar_tool_wrapper(
+        ctx: RunContextWrapper[GameContext],
+        params: CalendarToolParams,
+    ) -> CalendarData:
+        """Create calendar for the game world."""
+        call_id = str(uuid.uuid4())[:8]
+        
+        # Log the call with unique ID
+        logger.info(f"[{call_id}] _calendar_tool_wrapper called with env_desc length: {len(params.environment_desc) if params.environment_desc else 0}")
+        
+        # Validate environment description
+        if not params.environment_desc or params.environment_desc.strip() == "":
+            logger.warning(f"[{call_id}] Empty environment description received, using fallback")
+            params.environment_desc = "A mysterious environment with hidden layers of intrigue and control"
+        
+        agent = ctx.context.get("agent_instance") or NewGameAgent()
+        cal_params = CreateCalendarParams(environment_desc=params.environment_desc)
+        
+        # Prevent duplicate calls by checking if calendar already exists
+        user_id = ctx.context["user_id"]
+        conversation_id = ctx.context["conversation_id"]
+        
+        async with get_db_connection_context() as conn:
+            existing = await conn.fetchrow("""
+                SELECT value FROM CurrentRoleplay
+                WHERE user_id=$1 AND conversation_id=$2 AND key='CalendarNames'
+            """, user_id, conversation_id)
+            
+            if existing:
+                logger.info(f"[{call_id}] Calendar already exists, returning cached data")
+                try:
+                    cal_data = json.loads(existing["value"])
+                    return CalendarData(
+                        days=cal_data.get("days", []),
+                        months=cal_data.get("months", []),
+                        seasons=cal_data.get("seasons", [])
+                    )
+                except:
+                    pass
+        
+        logger.info(f"[{call_id}] Creating new calendar")
+        return await agent.create_calendar(ctx, cal_params)
+    
+    # Also update the generate_environment method to better handle the agent tools
     @with_governance(
         agent_type=AgentType.UNIVERSAL_UPDATER,
-        action_type="generate_environment",
+        action_type="generate_environment", 
         action_description="Generated game environment for new game",
     )
     async def generate_environment(
@@ -524,83 +610,125 @@ class NewGameAgent:
         params: GenerateEnvironmentParams,
     ) -> EnvironmentData:
         """
-        Create the environment, guarantee JSON-safe `open_hours_json`, and
-        *block* until custom calendar day-names exist.
+        Create the environment with better error handling and tool isolation.
         """
         user_id, conversation_id = ctx.context["user_id"], ctx.context["conversation_id"]
-
-        # ---------- 1. Build strict prompt ---------------------------------
+        
+        # Build the prompt
         env_comp_text = "\n".join(params.env_components) if params.env_components else "No components provided"
         enh_feat_text = ", ".join(params.enhanced_features) if params.enhanced_features else "No enhanced features"
         stat_mod_text = (
             ", ".join(f"{sm.stat_name}: {sm.modifier_value}" for sm in params.stat_modifiers)
             if params.stat_modifiers else "No stat modifiers"
         )
-
+    
         prompt = f"""
-        You are setting up a new daily-life sim environment with subtle, hidden layers of femdom and intrigue.
-
+        Create a new daily-life sim environment with subtle, hidden layers of femdom and intrigue.
+    
         Below is a merged environment concept:
         Mega Setting Name: {params.mega_name}
         Mega Description:
         {params.mega_desc}
-
-        Using this as inspiration, create a cohesive environment with:
-        1. A creative setting name
-        2. A vivid environment description (1-3 paragraphs)
-        3. A brief history
-        4. Community events throughout the year
-        5. **At least 10 distinct locations.  
-           Each location MUST include "open_hours_json" that is VALID JSON, e.g.  
-           {{ "Mon-Sun": "24/7" }} or {{ "open": "18:00", "close": "23:59" }}.  
-           Plain strings like "24/7" are NOT allowed.**
-        6. A scenario name
-        7. Initial quest data
-
-        Reference these details:
+    
+        Using this as inspiration, create a VALID JSON object with these exact keys:
+        1. "setting_name": A creative setting name (string)
+        2. "environment_desc": A vivid environment description of 1-3 paragraphs (string)
+        3. "environment_history": A brief history (string)
+        4. "events": An array of event objects, each with: name, description, start_time, end_time, location, year, month, day, time_of_day
+        5. "locations": An array of at least 10 location objects, each with: location_name, description, type, features (array), open_hours_json (JSON string)
+        6. "scenario_name": A catchy scenario name (string)
+        7. "quest_data": An object with quest_name and quest_description
+    
+        Reference details:
         Environment components: {env_comp_text}
         Enhanced features: {enh_feat_text}
         Stat modifiers: {stat_mod_text}
+    
+        IMPORTANT: 
+        - Return ONLY valid JSON, no other text
+        - Each location's open_hours_json must be a JSON STRING like "{{\\"Mon-Sun\\": \\"24/7\\"}}"
+        - Do NOT call any tools or functions - just return the JSON
         """
-
-        # ---------- 2. Run a *raw* agent (no schema) -----------------------
+    
+        # Create a separate agent instance to avoid tool conflicts
         ctx.context["agent_instance"] = self
-        env_agent_raw = Agent(
-            name="EnvironmentCreatorRaw",
-            instructions=self.environment_agent.instructions,
-            tools=[_calendar_tool_wrapper],
+        
+        # Use a modified agent that won't auto-call tools
+        env_agent_isolated = Agent(
+            name="EnvironmentCreatorIsolated",
+            instructions="""
+            You create game environments. When given a prompt, return ONLY valid JSON data.
+            Do NOT use any tools or functions - just generate the requested JSON structure.
+            """,
+            tools=[],  # No tools to prevent unwanted calls
             model="gpt-4.1-nano",
-            output_type=None,          # <- no automatic validation yet
+            output_type=None,
         )
-        raw_run = await Runner.run(env_agent_raw, prompt, context=ctx.context)
-
-        raw_data: Dict[str, Any] = (
-            raw_run.final_output if isinstance(raw_run.final_output, dict)
-            else json.loads(raw_run.final_output)
-        )
-
-        # ---------- 3. Patch any bad open_hours_json -----------------------
+        
+        # Run with retry logic
+        max_retries = 3
+        retry_count = 0
+        raw_data = None
+        
+        while retry_count < max_retries:
+            try:
+                logger.info(f"Generating environment (attempt {retry_count + 1}/{max_retries})")
+                raw_run = await Runner.run(env_agent_isolated, prompt, context=ctx.context)
+                
+                if not raw_run.final_output:
+                    raise ValueError("Empty response from GPT")
+                
+                # Parse response
+                if isinstance(raw_run.final_output, dict):
+                    raw_data = raw_run.final_output
+                else:
+                    output_str = str(raw_run.final_output).strip()
+                    if not output_str:
+                        raise ValueError("Empty string response")
+                    
+                    # Find JSON in response
+                    json_start = output_str.find('{')
+                    json_end = output_str.rfind('}') + 1
+                    
+                    if json_start != -1 and json_end > json_start:
+                        json_str = output_str[json_start:json_end]
+                        raw_data = json.loads(json_str)
+                    else:
+                        raise ValueError("No JSON found in response")
+                
+                break
+                
+            except Exception as e:
+                retry_count += 1
+                logger.warning(f"Environment generation failed (attempt {retry_count}/{max_retries}): {e}")
+                
+                if retry_count >= max_retries:
+                    logger.error("Borked")
+                else:
+                    await asyncio.sleep(1)
+        
+        # Fix open_hours_json format
         for loc in raw_data.get("locations", []):
             oh = loc.get("open_hours_json")
             if isinstance(oh, dict):
-                # Convert dict → str so it passes the model
                 loc["open_hours_json"] = json.dumps(oh)
-                continue
-        
-            if isinstance(oh, str):
+            elif isinstance(oh, str):
                 try:
-                    json.loads(oh)          # parses fine → leave it
-                except json.JSONDecodeError:
-                    loc["open_hours_json"] = json.dumps({"fallback": oh})
-
-        # ---------- 4. Validate against EnvironmentData --------------------
-        env_obj: EnvironmentData = EnvironmentData.model_validate(raw_data)
-
-        # ---------- 5. Create calendar *and* persist it --------------------
+                    json.loads(oh)
+                except:
+                    loc["open_hours_json"] = json.dumps({"hours": oh})
+            else:
+                loc["open_hours_json"] = json.dumps({"Mon-Sun": "09:00-17:00"})
+        
+        # Validate
+        env_obj = EnvironmentData.model_validate(raw_data)
+        
+        # NOW create calendar after environment is ready
         cal_data = await self.create_calendar(
             ctx, CreateCalendarParams(environment_desc=env_obj.environment_desc)
         )
-        # immediately persist so downstream steps can rely on it
+        
+        # Persist calendar
         async with get_db_connection_context() as conn:
             await conn.execute("""
                 INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
@@ -608,24 +736,24 @@ class NewGameAgent:
                 ON CONFLICT (user_id,conversation_id,key)
                 DO UPDATE SET value = EXCLUDED.value
             """, user_id, conversation_id, json.dumps(cal_data))
-
-        # block until the day-names are really there
+        
+        # Wait for calendar to be ready
         await self._require_day_names(user_id, conversation_id)
-
-        # ---------- 6. Canonical DB writes (unchanged) ---------------------
+        
+        # Store everything in database
         from lore.core import canon
         async with get_db_connection_context() as conn, conn.transaction():
             cctx = type("Ctx", (), {"user_id": user_id, "conversation_id": conversation_id})
-
+            
             await canon.create_game_setting(
                 cctx, conn,
                 env_obj.setting_name,
-                environment_desc   = env_obj.environment_desc,
-                environment_history= env_obj.environment_history,
-                calendar_data      = cal_data,
-                scenario_name      = env_obj.scenario_name,
+                environment_desc=env_obj.environment_desc,
+                environment_history=env_obj.environment_history,
+                calendar_data=cal_data,
+                scenario_name=env_obj.scenario_name,
             )
-
+            
             for ev in env_obj.events:
                 await canon.find_or_create_event(
                     cctx, conn,
@@ -636,16 +764,16 @@ class NewGameAgent:
                 )
                 
             for loc in env_obj.locations:
-                open_hours = json.loads(loc.open_hours_json)   # ← dict
+                open_hours = json.loads(loc.open_hours_json)
                 await canon.find_or_create_location(
                     cctx, conn,
                     loc.location_name,
-                    description      = loc.description,
-                    location_type    = loc.type,
-                    notable_features = loc.features,
-                    open_hours       = open_hours,             # dict → DB
+                    description=loc.description,
+                    location_type=loc.type,
+                    notable_features=loc.features,
+                    open_hours=open_hours,
                 )
-
+            
             qd = env_obj.quest_data
             await canon.find_or_create_quest(
                 cctx, conn,
@@ -653,8 +781,9 @@ class NewGameAgent:
                 progress_detail=qd.quest_description,
                 status="In Progress",
             )
-
+        
         return env_obj
+    
 
 
     async def _apply_setting_stat_modifiers(
