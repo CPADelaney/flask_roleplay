@@ -22,7 +22,7 @@ async def get_chatgpt_response_no_function(conversation_id: int, aggregator_text
     """
     client = get_openai_client()
     messages = await build_message_history(conversation_id, aggregator_text, user_input, limit=15)
-    response = client.chat.responses.create(
+    response = client.responses.create(
          model="gpt-4.1-nano",
          messages=messages,
          temperature=0.2,
