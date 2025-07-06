@@ -1721,6 +1721,17 @@ async def create_all_tables():
                 );
                 ''',
                 '''
+                CREATE EXTENSION IF NOT EXISTS vector;
+                ''',
+                '''
+                ALTER TABLE Events
+                ADD COLUMN embedding vector(1536);
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_events_embedding_hnsw
+                ON Events USING hnsw (embedding vector_cosine_ops);
+                ''',
+                '''                
                 CREATE TABLE IF NOT EXISTS MemoryContextEvolution (
                     memory_id INTEGER NOT NULL,
                     evolution_id INTEGER NOT NULL,
