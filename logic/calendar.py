@@ -6,6 +6,7 @@ REFACTORED: All database writes now go through canon
 
 import json
 import logging
+from openai import AsyncOpenAI
 import asyncio
 import asyncpg
 from db.connection import get_db_connection_context
@@ -15,25 +16,42 @@ from lore.core import canon
 # Configure logging as needed.
 logging.basicConfig(level=logging.INFO)
 
+async def get_openai_client() -> AsyncOpenAI:
+    """
+    Centralised factory so every call site gets the *same* AsyncOpenAI instance.
+    Keeps your API key / base_url in one place.
+    """
+    # Re-use a singleton if you want; demonstration keeps it simple.
+    return AsyncOpenAI()                # or AsyncOpenAI(base_url=..., api_key=...)
+
+# ---------------------------------------------------------------------------
 async def get_chatgpt_response_no_function(
     conversation_id: int,
     aggregator_text: str,
-    user_input: str
+    user_input: str,
 ) -> dict:
-    client = get_openai_client()          # returns OpenAI() or AsyncOpenAI()
+    """
+    Fire a call to the Responses endpoint and return the plain-text output.
+    """
 
-    # NOTE: Responses API needs `input=...`, not `messages=...`
-    response = await client.responses.create(   # await if you use AsyncOpenAI
-        model="gpt-4.1-nano",
-        input=await build_message_history(
-            conversation_id, aggregator_text, user_input, limit=15
-        )
+    client: AsyncOpenAI = await get_openai_client()   # ⭐ now awaited because the
+                                                      #   factory could become async
+                                                      #   (e.g., to fetch creds)
+
+    # prepare the request payload ------------------------------------------
+    messages = await build_message_history(
+        conversation_id, aggregator_text, user_input, limit=15
     )
 
-    # ---- CHANGES START HERE ---------------------------------------------
-    response_text = response.output_text          # <-- was response.response
-    tokens_used   = response.usage.total_tokens   # defensive fallback not needed
-    # ---- CHANGES END HERE -----------------------------------------------
+    # call the Responses API -----------------------------------------------
+    response = await client.responses.create(
+        model="gpt-4.1-nano",   # or "gpt-4.1-nano" if you really need that tier
+        input=messages         # Responses API uses the *single* `input` field
+    )                          # Streaming? add stream=True and iterate.
+
+    # extract what we need --------------------------------------------------
+    response_text = response.output_text
+    tokens_used   = response.usage.total_tokens        # guaranteed to exist
 
     return {
         "type": "text",
