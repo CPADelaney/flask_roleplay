@@ -824,7 +824,7 @@ async def create_all_tables():
                     location_name TEXT NOT NULL,
                     description TEXT,
                     open_hours JSONB,
-                    embeddings VECTOR(1536),
+                    embedding VECTOR(1536),
                     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
                     FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
                 );
@@ -1737,6 +1737,42 @@ async def create_all_tables():
                 ADD COLUMN location_type TEXT;
                 ''',
                 '''
+                ALTER TABLE Locations 
+                ADD COLUMN parent_location TEXT;
+                ''',
+                '''                      
+                ALTER TABLE Locations 
+                ADD COLUMN cultural_significance TEXT DEFAULT 'moderate';
+                ''',
+                '''         
+                ALTER TABLE Locations 
+                ADD COLUMN economic_importance TEXT DEFAULT 'moderate';
+                ''',
+                '''         
+                ALTER TABLE Locations 
+                ADD COLUMN strategic_value INTEGER DEFAULT 5;
+                ''',
+                '''         
+                ALTER TABLE Locations 
+                ADD COLUMN population_density TEXT DEFAULT 'moderate';
+                ''',
+                '''         
+                ALTER TABLE Locations 
+                ADD COLUMN notable_features TEXT[] DEFAULT '{}';
+                ''',
+                '''         
+                ALTER TABLE Locations 
+                ADD COLUMN hidden_aspects TEXT[] DEFAULT '{}';
+                ''',
+                '''         
+                ALTER TABLE Locations 
+                ADD COLUMN access_restrictions TEXT[] DEFAULT '{}';
+                ''',
+                '''         
+                ALTER TABLE Locations 
+                ADD COLUMN local_customs TEXT[] DEFAULT '{}';
+                ''',
+                '''         
                 CREATE INDEX IF NOT EXISTS idx_events_embedding_hnsw
                 ON Events USING hnsw (embedding vector_cosine_ops);
                 ''',
