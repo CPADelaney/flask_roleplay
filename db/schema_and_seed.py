@@ -824,6 +824,7 @@ async def create_all_tables():
                     location_name TEXT NOT NULL,
                     description TEXT,
                     open_hours JSONB,
+                    embeddings VECTOR(1536),
                     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
                     FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
                 );
@@ -1725,6 +1726,10 @@ async def create_all_tables():
                 ''',
                 '''
                 ALTER TABLE Events
+                ADD COLUMN embedding vector(1536);
+                ''',
+                '''
+                ALTER TABLE Locations
                 ADD COLUMN embedding vector(1536);
                 ''',
                 '''
