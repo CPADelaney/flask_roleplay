@@ -856,7 +856,7 @@ class NPCCreationHandler:
             if not user_id or not conversation_id:
                 return ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
             
-            calendar_data = load_calendar_names(user_id, conversation_id)
+            calendar_data = await load_calendar_names(user_id, conversation_id)
             day_names = calendar_data.get("days", ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"])
             
             return day_names
@@ -1821,7 +1821,7 @@ class NPCCreationHandler:
             
             # Generate age and birthdate
             age = random.randint(20, 50)
-            calendar_data = load_calendar_names(user_id, conversation_id)
+            calendar_data = await load_calendar_names(user_id, conversation_id)
             months_list = calendar_data.get("months", [
                 "Frostmoon", "Windspeak", "Bloomrise", "Dawnsveil",
                 "Emberlight", "Goldencrest", "Shadowleaf", "Harvesttide",
