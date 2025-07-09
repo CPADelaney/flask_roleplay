@@ -124,7 +124,7 @@ async def store_calendar_names(user_id: int, conversation_id: int, calendar_name
         
         # Use canon to update CurrentRoleplay
         await canon.update_current_roleplay(
-            ctx, conn, user_id, conversation_id, 
+            ctx, conn, 
             'CalendarNames', value_json
         )
 
