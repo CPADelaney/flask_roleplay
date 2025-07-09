@@ -1091,7 +1091,7 @@ class NPCCreationHandler:
     
     async def generate_npc_name(self, ctx: RunContextWrapper, desired_gender="female", style="unique", forbidden_names=None) -> str:
         """
-        Generate a unique name for an NPC using the canon system to ensure no duplicates.
+        Generate a unique name for an NPC using GPT to ensure no duplicates.
         """
         try:
             user_id = ctx.context.get("user_id")
@@ -1116,16 +1116,36 @@ class NPCCreationHandler:
             if forbidden_names:
                 existing_names.extend(forbidden_names)
             
-            # Keep trying to generate a unique name
+            # Generate name using GPT
             max_attempts = 10
             for attempt in range(max_attempts):
-                # Use existing function to get a name
-                candidate_name = await fetch_npc_name(
-                    desired_gender, 
-                    existing_names, 
-                    env_details["environment_desc"], 
-                    style
+                # Create prompt for name generation
+                prompt = f"""
+                Generate a unique name for a {desired_gender} NPC in this environment:
+                {env_details['environment_desc']}
+                
+                Style: {style}
+                
+                The name must be:
+                - Appropriate for the setting
+                - Not in this list of existing names: {', '.join(existing_names) if existing_names else 'None'}
+                - A single first and last name (e.g., "Elena Blackwood")
+                
+                Return ONLY the name, nothing else.
+                """
+                
+                client = get_openai_client()
+                response = client.chat.completions.create(
+                    model="gpt-4.1-nano",
+                    messages=[{"role": "system", "content": prompt}],
+                    temperature=0.8,
+                    max_tokens=50
                 )
+                
+                candidate_name = response.choices[0].message.content.strip()
+                
+                # Ensure the name is unique
+                candidate_name = self.get_unique_npc_name(candidate_name, existing_names)
                 
                 # Check if this name already exists canonically
                 async with get_db_connection_context() as conn:
