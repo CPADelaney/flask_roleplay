@@ -1733,6 +1733,10 @@ async def create_all_tables():
                 ADD COLUMN embedding vector(1536);
                 ''',
                 '''
+                ALTER TABLE Locations
+                ADD COLUMN location_type TEXT;
+                ''',
+                '''
                 CREATE INDEX IF NOT EXISTS idx_events_embedding_hnsw
                 ON Events USING hnsw (embedding vector_cosine_ops);
                 ''',
