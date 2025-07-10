@@ -348,6 +348,9 @@ async def create_all_tables():
                 ON NPCStats USING hnsw (embedding vector_cosine_ops);
                 ''',
                 '''
+                ALTER TABLE NPCStats ADD COLUMN IF NOT EXISTS embedding vector(1536);
+                ''',
+                '''
                 CREATE TABLE IF NOT EXISTS NPCGroups (
                     group_id SERIAL PRIMARY KEY,
                     user_id INTEGER NOT NULL,
@@ -2175,6 +2178,132 @@ async def create_all_tables():
                 '''
                 CREATE INDEX IF NOT EXISTS idx_memory_last_context_update
                 ON unified_memories(last_context_update);
+                ''',
+                '''
+                CREATE EXTENSION IF NOT EXISTS vector;
+                ''',
+                '''         
+                ALTER TABLE NPCStats ADD COLUMN IF NOT EXISTS embedding vector(1536);
+                ''',
+                '''
+                ALTER TABLE Locations ADD COLUMN IF NOT EXISTS embedding vector(1536);
+                ''',
+                '''
+                ALTER TABLE Events ADD COLUMN IF NOT EXISTS embedding vector(1536);
+                ''',
+                '''
+                ALTER TABLE Factions ADD COLUMN IF NOT EXISTS embedding vector(1536);
+                ''',
+                '''
+                ALTER TABLE Nations ADD COLUMN IF NOT EXISTS embedding vector(1536);
+                ''',
+                '''
+                ALTER TABLE NationalConflicts ADD COLUMN IF NOT EXISTS embedding vector(1536);
+                ''',
+                '''
+                ALTER TABLE CulturalElements ADD COLUMN IF NOT EXISTS embedding vector(1536);
+                ''',
+                '''
+                ALTER TABLE CulinaryTraditions ADD COLUMN IF NOT EXISTS embedding vector(1536);
+                ''',
+                '''
+                ALTER TABLE SocialCustoms ADD COLUMN IF NOT EXISTS embedding vector(1536);
+                ''',
+                '''
+                ALTER TABLE GeographicRegions ADD COLUMN IF NOT EXISTS embedding vector(1536);
+                ''',
+                '''
+                ALTER TABLE PoliticalEntities ADD COLUMN IF NOT EXISTS embedding vector(1536);
+                ''',
+                '''
+                ALTER TABLE ConflictSimulations ADD COLUMN IF NOT EXISTS embedding vector(1536);
+                ''',
+                '''
+                ALTER TABLE BorderDisputes ADD COLUMN IF NOT EXISTS embedding vector(1536);
+                ''',
+                '''
+                ALTER TABLE UrbanMyths ADD COLUMN IF NOT EXISTS embedding vector(1536);
+                ''',
+                '''
+                ALTER TABLE LocalHistories ADD COLUMN IF NOT EXISTS embedding vector(1536);
+                ''',
+                '''
+                ALTER TABLE Landmarks ADD COLUMN IF NOT EXISTS embedding vector(1536);
+                ''',
+                '''
+                ALTER TABLE HistoricalEvents ADD COLUMN IF NOT EXISTS embedding vector(1536);
+                ''',
+                '''
+                ALTER TABLE NotableFigures ADD COLUMN IF NOT EXISTS embedding vector(1536);
+                ''',
+                '''
+                ALTER TABLE Quests ADD COLUMN IF NOT EXISTS embedding vector(1536);
+                ''',
+                '''
+                ALTER TABLE NPCMemories ADD COLUMN IF NOT EXISTS embedding vector(1536);
+                ''',
+                '''
+                ALTER TABLE unified_memories ADD COLUMN IF NOT EXISTS embedding vector(1536);
+                ''',
+                '''                
+                CREATE INDEX IF NOT EXISTS idx_npcstats_embedding_hnsw ON NPCStats USING hnsw (embedding vector_cosine_ops);
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_locations_embedding_hnsw ON Locations USING hnsw (embedding vector_cosine_ops);
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_events_embedding_hnsw ON Events USING hnsw (embedding vector_cosine_ops);
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_nations_embedding_hnsw ON Nations USING hnsw (embedding vector_cosine_ops);
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_national_conflicts_embedding_hnsw ON NationalConflicts USING hnsw (embedding vector_cosine_ops);
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_cultural_elements_embedding_hnsw ON CulturalElements USING hnsw (embedding vector_cosine_ops);
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_culinary_traditions_embedding_hnsw ON CulinaryTraditions USING hnsw (embedding vector_cosine_ops);
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_social_customs_embedding_hnsw ON SocialCustoms USING hnsw (embedding vector_cosine_ops);
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_geographic_regions_embedding_hnsw ON GeographicRegions USING hnsw (embedding vector_cosine_ops);
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_political_entities_embedding_hnsw ON PoliticalEntities USING hnsw (embedding vector_cosine_ops);
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_conflict_simulations_embedding_hnsw ON ConflictSimulations USING hnsw (embedding vector_cosine_ops);
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_border_disputes_embedding_hnsw ON BorderDisputes USING hnsw (embedding vector_cosine_ops);
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_urban_myths_embedding_hnsw ON UrbanMyths USING hnsw (embedding vector_cosine_ops);
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_local_histories_embedding_hnsw ON LocalHistories USING hnsw (embedding vector_cosine_ops);
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_landmarks_embedding_hnsw ON Landmarks USING hnsw (embedding vector_cosine_ops);
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_historical_events_embedding_hnsw ON HistoricalEvents USING hnsw (embedding vector_cosine_ops);
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_notable_figures_embedding_hnsw ON NotableFigures USING hnsw (embedding vector_cosine_ops);
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_quests_embedding_hnsw ON Quests USING hnsw (embedding vector_cosine_ops);
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS npc_memory_embedding_hnsw_idx ON NPCMemories USING hnsw (embedding vector_cosine_ops);
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_unified_memories_embedding_hnsw ON unified_memories USING hnsw (embedding vector_cosine_ops);
                 '''
             ]  # End of sql_commands list
 
