@@ -2304,7 +2304,21 @@ async def create_all_tables():
                 ''',
                 '''
                 CREATE INDEX IF NOT EXISTS idx_unified_memories_embedding_hnsw ON unified_memories USING hnsw (embedding vector_cosine_ops);
+                ''',
                 '''
+                ALTER TABLE Factions 
+                ADD COLUMN IF NOT EXISTS user_id INTEGER NOT NULL DEFAULT 0,
+                ADD COLUMN IF NOT EXISTS conversation_id INTEGER NOT NULL DEFAULT 0;
+                ''',
+                '''
+                ALTER TABLE Factions 
+                ADD CONSTRAINT fk_factions_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                ADD CONSTRAINT fk_factions_conversation FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE;
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_factions_name
+                ON Factions(user_id, conversation_id, lower(name));
+                ''',               
             ]  # End of sql_commands list
 
             # Execute commands sequentially
