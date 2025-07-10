@@ -26,7 +26,7 @@ import asyncio
 from typing import Dict, Any
 
 # Import system prompts for Nyx
-from prompts.nyx_prompts import SYSTEM_PROMPT, PRIVATE_REFLECTION_INSTRUCTIONS
+from logic.prompts import SYSTEM_PROMPT, PRIVATE_REFLECTION_INSTRUCTIONS
 
 # Configure logger for this module
 logger = logging.getLogger(__name__)
