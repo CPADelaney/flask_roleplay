@@ -1417,7 +1417,7 @@ class NewGameAgent:
     )
     async def process_new_game(self, ctx, conversation_data: Dict[str, Any]) -> ProcessNewGameResult:
         # Extract user_id from context
-        user_id = ctx.user_id
+        user_id = ctx.context.get("user_id")
         conversation_id = None
         
         try:
@@ -1516,14 +1516,12 @@ class NewGameAgent:
             mega_desc = mega_data.get("mega_description", "No environment generated")
             
             # Set up context wrapper for the agent methods
-            ctx_wrap = type('RunContextWrapper', (object,), {
-                'context': {
-                    'user_id': user_id,
-                    'conversation_id': conversation_id,
-                    'db_dsn': DB_DSN,
-                    'agent_instance': self
-                }
-            })()
+            ctx_wrap = RunContextWrapper(context={
+                'user_id': user_id,
+                'conversation_id': conversation_id,
+                'db_dsn': DB_DSN,
+                'agent_instance': self
+            })
             
             # Update status - running agent
             async with get_db_connection_context() as conn:
