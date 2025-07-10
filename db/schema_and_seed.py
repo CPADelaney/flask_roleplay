@@ -7,8 +7,8 @@ from typing import List
 # Import connection and pool management functions
 from db.connection import (
     get_db_connection_context,
-    initialize_connection_pool, # Added import
-    close_connection_pool # Added import
+    initialize_connection_pool,
+    close_connection_pool
 )
 # Assuming these are now async and use asyncpg internally
 from routes.activities import insert_missing_activities
@@ -20,14 +20,16 @@ from logic.seed_interactions import create_and_seed_interactions
 from logic.stats_logic import (
     insert_stat_definitions,
     insert_or_update_game_rules,
-    # insert_default_player_stats_chase # This might be synchronous or not needed if seeding covers it? Verify its nature.
 )
 import asyncpg
-import asyncio # Added import for asyncio.run
+import asyncio
 from typing import Dict, Any
 
+# Import system prompts for Nyx
+from prompts.nyx_prompts import SYSTEM_PROMPT, PRIVATE_REFLECTION_INSTRUCTIONS
+
 # Configure logger for this module
-logger = logging.getLogger(__name__) # Define logger at module level
+logger = logging.getLogger(__name__)
 
 def parse_system_prompt_to_memories(prompt: str, private_instructions: str = None) -> List[Dict[str, Any]]:
     """
@@ -126,7 +128,6 @@ async def seed_nyx_memories_from_prompt(prompt: str, private: str = None):
                 )
     logger.info(f"Seeded {len(chunks)} memories for Nyx from system prompt and rules.")
 
-
 async def create_all_tables():
     """
     Asynchronously creates all database tables using asyncpg.
@@ -145,78 +146,9 @@ async def create_all_tables():
 
             # Define all CREATE TABLE and CREATE INDEX statements
             sql_commands = [
-                # ---------- GLOBAL / CORE TABLES ----------
-                '''
-                CREATE TABLE IF NOT EXISTS StateUpdates (
-                    user_id INTEGER NOT NULL,
-                    conversation_id INTEGER NOT NULL,
-                    update_payload JSONB,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    PRIMARY KEY (user_id, conversation_id)
-                );
-                ''',
-                '''
-                CREATE TABLE IF NOT EXISTS Settings (
-                    id SERIAL PRIMARY KEY,
-                    name TEXT UNIQUE NOT NULL,
-                    mood_tone TEXT NOT NULL,
-                    enhanced_features JSONB NOT NULL,
-                    stat_modifiers JSONB NOT NULL,
-                    activity_examples JSONB NOT NULL
-                );
-                ''',
-                '''
-                CREATE TABLE IF NOT EXISTS StatDefinitions (
-                    id SERIAL PRIMARY KEY,
-                    scope TEXT NOT NULL,
-                    stat_name TEXT UNIQUE NOT NULL,
-                    range_min INT NOT NULL,
-                    range_max INT NOT NULL,
-                    definition TEXT NOT NULL,
-                    effects TEXT NOT NULL,
-                    progression_triggers TEXT NOT NULL
-                );
-                ''',
-                '''
-                CREATE TABLE IF NOT EXISTS nyx_brain_checkpoints (
-                    id BIGSERIAL PRIMARY KEY,
-                    nyx_id TEXT NOT NULL,
-                    instance_id TEXT NOT NULL,
-                    checkpoint_time TIMESTAMPTZ NOT NULL DEFAULT now(),
-                    event TEXT,
-                    serialized_state JSONB NOT NULL,
-                    merged_from TEXT[],
-                    notes TEXT,
-                    UNIQUE(nyx_id, instance_id, checkpoint_time)
-                );
-                ''',
-                '''
-                CREATE INDEX IF NOT EXISTS idx_nyx_brain_checkpoints_nyx_id_time 
-                ON nyx_brain_checkpoints(nyx_id, checkpoint_time DESC);
-                ''',
-                '''
-                CREATE TABLE IF NOT EXISTS nyx_brain_events (
-                    id BIGSERIAL PRIMARY KEY,
-                    nyx_id TEXT NOT NULL,
-                    instance_id TEXT NOT NULL,
-                    event_time TIMESTAMPTZ NOT NULL DEFAULT now(),
-                    event_type TEXT NOT NULL,
-                    event_payload JSONB NOT NULL,
-                    UNIQUE(nyx_id, instance_id, event_time, event_type)
-                );
-                ''',
-                '''
-                CREATE INDEX IF NOT EXISTS idx_nyx_brain_events_nyx_id_time 
-                ON nyx_brain_events(nyx_id, event_time desc);                
-                ''',
-                '''
-                CREATE TABLE IF NOT EXISTS GameRules (
-                    id SERIAL PRIMARY KEY,
-                    rule_name TEXT UNIQUE NOT NULL,
-                    condition TEXT NOT NULL,
-                    effect TEXT NOT NULL
-                );
-                ''',
+                # ======================================
+                # CORE USER AND CONVERSATION TABLES
+                # ======================================
                 '''
                 CREATE TABLE IF NOT EXISTS users (
                     id SERIAL PRIMARY KEY,
@@ -247,6 +179,30 @@ async def create_all_tables():
                 );
                 ''',
                 '''
+                CREATE TABLE IF NOT EXISTS messages (
+                    id SERIAL PRIMARY KEY,
+                    conversation_id INTEGER NOT NULL,
+                    sender VARCHAR(50) NOT NULL,
+                    content TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    structured_content JSONB,
+                    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+                );
+                ''',
+                
+                # ======================================
+                # GAME STATE AND SETTINGS
+                # ======================================
+                '''
+                CREATE TABLE IF NOT EXISTS StateUpdates (
+                    user_id INTEGER NOT NULL,
+                    conversation_id INTEGER NOT NULL,
+                    update_payload JSONB,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (user_id, conversation_id)
+                );
+                ''',
+                '''
                 CREATE TABLE IF NOT EXISTS CurrentRoleplay (
                     user_id INTEGER NOT NULL,
                     conversation_id INTEGER NOT NULL,
@@ -258,17 +214,93 @@ async def create_all_tables():
                 );
                 ''',
                 '''
-                CREATE TABLE IF NOT EXISTS messages (
+                CREATE TABLE IF NOT EXISTS Settings (
                     id SERIAL PRIMARY KEY,
+                    name TEXT UNIQUE NOT NULL,
+                    mood_tone TEXT NOT NULL,
+                    enhanced_features JSONB NOT NULL,
+                    stat_modifiers JSONB NOT NULL,
+                    activity_examples JSONB NOT NULL
+                );
+                ''',
+                '''
+                CREATE TABLE IF NOT EXISTS StatDefinitions (
+                    id SERIAL PRIMARY KEY,
+                    scope TEXT NOT NULL,
+                    stat_name TEXT UNIQUE NOT NULL,
+                    range_min INT NOT NULL,
+                    range_max INT NOT NULL,
+                    definition TEXT NOT NULL,
+                    effects TEXT NOT NULL,
+                    progression_triggers TEXT NOT NULL
+                );
+                ''',
+                '''
+                CREATE TABLE IF NOT EXISTS GameRules (
+                    id SERIAL PRIMARY KEY,
+                    rule_name TEXT UNIQUE NOT NULL,
+                    condition TEXT NOT NULL,
+                    effect TEXT NOT NULL
+                );
+                ''',
+                
+                # ======================================
+                # LOCATION AND WORLD TABLES
+                # ======================================
+                '''
+                CREATE TABLE IF NOT EXISTS Locations (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER NOT NULL,
                     conversation_id INTEGER NOT NULL,
-                    sender VARCHAR(50) NOT NULL,
-                    content TEXT NOT NULL,
-                    created_at TIMESTAMP DEFAULT NOW(),
-                    structured_content JSONB,
+                    location_name TEXT NOT NULL,
+                    description TEXT,
+                    location_type TEXT,
+                    parent_location TEXT,
+                    cultural_significance TEXT DEFAULT 'moderate',
+                    economic_importance TEXT DEFAULT 'moderate',
+                    strategic_value INTEGER DEFAULT 5,
+                    population_density TEXT DEFAULT 'moderate',
+                    notable_features TEXT[] DEFAULT '{}',
+                    hidden_aspects TEXT[] DEFAULT '{}',
+                    access_restrictions TEXT[] DEFAULT '{}',
+                    local_customs TEXT[] DEFAULT '{}',
+                    open_hours JSONB,
+                    embedding vector(1536),
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
                     FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
                 );
                 ''',
-                # ---------- PER-USER / CONVERSATION TABLES ----------
+                '''
+                CREATE INDEX IF NOT EXISTS idx_locations_embedding_hnsw
+                ON Locations USING hnsw (embedding vector_cosine_ops);
+                ''',
+                '''
+                CREATE TABLE IF NOT EXISTS Events (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER NOT NULL,
+                    conversation_id INTEGER NOT NULL,
+                    event_name TEXT NOT NULL,
+                    description TEXT,
+                    start_time TEXT NOT NULL,
+                    end_time TEXT NOT NULL,
+                    location TEXT NOT NULL,
+                    year INT DEFAULT 1,
+                    month INT DEFAULT 1,
+                    day INT DEFAULT 1,
+                    time_of_day TEXT DEFAULT 'Morning',
+                    embedding vector(1536),
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+                );
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_events_embedding_hnsw
+                ON Events USING hnsw (embedding vector_cosine_ops);
+                ''',
+                
+                # ======================================
+                # NPC AND CHARACTER TABLES
+                # ======================================
                 '''
                 CREATE TABLE IF NOT EXISTS NPCStats (
                     npc_id SERIAL PRIMARY KEY,
@@ -301,10 +333,125 @@ async def create_all_tables():
                     age INT,
                     birthdate TEXT,
                     is_active BOOLEAN DEFAULT FALSE,
+                    role TEXT,
+                    embedding vector(1536),
+                    personality_patterns JSONB DEFAULT '[]'::jsonb,
+                    trauma_triggers JSONB,
+                    flashback_triggers JSONB,
+                    revelation_plan JSONB,
                     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
                     FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
                 );
                 ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_npcstats_embedding_hnsw
+                ON NPCStats USING hnsw (embedding vector_cosine_ops);
+                ''',
+                '''
+                CREATE TABLE IF NOT EXISTS NPCGroups (
+                    group_id SERIAL PRIMARY KEY,
+                    user_id INTEGER NOT NULL,
+                    conversation_id INTEGER NOT NULL,
+                    group_name TEXT NOT NULL,
+                    group_data JSONB NOT NULL,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
+                    UNIQUE(user_id, conversation_id, group_name)
+                );
+                ''',
+                '''
+                CREATE TABLE IF NOT EXISTS NPCEvolution (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER NOT NULL,
+                    conversation_id INTEGER NOT NULL,
+                    npc_id INTEGER NOT NULL,
+                    mask_slippage_events JSONB,
+                    evolution_events JSONB,
+                    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
+                    FOREIGN KEY (npc_id) REFERENCES NPCStats(npc_id) ON DELETE CASCADE
+                );
+                ''',
+                '''
+                CREATE TABLE IF NOT EXISTS NPCRevelations (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER NOT NULL,
+                    conversation_id INTEGER NOT NULL,
+                    npc_id INTEGER NOT NULL,
+                    narrative_stage TEXT NOT NULL,
+                    revelation_text TEXT NOT NULL,
+                    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
+                    FOREIGN KEY (npc_id) REFERENCES NPCStats(npc_id) ON DELETE CASCADE
+                );
+                ''',
+                '''
+                CREATE TABLE IF NOT EXISTS NPCAgentState (
+                    npc_id INT NOT NULL,
+                    user_id INT NOT NULL,
+                    conversation_id INT NOT NULL,
+                    current_state JSONB,
+                    last_decision JSONB,
+                    last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (npc_id, user_id, conversation_id),
+                    FOREIGN KEY (npc_id) REFERENCES NPCStats(npc_id) ON DELETE CASCADE,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+                );
+                ''',
+                '''
+                CREATE TABLE IF NOT EXISTS NPCVisualAttributes (
+                    id SERIAL PRIMARY KEY,
+                    npc_id INTEGER NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    conversation_id INTEGER NOT NULL,
+                    hair_color TEXT,
+                    hair_style TEXT,
+                    eye_color TEXT,
+                    skin_tone TEXT,
+                    body_type TEXT,
+                    height TEXT,
+                    age_appearance TEXT,
+                    default_outfit TEXT,
+                    outfit_variations JSONB,
+                    makeup_style TEXT,
+                    accessories JSONB,
+                    expressions JSONB,
+                    poses JSONB,
+                    visual_seed TEXT,
+                    last_generated_image TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (npc_id) REFERENCES NPCStats(npc_id) ON DELETE CASCADE,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+                );
+                ''',
+                '''
+                CREATE TABLE IF NOT EXISTS NPCVisualEvolution (
+                    id SERIAL PRIMARY KEY,
+                    npc_id INTEGER NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    conversation_id INTEGER NOT NULL,
+                    event_type TEXT CHECK (event_type IN ('outfit_change','appearance_change','location_change','mood_change')),
+                    event_description TEXT,
+                    previous_state JSONB,
+                    current_state JSONB,
+                    scene_context TEXT,
+                    image_generated TEXT,
+                    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (npc_id) REFERENCES NPCStats(npc_id) ON DELETE CASCADE,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+                );
+                ''',
+                
+                # ======================================
+                # PLAYER TABLES
+                # ======================================
                 '''
                 CREATE TABLE IF NOT EXISTS PlayerStats (
                     id SERIAL PRIMARY KEY,
@@ -324,6 +471,281 @@ async def create_all_tables():
                     FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
                 );
                 ''',
+                '''
+                CREATE TABLE IF NOT EXISTS PlayerInventory (
+                    item_id SERIAL PRIMARY KEY,
+                    user_id INT NOT NULL,
+                    conversation_id INT NOT NULL,
+                    player_name VARCHAR(255) NOT NULL DEFAULT 'Chase',
+                    item_name VARCHAR(100) NOT NULL,
+                    item_description TEXT,
+                    item_category VARCHAR(50) NOT NULL,
+                    item_properties JSONB,
+                    quantity INT DEFAULT 1,
+                    equipped BOOLEAN DEFAULT FALSE,
+                    date_acquired TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+                );
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_player_inventory_user ON PlayerInventory(user_id, conversation_id);
+                ''',
+                '''
+                CREATE TABLE IF NOT EXISTS PlayerResources (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER NOT NULL,
+                    conversation_id INTEGER NOT NULL,
+                    player_name TEXT NOT NULL DEFAULT 'Chase',
+                    money INTEGER NOT NULL DEFAULT 100,
+                    supplies INTEGER NOT NULL DEFAULT 20,
+                    influence INTEGER NOT NULL DEFAULT 10,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE (user_id, conversation_id, player_name),
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+                );
+                ''',
+                '''
+                CREATE TABLE IF NOT EXISTS PlayerVitals (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER NOT NULL,
+                    conversation_id INTEGER NOT NULL,
+                    player_name VARCHAR(255) NOT NULL DEFAULT 'Chase',
+                    energy INTEGER NOT NULL DEFAULT 100,
+                    hunger INTEGER NOT NULL DEFAULT 100,
+                    last_update TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE (user_id, conversation_id, player_name)
+                );
+                ''',
+                '''
+                CREATE TABLE IF NOT EXISTS PlayerPerks (
+                    perk_id SERIAL PRIMARY KEY,
+                    user_id INT NOT NULL,
+                    conversation_id INT NOT NULL,
+                    perk_name VARCHAR(100) NOT NULL,
+                    perk_description TEXT,
+                    perk_category VARCHAR(50) NOT NULL,
+                    perk_tier INT DEFAULT 1,
+                    perk_properties JSONB,
+                    date_acquired TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+                );
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_player_perks_user ON PlayerPerks(user_id, conversation_id);
+                ''',
+                '''
+                CREATE TABLE IF NOT EXISTS PlayerSpecialRewards (
+                    reward_id SERIAL PRIMARY KEY,
+                    user_id INT NOT NULL,
+                    conversation_id INT NOT NULL,
+                    reward_name VARCHAR(100) NOT NULL,
+                    reward_description TEXT,
+                    reward_effect TEXT,
+                    reward_category VARCHAR(50) NOT NULL,
+                    reward_properties JSONB,
+                    used BOOLEAN DEFAULT FALSE,
+                    date_acquired TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+                );
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_player_special_rewards_user ON PlayerSpecialRewards(user_id, conversation_id);
+                ''',
+                '''
+                CREATE TABLE IF NOT EXISTS PlayerJournal (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER NOT NULL,
+                    conversation_id INTEGER NOT NULL,
+                    entry_type TEXT NOT NULL,
+                    entry_text TEXT NOT NULL,
+                    revelation_types TEXT,
+                    narrative_moment TEXT,
+                    fantasy_flag BOOLEAN DEFAULT FALSE,
+                    intensity_level INT CHECK (intensity_level BETWEEN 0 AND 4),
+                    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    entry_metadata JSONB DEFAULT '{}',
+                    importance FLOAT DEFAULT 0.5,
+                    access_count INTEGER DEFAULT 0,
+                    last_accessed TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    tags JSONB DEFAULT '[]',
+                    consolidated BOOLEAN DEFAULT FALSE,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+                );
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS player_journal_user_conversation_idx ON PlayerJournal(user_id, conversation_id);
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS player_journal_importance_idx ON PlayerJournal(importance);
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS player_journal_created_at_idx ON PlayerJournal(created_at);
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS player_journal_entry_type_idx ON PlayerJournal(entry_type);
+                ''',
+                '''
+                CREATE TABLE IF NOT EXISTS PlayerAddictions (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER NOT NULL,
+                    conversation_id INTEGER NOT NULL,
+                    player_name VARCHAR(255) NOT NULL,
+                    addiction_type VARCHAR(50) NOT NULL,
+                    level INTEGER NOT NULL DEFAULT 0,
+                    target_npc_id INTEGER NULL,
+                    last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(user_id, conversation_id, player_name, addiction_type, target_npc_id),
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+                );
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_player_addictions_lookup
+                ON PlayerAddictions(user_id, conversation_id, player_name);
+                ''',
+                
+                # ======================================
+                # MEMORY SYSTEM TABLES
+                # ======================================
+                '''
+                CREATE TABLE IF NOT EXISTS NPCMemories (
+                    id SERIAL PRIMARY KEY,
+                    npc_id INT NOT NULL,
+                    memory_text TEXT NOT NULL,
+                    timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    tags TEXT[],
+                    emotional_intensity INT DEFAULT 0,
+                    times_recalled INT DEFAULT 0,
+                    last_recalled TIMESTAMP,
+                    embedding VECTOR(1536),
+                    memory_type TEXT DEFAULT 'observation',
+                    associated_entities JSONB DEFAULT '{}'::jsonb,
+                    is_consolidated BOOLEAN NOT NULL DEFAULT FALSE,
+                    significance INT NOT NULL DEFAULT 3,
+                    status VARCHAR(20) NOT NULL DEFAULT 'active',
+                    FOREIGN KEY (npc_id) REFERENCES NPCStats(npc_id) ON DELETE CASCADE
+                );
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_mem_npcid_status_ts
+                ON NPCMemories (npc_id, status, timestamp);
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS npc_memory_embedding_hnsw_idx
+                ON NPCMemories
+                USING hnsw (embedding vector_cosine_ops);
+                ''',
+                '''
+                CREATE TABLE IF NOT EXISTS NPCMemoryAssociations (
+                    id SERIAL PRIMARY KEY,
+                    memory_id INT NOT NULL,
+                    associated_memory_id INT NOT NULL,
+                    association_strength FLOAT DEFAULT 0.0,
+                    association_type TEXT,
+                    FOREIGN KEY (memory_id) REFERENCES NPCMemories(id) ON DELETE CASCADE,
+                    FOREIGN KEY (associated_memory_id) REFERENCES NPCMemories(id) ON DELETE CASCADE
+                );
+                ''',
+                '''
+                CREATE TABLE IF NOT EXISTS unified_memories (
+                    id SERIAL PRIMARY KEY,
+                    entity_type TEXT NOT NULL,
+                    entity_id INTEGER NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    conversation_id INTEGER NOT NULL,
+                    memory_text TEXT NOT NULL,
+                    memory_type TEXT NOT NULL DEFAULT 'observation',
+                    significance INTEGER NOT NULL DEFAULT 3,
+                    emotional_intensity INTEGER NOT NULL DEFAULT 0,
+                    tags TEXT[] DEFAULT '{}',
+                    embedding VECTOR(1536),
+                    metadata JSONB,
+                    timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    times_recalled INTEGER NOT NULL DEFAULT 0,
+                    last_recalled TIMESTAMP,
+                    status TEXT NOT NULL DEFAULT 'active',
+                    is_consolidated BOOLEAN NOT NULL DEFAULT FALSE,
+                    relevance_score FLOAT DEFAULT 0.0,
+                    last_context_update TIMESTAMP
+                );
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_unified_memories_entity
+                ON unified_memories(entity_type, entity_id);
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_unified_memories_user_conv
+                ON unified_memories(user_id, conversation_id);
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_unified_memories_timestamp
+                ON unified_memories(timestamp);
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_unified_memories_embedding_hnsw
+                ON unified_memories
+                USING hnsw (embedding vector_cosine_ops);
+                ''',
+                '''
+                CREATE TABLE IF NOT EXISTS MemoryMaintenanceSchedule (
+                    user_id INTEGER NOT NULL,
+                    conversation_id INTEGER NOT NULL,
+                    entity_type TEXT NOT NULL,
+                    entity_id INTEGER NOT NULL,
+                    maintenance_schedule JSONB NOT NULL,
+                    next_maintenance_date TIMESTAMP NOT NULL,
+                    last_maintenance_date TIMESTAMP,
+                    PRIMARY KEY (user_id, conversation_id, entity_type, entity_id)
+                );
+                ''',
+                '''
+                CREATE TABLE IF NOT EXISTS memory_telemetry (
+                    id SERIAL PRIMARY KEY,
+                    timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    operation TEXT NOT NULL,
+                    success BOOLEAN NOT NULL,
+                    duration FLOAT NOT NULL,
+                    data_size INTEGER,
+                    error TEXT,
+                    metadata JSONB
+                );
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_memory_telemetry_timestamp
+                ON memory_telemetry(timestamp);
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_memory_telemetry_operation
+                ON memory_telemetry(operation);
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_memory_telemetry_success
+                ON memory_telemetry(success);
+                ''',
+                '''
+                CREATE TABLE IF NOT EXISTS SemanticNetworks (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER NOT NULL,
+                    conversation_id INTEGER NOT NULL,
+                    entity_type VARCHAR(50) NOT NULL,
+                    entity_id INTEGER NOT NULL,
+                    central_topic TEXT NOT NULL,
+                    network_data JSONB NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+                );
+                ''',
+                
+                # ======================================
+                # ARCHETYPE AND ACTIVITY TABLES
+                # ======================================
                 '''
                 CREATE TABLE IF NOT EXISTS Archetypes (
                     id SERIAL PRIMARY KEY,
@@ -347,36 +769,66 @@ async def create_all_tables():
                 );
                 ''',
                 '''
-                CREATE TABLE IF NOT EXISTS PlayerInventory (
-                    item_id SERIAL PRIMARY KEY,
-                    user_id INT NOT NULL,
-                    conversation_id INT NOT NULL,
-                    item_name VARCHAR(100) NOT NULL,
-                    item_description TEXT,
-                    item_category VARCHAR(50) NOT NULL,
-                    item_properties JSONB,
-                    quantity INT DEFAULT 1,
-                    equipped BOOLEAN DEFAULT FALSE,
-                    date_acquired TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-                    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
-                );
-                ''',
-                '''
-                CREATE TABLE IF NOT EXISTS PlayerResources (
+                CREATE TABLE IF NOT EXISTS ActivityEffects (
                     id SERIAL PRIMARY KEY,
                     user_id INTEGER NOT NULL,
                     conversation_id INTEGER NOT NULL,
-                    player_name TEXT NOT NULL DEFAULT 'Chase',
-                    money INTEGER NOT NULL DEFAULT 100,
-                    supplies INTEGER NOT NULL DEFAULT 20,
-                    influence INTEGER NOT NULL DEFAULT 10,
+                    activity_name TEXT NOT NULL,
+                    activity_details TEXT,
+                    setting_context TEXT,
+                    effects JSONB NOT NULL,
+                    description TEXT,
+                    flags JSONB,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE (user_id, conversation_id, player_name),
-                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-                    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+                    UNIQUE (user_id, conversation_id, activity_name, activity_details)
                 );
                 ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_activity_effects_lookup
+                ON ActivityEffects(user_id, conversation_id, activity_name, activity_details);
+                ''',
+                '''
+                CREATE TABLE IF NOT EXISTS IntensityTiers (
+                    id SERIAL PRIMARY KEY,
+                    tier_name TEXT NOT NULL,
+                    range_min INT NOT NULL,
+                    range_max INT NOT NULL,
+                    description TEXT NOT NULL,
+                    key_features JSONB NOT NULL,
+                    activity_examples JSONB,
+                    permanent_effects JSONB,
+                    fantasy_level TEXT DEFAULT 'realistic'
+                        CHECK (fantasy_level IN ('realistic','fantastical','surreal'))
+                );
+                ''',
+                '''
+                CREATE TABLE IF NOT EXISTS Interactions (
+                    id SERIAL PRIMARY KEY,
+                    interaction_name TEXT UNIQUE NOT NULL,
+                    detailed_rules JSONB NOT NULL,
+                    task_examples JSONB,
+                    agency_overrides JSONB,
+                    fantasy_level TEXT DEFAULT 'realistic'
+                        CHECK (fantasy_level IN ('realistic','fantastical','surreal'))
+                );
+                ''',
+                '''
+                CREATE TABLE IF NOT EXISTS PlotTriggers (
+                    id SERIAL PRIMARY KEY,
+                    trigger_name TEXT UNIQUE NOT NULL,
+                    stage_name TEXT,
+                    description TEXT,
+                    key_features JSONB,
+                    stat_dynamics JSONB,
+                    examples JSONB,
+                    triggers JSONB
+                );
+                ''',
+                
+                # ======================================
+                # FACTION AND POLITICAL TABLES
+                # ======================================
                 '''
                 CREATE TABLE IF NOT EXISTS Factions (
                     id SERIAL PRIMARY KEY,
@@ -387,12 +839,12 @@ async def create_all_tables():
                     description TEXT,
                     values TEXT[],
                     goals TEXT[],
-                    hierarchy TEXT DEFAULT 'informal', 
+                    hierarchy TEXT DEFAULT 'informal',
                     resources TEXT[],
-                    territory TEXT,  
-                    meeting_schedule TEXT,  
+                    territory TEXT,
+                    meeting_schedule TEXT,
                     membership_requirements TEXT[],
-                    rivals INTEGER[],  
+                    rivals INTEGER[],
                     allies INTEGER[],
                     public_reputation TEXT DEFAULT 'neutral',
                     secret_activities TEXT[],
@@ -411,27 +863,433 @@ async def create_all_tables():
                 '''
                 CREATE INDEX IF NOT EXISTS idx_factions_name
                 ON Factions(user_id, conversation_id, lower(name));
-                );
                 ''',
-                # ---------- RESOURCE HISTORY ----------
                 '''
-                CREATE TABLE IF NOT EXISTS ResourceHistoryLog (
+                CREATE TABLE IF NOT EXISTS FactionPowerShifts (
                     id SERIAL PRIMARY KEY,
                     user_id INTEGER NOT NULL,
                     conversation_id INTEGER NOT NULL,
-                    player_name TEXT NOT NULL DEFAULT 'Chase',
-                    resource_type TEXT NOT NULL,
-                    old_value INTEGER NOT NULL,
-                    new_value INTEGER NOT NULL,
-                    amount_changed INTEGER NOT NULL,
-                    source TEXT NOT NULL,
-                    description TEXT,
-                    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    faction_name VARCHAR(255) NOT NULL,
+                    power_level INTEGER NOT NULL,
+                    change_amount INTEGER NOT NULL,
+                    cause TEXT NOT NULL,
+                    conflict_id INTEGER,
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
                     FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
                 );
                 ''',
-                # ---------- CONFLICT SYSTEM TABLES ----------
+                '''
+                CREATE INDEX IF NOT EXISTS idx_faction_power_shifts
+                ON FactionPowerShifts(user_id, conversation_id);
+                ''',
+                
+                # ======================================
+                # WORLD LORE TABLES (NEW)
+                # ======================================
+                '''
+                CREATE TABLE IF NOT EXISTS Nations (
+                    id SERIAL PRIMARY KEY,
+                    name TEXT NOT NULL UNIQUE,
+                    government_type TEXT,
+                    description TEXT,
+                    relative_power INTEGER DEFAULT 5,
+                    matriarchy_level INTEGER DEFAULT 5,
+                    population_scale TEXT,
+                    major_resources TEXT[],
+                    major_cities TEXT[],
+                    cultural_traits TEXT[],
+                    notable_features TEXT,
+                    neighboring_nations TEXT[],
+                    embedding vector(1536)
+                );
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_nations_embedding_hnsw
+                ON Nations USING hnsw (embedding vector_cosine_ops);
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_nations_name
+                ON nations (lower(name));
+                ''',
+                '''
+                CREATE TABLE IF NOT EXISTS NationalConflicts (
+                    id SERIAL PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    conflict_type TEXT NOT NULL,
+                    description TEXT,
+                    severity INTEGER DEFAULT 5,
+                    status TEXT DEFAULT 'active',
+                    start_date TEXT,
+                    involved_nations INTEGER[],
+                    primary_aggressor INTEGER,
+                    primary_defender INTEGER,
+                    current_casualties TEXT,
+                    economic_impact TEXT,
+                    diplomatic_consequences TEXT,
+                    public_opinion JSONB,
+                    recent_developments TEXT[],
+                    potential_resolution TEXT,
+                    embedding vector(1536)
+                );
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_national_conflicts_embedding_hnsw
+                ON NationalConflicts USING hnsw (embedding vector_cosine_ops);
+                ''',
+                '''
+                CREATE TABLE IF NOT EXISTS CulturalElements (
+                    id SERIAL PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    element_type TEXT NOT NULL,
+                    description TEXT,
+                    practiced_by TEXT[],
+                    significance INTEGER DEFAULT 5,
+                    historical_origin TEXT,
+                    embedding vector(1536)
+                );
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_cultural_elements_embedding_hnsw
+                ON CulturalElements USING hnsw (embedding vector_cosine_ops);
+                ''',
+                '''
+                CREATE TABLE IF NOT EXISTS CulinaryTraditions (
+                    id SERIAL PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    nation_origin INTEGER,
+                    description TEXT,
+                    ingredients TEXT[],
+                    preparation TEXT,
+                    cultural_significance TEXT,
+                    adopted_by INTEGER[],
+                    embedding vector(1536)
+                );
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_culinary_traditions_embedding_hnsw
+                ON CulinaryTraditions USING hnsw (embedding vector_cosine_ops);
+                ''',
+                '''
+                CREATE TABLE IF NOT EXISTS SocialCustoms (
+                    id SERIAL PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    nation_origin INTEGER,
+                    description TEXT,
+                    context TEXT DEFAULT 'social',
+                    formality_level TEXT DEFAULT 'medium',
+                    adopted_by INTEGER[],
+                    adoption_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    embedding vector(1536)
+                );
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_social_customs_embedding_hnsw
+                ON SocialCustoms USING hnsw (embedding vector_cosine_ops);
+                ''',
+                '''
+                CREATE TABLE IF NOT EXISTS CulturalExchanges (
+                    id SERIAL PRIMARY KEY,
+                    nation1_id INTEGER NOT NULL,
+                    nation2_id INTEGER NOT NULL,
+                    exchange_type TEXT,
+                    exchange_details TEXT,
+                    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+                ''',
+                '''
+                CREATE TABLE IF NOT EXISTS GeographicRegions (
+                    id SERIAL PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    region_type TEXT NOT NULL,
+                    description TEXT,
+                    climate TEXT,
+                    resources TEXT[],
+                    governing_faction TEXT,
+                    population_density TEXT,
+                    major_settlements TEXT[],
+                    cultural_traits TEXT[],
+                    dangers TEXT[],
+                    terrain_features TEXT[],
+                    defensive_characteristics TEXT,
+                    strategic_value INTEGER DEFAULT 5,
+                    matriarchal_influence INTEGER DEFAULT 5,
+                    embedding vector(1536)
+                );
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_geographic_regions_embedding_hnsw
+                ON GeographicRegions USING hnsw (embedding vector_cosine_ops);
+                ''',
+                '''
+                CREATE TABLE IF NOT EXISTS PoliticalEntities (
+                    id SERIAL PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    entity_type TEXT NOT NULL,
+                    description TEXT,
+                    region_id INTEGER,
+                    governance_style TEXT,
+                    leadership_structure TEXT,
+                    population_scale TEXT,
+                    cultural_identity TEXT,
+                    economic_focus TEXT,
+                    political_values TEXT,
+                    matriarchy_level INTEGER DEFAULT 5,
+                    relations JSONB,
+                    military_strength INTEGER DEFAULT 5,
+                    diplomatic_stance TEXT,
+                    internal_conflicts TEXT[],
+                    power_centers JSONB,
+                    embedding vector(1536)
+                );
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_political_entities_embedding_hnsw
+                ON PoliticalEntities USING hnsw (embedding vector_cosine_ops);
+                ''',
+                '''
+                CREATE TABLE IF NOT EXISTS ConflictSimulations (
+                    id SERIAL PRIMARY KEY,
+                    conflict_type TEXT NOT NULL,
+                    primary_actors JSONB,
+                    timeline JSONB,
+                    intensity_progression TEXT,
+                    diplomatic_events JSONB,
+                    military_events JSONB,
+                    civilian_impact JSONB,
+                    resolution_scenarios JSONB,
+                    most_likely_outcome JSONB,
+                    duration_months INTEGER,
+                    confidence_level FLOAT,
+                    simulation_basis TEXT,
+                    embedding vector(1536)
+                );
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_conflict_simulations_embedding_hnsw
+                ON ConflictSimulations USING hnsw (embedding vector_cosine_ops);
+                ''',
+                '''
+                CREATE TABLE IF NOT EXISTS BorderDisputes (
+                    id SERIAL PRIMARY KEY,
+                    region1_id INTEGER NOT NULL,
+                    region2_id INTEGER NOT NULL,
+                    dispute_type TEXT NOT NULL,
+                    description TEXT,
+                    severity INTEGER DEFAULT 5,
+                    duration TEXT,
+                    causal_factors TEXT,
+                    status TEXT DEFAULT 'active',
+                    resolution_attempts JSONB,
+                    strategic_implications TEXT,
+                    female_leaders_involved TEXT[],
+                    gender_dynamics TEXT,
+                    embedding vector(1536)
+                );
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_border_disputes_embedding_hnsw
+                ON BorderDisputes USING hnsw (embedding vector_cosine_ops);
+                ''',
+                '''
+                CREATE TABLE IF NOT EXISTS UrbanMyths (
+                    id SERIAL PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    description TEXT,
+                    origin_location TEXT,
+                    origin_event TEXT,
+                    believability INTEGER DEFAULT 6,
+                    spread_rate INTEGER DEFAULT 5,
+                    regions_known TEXT[],
+                    narrative_style TEXT DEFAULT 'folklore',
+                    themes TEXT[],
+                    matriarchal_elements TEXT[],
+                    embedding vector(1536)
+                );
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_urban_myths_embedding_hnsw
+                ON UrbanMyths USING hnsw (embedding vector_cosine_ops);
+                ''',
+                '''
+                CREATE TABLE IF NOT EXISTS LocalHistories (
+                    id SERIAL PRIMARY KEY,
+                    location_id INTEGER NOT NULL,
+                    event_name TEXT NOT NULL,
+                    description TEXT,
+                    date_description TEXT,
+                    significance INTEGER DEFAULT 5,
+                    impact_type TEXT,
+                    notable_figures TEXT[],
+                    current_relevance TEXT,
+                    commemoration TEXT,
+                    connected_myths TEXT[],
+                    related_landmarks TEXT[],
+                    narrative_category TEXT,
+                    embedding vector(1536)
+                );
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_local_histories_embedding_hnsw
+                ON LocalHistories USING hnsw (embedding vector_cosine_ops);
+                ''',
+                '''
+                CREATE TABLE IF NOT EXISTS Landmarks (
+                    id SERIAL PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    location_id INTEGER NOT NULL,
+                    landmark_type TEXT NOT NULL,
+                    description TEXT,
+                    historical_significance TEXT,
+                    current_use TEXT,
+                    controlled_by TEXT,
+                    legends TEXT[],
+                    connected_histories TEXT[],
+                    architectural_style TEXT,
+                    symbolic_meaning TEXT,
+                    matriarchal_significance TEXT DEFAULT 'moderate',
+                    embedding vector(1536)
+                );
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_landmarks_embedding_hnsw
+                ON Landmarks USING hnsw (embedding vector_cosine_ops);
+                ''',
+                '''
+                CREATE TABLE IF NOT EXISTS HistoricalEvents (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER NOT NULL,
+                    conversation_id INTEGER NOT NULL,
+                    name TEXT NOT NULL,
+                    description TEXT,
+                    date_description TEXT,
+                    event_type TEXT DEFAULT 'political',
+                    significance INTEGER DEFAULT 5,
+                    involved_entities TEXT[],
+                    location TEXT,
+                    consequences TEXT[],
+                    cultural_impact TEXT DEFAULT 'moderate',
+                    disputed_facts TEXT[],
+                    commemorations TEXT[],
+                    primary_sources TEXT[],
+                    embedding vector(1536),
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+                );
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_historical_events_embedding_hnsw
+                ON HistoricalEvents USING hnsw (embedding vector_cosine_ops);
+                ''',
+                '''
+                CREATE TABLE IF NOT EXISTS NotableFigures (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER NOT NULL,
+                    conversation_id INTEGER NOT NULL,
+                    name TEXT NOT NULL,
+                    title TEXT,
+                    description TEXT,
+                    birth_date TEXT,
+                    death_date TEXT,
+                    faction_affiliations TEXT[],
+                    achievements TEXT[],
+                    failures TEXT[],
+                    personality_traits TEXT[],
+                    public_image TEXT DEFAULT 'neutral',
+                    hidden_aspects TEXT[],
+                    influence_areas TEXT[],
+                    legacy TEXT,
+                    controversial_actions TEXT[],
+                    relationships TEXT[],
+                    current_status TEXT DEFAULT 'active',
+                    reputation INTEGER DEFAULT 50,
+                    significance INTEGER DEFAULT 5,
+                    embedding vector(1536),
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+                );
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_notable_figures_embedding_hnsw
+                ON NotableFigures USING hnsw (embedding vector_cosine_ops);
+                ''',
+                
+                # ======================================
+                # RELATIONSHIP AND SOCIAL TABLES
+                # ======================================
+                '''
+                CREATE TABLE IF NOT EXISTS SocialLinks (
+                    link_id SERIAL PRIMARY KEY,
+                    user_id INTEGER NOT NULL,
+                    conversation_id INTEGER NOT NULL,
+                    entity1_type TEXT NOT NULL,
+                    entity1_id INT NOT NULL,
+                    entity2_type TEXT NOT NULL,
+                    entity2_id INT NOT NULL,
+                    link_type TEXT,
+                    link_level INT DEFAULT 0,
+                    link_history JSONB,
+                    dynamics JSONB,
+                    experienced_crossroads JSONB,
+                    experienced_rituals JSONB,
+                    relationship_stage TEXT,
+                    group_interaction TEXT,
+                    UNIQUE (user_id, conversation_id, entity1_type, entity1_id, entity2_type, entity2_id),
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+                );
+                ''',
+                '''
+                CREATE TABLE IF NOT EXISTS RelationshipEvolution (
+                    user_id INTEGER NOT NULL,
+                    conversation_id INTEGER NOT NULL,
+                    npc1_id INTEGER NOT NULL,
+                    entity2_type TEXT NOT NULL,
+                    entity2_id INTEGER NOT NULL,
+                    relationship_type TEXT NOT NULL,
+                    current_stage TEXT NOT NULL,
+                    progress_to_next INTEGER NOT NULL DEFAULT 0,
+                    evolution_history JSONB NOT NULL DEFAULT '[]'::jsonb,
+                    PRIMARY KEY (user_id, conversation_id, npc1_id, entity2_type, entity2_id)
+                );
+                ''',
+                '''
+                CREATE TABLE IF NOT EXISTS interaction_history (
+                    id SERIAL PRIMARY KEY,
+                    entity1_id VARCHAR(100) NOT NULL,
+                    entity2_id VARCHAR(100) NOT NULL,
+                    interaction_type VARCHAR(50) NOT NULL,
+                    outcome VARCHAR(50) NOT NULL,
+                    emotional_impact JSONB NOT NULL DEFAULT '{}',
+                    duration INTEGER NOT NULL DEFAULT 0,
+                    intensity FLOAT NOT NULL DEFAULT 0.5,
+                    relationship_changes JSONB NOT NULL DEFAULT '{}',
+                    user_id INTEGER NOT NULL,
+                    conversation_id INTEGER NOT NULL,
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+                );
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_interaction_history_entities 
+                ON interaction_history(entity1_id, entity2_id, created_at);
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_interaction_history_user_conv
+                ON interaction_history(user_id, conversation_id, created_at);
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_interaction_history_lookup
+                ON interaction_history(user_id, conversation_id, entity1_id, entity2_id);
+                ''',
+                '''
+                COMMENT ON TABLE interaction_history IS 'Tracks interactions between entities (NPCs, users) for relationship management';
+                ''',
+                
+                # ======================================
+                # CONFLICT SYSTEM TABLES
+                # ======================================
                 '''
                 CREATE TABLE IF NOT EXISTS Conflicts (
                     conflict_id SERIAL PRIMARY KEY,
@@ -453,6 +1311,14 @@ async def create_all_tables():
                     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
                     FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
                 );
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_conflicts_user_conv
+                ON Conflicts(user_id, conversation_id);
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_active_conflicts
+                ON Conflicts(is_active) WHERE is_active = TRUE;
                 ''',
                 '''
                 CREATE TABLE IF NOT EXISTS ConflictStakeholders (
@@ -559,7 +1425,6 @@ async def create_all_tables():
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
                 ''',
-                # ---------- INTERNAL FACTION CONFLICTS ----------
                 '''
                 CREATE TABLE IF NOT EXISTS InternalFactionConflicts (
                     struggle_id SERIAL PRIMARY KEY,
@@ -593,32 +1458,6 @@ async def create_all_tables():
                 );
                 ''',
                 '''
-                CREATE TABLE IF NOT EXISTS nations (
-                  id SERIAL PRIMARY KEY,
-                  name TEXT NOT NULL UNIQUE,
-                  region_type TEXT,
-                  climate TEXT,
-                  resources JSONB,
-                  strategic_value INT,
-                  matriarchal_influence FLOAT DEFAULT 0.0,
-                  embedding VECTOR(1536)
-                );
-                ''',
-                '''
-                CREATE INDEX IF NOT EXISTS idx_nations_name
-                ON nations (lower(name)
-                );
-                ''',
-                '''
-                CREATE TABLE IF NOT EXISTS StateUpdates (
-                  user_id INTEGER NOT NULL,
-                  conversation_id INTEGER NOT NULL,
-                  update_payload JSONB,
-                  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                  PRIMARY KEY (user_id, conversation_id)
-                );
-                ''',
-                '''
                 CREATE TABLE IF NOT EXISTS FactionIdeologicalDifferences (
                     id SERIAL PRIMARY KEY,
                     struggle_id INTEGER REFERENCES InternalFactionConflicts(struggle_id),
@@ -641,7 +1480,6 @@ async def create_all_tables():
                     timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
                 ''',
-                # ---------- CONFLICT MEMORY EVENTS ----------
                 '''
                 CREATE TABLE IF NOT EXISTS ConflictMemoryEvents (
                     id SERIAL PRIMARY KEY,
@@ -679,16 +1517,8 @@ async def create_all_tables():
                 );
                 ''',
                 '''
-                CREATE TABLE IF NOT EXISTS PlayerVitals (
-                    id SERIAL PRIMARY KEY,
-                    user_id INTEGER NOT NULL,
-                    conversation_id INTEGER NOT NULL,
-                    player_name VARCHAR(255) NOT NULL DEFAULT 'Chase',
-                    energy INTEGER NOT NULL DEFAULT 100,
-                    hunger INTEGER NOT NULL DEFAULT 100,
-                    last_update TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE (user_id, conversation_id, player_name)
-                );
+                CREATE INDEX IF NOT EXISTS idx_conflict_npcs
+                ON ConflictNPCs(conflict_id);
                 ''',
                 '''
                 CREATE TABLE IF NOT EXISTS ConflictHistory (
@@ -706,34 +1536,6 @@ async def create_all_tables():
                 );
                 ''',
                 '''
-                CREATE TABLE IF NOT EXISTS FactionPowerShifts (
-                    id SERIAL PRIMARY KEY,
-                    user_id INTEGER NOT NULL,
-                    conversation_id INTEGER NOT NULL,
-                    faction_name VARCHAR(255) NOT NULL,
-                    power_level INTEGER NOT NULL,
-                    change_amount INTEGER NOT NULL,
-                    cause TEXT NOT NULL,
-                    conflict_id INTEGER REFERENCES Conflicts(conflict_id),
-                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-                    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
-                );
-                ''',
-                # ---------- CONFLICT SYSTEM INDEXES ----------
-                '''
-                CREATE INDEX IF NOT EXISTS idx_conflicts_user_conv
-                ON Conflicts(user_id, conversation_id);
-                ''',
-                '''
-                CREATE INDEX IF NOT EXISTS idx_conflict_npcs
-                ON ConflictNPCs(conflict_id);
-                ''',
-                '''
-                CREATE INDEX IF NOT EXISTS idx_active_conflicts
-                ON Conflicts(is_active) WHERE is_active = TRUE;
-                ''',
-                '''
                 CREATE INDEX IF NOT EXISTS idx_conflict_history
                 ON ConflictHistory(user_id, conversation_id);
                 ''',
@@ -741,132 +1543,10 @@ async def create_all_tables():
                 CREATE INDEX IF NOT EXISTS idx_grudge_level
                 ON ConflictHistory(grudge_level) WHERE grudge_level > 50;
                 ''',
-                '''
-                CREATE INDEX IF NOT EXISTS idx_faction_power_shifts
-                ON FactionPowerShifts(user_id, conversation_id);
-                ''',
-                # ---------- LEGACY "NPCMemories" TABLE (OPTIONAL) ----------
-                '''
-                CREATE TABLE IF NOT EXISTS NPCMemories (
-                    id SERIAL PRIMARY KEY,
-                    npc_id INT NOT NULL,
-                    memory_text TEXT NOT NULL,
-                    timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    tags TEXT[],
-                    emotional_intensity INT DEFAULT 0,
-                    times_recalled INT DEFAULT 0,
-                    last_recalled TIMESTAMP,
-                    embedding VECTOR(1536),
-                    memory_type TEXT DEFAULT 'observation',
-                    associated_entities JSONB DEFAULT '{}'::jsonb,
-                    is_consolidated BOOLEAN NOT NULL DEFAULT FALSE,
-                    significance INT NOT NULL DEFAULT 3,
-                    status VARCHAR(20) NOT NULL DEFAULT 'active',
-                    FOREIGN KEY (npc_id) REFERENCES NPCStats(npc_id) ON DELETE CASCADE
-                );
-                ''',
-                '''
-                CREATE INDEX IF NOT EXISTS idx_mem_npcid_status_ts
-                ON NPCMemories (npc_id, status, timestamp);
-                ''',
-                '''
-                CREATE INDEX IF NOT EXISTS npc_memory_embedding_hnsw_idx
-                ON NPCMemories
-                USING hnsw (embedding vector_cosine_ops);
-                ''',
-                # ---------- NEW "unified_memories" TABLE ----------
-                '''
-                CREATE TABLE IF NOT EXISTS unified_memories (
-                    id SERIAL PRIMARY KEY,
-                    entity_type TEXT NOT NULL,
-                    entity_id INTEGER NOT NULL,
-                    user_id INTEGER NOT NULL,
-                    conversation_id INTEGER NOT NULL,
-                    memory_text TEXT NOT NULL,
-                    memory_type TEXT NOT NULL DEFAULT 'observation',
-                    significance INTEGER NOT NULL DEFAULT 3,
-                    emotional_intensity INTEGER NOT NULL DEFAULT 0,
-                    tags TEXT[] DEFAULT '{}',
-                    embedding VECTOR(1536),
-                    metadata JSONB,
-                    timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    times_recalled INTEGER NOT NULL DEFAULT 0,
-                    last_recalled TIMESTAMP,
-                    status TEXT NOT NULL DEFAULT 'active',
-                    is_consolidated BOOLEAN NOT NULL DEFAULT FALSE,
-                    relevance_score FLOAT DEFAULT 0.0, -- Added previously
-                    last_context_update TIMESTAMP      -- Added previously
-                );
-                ''',
-                '''
-                CREATE INDEX IF NOT EXISTS idx_unified_memories_entity
-                ON unified_memories(entity_type, entity_id);
-                ''',
-                '''
-                CREATE INDEX IF NOT EXISTS idx_unified_memories_user_conv
-                ON unified_memories(user_id, conversation_id);
-                ''',
-                '''
-                CREATE INDEX IF NOT EXISTS idx_unified_memories_timestamp
-                ON unified_memories(timestamp);
-                ''',
-                '''
-                CREATE INDEX IF NOT EXISTS idx_unified_memories_embedding_hnsw
-                ON unified_memories
-                USING hnsw (embedding vector_cosine_ops);
-                ''',
-                # ---------- MORE TABLES ----------
-                '''
-                CREATE TABLE IF NOT EXISTS Locations (
-                    id SERIAL PRIMARY KEY,
-                    user_id INTEGER NOT NULL,
-                    conversation_id INTEGER NOT NULL,
-                    location_name TEXT NOT NULL,
-                    description TEXT,
-                    open_hours JSONB,
-                    embedding VECTOR(1536),
-                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-                    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
-                );
-                ''',
-                '''
-                CREATE TABLE IF NOT EXISTS ActivityEffects (
-                    id SERIAL PRIMARY KEY,
-                    user_id INTEGER NOT NULL,
-                    conversation_id INTEGER NOT NULL,
-                    activity_name TEXT NOT NULL,
-                    activity_details TEXT,
-                    setting_context TEXT,
-                    effects JSONB NOT NULL,
-                    description TEXT,
-                    flags JSONB,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE (user_id, conversation_id, activity_name, activity_details)
-                );
-                ''',
-                '''
-                CREATE INDEX IF NOT EXISTS idx_activity_effects_lookup
-                ON ActivityEffects(user_id, conversation_id, activity_name, activity_details);
-                ''',
-                '''
-                CREATE TABLE IF NOT EXISTS Events (
-                    id SERIAL PRIMARY KEY,
-                    user_id INTEGER NOT NULL,
-                    conversation_id INTEGER NOT NULL,
-                    event_name TEXT NOT NULL,
-                    description TEXT,
-                    start_time TEXT NOT NULL,
-                    end_time TEXT NOT NULL,
-                    location TEXT NOT NULL,
-                    year INT DEFAULT 1,
-                    month INT DEFAULT 1,
-                    day INT DEFAULT 1,
-                    time_of_day TEXT DEFAULT 'Morning',
-                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-                    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
-                );
-                ''',
+                
+                # ======================================
+                # QUEST AND EVENT TABLES
+                # ======================================
                 '''
                 CREATE TABLE IF NOT EXISTS Quests (
                     quest_id SERIAL PRIMARY KEY,
@@ -877,9 +1557,14 @@ async def create_all_tables():
                     progress_detail TEXT,
                     quest_giver TEXT,
                     reward TEXT,
+                    embedding vector(1536),
                     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
                     FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
                 );
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_quests_embedding_hnsw
+                ON Quests USING hnsw (embedding vector_cosine_ops);
                 ''',
                 '''
                 CREATE TABLE IF NOT EXISTS PlannedEvents (
@@ -897,159 +1582,10 @@ async def create_all_tables():
                     FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
                 );
                 ''',
-                '''
-                CREATE TABLE IF NOT EXISTS SocialLinks (
-                    link_id SERIAL PRIMARY KEY,
-                    user_id INTEGER NOT NULL,
-                    conversation_id INTEGER NOT NULL,
-                    entity1_type TEXT NOT NULL,
-                    entity1_id INT NOT NULL,
-                    entity2_type TEXT NOT NULL,
-                    entity2_id INT NOT NULL,
-                    link_type TEXT,
-                    link_level INT DEFAULT 0,
-                    link_history JSONB,
-                    dynamics JSONB,
-                    experienced_crossroads JSONB,
-                    experienced_rituals JSONB,
-                    relationship_stage TEXT,
-                    group_interaction TEXT,
-                    UNIQUE (user_id, conversation_id, entity1_type, entity1_id, entity2_type, entity2_id),
-                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-                    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
-                );
-                ''',
-                '''
-                CREATE TABLE IF NOT EXISTS PlayerPerks (
-                    perk_id SERIAL PRIMARY KEY,
-                    user_id INT NOT NULL,
-                    conversation_id INT NOT NULL,
-                    perk_name VARCHAR(100) NOT NULL,
-                    perk_description TEXT,
-                    perk_category VARCHAR(50) NOT NULL,
-                    perk_tier INT DEFAULT 1,
-                    perk_properties JSONB,
-                    date_acquired TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-                    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
-                );
-                ''',
-                '''
-                CREATE TABLE IF NOT EXISTS IntensityTiers (
-                    id SERIAL PRIMARY KEY,
-                    tier_name TEXT NOT NULL,
-                    range_min INT NOT NULL,
-                    range_max INT NOT NULL,
-                    description TEXT NOT NULL,
-                    key_features JSONB NOT NULL,
-                    activity_examples JSONB,
-                    permanent_effects JSONB,
-                    fantasy_level TEXT DEFAULT 'realistic'
-                        CHECK (fantasy_level IN ('realistic','fantastical','surreal'))
-                );
-                ''',
-                '''
-                CREATE TABLE IF NOT EXISTS Interactions (
-                    id SERIAL PRIMARY KEY,
-                    interaction_name TEXT UNIQUE NOT NULL,
-                    detailed_rules JSONB NOT NULL,
-                    task_examples JSONB,
-                    agency_overrides JSONB,
-                    fantasy_level TEXT DEFAULT 'realistic'
-                        CHECK (fantasy_level IN ('realistic','fantastical','surreal'))
-                );
-                ''',
-                '''
-                CREATE TABLE IF NOT EXISTS PlotTriggers (
-                    id SERIAL PRIMARY KEY,
-                    trigger_name TEXT UNIQUE NOT NULL,
-                    stage_name TEXT,
-                    description TEXT,
-                    key_features JSONB,
-                    stat_dynamics JSONB,
-                    examples JSONB,
-                    triggers JSONB
-                );
-                ''',
-                # ---------- ENHANCED SYSTEMS ----------
-                '''
-                CREATE TABLE IF NOT EXISTS PlayerJournal (
-                    id SERIAL PRIMARY KEY,
-                    user_id INTEGER NOT NULL,
-                    conversation_id INTEGER NOT NULL,
-                    entry_type TEXT NOT NULL,
-                    entry_text TEXT NOT NULL,
-                    revelation_types TEXT,
-                    narrative_moment TEXT,
-                    fantasy_flag BOOLEAN DEFAULT FALSE,
-                    intensity_level INT CHECK (intensity_level BETWEEN 0 AND 4),
-                    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    entry_metadata JSONB DEFAULT '{}',
-                    importance FLOAT DEFAULT 0.5,
-                    access_count INTEGER DEFAULT 0,
-                    last_accessed TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    tags JSONB DEFAULT '[]',
-                    consolidated BOOLEAN DEFAULT FALSE,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-                    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
-                );
-                ''',
-                '''
-                CREATE INDEX IF NOT EXISTS player_journal_user_conversation_idx ON PlayerJournal(user_id, conversation_id);
-                ''',
-                '''
-                CREATE INDEX IF NOT EXISTS player_journal_importance_idx ON PlayerJournal(importance);
-                ''',
-                '''
-                CREATE INDEX IF NOT EXISTS player_journal_created_at_idx ON PlayerJournal(created_at);
-                ''',
-                '''
-                CREATE INDEX IF NOT EXISTS player_journal_entry_type_idx ON PlayerJournal(entry_type);
-                ''',
-                '''
-                CREATE TABLE IF NOT EXISTS NPCEvolution (
-                    id SERIAL PRIMARY KEY,
-                    user_id INTEGER NOT NULL,
-                    conversation_id INTEGER NOT NULL,
-                    npc_id INTEGER NOT NULL,
-                    mask_slippage_events JSONB,
-                    evolution_events JSONB,
-                    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-                    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
-                    FOREIGN KEY (npc_id) REFERENCES NPCStats(npc_id) ON DELETE CASCADE
-                );
-                ''',
-                '''
-                CREATE TABLE IF NOT EXISTS NPCRevelations (
-                    id SERIAL PRIMARY KEY,
-                    user_id INTEGER NOT NULL,
-                    conversation_id INTEGER NOT NULL,
-                    npc_id INTEGER NOT NULL,
-                    narrative_stage TEXT NOT NULL,
-                    revelation_text TEXT NOT NULL,
-                    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-                    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
-                    FOREIGN KEY (npc_id) REFERENCES NPCStats(npc_id) ON DELETE CASCADE
-                );
-                ''',
-                '''
-                CREATE TABLE IF NOT EXISTS StatsHistory (
-                    id SERIAL PRIMARY KEY,
-                    user_id INTEGER NOT NULL,
-                    conversation_id INTEGER NOT NULL,
-                    player_name TEXT NOT NULL,
-                    stat_name TEXT NOT NULL,
-                    old_value INTEGER NOT NULL,
-                    new_value INTEGER NOT NULL,
-                    cause TEXT,
-                    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-                    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
-                );
-                ''',
+                
+                # ======================================
+                # CANONICAL EVENT TRACKING
+                # ======================================
                 '''
                 CREATE TABLE IF NOT EXISTS CanonicalEvents (
                     id SERIAL PRIMARY KEY,
@@ -1072,308 +1608,78 @@ async def create_all_tables():
                 CREATE INDEX IF NOT EXISTS idx_canonical_events_tags
                 ON CanonicalEvents USING GIN (tags);
                 ''',
-                # ---------- TELEMETRY TABLE ----------
+                
+                # ======================================
+                # HISTORY AND TRACKING TABLES
+                # ======================================
                 '''
-                CREATE TABLE IF NOT EXISTS memory_telemetry (
-                    id SERIAL PRIMARY KEY,
-                    timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    operation TEXT NOT NULL,
-                    success BOOLEAN NOT NULL,
-                    duration FLOAT NOT NULL,
-                    data_size INTEGER,
-                    error TEXT,
-                    metadata JSONB
-                );
-                ''',
-                '''
-                CREATE INDEX IF NOT EXISTS idx_memory_telemetry_timestamp
-                ON memory_telemetry(timestamp);
-                ''',
-                '''
-                CREATE INDEX IF NOT EXISTS idx_memory_telemetry_operation
-                ON memory_telemetry(operation);
-                ''',
-                '''
-                CREATE INDEX IF NOT EXISTS idx_memory_telemetry_success
-                ON memory_telemetry(success);
-                ''',
-                # ---------- KINK DATA ----------
-                '''
-                CREATE TABLE IF NOT EXISTS UserKinkProfile (
-                    id SERIAL PRIMARY KEY,
-                    user_id INTEGER NOT NULL,
-                    kink_type TEXT NOT NULL,
-                    level INTEGER CHECK (level BETWEEN 0 AND 4) DEFAULT 0,
-                    discovery_source TEXT,
-                    first_discovered TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    frequency INTEGER DEFAULT 0,
-                    intensity_preference INTEGER CHECK (intensity_preference BETWEEN 0 AND 4) DEFAULT 0,
-                    trigger_context JSONB,
-                    confidence_score FLOAT DEFAULT 0.5,
-                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-                    UNIQUE (user_id, kink_type)
-                );
-                ''',
-                '''
-                CREATE TABLE IF NOT EXISTS KinkTeaseHistory (
+                CREATE TABLE IF NOT EXISTS ResourceHistoryLog (
                     id SERIAL PRIMARY KEY,
                     user_id INTEGER NOT NULL,
                     conversation_id INTEGER NOT NULL,
-                    kink_id INTEGER NOT NULL,
-                    tease_text TEXT NOT NULL,
-                    tease_type TEXT CHECK (tease_type IN ('narrative','meta_commentary','punishment')),
-                    narrative_context TEXT,
-                    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-                    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
-                    FOREIGN KEY (kink_id) REFERENCES UserKinkProfile(id) ON DELETE CASCADE
-                );
-                ''',
-                # ---------- IMAGE GENERATION TABLES ----------
-                '''
-                CREATE TABLE IF NOT EXISTS NPCVisualAttributes (
-                    id SERIAL PRIMARY KEY,
-                    npc_id INTEGER NOT NULL,
-                    user_id INTEGER NOT NULL,
-                    conversation_id INTEGER NOT NULL,
-                    hair_color TEXT,
-                    hair_style TEXT,
-                    eye_color TEXT,
-                    skin_tone TEXT,
-                    body_type TEXT,
-                    height TEXT,
-                    age_appearance TEXT,
-                    default_outfit TEXT,
-                    outfit_variations JSONB,
-                    makeup_style TEXT,
-                    accessories JSONB,
-                    expressions JSONB,
-                    poses JSONB,
-                    visual_seed TEXT,
-                    last_generated_image TEXT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (npc_id) REFERENCES NPCStats(npc_id) ON DELETE CASCADE,
-                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-                    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
-                );
-                ''',
-                '''
-                CREATE TABLE IF NOT EXISTS ImageFeedback (
-                    id SERIAL PRIMARY KEY,
-                    user_id INTEGER NOT NULL,
-                    conversation_id INTEGER NOT NULL,
-                    image_path TEXT NOT NULL,
-                    original_prompt TEXT NOT NULL,
-                    npc_names JSONB NOT NULL,
-                    rating INTEGER CHECK (rating BETWEEN 1 AND 5),
-                    feedback_text TEXT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-                    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
-                );
-                ''',
-                '''
-                CREATE TABLE IF NOT EXISTS CurrencySystem (
-                    id SERIAL PRIMARY KEY,
-                    user_id INTEGER NOT NULL,
-                    conversation_id INTEGER NOT NULL,
-                    currency_name TEXT NOT NULL,
-                    currency_plural TEXT NOT NULL,
-                    minor_currency_name TEXT,
-                    minor_currency_plural TEXT,
-                    exchange_rate INTEGER DEFAULT 100,
-                    currency_symbol TEXT,
-                    format_template TEXT DEFAULT '{{amount}} {{currency}}',
+                    player_name TEXT NOT NULL DEFAULT 'Chase',
+                    resource_type TEXT NOT NULL,
+                    old_value INTEGER NOT NULL,
+                    new_value INTEGER NOT NULL,
+                    amount_changed INTEGER NOT NULL,
+                    source TEXT NOT NULL,
                     description TEXT,
-                    setting_context TEXT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE (user_id, conversation_id)
-                );
-                ''',
-                '''
-                CREATE TABLE IF NOT EXISTS interaction_history (
-                    id SERIAL PRIMARY KEY,
-                    entity1_id VARCHAR(100) NOT NULL,
-                    entity2_id VARCHAR(100) NOT NULL,
-                    interaction_type VARCHAR(50) NOT NULL,
-                    outcome VARCHAR(50) NOT NULL,
-                    emotional_impact JSONB NOT NULL DEFAULT '{}',
-                    duration INTEGER NOT NULL DEFAULT 0,
-                    intensity FLOAT NOT NULL DEFAULT 0.5,
-                    relationship_changes JSONB NOT NULL DEFAULT '{}',
-                    user_id INTEGER NOT NULL,
-                    conversation_id INTEGER NOT NULL,
-                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-                    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
-                );
-                ''',
-                '''
-                CREATE INDEX IF NOT EXISTS idx_interaction_history_entities 
-                ON interaction_history(entity1_id, entity2_id, created_at);
-                ''',
-                '''
-                CREATE INDEX IF NOT EXISTS idx_interaction_history_user_conv
-                ON interaction_history(user_id, conversation_id, created_at);
-                ''',
-                '''
-                CREATE INDEX IF NOT EXISTS idx_interaction_history_lookup
-                ON interaction_history(user_id, conversation_id, entity1_id, entity2_id);
-                ''',
-                '''
-                COMMENT ON TABLE interaction_history IS 'Tracks interactions between entities (NPCs, users) for relationship management';
-                ''',
-                '''
-                CREATE TABLE IF NOT EXISTS strategy_reviews (
-                    id SERIAL PRIMARY KEY,
-                    strategy_id INTEGER NOT NULL,
-                    user_id INTEGER NOT NULL,
-                    reason TEXT NOT NULL,
-                    status VARCHAR(20) DEFAULT 'pending',
-                    reviewed_at TIMESTAMP,
-                    reviewer_notes TEXT,
-                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-                );
-                ''',
-                '''
-                CREATE INDEX IF NOT EXISTS idx_strategy_reviews_strategy
-                ON strategy_reviews(strategy_id);
-                ''',
-                '''
-                CREATE INDEX IF NOT EXISTS idx_strategy_reviews_user
-                ON strategy_reviews(user_id);
-                ''',
-                '''
-                CREATE INDEX IF NOT EXISTS idx_strategy_reviews_status
-                ON strategy_reviews(status);
-                ''',
-                '''
-                CREATE TABLE IF NOT EXISTS scenario_states (
-                    id SERIAL PRIMARY KEY,
-                    user_id INTEGER NOT NULL,
-                    conversation_id INTEGER NOT NULL,
-                    state_data JSONB NOT NULL,
-                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-                    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
-                );
-                ''',
-                '''
-                CREATE TABLE IF NOT EXISTS NPCGroups (
-                    group_id SERIAL PRIMARY KEY,
-                    user_id INTEGER NOT NULL,
-                    conversation_id INTEGER NOT NULL,
-                    group_name TEXT NOT NULL,
-                    group_data JSONB NOT NULL,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-                    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
-                    UNIQUE(user_id, conversation_id, group_name)
-                );
-                ''',
-                '''
-                CREATE INDEX IF NOT EXISTS idx_scenario_states_user_conv
-                ON scenario_states(user_id, conversation_id);
-                ''',
-                '''
-                CREATE INDEX IF NOT EXISTS idx_scenario_states_created
-                ON scenario_states(created_at DESC);
-                ''',
-                '''
-                CREATE TABLE IF NOT EXISTS performance_metrics (
-                    id SERIAL PRIMARY KEY,
-                    user_id INTEGER NOT NULL,
-                    conversation_id INTEGER NOT NULL,
-                    metrics JSONB NOT NULL,
-                    error_log JSONB,
-                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-                    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
-                );
-                ''',
-                '''
-                CREATE INDEX IF NOT EXISTS idx_performance_metrics_latest
-                ON performance_metrics(user_id, conversation_id, created_at DESC);
-                ''',
-                '''
-                CREATE TABLE IF NOT EXISTS learning_metrics (
-                    id SERIAL PRIMARY KEY,
-                    user_id INTEGER NOT NULL,
-                    conversation_id INTEGER NOT NULL,
-                    metrics JSONB NOT NULL,
-                    learned_patterns JSONB,
-                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-                    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
-                );
-                ''',
-                '''
-                CREATE INDEX IF NOT EXISTS idx_learning_metrics_latest
-                ON learning_metrics(user_id, conversation_id, created_at DESC);
-                ''',
-                '''
-                CREATE TABLE IF NOT EXISTS NPCVisualEvolution (
-                    id SERIAL PRIMARY KEY,
-                    npc_id INTEGER NOT NULL,
-                    user_id INTEGER NOT NULL,
-                    conversation_id INTEGER NOT NULL,
-                    event_type TEXT CHECK (event_type IN ('outfit_change','appearance_change','location_change','mood_change')),
-                    event_description TEXT,
-                    previous_state JSONB,
-                    current_state JSONB,
-                    scene_context TEXT,
-                    image_generated TEXT,
                     timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (npc_id) REFERENCES NPCStats(npc_id) ON DELETE CASCADE,
                     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
                     FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
                 );
                 ''',
                 '''
-                CREATE OR REPLACE VIEW UserVisualPreferences AS
-                SELECT
-                    user_id,
-                    npc_name,
-                    AVG(rating) as avg_rating,
-                    COUNT(*) as feedback_count
-                FROM
-                    ImageFeedback,
-                    jsonb_array_elements_text(npc_names) as npc_name
-                WHERE
-                    rating >= 4
-                GROUP BY
-                    user_id, npc_name;
-                ''',
-                # ---------- ADDITIONAL NPCMemory ASSOCIATIONS ----------
-                '''
-                CREATE TABLE IF NOT EXISTS NPCMemoryAssociations (
+                CREATE TABLE IF NOT EXISTS StatsHistory (
                     id SERIAL PRIMARY KEY,
-                    memory_id INT NOT NULL,
-                    associated_memory_id INT NOT NULL,
-                    association_strength FLOAT DEFAULT 0.0,
-                    association_type TEXT,
-                    FOREIGN KEY (memory_id) REFERENCES NPCMemories(id) ON DELETE CASCADE,
-                    FOREIGN KEY (associated_memory_id) REFERENCES NPCMemories(id) ON DELETE CASCADE
-                );
-                ''',
-                '''
-                CREATE TABLE IF NOT EXISTS NPCAgentState (
-                    npc_id INT NOT NULL,
-                    user_id INT NOT NULL,
-                    conversation_id INT NOT NULL,
-                    current_state JSONB,
-                    last_decision JSONB,
-                    last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    PRIMARY KEY (npc_id, user_id, conversation_id),
-                    FOREIGN KEY (npc_id) REFERENCES NPCStats(npc_id) ON DELETE CASCADE,
+                    user_id INTEGER NOT NULL,
+                    conversation_id INTEGER NOT NULL,
+                    player_name TEXT NOT NULL,
+                    stat_name TEXT NOT NULL,
+                    old_value INTEGER NOT NULL,
+                    new_value INTEGER NOT NULL,
+                    cause TEXT,
+                    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
                     FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
                 );
                 ''',
-                # ---------- "NyxMemories" LEGACY TABLE (OPTIONAL) ----------
+                
+                # ======================================
+                # NYX AGENT SYSTEM TABLES
+                # ======================================
+                '''
+                CREATE TABLE IF NOT EXISTS nyx_brain_checkpoints (
+                    id BIGSERIAL PRIMARY KEY,
+                    nyx_id TEXT NOT NULL,
+                    instance_id TEXT NOT NULL,
+                    checkpoint_time TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    event TEXT,
+                    serialized_state JSONB NOT NULL,
+                    merged_from TEXT[],
+                    notes TEXT,
+                    UNIQUE(nyx_id, instance_id, checkpoint_time)
+                );
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_nyx_brain_checkpoints_nyx_id_time 
+                ON nyx_brain_checkpoints(nyx_id, checkpoint_time DESC);
+                ''',
+                '''
+                CREATE TABLE IF NOT EXISTS nyx_brain_events (
+                    id BIGSERIAL PRIMARY KEY,
+                    nyx_id TEXT NOT NULL,
+                    instance_id TEXT NOT NULL,
+                    event_time TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    event_type TEXT NOT NULL,
+                    event_payload JSONB NOT NULL,
+                    UNIQUE(nyx_id, instance_id, event_time, event_type)
+                );
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_nyx_brain_events_nyx_id_time 
+                ON nyx_brain_events(nyx_id, event_time desc);
+                ''',
                 '''
                 CREATE TABLE IF NOT EXISTS NyxMemories (
                     id SERIAL PRIMARY KEY,
@@ -1391,7 +1697,6 @@ async def create_all_tables():
                     FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
                 );
                 ''',
-                # ---------- "NyxAgentState" FOR DM LOGIC ----------
                 '''
                 CREATE TABLE IF NOT EXISTS NyxAgentState (
                     user_id INT NOT NULL,
@@ -1406,53 +1711,23 @@ async def create_all_tables():
                 );
                 ''',
                 '''
-                CREATE TABLE IF NOT EXISTS PlayerReputation (
-                    user_id INT,
-                    npc_id INT,
-                    reputation_score FLOAT DEFAULT 0,
-                    PRIMARY KEY (user_id, npc_id)
+                CREATE TABLE IF NOT EXISTS NyxConversations (
+                    nyx_conv_id SERIAL PRIMARY KEY,
+                    user_id INTEGER NOT NULL,
+                    nyx_conversation_name VARCHAR(100) NOT NULL,
+                    status VARCHAR(20) NOT NULL DEFAULT 'processing',
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    folder_id INTEGER,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY (folder_id) REFERENCES folders(id) ON DELETE SET NULL
                 );
                 ''',
                 '''
-                CREATE TABLE IF NOT EXISTS ReflectionLogs (
+                CREATE TABLE IF NOT EXISTS nyx_dm_messages (
                     id SERIAL PRIMARY KEY,
-                    user_id INT NOT NULL,
-                    reflection_text TEXT NOT NULL,
-                    was_accurate BOOLEAN DEFAULT FALSE,
+                    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    message JSONB NOT NULL,
                     created_at TIMESTAMP DEFAULT NOW()
-                );
-                ''',
-                '''
-                CREATE TABLE IF NOT EXISTS AIReflectionSettings (
-                    id SERIAL PRIMARY KEY,
-                    temperature FLOAT DEFAULT 0.7,
-                    max_tokens INT DEFAULT 4000
-                );
-                ''',
-                '''
-                CREATE TABLE IF NOT EXISTS MemoryMaintenanceSchedule (
-                    user_id INTEGER NOT NULL,
-                    conversation_id INTEGER NOT NULL,
-                    entity_type TEXT NOT NULL,
-                    entity_id INTEGER NOT NULL,
-                    maintenance_schedule JSONB NOT NULL,
-                    next_maintenance_date TIMESTAMP NOT NULL,
-                    last_maintenance_date TIMESTAMP,
-                    PRIMARY KEY (user_id, conversation_id, entity_type, entity_id)
-                );
-                ''',
-                '''
-                CREATE TABLE IF NOT EXISTS RelationshipEvolution (
-                    user_id INTEGER NOT NULL,
-                    conversation_id INTEGER NOT NULL,
-                    npc1_id INTEGER NOT NULL,
-                    entity2_type TEXT NOT NULL,
-                    entity2_id INTEGER NOT NULL,
-                    relationship_type TEXT NOT NULL,
-                    current_stage TEXT NOT NULL,
-                    progress_to_next INTEGER NOT NULL DEFAULT 0,
-                    evolution_history JSONB NOT NULL DEFAULT '[]'::jsonb,
-                    PRIMARY KEY (user_id, conversation_id, npc1_id, entity2_type, entity2_id)
                 );
                 ''',
                 '''
@@ -1537,26 +1812,6 @@ async def create_all_tables():
                 ON NyxActionTracking(user_id, conversation_id, agent_type, agent_id);
                 ''',
                 '''
-                CREATE TABLE IF NOT EXISTS NyxConversations (
-                    nyx_conv_id SERIAL PRIMARY KEY,
-                    user_id INTEGER NOT NULL,
-                    nyx_conversation_name VARCHAR(100) NOT NULL,
-                    status VARCHAR(20) NOT NULL DEFAULT 'processing',
-                    created_at TIMESTAMP DEFAULT NOW(),
-                    folder_id INTEGER,
-                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-                    FOREIGN KEY (folder_id) REFERENCES folders(id) ON DELETE SET NULL
-                );
-                ''',
-                '''
-                CREATE TABLE IF NOT EXISTS nyx_dm_messages (
-                    id SERIAL PRIMARY KEY,
-                    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                    message JSONB NOT NULL,
-                    created_at TIMESTAMP DEFAULT NOW()
-                );
-                ''',
-                '''
                 CREATE TABLE IF NOT EXISTS NyxAgentCommunication (
                     id SERIAL PRIMARY KEY,
                     user_id INTEGER NOT NULL,
@@ -1629,7 +1884,7 @@ async def create_all_tables():
                 '''
                 CREATE TABLE IF NOT EXISTS nyx1_strategy_injections (
                     id SERIAL PRIMARY KEY,
-                    strategy_type TEXT NOT NULL, 
+                    strategy_type TEXT NOT NULL,
                     strategy_name TEXT NOT NULL,
                     payload JSONB NOT NULL,
                     status TEXT DEFAULT 'active',
@@ -1654,7 +1909,7 @@ async def create_all_tables():
                     id SERIAL PRIMARY KEY,
                     strategy_id INTEGER REFERENCES nyx1_strategy_injections(id) ON DELETE CASCADE,
                     user_id INTEGER NOT NULL,
-                    event_type TEXT, -- "triggered", "dismissed", "archived"
+                    event_type TEXT,
                     message_snippet TEXT,
                     kink_profile JSONB,
                     decision_meta JSONB,
@@ -1689,25 +1944,190 @@ async def create_all_tables():
                     CONSTRAINT agent_registry_unique UNIQUE (user_id, conversation_id, agent_type, agent_id)
                 );
                 ''',
+                
+                # ======================================
+                # MISC AND SUPPORTING TABLES
+                # ======================================
                 '''
-                CREATE TABLE IF NOT EXISTS PlayerSpecialRewards (
-                    reward_id SERIAL PRIMARY KEY,
+                CREATE TABLE IF NOT EXISTS CurrencySystem (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER NOT NULL,
+                    conversation_id INTEGER NOT NULL,
+                    currency_name TEXT NOT NULL,
+                    currency_plural TEXT NOT NULL,
+                    minor_currency_name TEXT,
+                    minor_currency_plural TEXT,
+                    exchange_rate INTEGER DEFAULT 100,
+                    currency_symbol TEXT,
+                    format_template TEXT DEFAULT '{{amount}} {{currency}}',
+                    description TEXT,
+                    setting_context TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE (user_id, conversation_id)
+                );
+                ''',
+                '''
+                CREATE TABLE IF NOT EXISTS PlayerReputation (
+                    user_id INT,
+                    npc_id INT,
+                    reputation_score FLOAT DEFAULT 0,
+                    PRIMARY KEY (user_id, npc_id)
+                );
+                ''',
+                '''
+                CREATE TABLE IF NOT EXISTS ReflectionLogs (
+                    id SERIAL PRIMARY KEY,
                     user_id INT NOT NULL,
-                    conversation_id INT NOT NULL,
-                    reward_name VARCHAR(100) NOT NULL,
-                    reward_description TEXT,
-                    reward_effect TEXT,
-                    reward_category VARCHAR(50) NOT NULL,
-                    reward_properties JSONB,
-                    used BOOLEAN DEFAULT FALSE,
-                    date_acquired TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    reflection_text TEXT NOT NULL,
+                    was_accurate BOOLEAN DEFAULT FALSE,
+                    created_at TIMESTAMP DEFAULT NOW()
+                );
+                ''',
+                '''
+                CREATE TABLE IF NOT EXISTS AIReflectionSettings (
+                    id SERIAL PRIMARY KEY,
+                    temperature FLOAT DEFAULT 0.7,
+                    max_tokens INT DEFAULT 4000
+                );
+                ''',
+                '''
+                CREATE TABLE IF NOT EXISTS strategy_reviews (
+                    id SERIAL PRIMARY KEY,
+                    strategy_id INTEGER NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    reason TEXT NOT NULL,
+                    status VARCHAR(20) DEFAULT 'pending',
+                    reviewed_at TIMESTAMP,
+                    reviewer_notes TEXT,
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+                );
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_strategy_reviews_strategy
+                ON strategy_reviews(strategy_id);
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_strategy_reviews_user
+                ON strategy_reviews(user_id);
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_strategy_reviews_status
+                ON strategy_reviews(status);
+                ''',
+                '''
+                CREATE TABLE IF NOT EXISTS scenario_states (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER NOT NULL,
+                    conversation_id INTEGER NOT NULL,
+                    state_data JSONB NOT NULL,
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
                     FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
                 );
                 ''',
-                "CREATE INDEX IF NOT EXISTS idx_player_inventory_user ON PlayerInventory(user_id, conversation_id);",
-                "CREATE INDEX IF NOT EXISTS idx_player_perks_user ON PlayerPerks(user_id, conversation_id);",
-                "CREATE INDEX IF NOT EXISTS idx_player_special_rewards_user ON PlayerSpecialRewards(user_id, conversation_id);",
+                '''
+                CREATE INDEX IF NOT EXISTS idx_scenario_states_user_conv
+                ON scenario_states(user_id, conversation_id);
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_scenario_states_created
+                ON scenario_states(created_at DESC);
+                ''',
+                '''
+                CREATE TABLE IF NOT EXISTS performance_metrics (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER NOT NULL,
+                    conversation_id INTEGER NOT NULL,
+                    metrics JSONB NOT NULL,
+                    error_log JSONB,
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+                );
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_performance_metrics_latest
+                ON performance_metrics(user_id, conversation_id, created_at DESC);
+                ''',
+                '''
+                CREATE TABLE IF NOT EXISTS learning_metrics (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER NOT NULL,
+                    conversation_id INTEGER NOT NULL,
+                    metrics JSONB NOT NULL,
+                    learned_patterns JSONB,
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+                );
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_learning_metrics_latest
+                ON learning_metrics(user_id, conversation_id, created_at DESC);
+                ''',
+                '''
+                CREATE TABLE IF NOT EXISTS ImageFeedback (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER NOT NULL,
+                    conversation_id INTEGER NOT NULL,
+                    image_path TEXT NOT NULL,
+                    original_prompt TEXT NOT NULL,
+                    npc_names JSONB NOT NULL,
+                    rating INTEGER CHECK (rating BETWEEN 1 AND 5),
+                    feedback_text TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+                );
+                ''',
+                '''
+                CREATE OR REPLACE VIEW UserVisualPreferences AS
+                SELECT
+                    user_id,
+                    npc_name,
+                    AVG(rating) as avg_rating,
+                    COUNT(*) as feedback_count
+                FROM
+                    ImageFeedback,
+                    jsonb_array_elements_text(npc_names) as npc_name
+                WHERE
+                    rating >= 4
+                GROUP BY
+                    user_id, npc_name;
+                ''',
+                '''
+                CREATE TABLE IF NOT EXISTS UserKinkProfile (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER NOT NULL,
+                    kink_type TEXT NOT NULL,
+                    level INTEGER CHECK (level BETWEEN 0 AND 4) DEFAULT 0,
+                    discovery_source TEXT,
+                    first_discovered TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    frequency INTEGER DEFAULT 0,
+                    intensity_preference INTEGER CHECK (intensity_preference BETWEEN 0 AND 4) DEFAULT 0,
+                    trigger_context JSONB,
+                    confidence_score FLOAT DEFAULT 0.5,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    UNIQUE (user_id, kink_type)
+                );
+                ''',
+                '''
+                CREATE TABLE IF NOT EXISTS KinkTeaseHistory (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER NOT NULL,
+                    conversation_id INTEGER NOT NULL,
+                    kink_id INTEGER NOT NULL,
+                    tease_text TEXT NOT NULL,
+                    tease_type TEXT CHECK (tease_type IN ('narrative','meta_commentary','punishment')),
+                    narrative_context TEXT,
+                    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
+                    FOREIGN KEY (kink_id) REFERENCES UserKinkProfile(id) ON DELETE CASCADE
+                );
+                ''',
                 '''
                 CREATE TABLE IF NOT EXISTS ContextEvolution (
                     evolution_id SERIAL PRIMARY KEY,
@@ -1722,61 +2142,14 @@ async def create_all_tables():
                 );
                 ''',
                 '''
-                CREATE EXTENSION IF NOT EXISTS vector;
+                CREATE INDEX IF NOT EXISTS idx_context_evolution_user_conversation
+                ON ContextEvolution(user_id, conversation_id);
                 ''',
                 '''
-                ALTER TABLE Events
-                ADD COLUMN embedding vector(1536);
+                CREATE INDEX IF NOT EXISTS idx_context_evolution_timestamp
+                ON ContextEvolution(timestamp);
                 ''',
                 '''
-                ALTER TABLE Locations
-                ADD COLUMN embedding vector(1536);
-                ''',
-                '''
-                ALTER TABLE Locations
-                ADD COLUMN location_type TEXT;
-                ''',
-                '''
-                ALTER TABLE Locations 
-                ADD COLUMN parent_location TEXT;
-                ''',
-                '''                      
-                ALTER TABLE Locations 
-                ADD COLUMN cultural_significance TEXT DEFAULT 'moderate';
-                ''',
-                '''         
-                ALTER TABLE Locations 
-                ADD COLUMN economic_importance TEXT DEFAULT 'moderate';
-                ''',
-                '''         
-                ALTER TABLE Locations 
-                ADD COLUMN strategic_value INTEGER DEFAULT 5;
-                ''',
-                '''         
-                ALTER TABLE Locations 
-                ADD COLUMN population_density TEXT DEFAULT 'moderate';
-                ''',
-                '''         
-                ALTER TABLE Locations 
-                ADD COLUMN notable_features TEXT[] DEFAULT '{}';
-                ''',
-                '''         
-                ALTER TABLE Locations 
-                ADD COLUMN hidden_aspects TEXT[] DEFAULT '{}';
-                ''',
-                '''         
-                ALTER TABLE Locations 
-                ADD COLUMN access_restrictions TEXT[] DEFAULT '{}';
-                ''',
-                '''         
-                ALTER TABLE Locations 
-                ADD COLUMN local_customs TEXT[] DEFAULT '{}';
-                ''',
-                '''         
-                CREATE INDEX IF NOT EXISTS idx_events_embedding_hnsw
-                ON Events USING hnsw (embedding vector_cosine_ops);
-                ''',
-                '''                
                 CREATE TABLE IF NOT EXISTS MemoryContextEvolution (
                     memory_id INTEGER NOT NULL,
                     evolution_id INTEGER NOT NULL,
@@ -1786,42 +2159,6 @@ async def create_all_tables():
                     FOREIGN KEY (memory_id) REFERENCES unified_memories(id),
                     FOREIGN KEY (evolution_id) REFERENCES ContextEvolution(evolution_id)
                 );
-                ''',
-                # Alter Memory table to add missing columns if needed
-                '''
-                DO $$
-                BEGIN
-                    IF NOT EXISTS (
-                        SELECT 1
-                        FROM information_schema.columns
-                        WHERE table_name = 'unified_memories'
-                        AND column_name = 'relevance_score'
-                    ) THEN
-                        ALTER TABLE unified_memories ADD COLUMN relevance_score FLOAT DEFAULT 0.0;
-                    END IF;
-                END $$;
-                ''',
-                '''
-                DO $$
-                BEGIN
-                    IF NOT EXISTS (
-                        SELECT 1
-                        FROM information_schema.columns
-                        WHERE table_name = 'unified_memories'
-                        AND column_name = 'last_context_update'
-                    ) THEN
-                        ALTER TABLE unified_memories ADD COLUMN last_context_update TIMESTAMP;
-                    END IF;
-                END $$;
-                ''',
-                # Corrected final block of CREATE INDEX statements
-                '''
-                CREATE INDEX IF NOT EXISTS idx_context_evolution_user_conversation
-                ON ContextEvolution(user_id, conversation_id);
-                ''',
-                '''
-                CREATE INDEX IF NOT EXISTS idx_context_evolution_timestamp
-                ON ContextEvolution(timestamp);
                 ''',
                 '''
                 CREATE INDEX IF NOT EXISTS idx_memory_context_evolution_memory
@@ -1839,26 +2176,24 @@ async def create_all_tables():
                 CREATE INDEX IF NOT EXISTS idx_memory_last_context_update
                 ON unified_memories(last_context_update);
                 '''
-            ] # End of sql_commands list
+            ]  # End of sql_commands list
 
             # Execute commands sequentially
             logger.info(f"Found {len(sql_commands)} SQL commands for schema creation.")
             for i, command in enumerate(sql_commands):
                 # Clean up potential leading/trailing whitespace from multi-line strings
                 cleaned_command = command.strip()
-                if not cleaned_command: # Skip empty strings if any accidentally got in
+                if not cleaned_command:  # Skip empty strings if any accidentally got in
                     logger.warning(f"Skipping empty command at index {i}.")
                     continue
                 try:
                     logger.debug(f"Executing schema command {i+1}/{len(sql_commands)}...")
-                    # Optional: Log part of the command for easier debugging
-                    # logger.debug(f"SQL: {cleaned_command[:150]}...")
                     await conn.execute(cleaned_command)
                 except asyncpg.PostgresError as e:
                     logger.error(f"Error executing command {i+1}: {cleaned_command[:100]}... \nError: {e}", exc_info=True)
-                    # Option 2: Log and continue is generally better for IF NOT EXISTS
+                    # Log and continue is generally better for IF NOT EXISTS
                     logger.warning(f"Continuing schema creation despite error on command {i+1}.")
-                except Exception as e_generic: # Catch other potential errors like syntax issues
+                except Exception as e_generic:  # Catch other potential errors like syntax issues
                     logger.error(f"Non-DB error executing command {i+1}: {cleaned_command[:100]}... \nError: {e_generic}", exc_info=True)
                     logger.warning(f"Continuing schema creation despite non-DB error on command {i+1}.")
 
@@ -1870,12 +2205,12 @@ async def create_all_tables():
     # Catch errors related to connection acquisition or timeout
     except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as e:
         logger.critical(f"Failed to acquire connection or timed out during table creation: {e}", exc_info=True)
-        raise # Re-raise the exception to indicate failure
+        raise  # Re-raise the exception to indicate failure
     except Exception as e:
         logger.critical(f"An unexpected error occurred outside the connection block during table creation: {e}", exc_info=True)
         raise
 
-# --- Seeding and Initialization Functions (Look correct from previous review) ---
+# --- Seeding and Initialization Functions ---
 
 async def seed_initial_vitals():
     """Asynchronously seed initial player vitals using asyncpg."""
@@ -1916,12 +2251,10 @@ async def seed_initial_vitals():
     except Exception as e:
         logger.error(f"Unexpected error seeding vitals: {e}", exc_info=True)
 
-
 async def initialize_conflict_system():
     """Asynchronously initialize the conflict system by seeding initial data."""
-    await seed_initial_vitals() # Call the async version
+    await seed_initial_vitals()  # Call the async version
     logger.info("Conflict system initialized (vitals seeded).")
-
 
 async def seed_initial_data():
     """
@@ -1932,7 +2265,6 @@ async def seed_initial_data():
     from routes.settings_routes import insert_missing_settings
     try:
         # Assuming these functions are defined elsewhere and are async
-        # Make sure insert_or_update_game_rules etc. are actually async!
         await insert_or_update_game_rules()
         await insert_stat_definitions()
         await insert_missing_settings(is_initial_setup=True)
@@ -1941,14 +2273,10 @@ async def seed_initial_data():
         await create_and_seed_intensity_tiers()
         await create_and_seed_plot_triggers()
         await create_and_seed_interactions()
-        # Note: insert_default_player_stats_chase was commented out previously,
-        # ensure its purpose and async nature if re-enabled.
-        # await insert_default_player_stats_chase()
         logger.info("All default data seeding tasks completed.")
     except Exception as e:
         logger.error(f"Error during initial data seeding: {e}", exc_info=True)
-        raise # Re-raise so initialize_all_data knows seeding failed
-
+        raise  # Re-raise so initialize_all_data knows seeding failed
 
 async def seed_initial_resources():
     """Asynchronously seed initial player resources using asyncpg."""
@@ -1986,7 +2314,6 @@ async def seed_initial_resources():
     except Exception as e:
         logger.error(f"Unexpected error seeding resources: {e}", exc_info=True)
 
-
 async def initialize_all_data():
     """
     Asynchronous convenience function to create tables + seed initial data.
@@ -2001,37 +2328,36 @@ async def initialize_all_data():
         await seed_initial_resources()
         # Conflict system init might have dependencies too
         await initialize_conflict_system()
-        logger.info("All initialization steps completed successfully!") # Changed log message
+        logger.info("All initialization steps completed successfully!")
     except Exception as e:
         # Catch error from any awaited step above
         logger.critical(f"Full database initialization failed during one of the steps: {e}", exc_info=True)
-        raise # Re-raise to signal failure to the caller (main)
-
+        raise  # Re-raise to signal failure to the caller (main)
 
 async def main():
     """Main async function to initialize pool and run setup."""
     # Setup logging BEFORE doing anything else
     logging.basicConfig(
         level=logging.INFO,
-        format='%(asctime)s - %(levelname)s - [%(name)s] - %(message)s' # Added logger name
+        format='%(asctime)s - %(levelname)s - [%(name)s] - %(message)s'
     )
-    logger.info("Application starting...") # Use the module logger
+    logger.info("Application starting...")
 
     pool_initialized = await initialize_connection_pool()
 
     if not pool_initialized:
         logger.critical("Database pool could not be initialized. Exiting.")
-        return # Exit if pool fails
+        return  # Exit if pool fails
 
     try:
         # Run the full initialization
         await initialize_all_data()
         await seed_nyx_memories_from_prompt(SYSTEM_PROMPT, PRIVATE_REFLECTION_INSTRUCTIONS)
-        logger.info("Application initialization successful.") # Success message if all went well
+        logger.info("Application initialization successful.")
         
     except Exception as e:
-         # initialize_all_data now re-raises, so main's try/except catches it
-         logger.error(f"An error occurred during application initialization in main: {e}", exc_info=True)
+        # initialize_all_data now re-raises, so main's try/except catches it
+        logger.error(f"An error occurred during application initialization in main: {e}", exc_info=True)
     finally:
         # Ensure pool is closed on exit or error
         logger.info("Closing database connection pool...")
@@ -2050,7 +2376,4 @@ if __name__ == "__main__":
         logger.info("Application interrupted by user. Shutting down.")
     except Exception as e:
         # Catch any unexpected errors during asyncio.run() itself
-        # Logger might not be fully configured if error happens very early
         print(f"CRITICAL: Unhandled exception during asyncio.run: {e}")
-        # Optionally re-log if logger might be available
-        # logger.critical(f"Critical error during application startup or shutdown: {e}", exc_info=True)
