@@ -1416,8 +1416,8 @@ class NewGameAgent:
         action_description="Processed complete new game creation workflow"
     )
     async def process_new_game(self, ctx, conversation_data: Dict[str, Any]) -> ProcessNewGameResult:
-        # Extract user_id from context
-        user_id = ctx.context.get("user_id")
+        # Extract user_id from context - ctx is a CanonicalContext with direct attributes
+        user_id = ctx.user_id  # Direct attribute access
         conversation_id = None
         
         try:
