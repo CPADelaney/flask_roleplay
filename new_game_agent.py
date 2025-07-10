@@ -850,12 +850,21 @@ class NewGameAgent:
             )
 
     @with_governance_permission(AgentType.UNIVERSAL_UPDATER, "spawn_npcs")
-    async def spawn_npcs(self, ctx: RunContextWrapper[GameContext], params: SpawnNPCsParams) -> List[str]:
+    async def spawn_npcs(self, ctx: RunContextWrapper[GameContext], params: SpawnNPCsParams) -> List[int]:
         """
         Spawn multiple NPCs for the game world.
         """
-        user_id = ctx.context["user_id"]
-        conversation_id = ctx.context["conversation_id"]
+        # Handle different context types
+        if hasattr(ctx, 'context') and isinstance(ctx.context, dict):
+            # RunContextWrapper style
+            user_id = ctx.context["user_id"]
+            conversation_id = ctx.context["conversation_id"]
+        elif hasattr(ctx, 'user_id') and hasattr(ctx, 'conversation_id'):
+            # Direct attribute style (CanonicalContext)
+            user_id = ctx.user_id
+            conversation_id = ctx.conversation_id
+        else:
+            raise ValueError("Invalid context object - missing user_id/conversation_id")
         
         # Create an instance of NPCCreationHandler
         npc_handler = NPCCreationHandler()
@@ -889,15 +898,16 @@ class NewGameAgent:
     async def create_chase_schedule(self, ctx: RunContextWrapper[GameContext], params: CreateChaseScheduleParams) -> str:
         """
         Create a schedule for the player "Chase".
-        
-        Args:
-            params: CreateChaseScheduleParams with environment_desc and day_names
-            
-        Returns:
-            JSON string with Chase's schedule
         """
-        user_id = ctx.context["user_id"]
-        conversation_id = ctx.context["conversation_id"]
+        # Handle different context types
+        if hasattr(ctx, 'context') and isinstance(ctx.context, dict):
+            user_id = ctx.context["user_id"]
+            conversation_id = ctx.context["conversation_id"]
+        elif hasattr(ctx, 'user_id') and hasattr(ctx, 'conversation_id'):
+            user_id = ctx.user_id
+            conversation_id = ctx.conversation_id
+        else:
+            raise ValueError("Invalid context object")
         
         # Create a basic schedule structure
         default_schedule = {}
@@ -981,8 +991,15 @@ class NewGameAgent:
         """
         Create NPCs and schedules for the game world using canonical functions.
         """
-        user_id = ctx.context["user_id"]
-        conversation_id = ctx.context["conversation_id"]
+        # Handle different context types
+        if hasattr(ctx, 'context') and isinstance(ctx.context, dict):
+            user_id = ctx.context["user_id"]
+            conversation_id = ctx.context["conversation_id"]
+        elif hasattr(ctx, 'user_id') and hasattr(ctx, 'conversation_id'):
+            user_id = ctx.user_id
+            conversation_id = ctx.conversation_id
+        else:
+            raise ValueError("Invalid context object")
         
         from lore.core import canon
         
