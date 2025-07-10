@@ -2308,16 +2308,12 @@ class NPCCreationHandler:
     async def spawn_multiple_npcs(self, ctx: RunContextWrapper, count=3) -> List[int]:
         """
         Spawn multiple NPCs for the game world.
-        
-        Args:
-            ctx: Context wrapper with user and conversation IDs
-            count: Number of NPCs to spawn
-            
-        Returns:
-            List of spawned NPC IDs
         """
         user_id = ctx.context.get("user_id")
         conversation_id = ctx.context.get("conversation_id")
+        
+        if not user_id or not conversation_id:
+            raise ValueError("Missing user_id or conversation_id in context")
         
         # Get environment description
         env_details = await self.get_environment_details(ctx)
@@ -2328,17 +2324,28 @@ class NPCCreationHandler:
         # Spawn NPCs one by one
         npc_ids = []
         for i in range(count):
-            # Generate a unique NPC
-            npc_data = await self.create_npc_with_context(
-                environment_desc=env_details["environment_desc"],
-                user_id=user_id,
-                conversation_id=conversation_id
-            )
-            
-            npc_ids.append(npc_data.npc_id)
+            try:
+                # Generate a unique NPC
+                npc_data = await self.create_npc_with_context(
+                    environment_desc=env_details["environment_desc"],
+                    user_id=user_id,
+                    conversation_id=conversation_id
+                )
+                
+                if npc_data and hasattr(npc_data, 'npc_id') and npc_data.npc_id is not None:
+                    npc_ids.append(npc_data.npc_id)
+                else:
+                    logger.error(f"Failed to create NPC {i+1}/{count}: Invalid result")
+                
+            except Exception as e:
+                logger.error(f"Error creating NPC {i+1}/{count}: {e}")
+                continue
             
             # Add a small delay to avoid rate limits
             await asyncio.sleep(0.5)
+        
+        if not npc_ids:
+            raise RuntimeError(f"Failed to create any NPCs out of {count} requested")
         
         return npc_ids
     
