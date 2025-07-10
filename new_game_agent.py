@@ -853,12 +853,6 @@ class NewGameAgent:
     async def spawn_npcs(self, ctx: RunContextWrapper[GameContext], params: SpawnNPCsParams) -> List[str]:
         """
         Spawn multiple NPCs for the game world.
-        
-        Args:
-            params: SpawnNPCsParams with environment_desc, day_names, and count
-            
-        Returns:
-            List of NPC IDs
         """
         user_id = ctx.context["user_id"]
         conversation_id = ctx.context["conversation_id"]
@@ -866,13 +860,16 @@ class NewGameAgent:
         # Create an instance of NPCCreationHandler
         npc_handler = NPCCreationHandler()
         
-        # Use the class method directly - ensure we await properly
-        # This MUST await all internal async operations to avoid race conditions
-        # Per fix #3: NPCCreationHandler.spawn_multiple_npcs must use:
-        #   npc_ids = await asyncio.gather(*coros)  # MUST await
-        #   await self._commit_all(npc_ids)         # transaction/flush
+        # Create a proper context for the handler
+        handler_ctx = RunContextWrapper(context={
+            "user_id": user_id,
+            "conversation_id": conversation_id,
+            "agent_instance": self
+        })
+        
+        # Use the class method directly with proper context
         npc_ids = await npc_handler.spawn_multiple_npcs(
-            ctx=ctx,
+            ctx=handler_ctx,  # Pass the proper context
             count=params.count
         )
         
