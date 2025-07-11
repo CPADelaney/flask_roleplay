@@ -176,6 +176,7 @@ class EmotionalMemoryManager:
             Emotional analysis of the text
         """
         try:
+            client = get_openai_client()  # Add this line
             context_text = f"\nContext: {context}" if context else ""
             
             prompt = f"""
