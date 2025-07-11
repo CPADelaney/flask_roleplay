@@ -731,6 +731,11 @@ class NPCAgentSystem:
                     "player_action": player_action
                 }
             )
+            approval = {
+                "approved": approval.get("approved", True),
+                "modified_context": approval.get("modified_action_details", {}).get("context", context),
+                "modified_npc_ids": approval.get("modified_action_details", {}).get("npc_ids", npc_ids)
+            }
             
             # Apply Nyx's modifications if any
             if approval.get("modified_context"):
