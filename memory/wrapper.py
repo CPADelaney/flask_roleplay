@@ -220,7 +220,7 @@ class MemorySystem:
         if not self.initialized:
             await self.initialize()
         
-        flashback_manager = FlashbackManager(self.user_id, self.conversation_id)
+        flashback_manager = FlashbackManager(ctx.context["user_id"], ctx.context["conversation_id"])
         return await flashback_manager.generate_flashback(
             entity_type="npc",
             entity_id=npc_id,
