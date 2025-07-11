@@ -103,12 +103,11 @@ async def find_or_create_npc(ctx, conn, npc_name: str, **kwargs) -> int:
         else:
             logger.info(f"LLM determined that proposal '{npc_name}' is NOT a duplicate. Proceeding with creation.")
 
-
     # --- Step 3: Commit - Create the new NPC if no duplicate was found ---
     # This part remains the same. It only runs if no duplicate is found.
     insert_query = """
         INSERT INTO NPCStats (user_id, conversation_id, npc_name, role, affiliations, embedding)
-        VALUES ($1, $2, $3, $4, $5, $6) RETURNING npc_id
+        VALUES ($1, $2, $3, $4, $5::jsonb, $6) RETURNING npc_id
     """
     # Create the embedding for the new entry
     embedding_text = f"{npc_name}"
@@ -116,18 +115,25 @@ async def find_or_create_npc(ctx, conn, npc_name: str, **kwargs) -> int:
         embedding_text += f", {role}"
     new_embedding = await generate_embedding(embedding_text)
 
+    # Convert affiliations to JSON string if it's a list
+    affiliations = kwargs.get("affiliations", [])
+    if isinstance(affiliations, list):
+        affiliations_json = json.dumps(affiliations)
+    else:
+        affiliations_json = affiliations
+
     npc_id = await conn.fetchval(
         insert_query,
         ctx.user_id,
         ctx.conversation_id,
         npc_name,
         role,
-        kwargs.get("affiliations", []),
+        affiliations_json,  # Pass as JSON string
         new_embedding
     )
     logger.info(f"Canonically created new, unique NPC '{npc_name}' with ID {npc_id}.")
     return npc_id
-
+    
 async def find_or_create_entity(
     ctx,
     conn,
