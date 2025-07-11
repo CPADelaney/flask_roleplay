@@ -627,20 +627,19 @@ async def report_action_to_nyx(
             return
             
         # Import here to avoid circular imports
-        from nyx.integrate import NyxNPCIntegrationManager
+        from nyx.integrate import remember_with_governance
         
-        nyx_manager = NyxNPCIntegrationManager(
-            ctx.context.user_id, 
-            ctx.context.conversation_id
+        # Report the action through governance memory system
+        await remember_with_governance(
+            user_id=ctx.context.user_id,
+            conversation_id=ctx.context.conversation_id,
+            entity_type="nyx",
+            entity_id=0,
+            memory_text=f"NPC {ctx.context.npc_id} performed action: {action.type} - {action.description}",
+            importance="medium",
+            emotional=False,
+            tags=["npc_action", f"npc_{ctx.context.npc_id}", action.type]
         )
-        
-        # Report the action
-        await nyx_manager.process_npc_action_report({
-            "npc_id": ctx.context.npc_id,
-            "action": action.model_dump(),
-            "result": result.model_dump(),
-            "timestamp": datetime.now().isoformat()
-        })
         
         logger.debug(f"Reported action of NPC {ctx.context.npc_id} to Nyx: {action.type}")
     except Exception as e:
