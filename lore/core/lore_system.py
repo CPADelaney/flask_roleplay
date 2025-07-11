@@ -98,6 +98,12 @@ class LoreSystem:
                         return {"status": "conflict_generated", "details": conflicts}
 
                     # Step 3b: No conflict, commit the change
+                    # Add type conversion for known boolean columns
+                    boolean_columns = ['introduced', 'is_active', 'is_consolidated', 'is_archived']
+                    for col in boolean_columns:
+                        if col in updates:
+                            updates[col] = bool(updates[col])
+                    
                     set_clauses = [f"{key} = ${i+1}" for i, key in enumerate(updates.keys())]
                     set_sql = ", ".join(set_clauses)
                     # The entity identifier values come after the update values
