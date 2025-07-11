@@ -112,7 +112,11 @@ def load_config(config_path: Optional[str] = None) -> Dict[str, Any]:
     # Create convenience shortcuts for commonly used sections
     global DB_CONFIG, EMBEDDING_CONFIG, MEMORY_CONFIG, OPENAI_CONFIG
     DB_CONFIG = config["database"]
-    EMBEDDING_CONFIG = config["embedding"]
+    EMBEDDING_CONFIG = {
+        "model": "text-embedding-ada-002",  # Force OpenAI
+        "batch_size": 5,
+        "fallback_model": "all-MiniLM-L6-v2"
+    }
     MEMORY_CONFIG = config["memory"]
     OPENAI_CONFIG = config["openai"]
     
