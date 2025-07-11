@@ -507,15 +507,28 @@ class NPCAgentCoordinator:
         """Get Nyx's approval for a group interaction."""
         try:
             # Import here to avoid circular imports
-            from nyx.integrate import NyxNPCIntegrationManager
+            from nyx.integrate import get_central_governance
             
-            nyx_manager = NyxNPCIntegrationManager(self.user_id, self.conversation_id)
+            governance = await get_central_governance(self.user_id, self.conversation_id)
             
-            approval_result = await nyx_manager.approve_group_interaction({
-                "npc_ids": npc_ids,
-                "context": context,
-                "requested_at": datetime.now().isoformat()
-            })
+            # Check permission for group interaction
+            approval = await governance.check_action_permission(
+                agent_type="npc_system", 
+                agent_id="group_coordinator",
+                action_type="group_interaction",
+                action_details={
+                    "npc_ids": npc_ids,
+                    "context": context,
+                    "requested_at": datetime.now().isoformat()
+                }
+            )
+            
+            # Transform to expected format
+            approval_result = {
+                "approved": approval.get("approved", True),
+                "reason": approval.get("reasoning", ""),
+                "modified_context": approval.get("modified_action_details", {}).get("context")
+            }
             
             return approval_result
         except Exception as e:
