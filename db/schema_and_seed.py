@@ -2120,6 +2120,23 @@ async def create_all_tables():
                 );
                 ''',
                 '''
+                CREATE TABLE IF NOT EXISTS NPCMasks (
+                    user_id INTEGER NOT NULL,
+                    conversation_id INTEGER NOT NULL,
+                    npc_id INTEGER NOT NULL,
+                    mask_data JSONB NOT NULL,
+                    last_updated TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (user_id, conversation_id, npc_id),
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
+                    FOREIGN KEY (npc_id) REFERENCES NPCStats(npc_id) ON DELETE CASCADE
+                );
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_npc_masks_lookup 
+                ON NPCMasks(user_id, conversation_id, npc_id);
+                ''',
+                '''
                 CREATE TABLE IF NOT EXISTS KinkTeaseHistory (
                     id SERIAL PRIMARY KEY,
                     user_id INTEGER NOT NULL,
