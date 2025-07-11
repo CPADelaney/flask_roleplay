@@ -255,17 +255,23 @@ class OpenAIEmbedding(EmbeddingProvider):
 class FallbackEmbedding(EmbeddingProvider):
     def __init__(self):
         self.providers = []
-        try:
-            self.providers.append(SentenceTransformerEmbedding())
-            logger.info("Using SentenceTransformers for embeddings")
-        except (ImportError, Exception) as e:
-            logger.warning(f"SentenceTransformers unavailable: {e}")
-
-        try:
-            self.providers.append(OpenAIEmbedding())
-            logger.info("Added OpenAI fallback for embeddings")
-        except Exception as e:
-            logger.warning(f"OpenAI embedding unavailable: {e}")
+        
+        # Check if we should use OpenAI first based on config
+        if EMBEDDING_MODEL == "text-embedding-ada-002" or os.getenv("FORCE_OPENAI_EMBEDDINGS"):
+            try:
+                self.providers.append(OpenAIEmbedding())
+                logger.info("Using OpenAI for embeddings (1536 dimensions)")
+            except Exception as e:
+                logger.warning(f"OpenAI embedding unavailable: {e}")
+        
+        # Only fall back to SentenceTransformers if OpenAI isn't available
+        if not self.providers:
+            try:
+                self.providers.append(SentenceTransformerEmbedding())
+                logger.info("Using SentenceTransformers for embeddings (384 dimensions)")
+                logger.warning("WARNING: Dimension mismatch - database expects 1536!")
+            except (ImportError, Exception) as e:
+                logger.warning(f"SentenceTransformers unavailable: {e}")
 
         if not self.providers:
             logger.error("No embedding providers available! Using zero vectors.")
