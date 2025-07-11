@@ -76,10 +76,11 @@ async def generate_calendar_names(environment_desc, conversation_id):
         "Ensure names are creative and unique, and are rooted in the universe and history of the setting. "
         "Your response should be in JSON format with exactly the following keys:\n"
         "  - \"year_name\": a creative name for the overall year (e.g., 'The Age of Ember', 'The Silver Cycle'),\n"
-        "  - \"months\": an array of 12 creative and unique month names,\n"
-        "  - \"days\": an array of 7 creative and unique day names for the week.\n\n"
+        "  - \"months\": an array of exactly 12 creative and unique month names,\n"
+        "  - \"days\": an array of exactly 7 creative and unique day names for the week.\n\n"
+        "IMPORTANT: Ensure your JSON is valid - all array elements must be separated by commas.\n"
         "Environment description: " + environment_desc + "\n\n"
-        "Return only the JSON object with no additional explanation."
+        "Return only the JSON object with no additional explanation or markdown formatting."
     )
     
     logging.info("Calling GPT for calendar names with prompt:\n%s", prompt)
@@ -90,7 +91,8 @@ async def generate_calendar_names(environment_desc, conversation_id):
     calendar_names = {}
     try:
         response_text = gpt_response.get("response", "").strip()
-        # Remove markdown code fences if present.
+        
+        # Remove markdown code fences if present
         if response_text.startswith("```"):
             lines = response_text.splitlines()
             if lines and lines[0].startswith("```"):
@@ -98,17 +100,62 @@ async def generate_calendar_names(environment_desc, conversation_id):
             if lines and lines[-1].startswith("```"):
                 lines = lines[:-1]
             response_text = "\n".join(lines).strip()
+        
+        # Fix common JSON issues
+        response_text = fix_common_json_issues(response_text)
+        
         calendar_names = json.loads(response_text)
+        
+        # Validate the structure
+        if not isinstance(calendar_names.get("months"), list) or len(calendar_names["months"]) != 12:
+            raise ValueError("Invalid months array - must have exactly 12 months")
+        if not isinstance(calendar_names.get("days"), list) or len(calendar_names["days"]) != 7:
+            raise ValueError("Invalid days array - must have exactly 7 days")
+        if not calendar_names.get("year_name"):
+            raise ValueError("Missing year_name")
+            
     except Exception as e:
         logging.error("Failed to parse calendar names JSON: %s", e, exc_info=True)
-        # Fallback to a default naming scheme if GPT fails.
+        logging.error("Raw response text: %s", response_text if 'response_text' in locals() else 'N/A')
+        
+        # Fallback to a default naming scheme if GPT fails
         calendar_names = {
             "year_name": "The Eternal Cycle",
-            "months": ["Aurora", "Blaze", "Crimson", "Dusk", "Ember", "Frost", "Gleam", "Haze", "Iris", "Jade", "Knell", "Lumen"],
+            "months": ["Aurora", "Blaze", "Crimson", "Dusk", "Ember", "Frost", 
+                      "Gleam", "Haze", "Iris", "Jade", "Knell", "Lumen"],
             "days": ["Sol", "Luna", "Terra", "Vesta", "Mercury", "Venus", "Mars"]
         }
     
     return calendar_names
+
+
+def fix_common_json_issues(json_str: str) -> str:
+    """
+    Fix common JSON formatting issues from LLM outputs.
+    """
+    import re
+    
+    # Fix missing commas between array elements
+    # Pattern: "element1"\n"element2" -> "element1",\n"element2"
+    json_str = re.sub(r'"\s*\n\s*"', '",\n"', json_str)
+    
+    # Fix missing commas between array elements on same line
+    # Pattern: "element1" "element2" -> "element1", "element2"
+    json_str = re.sub(r'"\s+"', '", "', json_str)
+    
+    # Fix trailing commas before closing brackets
+    json_str = re.sub(r',\s*\]', ']', json_str)
+    json_str = re.sub(r',\s*\}', '}', json_str)
+    
+    # Fix missing quotes around keys (simple cases)
+    # Pattern: key: "value" -> "key": "value"
+    json_str = re.sub(r'(\w+):\s*"', r'"\1": "', json_str)
+    
+    # Ensure arrays have proper formatting
+    # Fix cases like ["item1""item2"] -> ["item1","item2"]
+    json_str = re.sub(r'"\s*"', '", "', json_str)
+    
+    return json_str
 
 async def store_calendar_names(user_id: int, conversation_id: int, calendar_names: dict, conn: asyncpg.Connection):
     """
