@@ -1747,8 +1747,16 @@ class NPCCreationHandler:
         Create an NPC in the database using the canon system for consistency.
         """
         try:
-            user_id = ctx.context.get("user_id")
-            conversation_id = ctx.context.get("conversation_id")
+            # Fix: Access context attributes correctly
+            if hasattr(ctx, 'context') and isinstance(ctx.context, dict):
+                user_id = ctx.context.get("user_id")
+                conversation_id = ctx.context.get("conversation_id")
+            else:
+                user_id = getattr(ctx, 'user_id', None)
+                conversation_id = getattr(ctx, 'conversation_id', None)
+                
+            if not user_id or not conversation_id:
+                raise ValueError("Missing user_id or conversation_id in context")
             
             # Import canon system
             from lore.core import canon
@@ -1897,14 +1905,25 @@ class NPCCreationHandler:
                             ctx, conn, "Town Square"
                         )
             
+            # Create a proper canonical context
+            canon_ctx = type('CanonicalContext', (), {
+                'user_id': user_id,
+                'conversation_id': conversation_id
+            })()
+            
             # Use canon system to find or create the NPC
             async with get_db_connection_context() as conn:
                 # Create NPC canonically
                 npc_id = await canon.find_or_create_npc(
-                    ctx, conn, npc_name,
+                    canon_ctx, conn, npc_name,
                     role=archetype_summary,
                     affiliations=npc_data.get("affiliations", [])
                 )
+                
+                if not npc_id:
+                    raise ValueError(f"Failed to create NPC {npc_name} - no ID returned")
+                
+                logger.info(f"Created NPC {npc_name} with ID {npc_id}")
                 
                 # Now update the NPC with full details using canon system
                 updates = {
@@ -1934,7 +1953,7 @@ class NPCCreationHandler:
                 
                 # Update through canon system
                 await canon.update_entity_canonically(
-                    ctx, conn, "NPCStats", npc_id, updates,
+                    canon_ctx, conn, "NPCStats", npc_id, updates,
                     f"Fully initializing NPC {npc_name} with personality, stats, and background"
                 )
             
@@ -2055,8 +2074,8 @@ class NPCCreationHandler:
                 from nyx.integrate import NyxNPCIntegrationManager
                 
                 nyx_manager = NyxNPCIntegrationManager(
-                    user_id=ctx.context.get("user_id"),
-                    conversation_id=ctx.context.get("conversation_id")
+                    user_id=user_id,
+                    conversation_id=conversation_id
                 )
                 
                 # Notify Nyx about the new NPC
@@ -2079,8 +2098,8 @@ class NPCCreationHandler:
                 from nyx.memory_integration import JointMemoryGraph
                 
                 joint_memory = JointMemoryGraph(
-                    user_id=ctx.context.get("user_id"),
-                    conversation_id=ctx.context.get("conversation_id")
+                    user_id=user_id,
+                    conversation_id=conversation_id
                 )
                 
                 await joint_memory.add_joint_memory(
@@ -2106,9 +2125,9 @@ class NPCCreationHandler:
             return npc_details
             
         except Exception as e:
-            logging.error(f"Error creating NPC in database: {e}")
-            return {"error": f"Failed to create NPC: {str(e)}"}
-
+            logging.error(f"Error creating NPC in database: {e}", exc_info=True)
+            # Return error but don't crash
+            return {"error": f"Failed to create NPC: {str(e)}", "npc_id": None}
     
     # --- Main NPC creation method ---
     
@@ -2309,8 +2328,14 @@ class NPCCreationHandler:
         """
         Spawn multiple NPCs for the game world.
         """
-        user_id = ctx.context.get("user_id")
-        conversation_id = ctx.context.get("conversation_id")
+        # Fix: Handle context correctly
+        if hasattr(ctx, 'context') and isinstance(ctx.context, dict):
+            user_id = ctx.context.get("user_id")
+            conversation_id = ctx.context.get("conversation_id")
+        else:
+            # Fallback for other context types
+            user_id = getattr(ctx, 'user_id', None)
+            conversation_id = getattr(ctx, 'conversation_id', None)
         
         if not user_id or not conversation_id:
             raise ValueError("Missing user_id or conversation_id in context")
@@ -2325,20 +2350,24 @@ class NPCCreationHandler:
         npc_ids = []
         for i in range(count):
             try:
-                # Generate a unique NPC
-                npc_data = await self.create_npc_with_context(
+                # Create context with proper structure for create_npc_with_context
+                result = await self.create_npc_with_context(
                     environment_desc=env_details["environment_desc"],
                     user_id=user_id,
                     conversation_id=conversation_id
                 )
                 
-                if npc_data and hasattr(npc_data, 'npc_id') and npc_data.npc_id is not None:
-                    npc_ids.append(npc_data.npc_id)
+                # Fix: Check the result properly
+                if result and hasattr(result, 'npc_id') and result.npc_id is not None:
+                    npc_ids.append(result.npc_id)
+                    logger.info(f"Successfully created NPC {i+1}/{count} with ID {result.npc_id}")
                 else:
-                    logger.error(f"Failed to create NPC {i+1}/{count}: Invalid result")
-                
+                    logger.error(f"Failed to create NPC {i+1}/{count}: Invalid result - {result}")
+                    # Continue trying to create other NPCs instead of failing completely
+                    
             except Exception as e:
-                logger.error(f"Error creating NPC {i+1}/{count}: {e}")
+                logger.error(f"Error creating NPC {i+1}/{count}: {e}", exc_info=True)
+                # Continue with other NPCs
                 continue
             
             # Add a small delay to avoid rate limits
@@ -2347,6 +2376,7 @@ class NPCCreationHandler:
         if not npc_ids:
             raise RuntimeError(f"Failed to create any NPCs out of {count} requested")
         
+        logger.info(f"Successfully created {len(npc_ids)} out of {count} requested NPCs")
         return npc_ids
     
     # --- Memory system methods ---
