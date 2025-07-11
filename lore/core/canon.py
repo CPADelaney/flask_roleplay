@@ -1462,10 +1462,21 @@ async def update_entity_canonically(ctx, conn, entity_type: str, entity_id: int,
     
     lore_system = await LoreSystem.get_instance(ctx.user_id, ctx.conversation_id)
     
+    # Map entity types to their primary key columns
+    primary_key_map = {
+        "NPCStats": "npc_id",
+        "Locations": "id",
+        "Events": "id",
+        "Factions": "id",
+        # Add other mappings as needed
+    }
+    
+    primary_key = primary_key_map.get(entity_type, "id")
+    
     result = await lore_system.propose_and_enact_change(
         ctx,
         entity_type=entity_type,
-        entity_identifier={"id": entity_id},
+        entity_identifier={primary_key: entity_id},  # Use correct primary key
         updates=updates,
         reason=reason
     )
@@ -1678,8 +1689,23 @@ async def find_or_create_social_link(ctx, conn, **kwargs) -> int:
     """
     Find or create a social link between two entities.
     """
-    user_id = kwargs.get('user_id', ctx.user_id)
-    conversation_id = kwargs.get('conversation_id', ctx.conversation_id)
+    # Handle different context types
+    if hasattr(ctx, 'context') and isinstance(ctx.context, dict):
+        # RunContextWrapper style
+        user_id = kwargs.get('user_id', ctx.context.get('user_id'))
+        conversation_id = kwargs.get('conversation_id', ctx.context.get('conversation_id'))
+    elif hasattr(ctx, 'user_id') and hasattr(ctx, 'conversation_id'):
+        # Direct attribute style
+        user_id = kwargs.get('user_id', ctx.user_id)
+        conversation_id = kwargs.get('conversation_id', ctx.conversation_id)
+    else:
+        # Fallback to kwargs only
+        user_id = kwargs.get('user_id')
+        conversation_id = kwargs.get('conversation_id')
+    
+    if not user_id or not conversation_id:
+        raise ValueError("user_id and conversation_id are required")
+    
     entity1_type = kwargs['entity1_type']
     entity1_id = kwargs['entity1_id']
     entity2_type = kwargs['entity2_type']
