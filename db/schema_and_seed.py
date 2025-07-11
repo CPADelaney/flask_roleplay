@@ -344,6 +344,9 @@ async def create_all_tables():
                 );
                 ''',
                 '''
+                ALTER TABLE NPCStats ADD COLUMN IF NOT EXISTS role TEXT;
+                ''',             
+                '''
                 CREATE INDEX IF NOT EXISTS idx_npcstats_embedding_hnsw
                 ON NPCStats USING hnsw (embedding vector_cosine_ops);
                 ''',
