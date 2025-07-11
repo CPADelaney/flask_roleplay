@@ -716,14 +716,21 @@ class NPCAgentSystem:
         
         # Ask Nyx to approve or modify this group interaction
         try:
-            from nyx.integrate import NyxNPCIntegrationManager
-            nyx_manager = NyxNPCIntegrationManager(self.user_id, self.conversation_id)
+            from nyx.integrate import get_central_governance
             
-            approval = await nyx_manager.approve_group_interaction({
-                "npc_ids": npc_ids,
-                "context": context,
-                "player_action": player_action
-            })
+            governance = await get_central_governance(self.user_id, self.conversation_id)
+            
+            # Check permission for group interaction
+            approval = await governance.check_action_permission(
+                agent_type="npc_system",
+                agent_id="group_coordinator",
+                action_type="group_interaction",
+                action_details={
+                    "npc_ids": npc_ids,
+                    "context": context,
+                    "player_action": player_action
+                }
+            )
             
             # Apply Nyx's modifications if any
             if approval.get("modified_context"):
