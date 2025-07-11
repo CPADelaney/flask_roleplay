@@ -1902,7 +1902,7 @@ class NPCCreationHandler:
                 if not current_location:
                     async with get_db_connection_context() as conn:
                         current_location = await canon.find_or_create_location(
-                            ctx, conn, "Town Square"
+                            canon_ctx, conn, "Town Square"  # ← Use canon_ctx instead
                         )
             
             # Create a proper canonical context
