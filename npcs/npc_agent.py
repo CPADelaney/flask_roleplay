@@ -1256,21 +1256,18 @@ class NPCAgent:
         # Provide feedback to Nyx about directive completion
         try:
             # Report completion to Nyx
-            from nyx.integrate import NyxNPCIntegrationManager
+            from nyx.integrate import remember_with_governance
             
-            nyx_manager = NyxNPCIntegrationManager(
-                self.user_id, 
-                self.conversation_id
-            )
-            
-            await nyx_manager.report_directive_completion(
-                self.npc_id,
-                directive_data.get("id"),
-                {
-                    "action": action.model_dump(),
-                    "result": result.model_dump(),
-                    "timestamp": datetime.now().isoformat()
-                }
+            # Report directive completion through governance memory system
+            await remember_with_governance(
+                user_id=self.user_id,
+                conversation_id=self.conversation_id,
+                entity_type="nyx",
+                entity_id=0,
+                memory_text=f"NPC {self.npc_id} completed scene directive {directive_data.get('id', 'unknown')}",
+                importance="medium",
+                emotional=False,
+                tags=["directive_completion", f"npc_{self.npc_id}", "scene_directive"]
             )
         except Exception as e:
             logger.error(f"Error reporting directive completion: {e}")
