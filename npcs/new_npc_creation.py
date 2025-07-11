@@ -1761,6 +1761,12 @@ class NPCCreationHandler:
             # Import canon system
             from lore.core import canon
             
+            # Create a proper canonical context EARLY - moved to top
+            canon_ctx = type('CanonicalContext', (), {
+                'user_id': user_id,
+                'conversation_id': conversation_id
+            })()
+            
             # Get day names for scheduling
             day_names = await self.get_day_names(ctx)
             
@@ -1902,20 +1908,14 @@ class NPCCreationHandler:
                 if not current_location:
                     async with get_db_connection_context() as conn:
                         current_location = await canon.find_or_create_location(
-                            canon_ctx, conn, "Town Square"  # ← Use canon_ctx instead
+                            canon_ctx, conn, "Town Square"  # Using canon_ctx here
                         )
-            
-            # Create a proper canonical context
-            canon_ctx = type('CanonicalContext', (), {
-                'user_id': user_id,
-                'conversation_id': conversation_id
-            })()
             
             # Use canon system to find or create the NPC
             async with get_db_connection_context() as conn:
                 # Create NPC canonically
                 npc_id = await canon.find_or_create_npc(
-                    canon_ctx, conn, npc_name,
+                    canon_ctx, conn, npc_name,  # Using canon_ctx here
                     role=archetype_summary,
                     affiliations=npc_data.get("affiliations", [])
                 )
@@ -1953,7 +1953,7 @@ class NPCCreationHandler:
                 
                 # Update through canon system
                 await canon.update_entity_canonically(
-                    canon_ctx, conn, "NPCStats", npc_id, updates,
+                    canon_ctx, conn, "NPCStats", npc_id, updates,  # Using canon_ctx here
                     f"Fully initializing NPC {npc_name} with personality, stats, and background"
                 )
             
