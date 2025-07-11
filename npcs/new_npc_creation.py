@@ -2072,53 +2072,41 @@ class NPCCreationHandler:
                 "current_location": current_location
             }
     
-            # Inform Nyx about the new NPC canonically
+            # Inform Nyx about the new NPC canonically            
             try:
-                from nyx.integrate import NyxNPCIntegrationManager
+                from nyx.integrate import remember_with_governance, add_joint_memory_with_governance
                 
-                nyx_manager = NyxNPCIntegrationManager(
+                # Notify Nyx about the new NPC using the governance memory system
+                await remember_with_governance(
                     user_id=user_id,
-                    conversation_id=conversation_id
-                )
-                
-                # Notify Nyx about the new NPC
-                await nyx_manager.nyx_agent_sdk.memory_system.add_memory(
+                    conversation_id=conversation_id,
+                    entity_type="nyx",
+                    entity_id=0,
                     memory_text=f"A new NPC named {npc_name} has been created. {npc_name} is {physical_description[:100]}...",
-                    memory_type="observation",
-                    memory_scope="game",
-                    significance=7,
-                    tags=["npc_creation", f"npc_{npc_id}"],
-                    metadata={
-                        "npc_id": npc_id,
-                        "npc_name": npc_name,
-                        "archetype_summary": archetype_summary,
-                        "dominance": dominance,
-                        "cruelty": cruelty
-                    }
+                    importance="high",
+                    emotional=False,
+                    tags=["npc_creation", f"npc_{npc_id}"]
                 )
                 
-                # Create a memory in the joint memory graph
-                from nyx.memory_integration import JointMemoryGraph
-                
-                joint_memory = JointMemoryGraph(
+                # Create a joint memory for the NPC creation
+                await add_joint_memory_with_governance(
                     user_id=user_id,
-                    conversation_id=conversation_id
-                )
-                
-                await joint_memory.add_joint_memory(
+                    conversation_id=conversation_id,
                     memory_text=f"NPC {npc_name} has been created with {archetype_summary}",
                     source_type="system",
                     source_id=0,
                     shared_with=[
-                        {"type": "nyx", "id": 0},
-                        {"type": "npc", "id": npc_id}
+                        {"entity_type": "nyx", "entity_id": 0},
+                        {"entity_type": "npc", "entity_id": npc_id}
                     ],
                     significance=7,
                     tags=["npc_creation", "system_event"],
                     metadata={
                         "npc_id": npc_id,
                         "npc_name": npc_name,
-                        "archetype_summary": archetype_summary
+                        "archetype_summary": archetype_summary,
+                        "dominance": dominance,
+                        "cruelty": cruelty
                     }
                 )
             except Exception as e:
