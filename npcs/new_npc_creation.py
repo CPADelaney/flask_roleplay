@@ -1957,10 +1957,13 @@ class NPCCreationHandler:
                     f"Fully initializing NPC {npc_name} with personality, stats, and background"
                 )
             
-            # Assign canonical relationships
-            await self.assign_random_relationships_canonical(
-                user_id, conversation_id, npc_id, npc_name, archetype_objs
-            )
+            try:
+                # Assign canonical relationships
+                await self.assign_random_relationships_canonical(
+                    user_id, conversation_id, npc_id, npc_name, archetype_objs
+                )
+            except Exception as e:
+                logging.error(f"Error assigning relationships for NPC {npc_id}: {e}")
             
             # Initialize memory system
             try:
