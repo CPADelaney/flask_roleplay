@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Dict, Any, List, Optional, Tuple
 import asyncio
 import openai
+from logic.chatgpt_integration import get_openai_client, build_message_history, safe_json_loads
 
 from .connection import with_transaction, TransactionContext
 from .core import Memory, MemoryType, MemorySignificance, UnifiedMemoryManager
@@ -202,7 +203,7 @@ class EmotionalMemoryManager:
             Return only the JSON with no explanation.
             """
             
-            response = await openai.ChatCompletion.acreate(
+            response = await client.responses.create(
                 model="gpt-4.1-nano",
                 messages=[
                     {"role": "system", "content": "You analyze the emotional content of text."},
