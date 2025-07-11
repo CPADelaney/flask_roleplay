@@ -265,7 +265,7 @@ async def create_all_tables():
                     access_restrictions TEXT[] DEFAULT '{}',
                     local_customs TEXT[] DEFAULT '{}',
                     open_hours JSONB,
-                    embedding vector(1536),
+                    embedding vector(384),
                     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
                     FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
                 );
@@ -288,7 +288,7 @@ async def create_all_tables():
                     month INT DEFAULT 1,
                     day INT DEFAULT 1,
                     time_of_day TEXT DEFAULT 'Morning',
-                    embedding vector(1536),
+                    embedding vector(384),
                     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
                     FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
                 );
@@ -334,7 +334,7 @@ async def create_all_tables():
                     birthdate TEXT,
                     is_active BOOLEAN DEFAULT FALSE,
                     role TEXT,
-                    embedding vector(1536),
+                    embedding vector(384),
                     personality_patterns JSONB DEFAULT '[]'::jsonb,
                     trauma_triggers JSONB,
                     flashback_triggers JSONB,
@@ -351,7 +351,7 @@ async def create_all_tables():
                 ON NPCStats USING hnsw (embedding vector_cosine_ops);
                 ''',
                 '''
-                ALTER TABLE NPCStats ADD COLUMN IF NOT EXISTS embedding vector(1536);
+                ALTER TABLE NPCStats ADD COLUMN IF NOT EXISTS embedding vector(384);
                 ''',
                 '''
                 CREATE TABLE IF NOT EXISTS NPCGroups (
@@ -629,7 +629,7 @@ async def create_all_tables():
                     emotional_intensity INT DEFAULT 0,
                     times_recalled INT DEFAULT 0,
                     last_recalled TIMESTAMP,
-                    embedding VECTOR(1536),
+                    embedding VECTOR(384),
                     memory_type TEXT DEFAULT 'observation',
                     associated_entities JSONB DEFAULT '{}'::jsonb,
                     is_consolidated BOOLEAN NOT NULL DEFAULT FALSE,
@@ -670,7 +670,7 @@ async def create_all_tables():
                     significance INTEGER NOT NULL DEFAULT 3,
                     emotional_intensity INTEGER NOT NULL DEFAULT 0,
                     tags TEXT[] DEFAULT '{}',
-                    embedding VECTOR(1536),
+                    embedding VECTOR(384),
                     metadata JSONB,
                     timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     times_recalled INTEGER NOT NULL DEFAULT 0,
@@ -859,7 +859,7 @@ async def create_all_tables():
                     recruitment_methods TEXT[],
                     leadership_structure JSONB,
                     founding_story TEXT,
-                    embedding VECTOR(1536),
+                    embedding VECTOR(384),
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
                     FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
@@ -907,7 +907,7 @@ async def create_all_tables():
                     cultural_traits TEXT[],
                     notable_features TEXT,
                     neighboring_nations TEXT[],
-                    embedding vector(1536)
+                    embedding vector(384)
                 );
                 ''',
                 '''
@@ -936,7 +936,7 @@ async def create_all_tables():
                     public_opinion JSONB,
                     recent_developments TEXT[],
                     potential_resolution TEXT,
-                    embedding vector(1536)
+                    embedding vector(384)
                 );
                 ''',
                 '''
@@ -952,7 +952,7 @@ async def create_all_tables():
                     practiced_by TEXT[],
                     significance INTEGER DEFAULT 5,
                     historical_origin TEXT,
-                    embedding vector(1536)
+                    embedding vector(384)
                 );
                 ''',
                 '''
@@ -969,7 +969,7 @@ async def create_all_tables():
                     preparation TEXT,
                     cultural_significance TEXT,
                     adopted_by INTEGER[],
-                    embedding vector(1536)
+                    embedding vector(384)
                 );
                 ''',
                 '''
@@ -986,7 +986,7 @@ async def create_all_tables():
                     formality_level TEXT DEFAULT 'medium',
                     adopted_by INTEGER[],
                     adoption_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    embedding vector(1536)
+                    embedding vector(384)
                 );
                 ''',
                 '''
@@ -1020,7 +1020,7 @@ async def create_all_tables():
                     defensive_characteristics TEXT,
                     strategic_value INTEGER DEFAULT 5,
                     matriarchal_influence INTEGER DEFAULT 5,
-                    embedding vector(1536)
+                    embedding vector(384)
                 );
                 ''',
                 '''
@@ -1046,7 +1046,7 @@ async def create_all_tables():
                     diplomatic_stance TEXT,
                     internal_conflicts TEXT[],
                     power_centers JSONB,
-                    embedding vector(1536)
+                    embedding vector(384)
                 );
                 ''',
                 '''
@@ -1068,7 +1068,7 @@ async def create_all_tables():
                     duration_months INTEGER,
                     confidence_level FLOAT,
                     simulation_basis TEXT,
-                    embedding vector(1536)
+                    embedding vector(384)
                 );
                 ''',
                 '''
@@ -1090,7 +1090,7 @@ async def create_all_tables():
                     strategic_implications TEXT,
                     female_leaders_involved TEXT[],
                     gender_dynamics TEXT,
-                    embedding vector(1536)
+                    embedding vector(384)
                 );
                 ''',
                 '''
@@ -1110,7 +1110,7 @@ async def create_all_tables():
                     narrative_style TEXT DEFAULT 'folklore',
                     themes TEXT[],
                     matriarchal_elements TEXT[],
-                    embedding vector(1536)
+                    embedding vector(384)
                 );
                 ''',
                 '''
@@ -1132,7 +1132,7 @@ async def create_all_tables():
                     connected_myths TEXT[],
                     related_landmarks TEXT[],
                     narrative_category TEXT,
-                    embedding vector(1536)
+                    embedding vector(384)
                 );
                 ''',
                 '''
@@ -1154,7 +1154,7 @@ async def create_all_tables():
                     architectural_style TEXT,
                     symbolic_meaning TEXT,
                     matriarchal_significance TEXT DEFAULT 'moderate',
-                    embedding vector(1536)
+                    embedding vector(384)
                 );
                 ''',
                 '''
@@ -1178,7 +1178,7 @@ async def create_all_tables():
                     disputed_facts TEXT[],
                     commemorations TEXT[],
                     primary_sources TEXT[],
-                    embedding vector(1536),
+                    embedding vector(384),
                     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
                     FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
                 );
@@ -1210,7 +1210,7 @@ async def create_all_tables():
                     current_status TEXT DEFAULT 'active',
                     reputation INTEGER DEFAULT 50,
                     significance INTEGER DEFAULT 5,
-                    embedding vector(1536),
+                    embedding vector(384),
                     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
                     FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
                 );
@@ -1563,7 +1563,7 @@ async def create_all_tables():
                     progress_detail TEXT,
                     quest_giver TEXT,
                     reward TEXT,
-                    embedding vector(1536),
+                    embedding vector(384),
                     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
                     FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
                 );
@@ -1693,7 +1693,7 @@ async def create_all_tables():
                     conversation_id INTEGER NOT NULL,
                     memory_text TEXT NOT NULL,
                     timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    embedding VECTOR(1536),
+                    embedding VECTOR(384),
                     significance INT NOT NULL DEFAULT 3,
                     times_recalled INT NOT NULL DEFAULT 0,
                     last_recalled TIMESTAMP,
@@ -2186,67 +2186,67 @@ async def create_all_tables():
                 CREATE EXTENSION IF NOT EXISTS vector;
                 ''',
                 '''         
-                ALTER TABLE NPCStats ADD COLUMN IF NOT EXISTS embedding vector(1536);
+                ALTER TABLE NPCStats ADD COLUMN IF NOT EXISTS embedding vector(384);
                 ''',
                 '''
-                ALTER TABLE Locations ADD COLUMN IF NOT EXISTS embedding vector(1536);
+                ALTER TABLE Locations ADD COLUMN IF NOT EXISTS embedding vector(384);
                 ''',
                 '''
-                ALTER TABLE Events ADD COLUMN IF NOT EXISTS embedding vector(1536);
+                ALTER TABLE Events ADD COLUMN IF NOT EXISTS embedding vector(384);
                 ''',
                 '''
-                ALTER TABLE Factions ADD COLUMN IF NOT EXISTS embedding vector(1536);
+                ALTER TABLE Factions ADD COLUMN IF NOT EXISTS embedding vector(384);
                 ''',
                 '''
-                ALTER TABLE Nations ADD COLUMN IF NOT EXISTS embedding vector(1536);
+                ALTER TABLE Nations ADD COLUMN IF NOT EXISTS embedding vector(384);
                 ''',
                 '''
-                ALTER TABLE NationalConflicts ADD COLUMN IF NOT EXISTS embedding vector(1536);
+                ALTER TABLE NationalConflicts ADD COLUMN IF NOT EXISTS embedding vector(384);
                 ''',
                 '''
-                ALTER TABLE CulturalElements ADD COLUMN IF NOT EXISTS embedding vector(1536);
+                ALTER TABLE CulturalElements ADD COLUMN IF NOT EXISTS embedding vector(384);
                 ''',
                 '''
-                ALTER TABLE CulinaryTraditions ADD COLUMN IF NOT EXISTS embedding vector(1536);
+                ALTER TABLE CulinaryTraditions ADD COLUMN IF NOT EXISTS embedding vector(384);
                 ''',
                 '''
-                ALTER TABLE SocialCustoms ADD COLUMN IF NOT EXISTS embedding vector(1536);
+                ALTER TABLE SocialCustoms ADD COLUMN IF NOT EXISTS embedding vector(384);
                 ''',
                 '''
-                ALTER TABLE GeographicRegions ADD COLUMN IF NOT EXISTS embedding vector(1536);
+                ALTER TABLE GeographicRegions ADD COLUMN IF NOT EXISTS embedding vector(384);
                 ''',
                 '''
-                ALTER TABLE PoliticalEntities ADD COLUMN IF NOT EXISTS embedding vector(1536);
+                ALTER TABLE PoliticalEntities ADD COLUMN IF NOT EXISTS embedding vector(384);
                 ''',
                 '''
-                ALTER TABLE ConflictSimulations ADD COLUMN IF NOT EXISTS embedding vector(1536);
+                ALTER TABLE ConflictSimulations ADD COLUMN IF NOT EXISTS embedding vector(384);
                 ''',
                 '''
-                ALTER TABLE BorderDisputes ADD COLUMN IF NOT EXISTS embedding vector(1536);
+                ALTER TABLE BorderDisputes ADD COLUMN IF NOT EXISTS embedding vector(384);
                 ''',
                 '''
-                ALTER TABLE UrbanMyths ADD COLUMN IF NOT EXISTS embedding vector(1536);
+                ALTER TABLE UrbanMyths ADD COLUMN IF NOT EXISTS embedding vector(384);
                 ''',
                 '''
-                ALTER TABLE LocalHistories ADD COLUMN IF NOT EXISTS embedding vector(1536);
+                ALTER TABLE LocalHistories ADD COLUMN IF NOT EXISTS embedding vector(384);
                 ''',
                 '''
-                ALTER TABLE Landmarks ADD COLUMN IF NOT EXISTS embedding vector(1536);
+                ALTER TABLE Landmarks ADD COLUMN IF NOT EXISTS embedding vector(384);
                 ''',
                 '''
-                ALTER TABLE HistoricalEvents ADD COLUMN IF NOT EXISTS embedding vector(1536);
+                ALTER TABLE HistoricalEvents ADD COLUMN IF NOT EXISTS embedding vector(384);
                 ''',
                 '''
-                ALTER TABLE NotableFigures ADD COLUMN IF NOT EXISTS embedding vector(1536);
+                ALTER TABLE NotableFigures ADD COLUMN IF NOT EXISTS embedding vector(384);
                 ''',
                 '''
-                ALTER TABLE Quests ADD COLUMN IF NOT EXISTS embedding vector(1536);
+                ALTER TABLE Quests ADD COLUMN IF NOT EXISTS embedding vector(384);
                 ''',
                 '''
-                ALTER TABLE NPCMemories ADD COLUMN IF NOT EXISTS embedding vector(1536);
+                ALTER TABLE NPCMemories ADD COLUMN IF NOT EXISTS embedding vector(384);
                 ''',
                 '''
-                ALTER TABLE unified_memories ADD COLUMN IF NOT EXISTS embedding vector(1536);
+                ALTER TABLE unified_memories ADD COLUMN IF NOT EXISTS embedding vector(384);
                 ''',
                 '''                
                 CREATE INDEX IF NOT EXISTS idx_npcstats_embedding_hnsw ON NPCStats USING hnsw (embedding vector_cosine_ops);
