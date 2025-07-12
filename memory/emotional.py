@@ -310,7 +310,7 @@ class EmotionalMemoryManager:
                 model=model,
                 instructions="You are an emotion-analysis engine. Return ONLY the JSON object described—no extra text.",
                 input=prompt,
-                text_format=EmotionalAnalysis,   # <- auto-validation & parsing
+                text=EmotionalAnalysis,   # <- auto-validation & parsing
                 temperature=0.3,
                 max_tokens=250,
             )
