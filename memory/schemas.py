@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional, Tuple, Set
 import asyncio
 import openai
+from logic.chatgpt_integration import get_openai_client, build_message_history, safe_json_loads, get_chatgpt_response
 
 from .connection import TransactionContext, with_transaction
 from .core import Memory, MemoryType, MemorySignificance, UnifiedMemoryManager
