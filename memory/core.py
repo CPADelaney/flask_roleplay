@@ -510,7 +510,7 @@ class UnifiedMemoryManager:
         rows = await conn.fetch(
             """
             SELECT entity1_type, entity1_id, entity2_type, entity2_id, link_type, link_level
-            FROM SocialLinks  # <- Change from 'social_links' to 'SocialLinks'
+            FROM SocialLinks 
             WHERE user_id = $1 AND conversation_id = $2
             AND ((entity1_type = $3 AND entity1_id = $4) OR (entity2_type = $3 AND entity2_id = $4))
             AND link_level >= 30
@@ -524,10 +524,10 @@ class UnifiedMemoryManager:
                 target_type, target_id = (row['entity2_type'], row['entity2_id'])
             else:
                 target_type, target_id = (row['entity1_type'], row['entity1_id'])
-
+    
             if target_type == self.entity_type and target_id == self.entity_id:
                 continue
-
+    
             derived_text = f"Heard that {memory.text}"
             propagated_memory = Memory(
                 text=derived_text,
