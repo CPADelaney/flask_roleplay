@@ -121,7 +121,8 @@ class NyxUnifiedGovernor:
         self.agent_performance: Dict[str, Dict[str, Any]] = {}     # {agent_type: {agent_id: ...}}
         self.agent_learning: Dict[str, Dict[str, Any]] = {}        # {agent_type: {agent_id: ...}}
         self.coordination_history: List[Dict[str, Any]] = []
-
+        self.memory_integration = None  # <-- ADD THIS
+    
         # Learning state
         self.strategy_effectiveness: Dict[str, Any] = {}
         self.adaptation_patterns: Dict[str, Any] = {}
@@ -175,6 +176,12 @@ class NyxUnifiedGovernor:
     
         # Initialize other systems
         self.memory_system = await get_memory_nyx_bridge(self.user_id, self.conversation_id)
+        
+        # ADD THIS: Initialize memory integration
+        from memory.memory_integration import MemoryIntegration
+        self.memory_integration = MemoryIntegration(self.user_id, self.conversation_id)
+        await self.memory_integration.initialize()
+        
         self.game_state = await self.initialize_game_state()
         await self.discover_and_register_agents()
         await self._load_initial_state()
