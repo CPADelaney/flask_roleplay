@@ -14,18 +14,27 @@ TOKEN_CHARS = 4  # rough chars per token for chunking
 CHUNK_TOKEN_LIMIT = 3000
 
 async def _summarise(text: str) -> str:
-    stream = await openai.ChatCompletion.acreate(
+    """
+    Stream-summarise *text* with the Responses API.
+    """
+    client = get_openai_client()
+
+    stream = await client.responses.create(
         model=DEFAULT_MODEL,
-        messages=[{"role": "system", "content": SYSTEM_PROMPT},
-                  {"role": "user", "content": text}],
+        instructions=SYSTEM_PROMPT,   # ← old “system” role
+        input=text,                   # ← old “user” role
+        temperature=0.3,
+        max_tokens=250,
         stream=True,
     )
+
     summary = ""
-    async for part in stream:
-        delta = part.choices[0].delta
-        if delta and delta.content:
-            summary += delta.content
+    async for chunk in stream:                    # chunk: ResponseChunk
+        if chunk.output_text:
+            summary += chunk.output_text
+
     return summary.strip()
+
 
 
 async def nightly_rollup(date: str) -> None:
