@@ -220,65 +220,64 @@ class DistributedCheckpointMixin:
             logger.error("Agentic merge failed to produce a valid merged state. Cannot proceed with restore.")
             return None # Indicate failure
 
-    async def agentic_merge_states(self, states: List[Dict[str, Any]], system_prompt: Optional[str] = None) -> Tuple[Optional[Dict[str, Any]], str]:
+    async def agentic_merge_states(
+        self,
+        states: List[Dict[str, Any]],
+        system_prompt: Optional[str] = None
+    ) -> Tuple[Optional[Dict[str, Any]], str]:
         """
-        Given a list of state *dictionaries*, call an LLM to merge them.
-        Returns merged_state (dict or None), notes (str).
+        Merge divergent Nyx state dicts with the Responses API.
         """
-        # Ensure openai is imported and configured
         try:
-            import openai
-        except ImportError:
-            logger.error("OpenAI library not installed. Cannot perform agentic merge.")
-            return states[0] if states else None, "Fallback: OpenAI library missing."
-
-        state_jsons = []
-        for i, state_dict in enumerate(states):
-             try:
-                  state_jsons.append(json.dumps(state_dict, indent=2, sort_keys=True, default=str))
-             except (TypeError, OverflowError) as e:
-                  logger.error(f"Could not serialize state dict #{i} during merge prep: {e}")
-                  state_jsons.append(json.dumps({"error": "Serialization failed", "state_index": i}))
-
-        # Use the prompt defined in checkpointing_agent.py or customize here
-        merge_instructions = """
-You are Nyx, an intelligent agent merging your states from divergent runs. Analyze the JSON state objects below. Prioritize the most recent/significant data. Reconcile conflicts logically. For emotions/needs, blend or choose the most intense/relevant. Merge unique memories. For subtle differences (e.g., floats), adopt the most 'active' or latest value. Output a single merged state JSON and brief notes on your reasoning/conflicts.
-Respond ONLY with a valid JSON object matching this exact structure: {"merged_state": { ...new state dict... }, "merge_notes": "explanation..."}
-"""
-        prompt = system_prompt + "\n" + merge_instructions if system_prompt else merge_instructions
-
-        user_content = (
-            "Merge these brain checkpoint state dictionaries (JSON format):\n\n"
-            + "\n\n--- CHECKPOINT SEPARATOR ---\n\n".join(state_jsons)
+            from openai import error as openai_err
+            client = get_openai_client()
+        except Exception:
+            logger.error("OpenAI not configured; fallback merge.")
+            return states[0] if states else None, "Fallback: OpenAI unavailable."
+    
+        # ── prep prompt ───────────────────────────────────────────────────────────
+        state_blobs = []
+        for i, st in enumerate(states):
+            try:
+                state_blobs.append(json.dumps(st, indent=2, sort_keys=True, default=str))
+            except Exception as e:
+                logger.error("State %d serialise error: %s", i, e)
+                state_blobs.append(json.dumps({"error": "serialization-failed", "idx": i}))
+    
+        merge_instr = system_prompt.strip() + "\n" if system_prompt else ""
+        merge_instr += (
+            "You are Nyx, merging divergent checkpoints. "
+            "Output ONLY JSON: "
+            '{"merged_state":{...},"merge_notes":"..."}'
         )
-
+    
+        user_input = (
+            "Merge these JSON checkpoint states:\n\n"
+            + "\n\n--- CHECKPOINT SEPARATOR ---\n\n".join(state_blobs)
+        )
+    
         try:
-            # Ensure OpenAI client is configured (API key etc.)
-            completion = await openai.ChatCompletion.acreate(
-                model="gpt-4.1-nano", # Or your preferred merge model
-                messages=[
-                    {"role": "system", "content": prompt.strip()},
-                    {"role": "user", "content": user_content}
-                ],
+            resp = await client.responses.create(
+                model="gpt-4.1-nano",
+                instructions=merge_instr,
+                input=user_input,
                 temperature=0.1,
-                response_format={"type": "json_object"}
+                max_tokens=800,
+                text={"format": {"type": "json_object"}},   # force JSON mode
             )
-            response_content = completion.choices[0].message.content
-            merged_obj = json.loads(response_content)
-
-            if "merged_state" not in merged_obj or not isinstance(merged_obj["merged_state"], dict):
-                 logger.error(f"Agentic merge LLM output missing or invalid 'merged_state'. Output: {response_content[:500]}")
-                 raise ValueError("Invalid 'merged_state' in LLM response")
-
-            logger.info("Agentic state merge completed successfully via LLM.")
-            return merged_obj["merged_state"], merged_obj.get("merge_notes", "No specific notes provided by LLM.")
-        except openai.error.AuthenticationError as auth_err:
-             logger.error(f"OpenAI authentication error during agentic merge: {auth_err}")
-             return states[0] if states else None, f"Fallback: OpenAI Auth Error - {auth_err}"
+            raw_json = json.loads(resp.output_text)
+            merged = raw_json.get("merged_state")
+            if not isinstance(merged, dict):
+                raise ValueError("missing/invalid merged_state")
+            notes = raw_json.get("merge_notes", "")
+            return merged, notes
+    
+        except openai_err.RateLimitError as rl:
+            logger.error("Rate-limited during merge: %s", rl)
+            return states[0] if states else None, "Fallback (rate-limit)."
         except Exception as e:
-            logger.error(f"Agentic merge via OpenAI failed: {e}", exc_info=True)
-            # Fallback: use the first valid state dict
-            return states[0] if states else None, f"Auto-fallback to first state due to merge error: {e}"
+            logger.error("Agentic merge failed: %s", e, exc_info=True)
+            return states[0] if states else None, f"Fallback merge error: {e}"
 
 
     # ------- Main restoration entrypoint --------
