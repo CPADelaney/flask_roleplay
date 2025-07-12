@@ -278,7 +278,7 @@ class ManagerRegistry:
         """
         return ManagerRelationships(relationships=self._relationships.copy())
 
-    @function_tool
+    @function_tool(strict=False) 
     async def execute_cross_manager_handoff(
         self, params: CrossManagerHandoffParams
     ) -> CrossManagerHandoffResult:
