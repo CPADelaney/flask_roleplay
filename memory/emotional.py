@@ -311,17 +311,18 @@ class EmotionalMemoryManager:
                 }}
             """)
     
-            resp = await client.responses.create(
+            resp = await client.responses.parse(
                 model=model,
                 instructions="You are an emotion-analysis engine. Return ONLY the JSON object described—no extra text.",
-                input=prompt,                         # single string is fine
-                response_format={"type": "json_object"},
+                input=prompt,
+                # Let the SDK validate & parse straight into your schema
+                text_format=EmotionalAnalysis,   # <- Pydantic class
                 temperature=0.3,
                 max_tokens=250,
             )
-    
-            # Responses API parses the assistant output for you
-            raw: Dict[str, Any] = resp.output_json
+
+            validated: EmotionalAnalysis = resp.output_parsed
+            raw: Dict[str, Any] = validated.model_dump(mode="python")
     
             try:
                 validated = EmotionalAnalysis.model_validate(raw)
