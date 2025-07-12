@@ -1188,12 +1188,6 @@ async def propagate_memory_impl(
 ) -> Dict[str, Any]:
     """
     Propagate an important memory to related NPCs as secondhand info, with distortions.
-    
-    Args:
-        memory_text: The memory text
-        tags: Memory tags
-        significance: Memory significance (1-10)
-        emotional_intensity: Emotional intensity (0-100)
     """
     with function_span("propagate_memory"):
         result = {"propagated_to": 0}
@@ -1204,7 +1198,7 @@ async def propagate_memory_impl(
                 rows = await conn.fetch(
                     """
                     SELECT entity2_id, link_type, link_level
-                    FROM SocialLinks
+                    FROM SocialLinks  # <- Change this from 'social_links' to 'SocialLinks'
                     WHERE user_id=$1
                       AND conversation_id=$2
                       AND entity1_type='npc'
