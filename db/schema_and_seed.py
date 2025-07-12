@@ -994,6 +994,48 @@ async def create_all_tables():
                 ON SocialCustoms USING hnsw (embedding vector_cosine_ops);
                 ''',
                 '''
+                CREATE TABLE IF NOT EXISTS JointMemories (
+                    memory_id SERIAL PRIMARY KEY,
+                    user_id INTEGER NOT NULL,
+                    conversation_id INTEGER NOT NULL,
+                    memory_text TEXT NOT NULL,
+                    source_type VARCHAR(50) NOT NULL,
+                    source_id INTEGER NOT NULL,
+                    significance INTEGER DEFAULT 5,
+                    tags JSONB DEFAULT '[]'::jsonb,
+                    metadata JSONB DEFAULT '{}'::jsonb,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+                );
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_joint_memories_user_conv
+                ON JointMemories(user_id, conversation_id);
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_joint_memories_source
+                ON JointMemories(source_type, source_id);
+                ''',
+                '''
+                CREATE TABLE IF NOT EXISTS JointMemorySharing (
+                    id SERIAL PRIMARY KEY,
+                    memory_id INTEGER NOT NULL,
+                    entity_type VARCHAR(50) NOT NULL,
+                    entity_id INTEGER NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (memory_id) REFERENCES JointMemories(memory_id) ON DELETE CASCADE
+                );
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_joint_memory_sharing_memory
+                ON JointMemorySharing(memory_id);
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_joint_memory_sharing_entity
+                ON JointMemorySharing(entity_type, entity_id);
+                ''',
+                '''
                 CREATE TABLE IF NOT EXISTS CulturalExchanges (
                     id SERIAL PRIMARY KEY,
                     nation1_id INTEGER NOT NULL,
