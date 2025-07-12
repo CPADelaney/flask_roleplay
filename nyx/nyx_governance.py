@@ -122,6 +122,8 @@ class NyxUnifiedGovernor:
         self.agent_learning: Dict[str, Dict[str, Any]] = {}        # {agent_type: {agent_id: ...}}
         self.coordination_history: List[Dict[str, Any]] = []
         self.memory_integration = None  # <-- ADD THIS
+
+        self.memory_graph = None  # Joint memory graph for shared memories
     
         # Learning state
         self.strategy_effectiveness: Dict[str, Any] = {}
@@ -181,6 +183,9 @@ class NyxUnifiedGovernor:
         from memory.memory_integration import MemoryIntegration
         self.memory_integration = MemoryIntegration(self.user_id, self.conversation_id)
         await self.memory_integration.initialize()
+
+        from nyx.integrate import JointMemoryGraph
+        self.memory_graph = JointMemoryGraph(self.user_id, self.conversation_id)
         
         self.game_state = await self.initialize_game_state()
         await self.discover_and_register_agents()
