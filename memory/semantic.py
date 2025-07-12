@@ -6,6 +6,7 @@ import random
 from datetime import datetime
 from typing import Dict, Any, List, Optional, Union, Set
 import asyncio
+from logic.chatgpt_integration import get_chatgpt_response, get_openai_client
 import openai
 
 from .connection import with_transaction, TransactionContext
