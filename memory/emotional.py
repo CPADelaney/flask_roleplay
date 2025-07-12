@@ -273,13 +273,8 @@ class EmotionalMemoryManager:
         model: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
-        Detect the emotional fingerprint of *text* in a single OpenAI call
-        using the Responses API and gpt-4.1-nano.
-    
-        Returns
-        -------
-        Dict[str, Any]
-            JSON-serialisable dict matching EmotionalAnalysis schema.
+        Detect the emotional fingerprint of *text* in one Responses-API call.
+        Returns a plain-python dict that matches the EmotionalAnalysis schema.
         """
         model = model or getenv("EMOTION_ANALYSIS_MODEL", "gpt-4.1-nano")
     
@@ -289,18 +284,17 @@ class EmotionalMemoryManager:
             prompt = dedent(f"""
                 Analyze the emotional content of this text:
                 {"Context: " + context if context else ""}
-    
+                
                 Text: {text}
-    
+                
                 Identify:
                   1. primary_emotion   (joy/sadness/anger/fear/disgust/surprise/anticipation/trust/neutral)
                   2. intensity         (0-1)
                   3. secondary_emotions (dict of emotion:intensity)
                   4. valence           (-1 to 1)
                   5. arousal           (0-1)
-    
+                
                 Respond **only** with JSON in exactly this shape:
-    
                 {{
                   "primary_emotion": "emotion_name",
                   "intensity": 0.0,
@@ -311,27 +305,18 @@ class EmotionalMemoryManager:
                 }}
             """)
     
-            resp = await client.responses.parse(
+            # Create + auto-parse into our Pydantic model
+            resp = await client.responses.create(
                 model=model,
                 instructions="You are an emotion-analysis engine. Return ONLY the JSON object described—no extra text.",
                 input=prompt,
-                # Let the SDK validate & parse straight into your schema
-                text_format=EmotionalAnalysis,   # <- Pydantic class
+                text_format=EmotionalAnalysis,   # <- auto-validation & parsing
                 temperature=0.3,
                 max_tokens=250,
             )
-
-            validated: EmotionalAnalysis = resp.output_parsed
-            raw: Dict[str, Any] = validated.model_dump(mode="python")
     
-            try:
-                validated = EmotionalAnalysis.model_validate(raw)
-            except ValidationError as ve:
-                logger.warning("Schema fix-up triggered: %s", ve, extra={"raw_response": raw})
-                repaired = {**EmotionalAnalysis().model_dump(mode="python"), **raw}
-                validated = EmotionalAnalysis.model_validate(repaired)
-    
-            return validated.model_dump(mode="python")
+            parsed: EmotionalAnalysis = resp.output_parsed
+            return parsed.model_dump(mode="python")
     
         except Exception:
             logger.exception("Emotion analysis failed")
