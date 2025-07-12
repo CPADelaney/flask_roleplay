@@ -129,7 +129,7 @@ class SemanticMemoryManager:
         """
     
         try:
-            resp = await client.responses.create(
+            resp = client.responses.create(
                 model="gpt-4.1-nano",
                 instructions="You extract semantic abstractions.",
                 input=prompt,
@@ -303,7 +303,7 @@ class SemanticMemoryManager:
         """
     
         try:
-            resp = await client.responses.create(
+            resp = client.responses.create(
                 model="gpt-4.1-nano",
                 instructions="You extract patterns from memory clusters.",
                 input=prompt,
@@ -618,7 +618,7 @@ class SemanticMemoryManager:
         """
     
         try:
-            resp = await client.responses.create(
+            resp = client.responses.create(
                 model="gpt-4.1-nano",
                 instructions="You generate counterfactual variations.",
                 input=prompt,
@@ -777,7 +777,7 @@ class SemanticMemoryManager:
         """
     
         try:
-            resp = await client.responses.create(
+            resp = client.responses.create(
                 model="gpt-4.1-nano",
                 instructions="You extract related topics.",
                 input=prompt,
