@@ -57,15 +57,9 @@ class LoreSystem:
     ) -> Dict[str, Any]:
         """
         The universal method for making a canonical change to the world state.
-
-        Args:
-            entity_type (str): The type of entity (e.g., 'Nations', 'Factions').
-            entity_identifier (Dict): A dict to find the entity (e.g., {'id': 123}).
-            updates (Dict): A dict of columns and their new values (e.g., {'leader_npc_id': 456}).
-            reason (str): The narrative reason for the change.
         """
         logger.info(f"Proposing change to {entity_type} ({entity_identifier}) because: {reason}")
-
+    
         try:
             async with get_db_connection_context() as conn:
                 async with conn.transaction():
@@ -75,10 +69,10 @@ class LoreSystem:
                     select_query = f"SELECT * FROM {entity_type} WHERE {where_sql}"
                     
                     existing_entity = await conn.fetchrow(select_query, *entity_identifier.values())
-
+    
                     if not existing_entity:
                         return {"status": "error", "message": f"Entity not found: {entity_type} with {entity_identifier}"}
-
+    
                     # Step 2: Validate for conflicts
                     conflicts = []
                     for field, new_value in updates.items():
@@ -90,28 +84,39 @@ class LoreSystem:
                             )
                             conflicts.append(conflict_detail)
                             logger.warning(f"Conflict detected for {entity_type} ({entity_identifier}): {conflict_detail}")
-
+    
                     if conflicts:
                         # Step 3a: Handle conflict by generating a new narrative event
                         dynamics = await self.registry.get_lore_dynamics()
                         await dynamics.evolve_lore_with_event(f"A conflict arose: {reason}. Details: {', '.join(conflicts)}")
                         return {"status": "conflict_generated", "details": conflicts}
-
+    
                     # Step 3b: No conflict, commit the change
                     # Add type conversion for known boolean columns
                     boolean_columns = ['introduced', 'is_active', 'is_consolidated', 'is_archived']
-                    for col in boolean_columns:
-                        if col in updates:
-                            updates[col] = bool(updates[col])
                     
-                    set_clauses = [f"{key} = ${i+1}" for i, key in enumerate(updates.keys())]
+                    # Build SET clauses with proper casting for boolean columns
+                    set_clauses = []
+                    update_values = []
+                    
+                    for i, (key, value) in enumerate(updates.items()):
+                        if key in boolean_columns:
+                            # Ensure it's a boolean and use explicit cast
+                            bool_value = bool(value) if not isinstance(value, bool) else value
+                            set_clauses.append(f"{key} = ${i+1}::boolean")
+                            update_values.append(bool_value)
+                        else:
+                            set_clauses.append(f"{key} = ${i+1}")
+                            update_values.append(value)
+                    
                     set_sql = ", ".join(set_clauses)
-                    # The entity identifier values come after the update values
-                    update_values = list(updates.values()) + list(entity_identifier.values())
+                    
+                    # Add the entity identifier values
+                    update_values.extend(list(entity_identifier.values()))
                     
                     update_query = f"UPDATE {entity_type} SET {set_sql} WHERE {where_sql}"
                     await conn.execute(update_query, *update_values)
-
+    
                     # Step 4: Log the change as a canonical event in unified memory
                     event_text = f"The {entity_type} identified by {entity_identifier} was updated. Reason: {reason}. Changes: {updates}"
                     await canon.log_canonical_event(ctx, conn, event_text, tags=[entity_type.lower(), 'state_change'], significance=8)
@@ -121,7 +126,7 @@ class LoreSystem:
             await dynamics.evolve_lore_with_event(f"A world state change occurred: {reason}")
             
             return {"status": "committed", "entity_type": entity_type, "identifier": entity_identifier, "changes": updates}
-
+    
         except Exception as e:
             logger.exception(f"Failed to enact change for {entity_type} ({entity_identifier}): {e}")
             return {"status": "error", "message": str(e)}
