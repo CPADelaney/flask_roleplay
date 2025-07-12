@@ -105,56 +105,44 @@ class SemanticMemoryManager:
             "abstraction_level": abstraction_level
         }
     
-    async def _generate_semantic_abstraction(self, memory_text: str, abstraction_level: float) -> str:
+    async def _generate_semantic_abstraction(
+        self,
+        memory_text: str,
+        abstraction_level: float,
+    ) -> str:
         """
-        Generate a semantic abstraction from a specific memory.
-        Uses GPT to create a more abstract representation.
+        Create a semantic abstraction (minimal/moderate/high) via Responses API.
         """
-        abstraction_description = "moderate"
-        if abstraction_level < 0.3:
-            abstraction_description = "minimal"
-        elif abstraction_level > 0.7:
-            abstraction_description = "high"
-            
-        try:
-            prompt = f"""
-            Convert this specific observation into a general insight or pattern with {abstraction_description} abstraction:
-            
-            Observation: {memory_text}
-            
-            Create a concise semantic memory that:
-            1. Extracts the general principle or pattern from this specific event
-            2. Forms a higher-level abstraction that could apply to similar situations
-            3. Phrases it as a generalized insight rather than a specific event
-            4. Keeps it under 50 words
-            
-            Example transformation:
-            Observation: "Chase hesitated when Monica asked him about his past, changing the subject quickly."
-            Semantic abstraction: "Chase appears uncomfortable discussing his past and employs deflection when questioned about it."
-            
-            Return only the semantic abstraction with no explanation.
-            """
-            
-            response = await openai.ChatCompletion.acreate(
-                model="gpt-4.1-nano",
-                messages=[
-                    {"role": "system", "content": "You are an AI that extracts semantic meaning from specific observations."},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.4,
-                max_tokens=100
-            )
-            
-            abstraction = response.choices[0].message.content.strip()
-            return abstraction
-            
-        except Exception as e:
-            logger.error(f"Error generating semantic abstraction: {e}")
-            # Simple fallback
-            if len(memory_text) > 100:
-                return f"General pattern observed: {memory_text[:100]}..."
-            return f"General pattern observed: {memory_text}"
+        client = get_openai_client()
+        level = (
+            "minimal" if abstraction_level < 0.3
+            else "high" if abstraction_level > 0.7
+            else "moderate"
+        )
     
+        prompt = f"""
+        Observation: {memory_text}
+    
+        Produce a {level} abstraction (≤ 50 words) capturing the general insight.
+        Return ONLY the abstraction.
+        """
+    
+        try:
+            resp = await client.responses.create(
+                model="gpt-4.1-nano",
+                instructions="You extract semantic abstractions.",
+                input=prompt,
+                temperature=0.4,
+                max_tokens=100,
+            )
+            return resp.output_text.strip()
+        except Exception as e:
+            logger.error("Semantic abstraction failed: %s", e)
+            return (
+                f"General pattern observed: {memory_text[:100]}..."
+                if len(memory_text) > 100 else f"General pattern observed: {memory_text}"
+            )
+        
     @with_transaction
     async def find_patterns_across_memories(self,
                                          entity_type: str,
@@ -286,54 +274,48 @@ class SemanticMemoryManager:
         
         return clusters
     
-    async def _extract_pattern_from_cluster(self, cluster: List[Memory], topic: str = None) -> Optional[Dict[str, Any]]:
+    async def _extract_pattern_from_cluster(
+        self,
+        cluster: List[Memory],
+        topic: str | None = None,
+    ) -> Optional[Dict[str, Any]]:
         """
-        Extract a pattern from a cluster of similar memories.
+        Extract a pattern from a cluster of Memory objects.
         """
+        client = get_openai_client()
+    
+        memories_text = "\n".join(f"- {m.text}" for m in cluster)
+        topic_line = f"TOPIC FOCUS: {topic}" if topic else ""
+    
+        prompt = f"""
+        MEMORIES:
+        {memories_text}
+    
+        {topic_line}
+    
+        Identify pattern, confidence (0-1) and implications.
+        Respond JSON:
+        {{
+          "pattern": "...",
+          "confidence": 0.x,
+          "implications": "..."
+        }}
+        """
+    
         try:
-            # Format memories for the prompt
-            memories_text = "\n".join([f"- {m.text}" for m in cluster])
-            
-            prompt = f"""
-            Analyze these related memories and extract a general pattern or insight:
-            
-            MEMORIES:
-            {memories_text}
-            
-            {f'TOPIC FOCUS: {topic}' if topic else ''}
-            
-            Extract:
-            1. A general pattern that connects these memories
-            2. The confidence level in this pattern (0.0-1.0)
-            3. Potential implications or predictions based on this pattern
-            
-            Format your response as JSON with these fields:
-            "pattern": "The extracted pattern",
-            "confidence": 0.X,
-            "implications": "Potential implications"
-            
-            Make sure the pattern is not too specific to individual memories but captures the underlying insight.
-            """
-            
-            response = await openai.ChatCompletion.acreate(
+            resp = await client.responses.create(
                 model="gpt-4.1-nano",
-                messages=[
-                    {"role": "system", "content": "You are an AI that extracts patterns from memories."},
-                    {"role": "user", "content": prompt}
-                ],
+                instructions="You extract patterns from memory clusters.",
+                input=prompt,
                 temperature=0.3,
                 max_tokens=300,
-                response_format={"type": "json_object"}
+                text={"format": {"type": "json_object"}},
             )
-            
-            content = response.choices[0].message.content.strip()
-            pattern_data = json.loads(content)
-            return pattern_data
-            
+            return json.loads(resp.output_text)
         except Exception as e:
-            logger.error(f"Error extracting pattern from cluster: {e}")
+            logger.error("Cluster pattern extraction failed: %s", e)
             return None
-    
+        
     @with_transaction
     async def create_belief(self,
                          entity_type: str,
@@ -615,54 +597,45 @@ class SemanticMemoryManager:
             "variation_type": variation_type
         }
     
-    async def _generate_counterfactual_variation(self, memory_text: str, variation_type: str) -> str:
+    async def _generate_counterfactual_variation(
+        self,
+        memory_text: str,
+        variation_type: str,
+    ) -> str:
         """
-        Generate a counterfactual variation of a memory.
+        Counterfactual variation (alternative/opposite/exaggeration) via Responses API.
         """
+        client = get_openai_client()
+    
+        description = {
+            "alternative": "what might have gone differently",
+            "opposite": "the opposite outcome",
+            "exaggeration": "an exaggerated version of events",
+        }.get(variation_type, "an alternative version")
+    
+        prompt = f"""
+        Original: {memory_text}
+    
+        Generate {description}. Begin with "What if..." and return ONLY the variation.
+        """
+    
         try:
-            variation_description = {
-                "alternative": "what might have happened differently",
-                "opposite": "what would have happened if the opposite occurred",
-                "exaggeration": "an exaggerated version of what happened"
-            }.get(variation_type, "an alternative version")
-            
-            prompt = f"""
-            Generate {variation_description} for this memory:
-            
-            Original memory: {memory_text}
-            
-            Create a counterfactual variation that:
-            1. Keeps the same setting and characters
-            2. Changes key actions or outcomes based on the variation type: {variation_type}
-            3. Is plausible within the constraints of the original situation
-            4. Starts with "What if..." or similar counterfactual framing
-            
-            Return only the counterfactual variation with no explanation.
-            """
-            
-            response = await openai.ChatCompletion.acreate(
+            resp = await client.responses.create(
                 model="gpt-4.1-nano",
-                messages=[
-                    {"role": "system", "content": "You generate counterfactual variations of memories."},
-                    {"role": "user", "content": prompt}
-                ],
+                instructions="You generate counterfactual variations.",
+                input=prompt,
                 temperature=0.7,
-                max_tokens=200
+                max_tokens=200,
             )
-            
-            counterfactual = response.choices[0].message.content.strip()
-            return counterfactual
-            
+            return resp.output_text.strip()
         except Exception as e:
-            logger.error(f"Error generating counterfactual: {e}")
-            # Simple fallback
-            variation_prefix = {
-                "alternative": "What if instead",
-                "opposite": "What if the opposite happened and",
-                "exaggeration": "What if, to a much greater extent,"
-            }.get(variation_type, "What if")
-            
-            return f"{variation_prefix} {memory_text}"
+            logger.error("Counterfactual generation failed: %s", e)
+            prefix = {
+                "alternative": "What if instead ",
+                "opposite": "What if the opposite happened and ",
+                "exaggeration": "What if, to a much greater extent, ",
+            }.get(variation_type, "What if ")
+            return prefix + memory_text
     
     @with_transaction
     async def build_semantic_network(self,
@@ -789,55 +762,46 @@ class SemanticMemoryManager:
         
         return semantic_network
     
-    async def _extract_related_topics(self, memory_text: str, current_topic: str) -> List[str]:
+    async def _extract_related_topics(
+        self,
+        memory_text: str,
+        current_topic: str,
+    ) -> List[str]:
         """
-        Extract related topics from a memory text.
+        Extract 2-3 related topics from *memory_text* via Responses API.
         """
+        client = get_openai_client()
+    
+        prompt = f"""
+        Memory: {memory_text}
+        Current topic: {current_topic}
+    
+        Return JSON array of 2-3 distinct but related topics.
+        """
+    
         try:
-            prompt = f"""
-            Extract related topics from this semantic memory:
-            
-            Memory: {memory_text}
-            Current topic: {current_topic}
-            
-            Extract 2-3 related topics that:
-            1. Are distinct from the current topic
-            2. Are conceptually related to the memory
-            3. Would be useful for organizing a semantic network
-            
-            Format your response as a JSON array of strings:
-            ["topic1", "topic2", "topic3"]
-            
-            Return only the JSON array with no explanation.
-            """
-            
-            response = await openai.ChatCompletion.acreate(
+            resp = await client.responses.create(
                 model="gpt-4.1-nano",
-                messages=[
-                    {"role": "system", "content": "You extract related topics from semantic memories."},
-                    {"role": "user", "content": prompt}
-                ],
+                instructions="You extract related topics.",
+                input=prompt,
                 temperature=0.5,
                 max_tokens=100,
-                response_format={"type": "json_object"}
+                text={"format": {"type": "json_object"}},
             )
-            
-            content = response.choices[0].message.content.strip()
-            topics_data = json.loads(content)
-            
-            if isinstance(topics_data, list):
-                return topics_data
-            elif isinstance(topics_data, dict) and "topics" in topics_data:
-                return topics_data["topics"]
-            else:
-                return []
-                
+            data = json.loads(resp.output_text)
+            if isinstance(data, list):
+                return data
+            if isinstance(data, dict) and "topics" in data:
+                return data["topics"]
+            return []
         except Exception as e:
-            logger.error(f"Error extracting related topics: {e}")
-            # Simple extraction fallback
-            words = memory_text.lower().split()
-            potential_topics = [w.capitalize() for w in words if len(w) > 5 and w.lower() != current_topic.lower()]
-            return random.sample(potential_topics, min(3, len(potential_topics)))
+            logger.error("Topic extraction failed: %s", e)
+            words = [
+                w.capitalize()
+                for w in memory_text.split()
+                if len(w) > 5 and w.lower() != current_topic.lower()
+            ]
+            return random.sample(words, min(3, len(words)))
 
 # Create the necessary tables if they don't exist
 async def create_semantic_tables():
