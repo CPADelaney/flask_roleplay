@@ -4,6 +4,7 @@ import logging
 import random
 import json
 import asyncio
+import numpy as np
 from datetime import datetime
 from typing import Dict, Any, List, Optional, Union
 
@@ -31,6 +32,7 @@ class IntegratedMemorySystem:
     - Automated background maintenance
     - Event tracking for memory interactions
     - Memory statistics and health monitoring
+    - Safe handling of array-like values and numpy arrays
     """
     
     def __init__(self, user_id: int, conversation_id: int):
@@ -63,6 +65,118 @@ class IntegratedMemorySystem:
         # Track memory events
         self.events = []
     
+    def _safe_bool(self, value: Any) -> bool:
+        """
+        Safely convert a value to boolean, handling numpy arrays.
+        
+        Args:
+            value: Value to convert to boolean
+            
+        Returns:
+            Boolean value
+        """
+        if value is None:
+            return False
+            
+        if isinstance(value, (np.ndarray, list)):
+            # For arrays, check if any element is True
+            try:
+                return bool(np.any(value))
+            except:
+                return bool(value) if value else False
+        elif hasattr(value, '__array__'):
+            # For array-like objects
+            try:
+                return bool(np.any(value))
+            except:
+                return bool(value) if value else False
+        else:
+            return bool(value)
+    
+    def _safe_get(self, dictionary: Dict[str, Any], key: str, default: Any = None) -> Any:
+        """
+        Safely get a value from a dictionary, handling array-like values.
+        
+        Args:
+            dictionary: Dictionary to get value from
+            key: Key to look up
+            default: Default value if key not found
+            
+        Returns:
+            Value with proper type handling
+        """
+        if not isinstance(dictionary, dict):
+            return default
+            
+        value = dictionary.get(key, default)
+        
+        # If expecting a boolean, ensure it's converted properly
+        if isinstance(default, bool) and value is not None:
+            return self._safe_bool(value)
+        
+        return value
+    
+    def _safe_float(self, value: Any, default: float = 0.0) -> float:
+        """
+        Safely convert a value to float, handling numpy arrays.
+        
+        Args:
+            value: Value to convert
+            default: Default value if conversion fails
+            
+        Returns:
+            Float value
+        """
+        try:
+            if value is None:
+                return default
+                
+            if isinstance(value, (np.ndarray, list)):
+                # For arrays, take the mean or first element
+                if len(value) > 0:
+                    return float(np.mean(value))
+                return default
+            elif hasattr(value, '__array__'):
+                return float(np.mean(value))
+            else:
+                return float(value)
+        except (TypeError, ValueError):
+            return default
+    
+    def _safe_comparison(self, value1: Any, operator: str, value2: Any) -> bool:
+        """
+        Safely compare two values, handling arrays.
+        
+        Args:
+            value1: First value
+            operator: Comparison operator ('<', '>', '<=', '>=', '==', '!=')
+            value2: Second value
+            
+        Returns:
+            Boolean result of comparison
+        """
+        # Convert to safe floats for numeric comparisons
+        if operator in ['<', '>', '<=', '>=']:
+            v1 = self._safe_float(value1, 0.0)
+            v2 = self._safe_float(value2, 0.0)
+            
+            if operator == '<':
+                return v1 < v2
+            elif operator == '>':
+                return v1 > v2
+            elif operator == '<=':
+                return v1 <= v2
+            elif operator == '>=':
+                return v1 >= v2
+        
+        # For equality comparisons
+        if operator == '==':
+            return self._safe_bool(value1 == value2)
+        elif operator == '!=':
+            return self._safe_bool(value1 != value2)
+        
+        return False
+    
     async def add_memory(self,
                       entity_type: str,
                       entity_id: int,
@@ -85,14 +199,22 @@ class IntegratedMemorySystem:
         
         try:
             # 1. First, analyze emotional content if not provided
-            if "emotional_intensity" not in memory_kwargs and "primary_emotion" not in memory_kwargs:
+            has_emotional_params = (
+                "emotional_intensity" in memory_kwargs or 
+                "primary_emotion" in memory_kwargs
+            )
+            
+            if not has_emotional_params:
                 emotion_analysis = await self.emotional_manager.analyze_emotional_content(memory_text)
                 
                 results["emotion_analysis"] = emotion_analysis
                 
-                # Extract emotional parameters for the memory
+                # Extract emotional parameters for the memory with safe type handling
                 primary_emotion = emotion_analysis.get("primary_emotion", "neutral")
-                emotion_intensity = emotion_analysis.get("intensity", 0.5)
+                emotion_intensity = self._safe_float(
+                    emotion_analysis.get("intensity", 0.5), 
+                    default=0.5
+                )
                 
                 # Create the memory with emotional context
                 memory_result = await self.emotional_manager.add_emotional_memory(
@@ -111,11 +233,17 @@ class IntegratedMemorySystem:
                 
             else:
                 # Direct core memory creation if emotional parameters provided
+                # Ensure emotional_intensity is a proper float
+                emotional_intensity = self._safe_float(
+                    memory_kwargs.get("emotional_intensity", 50),
+                    default=50
+                )
+                
                 memory = Memory(
                     text=memory_text,
                     memory_type=memory_kwargs.get("memory_type", MemoryType.OBSERVATION),
                     significance=memory_kwargs.get("significance", MemorySignificance.MEDIUM),
-                    emotional_intensity=memory_kwargs.get("emotional_intensity", 50),
+                    emotional_intensity=emotional_intensity,
                     tags=memory_kwargs.get("tags", []),
                     metadata=memory_kwargs.get("metadata", {}),
                     timestamp=datetime.now()
@@ -132,7 +260,7 @@ class IntegratedMemorySystem:
                 results["memory_id"] = memory_id
             
             # 2. Apply schema processing if requested
-            if memory_kwargs.get("apply_schemas", True):
+            if self._safe_get(memory_kwargs, "apply_schemas", True):
                 schema_result = await self.schema_manager.apply_schema_to_memory(
                     memory_id=memory_id,
                     entity_type=entity_type,
@@ -143,7 +271,7 @@ class IntegratedMemorySystem:
                 results["schema_processing"] = schema_result
             
             # 3. Check for memory interference
-            if memory_kwargs.get("check_interference", True):
+            if self._safe_get(memory_kwargs, "check_interference", True):
                 interference_result = await self.interference_manager.detect_memory_interference(
                     entity_type=entity_type,
                     entity_id=entity_id,
@@ -153,16 +281,25 @@ class IntegratedMemorySystem:
                 results["interference_check"] = interference_result
                 
                 # If high interference, potentially create a blended memory
-                if interference_result.get("high_interference_risk", False):
+                high_interference = self._safe_get(
+                    interference_result, 
+                    "high_interference_risk", 
+                    False
+                )
+                
+                if high_interference:
                     # Get the highest interfering memory
                     retroactive = interference_result.get("retroactive_interference", [])
                     proactive = interference_result.get("proactive_interference", [])
                     
                     all_interference = retroactive + proactive
                     if all_interference:
-                        # Sort by similarity
-                        all_interference.sort(key=lambda x: x.get("similarity", 0), reverse=True)
-                        interfering_memory_id = all_interference[0].get("memory_id")
+                        # Sort by similarity with safe float conversion
+                        all_interference.sort(
+                            key=lambda x: self._safe_float(x.get("similarity", 0)), 
+                            reverse=True
+                        )
+                        interfering_memory_id = all_interference[0].get("memory_id") if all_interference else None
                         
                         # Create a blended memory with 30% probability
                         if interfering_memory_id and random.random() < 0.3:
@@ -187,12 +324,16 @@ class IntegratedMemorySystem:
                 results["semantic_memory"] = semantic_result
             
             # 5. Apply any mask processing for NPCs
-            if entity_type == "npc" and memory_kwargs.get("check_mask_impact", True):
+            check_mask = self._safe_get(memory_kwargs, "check_mask_impact", True)
+            if entity_type == "npc" and check_mask:
                 # Get mask data
                 mask_result = await self.mask_manager.get_npc_mask(entity_id)
                 
-                # If there's a mask with decent integrity left, check for triggers
-                if mask_result and "error" not in mask_result and mask_result.get("integrity", 0) > 20:
+                # Check if there's a mask with decent integrity left
+                has_mask = mask_result and "error" not in mask_result
+                integrity = self._safe_float(mask_result.get("integrity", 0)) if has_mask else 0
+                
+                if has_mask and self._safe_comparison(integrity, '>', 20):
                     # 10% chance to generate a slippage event
                     if random.random() < 0.1:
                         slippage_result = await self.mask_manager.generate_mask_slippage(
@@ -218,7 +359,7 @@ class IntegratedMemorySystem:
             return results
             
         except Exception as e:
-            logger.error(f"Error in integrated memory add: {e}")
+            logger.error(f"Error in integrated memory add: {e}", exc_info=True)
             results["error"] = str(e)
             return results
     
@@ -251,7 +392,7 @@ class IntegratedMemorySystem:
         try:
             # Different retrieval strategies based on current emotional state
             emotional_state = None
-            if retrieval_kwargs.get("use_emotional_context", True):
+            if self._safe_get(retrieval_kwargs, "use_emotional_context", True):
                 emotional_state = await self.emotional_manager.get_entity_emotional_state(
                     entity_type=entity_type,
                     entity_id=entity_id
@@ -266,7 +407,9 @@ class IntegratedMemorySystem:
                         text=trigger_text
                     )
                     
-                    if trigger_result and trigger_result.get("triggered", False):
+                    triggered = self._safe_get(trigger_result, "triggered", False) if trigger_result else False
+                    
+                    if triggered:
                         results["trauma_triggered"] = trigger_result
                         # If trauma triggered, we prioritize these memories
                         trauma_memories = trigger_result.get("triggered_memories", [])
@@ -291,7 +434,9 @@ class IntegratedMemorySystem:
                 
                 # If in a strong emotional state, use mood-congruent recall
                 current_emotion = emotional_state.get("current_emotion", {}) if emotional_state else {}
-                if current_emotion.get("intensity", 0) > 0.6:
+                emotion_intensity = self._safe_float(current_emotion.get("intensity", 0), 0)
+                
+                if self._safe_comparison(emotion_intensity, '>', 0.6):
                     mood_memories = await self.emotional_manager.retrieve_mood_congruent_memories(
                         entity_type=entity_type,
                         entity_id=entity_id,
@@ -317,7 +462,8 @@ class IntegratedMemorySystem:
                                                  {"current_emotion": current_emotion})
                         
                         # Only use mood-congruent recall if specifically requested or emotion is very strong
-                        if retrieval_kwargs.get("force_mood_congruent", False) or current_emotion.get("intensity", 0) > 0.8:
+                        force_mood = self._safe_get(retrieval_kwargs, "force_mood_congruent", False)
+                        if force_mood or self._safe_comparison(emotion_intensity, '>', 0.8):
                             return results
             
             # Standard memory retrieval if no emotional override
@@ -335,7 +481,7 @@ class IntegratedMemorySystem:
             min_significance = retrieval_kwargs.get("min_significance", 0)
             
             # If we want realistic recall, use memory competition
-            if retrieval_kwargs.get("simulate_competition", True) and query:
+            if self._safe_get(retrieval_kwargs, "simulate_competition", True) and query:
                 competition_result = await self.interference_manager.simulate_memory_competition(
                     entity_type=entity_type,
                     entity_id=entity_id,
@@ -360,7 +506,7 @@ class IntegratedMemorySystem:
                                              competition_result)
                     
                     # If only wanting the strongest memory, return just the winner
-                    if retrieval_kwargs.get("competition_only", False):
+                    if self._safe_get(retrieval_kwargs, "competition_only", False):
                         return results
             
             # Standard memory retrieval
@@ -384,7 +530,7 @@ class IntegratedMemorySystem:
                     
                 # Get schema interpretations if available
                 interpretation = None
-                if retrieval_kwargs.get("include_schema_interpretation", True):
+                if self._safe_get(retrieval_kwargs, "include_schema_interpretation", True):
                     try:
                         interpretation_result = await self.schema_manager.interpret_memory_with_schemas(
                             memory_id=getattr(memory, 'id', None),
@@ -398,7 +544,7 @@ class IntegratedMemorySystem:
                         logger.error(f"Error getting schema interpretation: {e}")
                 
                 # Reconsolidate the memory upon recall with subtle changes
-                if retrieval_kwargs.get("reconsolidate_on_recall", True):
+                if self._safe_get(retrieval_kwargs, "reconsolidate_on_recall", True):
                     try:
                         # Pass emotional context if available
                         recon_context = {}
@@ -423,7 +569,7 @@ class IntegratedMemorySystem:
                     "text": getattr(memory, 'text', ''),
                     "type": getattr(memory, 'memory_type', 'unknown'),
                     "significance": getattr(memory, 'significance', 0),
-                    "emotional_intensity": getattr(memory, 'emotional_intensity', 0),
+                    "emotional_intensity": self._safe_float(getattr(memory, 'emotional_intensity', 0)),
                     "timestamp": memory.timestamp.isoformat() if hasattr(memory, 'timestamp') and memory.timestamp else None,
                     "tags": getattr(memory, 'tags', []),
                     "schema_interpretation": interpretation
@@ -431,7 +577,7 @@ class IntegratedMemorySystem:
                 detailed_memories.append(memory_dict)
             
             # Check for random flashback opportunity
-            if retrieval_kwargs.get("allow_flashbacks", True) and random.random() < 0.15:  # 15% chance
+            if self._safe_get(retrieval_kwargs, "allow_flashbacks", True) and random.random() < 0.15:  # 15% chance
                 try:
                     flashback = await self.flashback_manager.generate_flashback(
                         entity_type=entity_type,
@@ -445,7 +591,7 @@ class IntegratedMemorySystem:
                     logger.error(f"Error generating flashback: {e}")
             
             # Check for intrusive memory opportunity
-            if retrieval_kwargs.get("allow_intrusive", True) and random.random() < 0.1:  # 10% chance
+            if self._safe_get(retrieval_kwargs, "allow_intrusive", True) and random.random() < 0.1:  # 10% chance
                 try:
                     intrusion = await self.interference_manager.generate_intrusive_memory(
                         entity_type=entity_type,
@@ -453,7 +599,8 @@ class IntegratedMemorySystem:
                         context=current_context.get("text", query or "")
                     )
                     
-                    if intrusion and intrusion.get("intrusion_generated", False):
+                    intrusion_generated = self._safe_get(intrusion, "intrusion_generated", False) if intrusion else False
+                    if intrusion_generated:
                         results["intrusive_memory"] = intrusion
                 except Exception as e:
                     logger.error(f"Error generating intrusive memory: {e}")
@@ -497,19 +644,25 @@ class IntegratedMemorySystem:
             # Analyze the emotional content of the memory
             emotion_analysis = await self.emotional_manager.analyze_emotional_content(memory_text)
             
-            # Prepare emotional state update
+            # Prepare emotional state update with safe type conversions
             current_emotion = {
                 "primary_emotion": emotion_analysis.get("primary_emotion", "neutral"),
-                "intensity": emotion_analysis.get("intensity", 0.3),
+                "intensity": self._safe_float(emotion_analysis.get("intensity", 0.3), 0.3),
                 "secondary_emotions": emotion_analysis.get("secondary_emotions", {}),
-                "valence": emotion_analysis.get("valence", 0.0),
-                "arousal": emotion_analysis.get("arousal", 0.0)
+                "valence": self._safe_float(emotion_analysis.get("valence", 0.0), 0.0),
+                "arousal": self._safe_float(emotion_analysis.get("arousal", 0.0), 0.0)
             }
             
             # Check if this is potentially a traumatic event
-            is_traumatic = False
-            if emotion_analysis.get("valence", 0) < -0.7 and emotion_analysis.get("intensity", 0) > 0.7:
-                is_traumatic = True
+            valence = self._safe_float(emotion_analysis.get("valence", 0), 0.0)
+            intensity = self._safe_float(emotion_analysis.get("intensity", 0), 0.0)
+            
+            is_traumatic = (
+                self._safe_comparison(valence, '<', -0.7) and 
+                self._safe_comparison(intensity, '>', 0.7)
+            )
+            
+            if is_traumatic:
                 trauma_event = {
                     "memory_id": memory_id,
                     "memory_text": memory_text,
@@ -536,7 +689,7 @@ class IntegratedMemorySystem:
             }
             
         except Exception as e:
-            logger.error(f"Error updating emotional state: {e}")
+            logger.error(f"Error updating emotional state: {e}", exc_info=True)
             return {"error": str(e)}
     
     async def generate_schemas_from_memories(self,
@@ -562,7 +715,9 @@ class IntegratedMemorySystem:
                 tags=tag_filter
             )
             
-            if result.get("schema_detected", False):
+            schema_detected = self._safe_get(result, "schema_detected", False)
+            
+            if schema_detected:
                 return {
                     "schema_detected": True,
                     "schema_id": result.get("schema_id"),
@@ -576,7 +731,7 @@ class IntegratedMemorySystem:
                 }
                 
         except Exception as e:
-            logger.error(f"Error generating schemas: {e}")
+            logger.error(f"Error generating schemas: {e}", exc_info=True)
             return {"error": str(e)}
     
     async def analyze_entity_memories(self,
@@ -625,9 +780,9 @@ class IntegratedMemorySystem:
                             memory_tags[tag] = 0
                         memory_tags[tag] += 1
                     
-                    # Accumulate for averages
-                    avg_significance += memory.significance
-                    avg_emotional_intensity += memory.emotional_intensity
+                    # Accumulate for averages (using safe float conversion)
+                    avg_significance += self._safe_float(memory.significance)
+                    avg_emotional_intensity += self._safe_float(memory.emotional_intensity)
                 
                 # Calculate averages
                 avg_significance /= total_memories
@@ -665,7 +820,7 @@ class IntegratedMemorySystem:
                 mask_info = await self.mask_manager.get_npc_mask(entity_id)
                 if mask_info and "error" not in mask_info:
                     analysis["mask"] = {
-                        "integrity": mask_info.get("integrity", 100),
+                        "integrity": self._safe_float(mask_info.get("integrity", 100)),
                         "presented_traits": mask_info.get("presented_traits", {}),
                         "hidden_traits": mask_info.get("hidden_traits", {})
                     }
@@ -673,7 +828,7 @@ class IntegratedMemorySystem:
             return analysis
             
         except Exception as e:
-            logger.error(f"Error analyzing entity memories: {e}")
+            logger.error(f"Error analyzing entity memories: {e}", exc_info=True)
             return {"error": str(e)}
     
     async def _get_entity_schemas(self, entity_type: str, entity_id: int) -> List[Dict[str, Any]]:
@@ -699,7 +854,7 @@ class IntegratedMemorySystem:
                     "name": row["schema_name"],
                     "category": row["category"],
                     "description": schema_data.get("description", ""),
-                    "confidence": schema_data.get("confidence", 0.5)
+                    "confidence": self._safe_float(schema_data.get("confidence", 0.5))
                 })
                 
         return schemas
@@ -732,7 +887,7 @@ class IntegratedMemorySystem:
         
         try:
             # Core memory maintenance
-            if options.get("core_maintenance", True):
+            if self._safe_get(options, "core_maintenance", True):
                 memory_manager = UnifiedMemoryManager(
                     entity_type=entity_type,
                     entity_id=entity_id,
@@ -744,7 +899,7 @@ class IntegratedMemorySystem:
                 results["core_maintenance"] = maintenance_result
             
             # Schema maintenance
-            if options.get("schema_maintenance", True):
+            if self._safe_get(options, "schema_maintenance", True):
                 schema_result = await self.schema_manager.run_schema_maintenance(
                     entity_type=entity_type,
                     entity_id=entity_id
@@ -753,7 +908,7 @@ class IntegratedMemorySystem:
                 results["schema_maintenance"] = schema_result
             
             # Emotional decay
-            if options.get("emotional_decay", True):
+            if self._safe_get(options, "emotional_decay", True):
                 emotional_result = await self.emotional_manager.emotional_decay_maintenance(
                     entity_type=entity_type,
                     entity_id=entity_id
@@ -762,7 +917,7 @@ class IntegratedMemorySystem:
                 results["emotional_decay"] = emotional_result
             
             # Background reconsolidation
-            if options.get("background_reconsolidation", True):
+            if self._safe_get(options, "background_reconsolidation", True):
                 recon_result = await self.reconsolidation_manager.check_memories_for_reconsolidation(
                     entity_type=entity_type,
                     entity_id=entity_id,
@@ -774,7 +929,7 @@ class IntegratedMemorySystem:
                 }
             
             # Interference processing
-            if options.get("interference_processing", True):
+            if self._safe_get(options, "interference_processing", True):
                 interference_result = await self.interference_manager.run_interference_maintenance(
                     entity_type=entity_type,
                     entity_id=entity_id
@@ -783,17 +938,17 @@ class IntegratedMemorySystem:
                 results["interference_processing"] = interference_result
             
             # Mask checks for NPCs
-            if options.get("mask_checks", False) and entity_type == "npc":
+            if self._safe_get(options, "mask_checks", False) and entity_type == "npc":
                 mask_result = await self.mask_manager.check_for_automated_reveals(self.user_id, self.conversation_id)
                 
                 results["mask_checks"] = {
-                    "reveals_generated": len(mask_result)
+                    "reveals_generated": len(mask_result) if isinstance(mask_result, list) else 0
                 }
             
             return results
             
         except Exception as e:
-            logger.error(f"Error in memory maintenance: {e}")
+            logger.error(f"Error in memory maintenance: {e}", exc_info=True)
             results["error"] = str(e)
             return results
     
