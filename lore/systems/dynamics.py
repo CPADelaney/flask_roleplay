@@ -432,10 +432,10 @@ class LoreDynamicsSystem(BaseLoreManager):
                 model_settings=ModelSettings(temperature=0.9),
                 input_guardrails=[input_guardrail],
                 tools=[
-                    self._identify_affected_lore, strict_mode=False,
-                    self._generate_lore_updates, strict_mode=False,
-                    self._apply_lore_updates, strict_mode=False,
-                    self._generate_consequential_lore, strict_mode=False
+                    self._identify_affected_lore, 
+                    self._generate_lore_updates,
+                    self._apply_lore_updates,
+                    self._generate_consequential_lore
                 ]
             )
             
