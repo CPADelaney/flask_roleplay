@@ -133,8 +133,7 @@ class SemanticMemoryManager:
                 model="gpt-4.1-nano",
                 instructions="You extract semantic abstractions.",
                 input=prompt,
-                temperature=0.4,
-                max_tokens=100,
+                temperature=0.4
             )
             return resp.output_text.strip()
         except Exception as e:
