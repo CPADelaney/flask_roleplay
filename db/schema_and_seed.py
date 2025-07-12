@@ -2338,7 +2338,16 @@ async def create_all_tables():
                 '''
                 CREATE INDEX IF NOT EXISTS idx_factions_name
                 ON Factions(user_id, conversation_id, lower(name));
-                ''',               
+                ''',
+                '''
+                ALTER TABLE NPCStats ADD COLUMN trauma_triggers JSONB;
+                ''',
+                '''
+                ALTER TABLE NPCStats ADD COLUMN flashback_triggers JSONB;
+                ''',
+                '''
+                ALTER TABLE NPCStats ADD COLUMN revelation_plan JSONB;
+                ''',
             ]  # End of sql_commands list
 
             # Execute commands sequentially
