@@ -2632,209 +2632,209 @@ class NPCCreationHandler:
             return {"error": str(e)}
 
     async def check_for_mask_slippage(self, user_id, conversation_id, npc_id):
-            """
-            Check if an NPC has reached thresholds where their true nature begins to show.
-            Updates are made through the canon system.
-            """
-            try:
-                # Import canon for updates
-                from lore.core import canon
-                
-                # Create context
-                ctx = RunContextWrapper(context={
-                    "user_id": user_id,
-                    "conversation_id": conversation_id
-                })
-                
-                async with get_db_connection_context() as conn:
-                    # Get NPC's current stats
-                    stats_query = """
-                        SELECT npc_name, dominance, cruelty, intensity, memory
-                        FROM NPCStats
-                        WHERE user_id=$1 AND conversation_id=$2 AND npc_id=$3
+        """
+        Check dominance / cruelty / intensity thresholds and record mask-slippage events.
+        Adds memories, tweaks the physical description, and writes history to NPCEvolution.
+        """
+        try:
+            from lore.core import canon
+    
+            # Build a lightweight context object for canon helpers
+            ctx = type(
+                "CanonContext",
+                (),
+                {"user_id": user_id, "conversation_id": conversation_id},
+            )()
+    
+            async with get_db_connection_context() as conn:
+                # ── Fetch current NPC state ───────────────────────────────────────────
+                stats_row = await conn.fetchrow(
                     """
-                    
-                    row = await conn.fetchrow(stats_query, user_id, conversation_id, npc_id)
-                    if not row:
-                        return None
-                        
-                    npc_name, dominance, cruelty, intensity, memory_json = row['npc_name'], row['dominance'], row['cruelty'], row['intensity'], row['memory']
-                    
-                    # Parse memory
-                    if memory_json:
-                        if isinstance(memory_json, str):
-                            try:
-                                memory = json.loads(memory_json)
-                            except:
-                                memory = []
-                        else:
-                            memory = memory_json
-                    else:
-                        memory = []
-                        
-                    # Get slippage history from NPCEvolution table
-                    slippage_query = """
-                        SELECT mask_slippage_events
-                        FROM NPCEvolution
-                        WHERE user_id=$1 AND conversation_id=$2 AND npc_id=$3
+                    SELECT npc_name, dominance, cruelty, intensity, memory
+                    FROM NPCStats
+                    WHERE user_id=$1 AND conversation_id=$2 AND npc_id=$3
+                    """,
+                    user_id,
+                    conversation_id,
+                    npc_id,
+                )
+                if not stats_row:
+                    return None
+    
+                npc_name = stats_row["npc_name"]
+                dominance = stats_row["dominance"]
+                cruelty = stats_row["cruelty"]
+                intensity = stats_row["intensity"]
+                memory_json = stats_row["memory"]
+    
+                # Parse stored memories safely
+                memory = (
+                    self.safe_json_loads(memory_json, [])
+                    if memory_json
+                    else []
+                )
+    
+                # ── Load previous slippage history ───────────────────────────────────
+                evo_row = await conn.fetchrow(
                     """
-                    
-                    row = await conn.fetchrow(slippage_query, user_id, conversation_id, npc_id)
-                    if row and row['mask_slippage_events']:
-                        if isinstance(row['mask_slippage_events'], str):
-                            try:
-                                slippage_history = json.loads(row['mask_slippage_events'])
-                            except:
-                                slippage_history = []
-                        else:
-                            slippage_history = row['mask_slippage_events']
-                    else:
-                        slippage_history = []
-                        
-                    # Check each stat for slippage triggers
-                    triggered_events = []
-                    physical_description_updates = []
-                    
-                    for stat_name, thresholds in MASK_SLIPPAGE_TRIGGERS.items():
-                        stat_value = locals().get(stat_name, 0)  # Get the stat value from local vars
-                        
-                        for threshold in thresholds:
-                            event_name = threshold["event"]
-                            
-                            # Skip if this slippage has already occurred
-                            if any(e.get("event") == event_name for e in slippage_history):
-                                continue
-                                
-                            # Check if threshold is met
-                            if stat_value >= threshold["threshold"]:
-                                # Record this slippage event
-                                event_data = {
+                    SELECT mask_slippage_events
+                    FROM NPCEvolution
+                    WHERE user_id=$1 AND conversation_id=$2 AND npc_id=$3
+                    """,
+                    user_id,
+                    conversation_id,
+                    npc_id,
+                )
+                slippage_history = self.safe_json_loads(
+                    evo_row["mask_slippage_events"] if evo_row else None, []
+                )
+    
+                # ── Evaluate thresholds ─────────────────────────────────────────────
+                triggered_events = []
+                physical_description_updates: list[str] = []
+    
+                for stat_name, thresholds in MASK_SLIPPAGE_TRIGGERS.items():
+                    stat_value = stats_row[stat_name]        # direct lookup is clearer
+    
+                    for threshold in thresholds:
+                        event_name = threshold["event"]
+    
+                        if any(e.get("event") == event_name for e in slippage_history):
+                            continue  # already happened
+    
+                        if stat_value >= threshold["threshold"]:
+                            triggered_events.append(
+                                {
                                     "event": event_name,
                                     "stat": stat_name,
                                     "threshold": threshold["threshold"],
-                                    "timestamp": datetime.now().isoformat()
+                                    "timestamp": datetime.now().isoformat(),
                                 }
-                                triggered_events.append(event_data)
-                                
-                                # Add the memory
-                                if "memory" in threshold:
-                                    memory.append(threshold["memory"])
-                                    
-                                # Subtle physical description changes based on mask slippage
-                                if stat_name == "dominance" and threshold["threshold"] >= 50:
-                                    physical_description_updates.append(
-                                        " In unguarded moments, her demeanor shifts subtly—a barely perceptible straightening of posture, a flash of something commanding in her eyes that quickly vanishes when noticed."
-                                    )
-                                
-                                if stat_name == "cruelty" and threshold["threshold"] >= 50:
-                                    physical_description_updates.append(
-                                        " Occasionally her smile doesn't quite reach her eyes, revealing a momentary coldness before she adjusts her expression back to warmth."
-                                    )
-                                    
-                                if stat_name == "intensity" and threshold["threshold"] >= 50:
-                                    physical_description_updates.append(
-                                        " Sometimes when she thinks no one is watching, her gaze becomes unnervingly focused, studying others with an analytical intensity that disappears behind a pleasant mask when attention returns to her."
-                                    )
-                    
-                    # Update memory using canon system
-                    if memory != json.loads(memory_json if memory_json else "[]"):
-                        await canon.update_entity_canonically(
-                            ctx, conn, "NPCStats", npc_id,
-                            {"memory": json.dumps(memory)},
-                            f"Mask slippage events occurred for {npc_name}, revealing deeper aspects of personality"
-                        )
-                    
-                    # Update physical description if needed
-                    if physical_description_updates:
-                        # Get current description
-                        desc_query = """
-                            SELECT physical_description FROM NPCStats
-                            WHERE user_id=$1 AND conversation_id=$2 AND npc_id=$3
-                        """
-                        
-                        desc_row = await conn.fetchrow(desc_query, user_id, conversation_id, npc_id)
-                        current_desc = desc_row['physical_description'] if desc_row else ""
-                        
-                        # Append new descriptions
-                        new_desc = current_desc + "".join(physical_description_updates)
-                        
-                        await canon.update_entity_canonically(
-                            ctx, conn, "NPCStats", npc_id,
-                            {"physical_description": new_desc},
-                            f"Physical manifestations of {npc_name}'s true nature are becoming visible"
-                        )
-                    
-                    if triggered_events:
-                        slippage_history.extend(triggered_events)
-                        
-                        # Check if NPCEvolution record exists
-                        exists_query = """
-                            SELECT 1 FROM NPCEvolution
-                            WHERE user_id=$1 AND conversation_id=$2 AND npc_id=$3
-                        """
-                        
-                        exists_row = await conn.fetchrow(exists_query, user_id, conversation_id, npc_id)
-                        
-                        if exists_row:
-                            # Update using canon system
-                            await canon.update_entity_with_governance(
-                                ctx, conn, "NPCEvolution", npc_id,
-                                {"mask_slippage_events": json.dumps(slippage_history)},
-                                f"Recording mask slippage progression for {npc_name}",
-                                significance=5
                             )
-                        else:
-                            # Create new record through canon
-                            # First, ensure NPCEvolution entity exists in canon
-                            evolution_id = await canon.find_or_create_entity(
-                                ctx, conn,
-                                entity_type="npc_evolution",
-                                entity_name=f"evolution_{npc_id}",
-                                search_fields={
-                                    "user_id": user_id,
-                                    "conversation_id": conversation_id,
-                                    "npc_id": npc_id,
-                                    "name_field": "npc_id"
-                                },
-                                create_data={
-                                    "user_id": user_id,
-                                    "conversation_id": conversation_id,
-                                    "npc_id": npc_id,
-                                    "mask_slippage_events": json.dumps(slippage_history)
-                                },
-                                table_name="NPCEvolution",
-                                embedding_text=f"NPC {npc_id} evolution tracking",
-                                similarity_threshold=0.95
-                            )
-                            
-                            await canon.log_canonical_event(
-                                ctx, conn,
-                                f"Initialized evolution tracking for NPC {npc_name}",
-                                tags=["npc_evolution", "mask_slippage", "initialization"],
-                                significance=5
-                            )
-                    
-                    return triggered_events
-                    
-            except Exception as e:
-                logging.error(f"Error checking mask slippage: {e}")
-                return None
     
+                            if "memory" in threshold:
+                                memory.append(threshold["memory"])
+    
+                            # Small visual tells as the mask cracks
+                            if stat_name == "dominance" and threshold["threshold"] >= 50:
+                                physical_description_updates.append(
+                                    " In unguarded moments her posture straightens, and a commanding glint flashes in her eyes before she reins it in."
+                                )
+                            if stat_name == "cruelty" and threshold["threshold"] >= 50:
+                                physical_description_updates.append(
+                                    " Occasionally her smile falters, revealing a fleeting chill behind the warmth."
+                                )
+                            if stat_name == "intensity" and threshold["threshold"] >= 50:
+                                physical_description_updates.append(
+                                    " When no one is watching, her gaze turns razor-sharp, studying others with unnerving focus."
+                                )
+    
+                # ── Persist memory / description updates ────────────────────────────
+                original_mem = self.safe_json_loads(memory_json, [])
+                if memory != original_mem:
+                    await canon.update_entity_canonically(
+                        ctx,
+                        conn,
+                        "NPCStats",
+                        npc_id,
+                        {"memory": json.dumps(memory)},
+                        f"Mask-slippage memories recorded for {npc_name}",
+                    )
+    
+                if physical_description_updates:
+                    desc_row = await conn.fetchrow(
+                        """
+                        SELECT physical_description
+                        FROM NPCStats
+                        WHERE user_id=$1 AND conversation_id=$2 AND npc_id=$3
+                        """,
+                        user_id,
+                        conversation_id,
+                        npc_id,
+                    )
+                    current_desc = desc_row["physical_description"] if desc_row else ""
+                    new_desc = current_desc + "".join(physical_description_updates)
+    
+                    await canon.update_entity_canonically(
+                        ctx,
+                        conn,
+                        "NPCStats",
+                        npc_id,
+                        {"physical_description": new_desc},
+                        f"{npc_name}'s veneer shows cracks after mask slippage",
+                    )
+    
+                # ── Record slippage history in NPCEvolution ─────────────────────────
+                if triggered_events:
+                    slippage_history.extend(triggered_events)
+    
+                    exists = await conn.fetchval(
+                        """
+                        SELECT 1 FROM NPCEvolution
+                        WHERE user_id=$1 AND conversation_id=$2 AND npc_id=$3
+                        """,
+                        user_id,
+                        conversation_id,
+                        npc_id,
+                    )
+    
+                    if exists:
+                        await canon.update_entity_with_governance(
+                            ctx,
+                            conn,
+                            "NPCEvolution",
+                            npc_id,
+                            {"mask_slippage_events": json.dumps(slippage_history)},
+                            f"Mask-slippage progression logged for {npc_name}",
+                            significance=5,
+                        )
+                    else:
+                        await canon.find_or_create_entity(
+                            ctx,
+                            conn,
+                            entity_type="npc_evolution",
+                            entity_name=f"evolution_{npc_id}",
+                            search_fields={
+                                "user_id": user_id,
+                                "conversation_id": conversation_id,
+                                "npc_id": npc_id,
+                            },
+                            create_data={
+                                "user_id": user_id,
+                                "conversation_id": conversation_id,
+                                "npc_id": npc_id,
+                                "mask_slippage_events": json.dumps(slippage_history),
+                            },
+                            table_name="NPCEvolution",
+                            embedding_text=f"NPC {npc_id} evolution tracking",
+                            similarity_threshold=0.95,
+                        )
+    
+                        await canon.log_canonical_event(
+                            ctx,
+                            conn,
+                            f"Initialized evolution tracking for NPC {npc_name}",
+                            tags=["npc_evolution", "mask_slippage", "init"],
+                            significance=5,
+                        )
+    
+            return triggered_events
+    
+        except Exception as e:
+            logging.error(f"Error checking mask slippage for NPC {npc_id}: {e}", exc_info=True)
+            return None
+        
     async def assign_random_relationships_canonical(self, user_id, conversation_id, npc_id, npc_name, npc_archetypes=None):
-        """
-        Assign random relationships between the new NPC and other entities using the canon system.
-        """
         logging.info(f"Assigning canonical relationships for NPC {npc_id} ({npc_name})")
         
-        # Import canon
         from lore.core import canon
         
-        # Create context
-        ctx = RunContextWrapper(context={
-            "user_id": user_id,
-            "conversation_id": conversation_id
-        })
-        
+        # Create context - FIX
+        ctx = type('CanonContext', (), {
+            'user_id': user_id,
+            'conversation_id': conversation_id
+        })()
+            
         relationships = []
     
         # Define explicit mapping for archetypes to relationship labels
@@ -3125,17 +3125,14 @@ class NPCCreationHandler:
 
     
     async def generate_relationship_specific_memory(self, user_id, conversation_id, npc_data, target_data, relationship_type):
-        """
-        Generate a memory specific to the relationship between two NPCs using canon system.
-        """
         try:
             from lore.core import canon
             
-            # Create context
-            ctx = RunContextWrapper(context={
-                "user_id": user_id,
-                "conversation_id": conversation_id
-            })
+            # Create context - FIX
+            ctx = type('CanonContext', (), {
+                'user_id': user_id,
+                'conversation_id': conversation_id
+            })()
             
             npc_name = npc_data.get("npc_name", "Unknown")
             target_name = target_data.get("npc_name", "Unknown")
@@ -3527,11 +3524,11 @@ class NPCCreationHandler:
         try:
             from lore.core import canon
             
-            # Create context
-            ctx = RunContextWrapper(context={
-                "user_id": user_id,
-                "conversation_id": conversation_id
-            })
+            # Create context - FIX: Use simple object instead of RunContextWrapper
+            ctx = type('CanonContext', (), {
+                'user_id': user_id,
+                'conversation_id': conversation_id
+            })()
             
             flashback_manager = FlashbackManager(user_id, conversation_id)
             
@@ -3542,6 +3539,7 @@ class NPCCreationHandler:
                 entity_id=npc_id,
                 limit=10
             )
+        
             
             # Identify potential trigger words from memories
             trigger_words = []
@@ -3660,17 +3658,14 @@ class NPCCreationHandler:
             return {"error": str(e)}
     
     async def plan_mask_revelations(self, user_id, conversation_id, npc_id, npc_data):
-        """
-        Create a revelation plan for gradually exposing the NPC's true nature using canon system.
-        """
         try:
             from lore.core import canon
             
-            # Create context
-            ctx = RunContextWrapper(context={
-                "user_id": user_id,
-                "conversation_id": conversation_id
-            })
+            # Create context - FIX
+            ctx = type('CanonContext', (), {
+                'user_id': user_id,
+                'conversation_id': conversation_id
+            })()
             
             mask_manager = ProgressiveRevealManager(user_id, conversation_id)
             
@@ -3747,17 +3742,15 @@ class NPCCreationHandler:
             return {"error": str(e)}
     
     async def setup_relationship_evolution_tracking(self, user_id, conversation_id, npc_id, relationships):
-        """
-        Setup tracking for relationship evolution using canon system.
-        """
         try:
             from lore.core import canon
             
-            # Create context
-            ctx = RunContextWrapper(context={
-                "user_id": user_id,
-                "conversation_id": conversation_id
-            })
+            # Create context - FIX
+            ctx = type('CanonContext', (), {
+                'user_id': user_id,
+                'conversation_id': conversation_id
+            })()
+        
             
             if not relationships:
                 return {"relationships_tracked": 0}
@@ -3949,17 +3942,14 @@ class NPCCreationHandler:
             return {"error": str(e)}
     
     async def schedule_npc_memory_maintenance(self, user_id, conversation_id, npc_id):
-        """
-        Schedule regular memory maintenance for an NPC using canon system.
-        """
         try:
             from lore.core import canon
             
-            # Create context
-            ctx = RunContextWrapper(context={
-                "user_id": user_id,
-                "conversation_id": conversation_id
-            })
+            # Create context - FIX
+            ctx = type('CanonContext', (), {
+                'user_id': user_id,
+                'conversation_id': conversation_id
+            })()
             
             # Create maintenance schedule entry in database
             async with get_db_connection_context() as conn:
