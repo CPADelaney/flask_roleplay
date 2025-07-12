@@ -1166,12 +1166,12 @@ class BaseLoreManager:
     # Context and Agent Utilities
     # ---------------------------
 
-    def create_run_context(self, additional_context: Optional[Dict[str, Any]] = None) -> RunContextWrapper:
+    def create_run_context(self, additional_context: Optional[Union[Dict[str, Any], RunContextWrapper]] = None) -> RunContextWrapper:
         """
         Create a run context for agent execution.
         
         Args:
-            additional_context: Additional context to include
+            additional_context: Additional context to include (can be dict or RunContextWrapper)
             
         Returns:
             RunContextWrapper instance
@@ -1181,8 +1181,20 @@ class BaseLoreManager:
             "user_id": self.user_id,
             "conversation_id": self.conversation_id
         }
+        
         if additional_context:
-            context.update(additional_context)
+            # Handle case where additional_context is already a RunContextWrapper
+            if isinstance(additional_context, RunContextWrapper):
+                # Extract the context dictionary from the wrapper
+                if hasattr(additional_context, 'context') and isinstance(additional_context.context, dict):
+                    context.update(additional_context.context)
+            elif isinstance(additional_context, dict):
+                # Normal dictionary case
+                context.update(additional_context)
+            else:
+                # Log warning for unexpected type but don't crash
+                logger.warning(f"Unexpected type for additional_context: {type(additional_context)}")
+                
         return RunContextWrapper(context=context)
 
     async def execute_llm_prompt(
