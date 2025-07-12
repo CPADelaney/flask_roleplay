@@ -274,9 +274,9 @@ class EmotionalMemoryManager:
     ) -> Dict[str, Any]:
         """
         Detect the emotional fingerprint of *text* in one Responses-API call.
-        Returns a plain-python dict that matches the EmotionalAnalysis schema.
+        Returns a dict matching the EmotionalAnalysis schema.
         """
-        model = model or getenv("EMOTION_ANALYSIS_MODEL", "gpt-4.1-nano")
+        model = model or getenv("EMOTION_ANALYSIS_MODEL", "gpt-4o-mini")
     
         try:
             client = get_openai_client()
@@ -284,16 +284,16 @@ class EmotionalMemoryManager:
             prompt = dedent(f"""
                 Analyze the emotional content of this text:
                 {"Context: " + context if context else ""}
-                
+    
                 Text: {text}
-                
+    
                 Identify:
                   1. primary_emotion   (joy/sadness/anger/fear/disgust/surprise/anticipation/trust/neutral)
                   2. intensity         (0-1)
                   3. secondary_emotions (dict of emotion:intensity)
                   4. valence           (-1 to 1)
                   5. arousal           (0-1)
-                
+    
                 Respond **only** with JSON in exactly this shape:
                 {{
                   "primary_emotion": "emotion_name",
@@ -305,17 +305,20 @@ class EmotionalMemoryManager:
                 }}
             """)
     
-            # Create + auto-parse into our Pydantic model
+            # ---- Responses API call (strict JSON output) ----
             resp = await client.responses.create(
                 model=model,
-                instructions="You are an emotion-analysis engine. Return ONLY the JSON object described—no extra text.",
+                instructions=(
+                    "You are an emotion-analysis engine. "
+                    "Return ONLY the JSON object described—no extra text."
+                ),
                 input=prompt,
-                text=EmotionalAnalysis,   # <- auto-validation & parsing
                 temperature=0.3,
-                max_tokens=250,
             )
     
-            parsed: EmotionalAnalysis = resp.output_parsed
+            # Parse and validate with Pydantic
+            data = json.loads(resp.output_text)
+            parsed = EmotionalAnalysis.model_validate(data)
             return parsed.model_dump(mode="python")
     
         except Exception:
@@ -323,6 +326,7 @@ class EmotionalMemoryManager:
             return EmotionalAnalysis(
                 explanation="Fallback: analysis failed"
             ).model_dump(mode="python")
+
     
     @with_transaction
     async def retrieve_mood_congruent_memories(self,
