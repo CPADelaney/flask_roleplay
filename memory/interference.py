@@ -76,8 +76,17 @@ class MemoryInterferenceManager:
         memory_embedding = row["embedding"]
         memory_timestamp = row["timestamp"]
         
-        if not memory_embedding:
-            return {"error": "Memory doesn't have an embedding for similarity comparison"}
+        memory_embedding = row["embedding"]
+
+        # Guard: pgvector can give us a NumPy array; its truth-value is ambiguous.
+        if (
+            memory_embedding is None or                                   # missing
+            (isinstance(memory_embedding, np.ndarray) and memory_embedding.size == 0) or  # empty ndarray
+            (isinstance(memory_embedding, (list, tuple)) and len(memory_embedding) == 0)   # empty list/tuple
+        ):
+            return {
+                "error": "Memory doesn't have an embedding for similarity comparison"
+            }
             
         # Find similar memories that might cause interference
         # We need both newer memories (retroactive interference) 
