@@ -343,80 +343,67 @@ class ReconsolidationManager:
         
         return []
     
-    async def _alter_memory_text(self,
-                               memory_text: str,
-                               original_form: str,
-                               alteration_strength: float,
-                               emotional_context: Optional[Dict[str, Any]],
-                               schemas: List[Dict[str, Any]],
-                               similar_memories: List[Dict[str, Any]]) -> str:
+    async def _alter_memory_text(
+        self,
+        memory_text: str,
+        original_form: str,
+        alteration_strength: float,
+        emotional_context: Optional[Dict[str, Any]],
+        schemas: List[Dict[str, Any]],
+        similar_memories: List[Dict[str, Any]],
+    ) -> str:
         """
-        Alter memory text based on various factors.
-        Uses GPT for more natural alterations.
+        Alter a memory using Responses API (or simple fallback for tiny changes).
         """
-        # For minimal changes, use simple word-level alterations
         if alteration_strength < 0.1 and random.random() < 0.7:
             return self._simple_text_alteration(memory_text, alteration_strength)
-        
-        # For more significant changes, use GPT
-        try:
-            # Format schemas for prompt
-            schema_text = ""
-            if schemas:
-                schema_text = "Memory schemas (cognitive biases) affecting this memory:\n"
-                for schema in schemas:
-                    schema_text += f"- {schema['schema_name']}: {schema['pattern']} (strength: {schema['influence_strength']:.2f})\n"
-            
-            # Format similar memories for source confusion
-            confusion_text = ""
-            if similar_memories:
-                confusion_text = "Similar memories that may cause source confusion:\n"
-                for i, mem in enumerate(similar_memories):
-                    confusion_text += f"- Similar memory {i+1}: {mem['memory_text']}\n"
-            
-            # Format emotional context
-            emotion_text = ""
-            if emotional_context:
-                emotion_text = f"Current emotional state: {emotional_context.get('primary_emotion', 'neutral')} (intensity: {emotional_context.get('intensity', 0.5):.2f})\n"
-            
-            # Create the prompt
-            prompt = f"""
-            Alter this memory to simulate human memory reconsolidation effects. The memory is being recalled and should change slightly.
-            
-            Original form of memory: {original_form}
-            Current form of memory: {memory_text}
-            Alteration strength (0.0-1.0): {alteration_strength:.2f}
-            
-            {emotion_text}
-            {schema_text}
-            {confusion_text}
-            
-            Instructions:
-            1. Keep the same core meaning and key facts
-            2. Make subtle changes to wording, emphasis, or details based on the alteration strength
-            3. If schemas are present, subtly alter the memory to align with those biases
-            4. If similar memories exist, incorporate small elements from them (source confusion)
-            5. If there's emotional context, slightly color the memory with that emotion
-            
-            Return only the altered memory text with no explanation.
-            """
-            
-            response = await openai.ChatCompletion.acreate(
-                model="gpt-4.1-nano",
-                messages=[
-                    {"role": "system", "content": "You are simulating human memory reconsolidation effects."},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.4,
-                max_tokens=300
+    
+        client = get_openai_client()
+    
+        schema_text = ""
+        if schemas:
+            schema_text = "Schemas influencing recall:\n" + "\n".join(
+                f"- {s['schema_name']} ({s['pattern']})"
+                for s in schemas
             )
-            
-            altered_text = response.choices[0].message.content.strip()
-            return altered_text
-            
+    
+        confusion_text = ""
+        if similar_memories:
+            confusion_text = "Similar memories causing source confusion:\n" + "\n".join(
+                f"- {m['memory_text']}" for m in similar_memories
+            )
+    
+        emotion_text = (
+            f"Current emotion: {emotional_context.get('primary_emotion')} "
+            f"(intensity {emotional_context.get('intensity',0):.2f})"
+            if emotional_context
+            else ""
+        )
+    
+        prompt = f"""
+        ORIGINAL: {original_form}
+        CURRENT: {memory_text}
+        ALTERATION STRENGTH: {alteration_strength:.2f}
+    
+        {emotion_text}
+        {schema_text}
+        {confusion_text}
+    
+        Alter the memory as a human might after reconsolidation.
+        Return ONLY the altered memory text.
+        """
+    
+        try:
+            resp = await client.responses.create(
+                model="gpt-4.1-nano",
+                instructions="You simulate memory reconsolidation.",
+                input=prompt,
+                temperature=0.4,
+                max_tokens=300,
+            )
+            return resp.output_text.strip()
         except Exception as e:
-            logger.error(f"Error in GPT-based memory alteration: {e}")
-            # Fall back to simple text alteration
+            logger.error("Memory alteration failed: %s", e)
             return self._simple_text_alteration(memory_text, alteration_strength)
     
     def _simple_text_alteration(self, text: str, alteration_strength: float) -> str:
