@@ -254,73 +254,60 @@ class MemorySchemaManager:
     
     async def _detect_pattern(self, memories: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         """
-        Detect a pattern in a set of memories.
-        Returns a schema structure if a pattern is found.
+        Detect a recurring pattern/schema in *memories* via Responses API.
         """
+        client = get_openai_client()
+    
+        memories_text = "\n".join(
+            f"Memory {i+1}: {m['text']}" for i, m in enumerate(memories)
+        )
+    
+        prompt = f"""
+        Analyze these memories to detect a recurring pattern or schema:
+    
+        {memories_text}
+    
+        Look for:
+          1. Common situations / events
+          2. Recurring elements or themes
+          3. Consistent cause-effect relationships
+          4. Patterns in interactions or outcomes
+    
+        If a clear pattern is found, output JSON:
+        {{
+          "pattern_found": true,
+          "name": "Schema Name",
+          "description": "Description",
+          "category": "Category",
+          "attributes": {{"key":"value"}}
+        }}
+    
+        Otherwise output: {{"pattern_found": false}}
+        """
+    
         try:
-            # Format memories for the prompt
-            memories_text = "\n".join([f"Memory {i+1}: {m['text']}" for i, m in enumerate(memories)])
-            
-            prompt = f"""
-            Analyze these memories to detect a recurring pattern or schema:
-            
-            {memories_text}
-            
-            Look for:
-            1. Common situations, events, or behaviors
-            2. Recurring elements or themes
-            3. Consistent cause-effect relationships
-            4. Patterns in interactions or outcomes
-            
-            If you find a clear pattern, create a schema with:
-            1. A concise name for the pattern
-            2. A description of what the pattern represents
-            3. A category (social, environmental, behavioral, emotional, etc.)
-            4. Key attributes or components of this pattern
-            
-            Format your response as JSON:
-            {{
-                "pattern_found": true/false,
-                "name": "Schema Name",
-                "description": "Description of the pattern",
-                "category": "Category",
-                "attributes": {{
-                    "key1": "value1",
-                    "key2": "value2"
-                }}
-            }}
-            
-            If no clear pattern is found, return pattern_found: false.
-            Return only the JSON with no explanation.
-            """
-            
-            response = await openai.ChatCompletion.acreate(
+            resp = await client.responses.create(
                 model="gpt-4.1-nano",
-                messages=[
-                    {"role": "system", "content": "You detect patterns in memories to form schemas."},
-                    {"role": "user", "content": prompt}
-                ],
+                instructions="You detect patterns in memories to form schemas.",
+                input=prompt,
                 temperature=0.4,
                 max_tokens=400,
-                response_format={"type": "json_object"}
+                text={"format": {"type": "json_object"}},
             )
-            
-            content = response.choices[0].message.content.strip()
-            result = json.loads(content)
-            
-            if not result.get("pattern_found", False):
+            result = json.loads(resp.output_text)
+            if not result.get("pattern_found"):
                 return None
-                
             return {
                 "name": result.get("name", "Unnamed Pattern"),
                 "description": result.get("description", ""),
                 "category": result.get("category", "general"),
-                "attributes": result.get("attributes", {})
+                "attributes": result.get("attributes", {}),
             }
-            
+    
         except Exception as e:
-            logger.error(f"Error detecting memory pattern: {e}")
+            logger.error("Pattern detection failed: %s", e, exc_info=True)
             return None
+
     
     @with_transaction
     async def find_similar_schema(self,
@@ -798,85 +785,53 @@ class MemorySchemaManager:
             "total_schemas_applied": len(applied_schemas)
         }
     
-    async def _calculate_schema_relevance(self, memory_text: str, schema_data: Dict[str, Any]) -> float:
+    async def _calculate_schema_relevance(
+        self,
+        memory_text: str,
+        schema_data: Dict[str, Any],
+    ) -> float:
         """
-        Calculate how relevant a schema is to a memory.
-        
-        Returns:
-            Relevance score from 0.0 to 1.0
+        Relevance score (0.0-1.0) of *schema_data* to *memory_text*.
         """
+        client = get_openai_client()
+    
+        schema_name = schema_data.get("name", "")
+        schema_description = schema_data.get("description", "")
+        attributes = schema_data.get("attributes", {})
+        attributes_text = "".join(f"- {k}: {v}\n" for k, v in attributes.items())
+    
+        prompt = f"""
+        MEMORY:
+        {memory_text}
+    
+        SCHEMA:
+        Name: {schema_name}
+        Description: {schema_description}
+        Attributes:
+        {attributes_text}
+    
+        Rate relevance 0.0-1.0 (0 = irrelevant, 1 = perfect).
+        Return ONLY the number.
+        """
+    
         try:
-            schema_name = schema_data.get("name", "")
-            schema_description = schema_data.get("description", "")
-            schema_attributes = schema_data.get("attributes", {})
-            
-            # Format attributes for the prompt
-            attributes_text = ""
-            for key, value in schema_attributes.items():
-                attributes_text += f"- {key}: {value}\n"
-                
-            prompt = f"""
-            Calculate how relevant this schema is to the memory:
-            
-            MEMORY:
-            {memory_text}
-            
-            SCHEMA:
-            Name: {schema_name}
-            Description: {schema_description}
-            Attributes:
-            {attributes_text}
-            
-            Calculate a relevance score from 0.0 to 1.0, where:
-            - 0.0: Completely irrelevant
-            - 0.5: Somewhat relevant
-            - 1.0: Perfectly matches the schema
-            
-            Consider:
-            1. How well the memory fits the schema's pattern
-            2. How many schema attributes are present in the memory
-            3. Whether the memory contradicts any aspects of the schema
-            
-            Return only a single number between 0.0 and 1.0 with no explanation.
-            """
-            
-            response = await openai.ChatCompletion.acreate(
+            resp = await client.responses.create(
                 model="gpt-4.1-nano",
-                messages=[
-                    {"role": "system", "content": "You calculate relevance scores between schemas and memories."},
-                    {"role": "user", "content": prompt}
-                ],
+                instructions="You rate memory/schema relevance.",
+                input=prompt,
                 temperature=0.1,
-                max_tokens=10
+                max_tokens=10,
             )
-            
-            relevance_text = response.choices[0].message.content.strip()
-            
-            try:
-                relevance = float(relevance_text)
-                # Ensure the score is within valid range
-                relevance = max(0.0, min(1.0, relevance))
-                return relevance
-            except ValueError:
-                logger.error(f"Invalid relevance score returned: {relevance_text}")
-                return 0.0
-                
+            score = float(resp.output_text.strip())
+            return max(0.0, min(1.0, score))
         except Exception as e:
-            logger.error(f"Error calculating schema relevance: {e}")
-            # Fallback - simple word matching
+            logger.error("Relevance calc failed: %s", e)
+            # simple word-overlap fallback
             schema_words = set((schema_name + " " + schema_description).lower().split())
             memory_words = set(memory_text.lower().split())
-            
             if not schema_words:
                 return 0.0
-                
-            overlap = len(schema_words.intersection(memory_words))
-            max_possible = min(len(schema_words), len(memory_words))
-            
-            if max_possible == 0:
-                return 0.0
-                
-            return overlap / max_possible
+            return len(schema_words & memory_words) / len(schema_words)
     
     @with_transaction
     async def interpret_memory_with_schemas(self,
@@ -1010,65 +965,55 @@ class MemorySchemaManager:
             ]
         }
     
-    async def _generate_schema_interpretation(self, memory_text: str, schema_details: List[Dict[str, Any]]) -> str:
+    async def _generate_schema_interpretation(
+        self,
+        memory_text: str,
+        schema_details: List[Dict[str, Any]],
+    ) -> str:
         """
-        Generate an interpretation of a memory based on applicable schemas.
+        Produce a 100-150 word interpretation using applicable schemas.
         """
-        try:
-            # Format schemas for the prompt
-            schemas_text = ""
-            for i, schema in enumerate(schema_details):
-                schemas_text += f"Schema {i+1}: {schema['name']} (relevance: {schema['relevance']:.2f})\n"
-                schemas_text += f"Description: {schema['description']}\n"
-                
-                # Add attributes if present
-                if schema["attributes"]:
-                    schemas_text += "Attributes:\n"
-                    for key, value in schema["attributes"].items():
-                        schemas_text += f"- {key}: {value}\n"
-                        
-                schemas_text += "\n"
-                
-            prompt = f"""
-            Interpret this memory using the applicable schemas:
-            
-            MEMORY:
-            {memory_text}
-            
-            APPLICABLE SCHEMAS:
-            {schemas_text}
-            
-            Generate an interpretation that:
-            1. Explains how the memory fits into the schemas
-            2. Identifies which elements of the memory align with schema attributes
-            3. Notes any aspects of the memory that deviate from expected schema patterns
-            4. Weighs the schemas by relevance in the interpretation
-            5. Provides a coherent narrative understanding of what this memory means in the context of these schemas
-            
-            Keep the interpretation concise (100-150 words).
-            
-            Return only the interpretation text with no explanation.
-            """
-            
-            response = await openai.ChatCompletion.acreate(
-                model="gpt-4.1-nano",
-                messages=[
-                    {"role": "system", "content": "You interpret memories through the lens of cognitive schemas."},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.4,
-                max_tokens=250
-            )
-            
-            interpretation = response.choices[0].message.content.strip()
-            return interpretation
-            
-        except Exception as e:
-            logger.error(f"Error generating schema interpretation: {e}")
-            # Simple fallback
-            highest_schema = max(schema_details, key=lambda x: x["relevance"])
-            return f"This memory appears to be an instance of the '{highest_schema['name']}' pattern. {highest_schema['description']}"
+        client = get_openai_client()
     
+        schemas_text = ""
+        for i, s in enumerate(schema_details):
+            schemas_text += (
+                f"Schema {i+1}: {s['name']} (relevance {s['relevance']:.2f})\n"
+                f"{s['description']}\n\n"
+            )
+    
+        prompt = f"""
+        MEMORY:
+        {memory_text}
+    
+        APPLICABLE SCHEMAS:
+        {schemas_text}
+    
+        Write a concise (100-150 words) interpretation that:
+          • Explains fit with schemas
+          • Weighs each by relevance
+          • Notes any deviations
+        Return ONLY the interpretation text.
+        """
+    
+        try:
+            resp = await client.responses.create(
+                model="gpt-4.1-nano",
+                instructions="You interpret memories through cognitive schemas.",
+                input=prompt,
+                temperature=0.4,
+                max_tokens=250,
+            )
+            return resp.output_text.strip()
+    
+        except Exception as e:
+            logger.error("Interpretation failed: %s", e)
+            highest = max(schema_details, key=lambda x: x["relevance"])
+            return (
+                f"This memory seems to illustrate the '{highest['name']}' pattern. "
+                f"{highest['description']}"
+            )
+        
     @with_transaction
     async def find_schema_conflicting_memories(self,
                                             schema_id: int,
@@ -1190,112 +1135,83 @@ class MemorySchemaManager:
             "schema_confidence": schema_data.get("confidence", 0.5)
         }
     
-    async def _calculate_conflict_score(self, memory_text: str, schema_data: Dict[str, Any]) -> float:
+    async def _calculate_conflict_score(
+        self,
+        memory_text: str,
+        schema_data: Dict[str, Any],
+    ) -> float:
         """
-        Calculate how much a memory conflicts with a schema.
-        
-        Returns:
-            Conflict score from 0.0 to 1.0
+        Conflict score 0.0-1.0 (1 = total contradiction).
         """
+        client = get_openai_client()
+    
+        schema_name = schema_data.get("name", "")
+        schema_description = schema_data.get("description", "")
+        attributes = schema_data.get("attributes", {})
+        attributes_text = "".join(f"- {k}: {v}\n" for k, v in attributes.items())
+    
+        prompt = f"""
+        MEMORY:
+        {memory_text}
+    
+        SCHEMA:
+        Name: {schema_name}
+        Description: {schema_description}
+        Attributes:
+        {attributes_text}
+    
+        Rate conflict (0.0-1.0). Return ONLY the number.
+        """
+    
         try:
-            schema_name = schema_data.get("name", "")
-            schema_description = schema_data.get("description", "")
-            schema_attributes = schema_data.get("attributes", {})
-            
-            # Format attributes for the prompt
-            attributes_text = ""
-            for key, value in schema_attributes.items():
-                attributes_text += f"- {key}: {value}\n"
-                
-            prompt = f"""
-            Calculate how much this memory conflicts with the schema:
-            
-            MEMORY:
-            {memory_text}
-            
-            SCHEMA:
-            Name: {schema_name}
-            Description: {schema_description}
-            Attributes:
-            {attributes_text}
-            
-            Calculate a conflict score from 0.0 to 1.0, where:
-            - 0.0: No conflict, memory completely aligns with schema
-            - 0.5: Moderate conflict, memory partially contradicts schema
-            - 1.0: Complete conflict, memory directly contradicts core schema attributes
-            
-            Consider:
-            1. Whether the memory contradicts key attributes of the schema
-            2. Whether the memory presents exceptions to the schema's patterns
-            3. Whether the memory challenges the fundamental assumptions of the schema
-            
-            Return only a single number between 0.0 and 1.0 with no explanation.
-            """
-            
-            response = await openai.ChatCompletion.acreate(
+            resp = await client.responses.create(
                 model="gpt-4.1-nano",
-                messages=[
-                    {"role": "system", "content": "You calculate conflict scores between memories and schemas."},
-                    {"role": "user", "content": prompt}
-                ],
+                instructions="You calculate schema/memory conflict.",
+                input=prompt,
                 temperature=0.1,
-                max_tokens=10
+                max_tokens=10,
             )
-            
-            conflict_text = response.choices[0].message.content.strip()
-            
-            try:
-                conflict = float(conflict_text)
-                # Ensure the score is within valid range
-                conflict = max(0.0, min(1.0, conflict))
-                return conflict
-            except ValueError:
-                logger.error(f"Invalid conflict score returned: {conflict_text}")
-                return 0.0
-                
+            score = float(resp.output_text.strip())
+            return max(0.0, min(1.0, score))
         except Exception as e:
-            logger.error(f"Error calculating conflict score: {e}")
+            logger.error("Conflict calc failed: %s", e)
             return 0.0
     
-    async def _explain_schema_conflict(self, memory_text: str, schema_data: Dict[str, Any]) -> str:
+    async def _explain_schema_conflict(
+        self,
+        memory_text: str,
+        schema_data: Dict[str, Any],
+    ) -> str:
         """
-        Generate an explanation of how a memory conflicts with a schema.
+        Brief (1-2 sentence) explanation of conflict.
         """
+        client = get_openai_client()
+    
+        prompt = f"""
+        MEMORY:
+        {memory_text}
+    
+        SCHEMA:
+        {schema_data.get('name', '')}: {schema_data.get('description', '')}
+    
+        Explain in 1-2 sentences how the memory conflicts with the schema.
+        Return ONLY the explanation.
+        """
+    
         try:
-            schema_name = schema_data.get("name", "")
-            schema_description = schema_data.get("description", "")
-            
-            prompt = f"""
-            Explain how this memory conflicts with the schema:
-            
-            MEMORY:
-            {memory_text}
-            
-            SCHEMA:
-            Name: {schema_name}
-            Description: {schema_description}
-            
-            Provide a brief explanation (1-2 sentences) of how this memory challenges or contradicts the schema.
-            
-            Return only the explanation with no additional text.
-            """
-            
-            response = await openai.ChatCompletion.acreate(
+            resp = await client.responses.create(
                 model="gpt-4.1-nano",
-                messages=[
-                    {"role": "system", "content": "You explain conflicts between memories and schemas."},
-                    {"role": "user", "content": prompt}
-                ],
+                instructions="You explain memory/schema conflicts.",
+                input=prompt,
                 temperature=0.4,
-                max_tokens=100
+                max_tokens=100,
             )
-            
-            explanation = response.choices[0].message.content.strip()
-            return explanation
-            
+            return resp.output_text.strip()
         except Exception as e:
-            logger.error(f"Error explaining schema conflict: {e}")
-            return f"This memory contradicts aspects of the '{schema_name}' schema."
+            logger.error("Conflict explanation failed: %s", e)
+            return (
+                f"This memory contradicts aspects of the '{schema_data.get('name','')}' schema."
+            )
     
     @with_transaction
     async def evolve_schema_from_conflicts(self,
@@ -1388,78 +1304,58 @@ class MemorySchemaManager:
             "changes": result.get("updates", [])
         }
     
-    async def _generate_evolved_schema(self, schema_data: Dict[str, Any], conflicts: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    async def _generate_evolved_schema(
+        self,
+        schema_data: Dict[str, Any],
+        conflicts: List[Dict[str, Any]],
+    ) -> Optional[Dict[str, Any]]:
         """
-        Generate an evolved schema that accounts for conflicting memories.
+        Produce an evolved schema JSON that resolves *conflicts*.
         """
+        client = get_openai_client()
+    
+        # build prompt pieces
+        attrs = "\n".join(f"- {k}: {v}" for k, v in schema_data.get("attributes", {}).items())
+        conflicts_text = ""
+        for i, c in enumerate(conflicts):
+            conflicts_text += (
+                f"Conflict {i+1}:\nMemory: {c.get('text','')}\n"
+                f"Explanation: {c.get('conflict_explanation','')}\n\n"
+            )
+    
+        prompt = f"""
+        CURRENT SCHEMA:
+        Name: {schema_data.get('name','')}
+        Description: {schema_data.get('description','')}
+        Attributes:
+        {attrs}
+    
+        CONFLICTING MEMORIES:
+        {conflicts_text}
+    
+        Produce evolved schema JSON:
+        {{
+          "description": "...",
+          "attributes": {{}},
+          "resolution": "..."
+        }}
+        Return ONLY JSON.
+        """
+    
         try:
-            schema_name = schema_data.get("name", "")
-            schema_description = schema_data.get("description", "")
-            schema_attributes = schema_data.get("attributes", {})
-            
-            # Format attributes
-            attributes_text = ""
-            for key, value in schema_attributes.items():
-                attributes_text += f"- {key}: {value}\n"
-                
-            # Format conflicts
-            conflicts_text = ""
-            for i, conflict in enumerate(conflicts):
-                conflicts_text += f"Conflict {i+1}:\n"
-                conflicts_text += f"Memory: {conflict.get('text', '')}\n"
-                conflicts_text += f"Explanation: {conflict.get('conflict_explanation', '')}\n\n"
-                
-            prompt = f"""
-            Evolve this schema to accommodate the conflicting memories:
-            
-            CURRENT SCHEMA:
-            Name: {schema_name}
-            Description: {schema_description}
-            Attributes:
-            {attributes_text}
-            
-            CONFLICTING MEMORIES:
-            {conflicts_text}
-            
-            Generate an evolved version of the schema that:
-            1. Maintains the core essence of the original schema
-            2. Expands or modifies the schema to accommodate the conflicts
-            3. Refines the attributes to be more accurate or nuanced
-            4. Explains how this evolution resolves the conflicts
-            
-            Format your response as JSON:
-            {{
-                "description": "Updated schema description",
-                "attributes": {{
-                    "key1": "value1",
-                    "key2": "value2"
-                }},
-                "resolution": "How this evolution resolves the conflicts"
-            }}
-            
-            Return only the JSON with no explanation.
-            """
-            
-            response = await openai.ChatCompletion.acreate(
+            resp = await client.responses.create(
                 model="gpt-4.1-nano",
-                messages=[
-                    {"role": "system", "content": "You evolve schemas to accommodate conflicting memories."},
-                    {"role": "user", "content": prompt}
-                ],
+                instructions="You evolve schemas to handle conflicts.",
+                input=prompt,
                 temperature=0.4,
                 max_tokens=500,
-                response_format={"type": "json_object"}
+                text={"format": {"type": "json_object"}},
             )
-            
-            content = response.choices[0].message.content.strip()
-            evolved_schema = json.loads(content)
-            
-            return evolved_schema
-            
+            return json.loads(resp.output_text)
         except Exception as e:
-            logger.error(f"Error generating evolved schema: {e}")
+            logger.error("Evolved schema failed: %s", e)
             return None
-    
+        
     @with_transaction
     async def merge_schemas(self,
                          entity_type: str,
@@ -1572,71 +1468,53 @@ class MemorySchemaManager:
             "source_schema_names": [s["name"] for s in schemas]
         }
     
-    async def _generate_merged_schema(self, schemas: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    async def _generate_merged_schema(
+        self,
+        schemas: List[Dict[str, Any]],
+    ) -> Optional[Dict[str, Any]]:
         """
-        Generate a merged schema from multiple source schemas.
+        Merge multiple schemas into one comprehensive schema.
         """
+        client = get_openai_client()
+    
+        schemas_text = ""
+        for i, s in enumerate(schemas):
+            data = s["data"]
+            schemas_text += (
+                f"Schema {i+1}: {s['name']}\n"
+                f"Description: {data.get('description','')}\n"
+                "Attributes:\n"
+                + "".join(f"- {k}: {v}\n" for k, v in data.get("attributes", {}).items())
+                + "\n"
+            )
+    
+        prompt = f"""
+        Merge these schemas into one comprehensive schema:
+    
+        {schemas_text}
+    
+        Output JSON:
+        {{
+          "name": "...",
+          "description": "...",
+          "category": "...",
+          "attributes": {{}},
+          "integration_notes": "..."
+        }}
+        """
+    
         try:
-            # Format schemas for the prompt
-            schemas_text = ""
-            for i, schema in enumerate(schemas):
-                schema_data = schema["data"]
-                schemas_text += f"Schema {i+1}: {schema['name']}\n"
-                schemas_text += f"Description: {schema_data.get('description', '')}\n"
-                
-                # Add attributes
-                attributes = schema_data.get("attributes", {})
-                if attributes:
-                    schemas_text += "Attributes:\n"
-                    for key, value in attributes.items():
-                        schemas_text += f"- {key}: {value}\n"
-                        
-                schemas_text += "\n"
-                
-            prompt = f"""
-            Merge these schemas into a single, more comprehensive schema:
-            
-            {schemas_text}
-            
-            Create a merged schema that:
-            1. Encompasses the key elements of all source schemas
-            2. Resolves any contradictions between the schemas
-            3. Creates a more general but still specific enough pattern
-            4. Maintains the essential attributes from each schema
-            
-            Format your response as JSON:
-            {{
-                "name": "Name for the merged schema",
-                "description": "Comprehensive description of the merged schema",
-                "category": "Appropriate category",
-                "attributes": {{
-                    "key1": "value1",
-                    "key2": "value2"
-                }},
-                "integration_notes": "How the schemas were integrated"
-            }}
-            
-            Return only the JSON with no explanation.
-            """
-            
-            response = await openai.ChatCompletion.acreate(
+            resp = await client.responses.create(
                 model="gpt-4.1-nano",
-                messages=[
-                    {"role": "system", "content": "You merge multiple schemas into more comprehensive patterns."},
-                    {"role": "user", "content": prompt}
-                ],
+                instructions="You merge schemas.",
+                input=prompt,
                 temperature=0.4,
                 max_tokens=800,
-                response_format={"type": "json_object"}
+                text={"format": {"type": "json_object"}},
             )
-            
-            content = response.choices[0].message.content.strip()
-            merged_schema = json.loads(content)
-            
-            return merged_schema
-            
+            return json.loads(resp.output_text)
         except Exception as e:
-            logger.error(f"Error generating merged schema: {e}")
+            logger.error("Merged schema failed: %s", e)
             return None
     
     @with_transaction
@@ -1805,75 +1683,46 @@ class MemorySchemaManager:
         
         return results
     
-    async def _calculate_schema_similarity(self, schema1_data: Dict[str, Any], schema2_data: Dict[str, Any]) -> float:
+    async def _calculate_schema_similarity(
+        self,
+        schema1_data: Dict[str, Any],
+        schema2_data: Dict[str, Any],
+    ) -> float:
         """
-        Calculate similarity between two schemas.
-        
-        Returns:
-            Similarity score from 0.0 to 1.0
+        Similarity 0.0-1.0 between two schema descriptions.
         """
+        client = get_openai_client()
+    
+        desc1 = schema1_data.get("description") or schema1_data.get("name", "")
+        desc2 = schema2_data.get("description") or schema2_data.get("name", "")
+    
+        prompt = f"""
+        SCHEMA 1:
+        {desc1}
+    
+        SCHEMA 2:
+        {desc2}
+    
+        Rate similarity 0.0-1.0. Return ONLY the number.
+        """
+    
         try:
-            schema1_desc = schema1_data.get("description", "")
-            schema2_desc = schema2_data.get("description", "")
-            
-            # If either description is empty, use other schema data
-            if not schema1_desc:
-                schema1_desc = schema1_data.get("name", "")
-            if not schema2_desc:
-                schema2_desc = schema2_data.get("name", "")
-                
-            prompt = f"""
-            Calculate the similarity between these two schemas:
-            
-            SCHEMA 1:
-            {schema1_desc}
-            
-            SCHEMA 2:
-            {schema2_desc}
-            
-            Rate their similarity on a scale from 0.0 to 1.0, where:
-            - 0.0: Completely different, no overlap
-            - 0.5: Moderate similarity, some overlapping concepts
-            - 1.0: Nearly identical in meaning and purpose
-            
-            Return only a single number between 0.0 and 1.0 with no explanation.
-            """
-            
-            response = await openai.ChatCompletion.acreate(
+            resp = await client.responses.create(
                 model="gpt-4.1-nano",
-                messages=[
-                    {"role": "system", "content": "You calculate similarity between schemas."},
-                    {"role": "user", "content": prompt}
-                ],
+                instructions="You rate schema similarity.",
+                input=prompt,
                 temperature=0.1,
-                max_tokens=10
+                max_tokens=10,
             )
-            
-            similarity_text = response.choices[0].message.content.strip()
-            
-            try:
-                similarity = float(similarity_text)
-                # Ensure the score is within valid range
-                similarity = max(0.0, min(1.0, similarity))
-                return similarity
-            except ValueError:
-                logger.error(f"Invalid similarity score returned: {similarity_text}")
-                return 0.0
-                
+            score = float(resp.output_text.strip())
+            return max(0.0, min(1.0, score))
         except Exception as e:
-            logger.error(f"Error calculating schema similarity: {e}")
-            # Fallback - simple word overlap
-            schema1_words = set((schema1_data.get("name", "") + " " + schema1_data.get("description", "")).lower().split())
-            schema2_words = set((schema2_data.get("name", "") + " " + schema2_data.get("description", "")).lower().split())
+            logger.error("Similarity calc failed: %s", e)
+            # quick word-overlap fallback
+            w1 = set(desc1.lower().split())
+            w2 = set(desc2.lower().split())
+            return len(w1 & w2) / len(w1 | w2) if w1 and w2 else 0.0
             
-            if not schema1_words or not schema2_words:
-                return 0.0
-                
-            overlap = len(schema1_words.intersection(schema2_words))
-            union = len(schema1_words.union(schema2_words))
-            
-            return overlap / union if union > 0 else 0.0
-
 # Create the necessary tables if they don't exist
 async def create_schema_tables():
     """Create the necessary tables for the schema memory system if they don't exist."""
