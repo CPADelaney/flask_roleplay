@@ -386,7 +386,7 @@ class LoreDynamicsSystem(BaseLoreManager):
         action_description="Evolving lore with event",
         id_from_context=lambda ctx: "lore_dynamics"
     )
-    async def evolve_lore_with_event(self, event_description: str) -> Dict[str, Any]:
+    async def evolve_lore_with_event(self, ctx, event_description: str) -> Dict[str, Any]:
         """
         Evolve world lore based on a narrative event, using a specialized LLM-based
         agent to coordinate steps (identify, generate updates, apply changes, create new lore).
@@ -1087,7 +1087,7 @@ class LoreDynamicsSystem(BaseLoreManager):
                 
                 # Use event_data["description"] to evolve lore
                 event_description = f"{event_data.get('event_name','Unnamed Event')}: {event_data.get('description','')}"
-                lore_updates = await self.evolve_lore_with_event(event_description)
+                lore_updates = await self.evolve_lore_with_event(ctx, event_description)
                 event_data["lore_updates"] = lore_updates
                 
                 return event_data
@@ -1204,7 +1204,20 @@ class LoreDynamicsSystem(BaseLoreManager):
                         'power_dynamics': 'strict_hierarchy',
                         'power_hierarchy': {}
                     }
-    
+
+    async def check_permission(self, agent_type, agent_id, action_type, action_details):
+        """Check permission with governance system."""
+        if not self.governor:
+            # If no governor, assume permission granted
+            return {"approved": True}
+        
+        return await self.governor.check_action_permission(
+            agent_type=agent_type,
+            agent_id=agent_id,
+            action_type=action_type,
+            action_details=action_details
+        )
+        
     async def _fetch_related_elements(self, lore_id: str) -> List[Dict[str, Any]]:
         """Fetch relationships from a LoreRelationships table if it exists."""
         if not lore_id:
