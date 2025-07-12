@@ -6,6 +6,7 @@ import random
 from datetime import datetime
 from typing import Dict, Any, List, Optional
 from textwrap import dedent
+from os import getenv
 from difflib import get_close_matches
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
