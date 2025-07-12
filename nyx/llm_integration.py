@@ -28,69 +28,39 @@ TEMPERATURE_SETTINGS = {
 async def generate_text_completion(
     system_prompt: str,
     user_prompt: str,
-    temperature: float = None,
+    temperature: float | None = None,
     max_tokens: int = 1000,
-    stop_sequences: List[str] = None,
-    task_type: str = "decision"
+    stop_sequences: List[str] | None = None,
+    task_type: str = "decision",
 ) -> str:
     """
-    Generate a text completion using GPT model.
-    
-    Args:
-        system_prompt: System prompt to guide the model's behavior
-        user_prompt: User prompt / query
-        temperature: Temperature setting (0.0-1.0)
-        max_tokens: Maximum tokens to generate
-        stop_sequences: Optional sequences to stop generation
-        task_type: Type of task for default temperature
-        
-    Returns:
-        Generated text response
+    Single-shot completion via Responses API with back-off.
     """
-    # Use task-specific temperature if not specified
-    if temperature is None:
-        temperature = TEMPERATURE_SETTINGS.get(task_type, 0.7)
+    temperature = temperature if temperature is not None else \
+                  TEMPERATURE_SETTINGS.get(task_type, 0.7)
 
-    # Inject relevant memories into the system prompt
     system_prompt = await prepare_context(system_prompt, user_prompt)
-    
-    # Create messages array
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": user_prompt},
-    ]
+    client = get_openai_client()
 
-    # Call OpenAI API with simple exponential backoff on rate limits
-    response = None
     for attempt in range(3):
         try:
-            response = await openai.ChatCompletion.acreate(
+            resp = await client.responses.create(
                 model="gpt-4.1-nano",
-                messages=messages,
+                instructions=system_prompt,     # “system”
+                input=user_prompt,              # “user”
                 temperature=temperature,
                 max_tokens=max_tokens,
                 stop=stop_sequences,
             )
-            break
-        except openai.error.RateLimitError:
+            return resp.output_text.strip()
+        except client.error.RateLimitError:
             wait = 2 ** attempt
-            logger.warning(
-                f"Rate limit hit, retrying in {wait}s (attempt {attempt + 1}/3)"
-            )
+            logger.warning("Rate limit – retrying in %ss", wait)
             await asyncio.sleep(wait)
-    else:
-        logger.error("Exceeded retry attempts due to rate limiting")
-        return "I'm having trouble processing your request at the moment."
 
-    try:
-        # Extract and return the text
-        return response.choices[0].message.content.strip()
-    except Exception as e:
-        logger.error(f"Error generating text completion: {e}")
-        return (
-            "I'm having trouble processing your request at the moment. "
-            + str(e)[:50]
-        )
+    logger.error("Exceeded retries for text completion.")
+    return "I'm having trouble processing your request right now."
+
 
 async def create_semantic_abstraction(memory_text: str) -> str:
     """
