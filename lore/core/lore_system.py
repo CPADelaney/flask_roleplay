@@ -132,7 +132,7 @@ class LoreSystem:
             
             # Step 5: Propagate consequences to other systems (outside the transaction)
             dynamics = await self.registry.get_lore_dynamics()
-            await dynamics.evolve_lore_with_event(f"A world state change occurred: {reason}")
+            await dynamics.evolve_lore_with_event(ctx, f"A world state change occurred: {reason}")
             
             return {"status": "committed", "entity_type": entity_type, "identifier": entity_identifier, "changes": updates}
     
