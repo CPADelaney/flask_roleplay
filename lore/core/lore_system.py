@@ -111,10 +111,19 @@ class LoreSystem:
                     
                     set_sql = ", ".join(set_clauses)
                     
+                    # Build WHERE clause with proper placeholder numbering
+                    # Start numbering after the SET clause placeholders
+                    where_clauses_update = []
+                    num_updates = len(updates)
+                    for i, key in enumerate(entity_identifier.keys()):
+                        placeholder_num = num_updates + i + 1
+                        where_clauses_update.append(f"{key} = ${placeholder_num}")
+                    where_sql_update = " AND ".join(where_clauses_update)
+                    
                     # Add the entity identifier values
                     update_values.extend(list(entity_identifier.values()))
                     
-                    update_query = f"UPDATE {entity_type} SET {set_sql} WHERE {where_sql}"
+                    update_query = f"UPDATE {entity_type} SET {set_sql} WHERE {where_sql_update}"
                     await conn.execute(update_query, *update_values)
     
                     # Step 4: Log the change as a canonical event in unified memory
