@@ -307,9 +307,7 @@ class SemanticMemoryManager:
                 model="gpt-4.1-nano",
                 instructions="You extract patterns from memory clusters.",
                 input=prompt,
-                temperature=0.3,
-                max_tokens=300,
-                text={"format": {"type": "json_object"}},
+                temperature=0.3
             )
             return json.loads(resp.output_text)
         except Exception as e:
@@ -624,8 +622,7 @@ class SemanticMemoryManager:
                 model="gpt-4.1-nano",
                 instructions="You generate counterfactual variations.",
                 input=prompt,
-                temperature=0.7,
-                max_tokens=200,
+                temperature=0.7
             )
             return resp.output_text.strip()
         except Exception as e:
@@ -784,9 +781,7 @@ class SemanticMemoryManager:
                 model="gpt-4.1-nano",
                 instructions="You extract related topics.",
                 input=prompt,
-                temperature=0.5,
-                max_tokens=100,
-                text={"format": {"type": "json_object"}},
+                temperature=0.5
             )
             data = json.loads(resp.output_text)
             if isinstance(data, list):
