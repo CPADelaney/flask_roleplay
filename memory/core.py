@@ -510,7 +510,7 @@ class UnifiedMemoryManager:
         rows = await conn.fetch(
             """
             SELECT entity1_type, entity1_id, entity2_type, entity2_id, link_type, link_level
-            FROM social_links
+            FROM SocialLinks  # <- Change from 'social_links' to 'SocialLinks'
             WHERE user_id = $1 AND conversation_id = $2
             AND ((entity1_type = $3 AND entity1_id = $4) OR (entity2_type = $3 AND entity2_id = $4))
             AND link_level >= 30
