@@ -489,171 +489,138 @@ class MemoryInterferenceManager:
     
     async def _blend_memory_elements(self, text1: str, text2: str) -> str:
         """
-        Blend elements from two memories.
+        Blend two memories via Responses API.
         """
+        client = get_openai_client()
+    
+        prompt = f"""
+        Blend elements from these memories into a plausible but false single memory.
+    
+        Memory 1: {text1}
+        Memory 2: {text2}
+    
+        Return ONLY the blended memory in first person.
+        """
+    
         try:
-            prompt = f"""
-            Create a blended memory by mixing elements from these two memories:
-            
-            Memory 1: {text1}
-            Memory 2: {text2}
-            
-            Generate a false memory that:
-            1. Takes some details from Memory 1
-            2. Takes other details from Memory 2
-            3. Combines them in a plausible but incorrect way
-            4. Creates a subtle confusion about what actually happened
-            
-            The blended memory should be written in first person, as if the person genuinely remembers it this way.
-            
-            Return only the blended memory text with no explanation.
-            """
-            
-            response = await openai.ChatCompletion.acreate(
+            resp = await client.responses.create(
                 model="gpt-4.1-nano",
-                messages=[
-                    {"role": "system", "content": "You create blended false memories to simulate memory interference."},
-                    {"role": "user", "content": prompt}
-                ],
+                instructions="You create blended false memories.",
+                input=prompt,
                 temperature=0.7,
-                max_tokens=200
+                max_tokens=200,
             )
-            
-            blended_text = response.choices[0].message.content.strip()
-            return blended_text
-            
+            return resp.output_text.strip()
         except Exception as e:
-            logger.error(f"Error blending memory elements: {e}")
-            # Fallback - simple joining
-            return f"I remember that {text1}, but then {text2}"
+            logger.error("Blend failed: %s", e)
+            return f"I remember that {text1} … and somehow {text2} too."
     
     async def _blend_temporal_elements(self, text1: str, text2: str) -> str:
         """
-        Blend memories with temporal confusion.
+        Build a single false memory that *confuses the order* of two memories.
         """
-        try:
-            prompt = f"""
-            Create a blended memory with temporal confusion from these two memories:
-            
-            Memory 1: {text1}
-            Memory 2: {text2}
-            
-            Generate a false memory that:
-            1. Confuses the order of events
-            2. Merges the timeframes of both memories
-            3. Creates a single coherent but incorrect narrative
-            4. Makes the person believe events happened in a different sequence than they actually did
-            
-            The blended memory should be written in first person, as if the person genuinely remembers it this way.
-            
-            Return only the blended memory text with no explanation.
-            """
-            
-            response = await openai.ChatCompletion.acreate(
-                model="gpt-4.1-nano",
-                messages=[
-                    {"role": "system", "content": "You create temporally confused false memories."},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.7,
-                max_tokens=200
-            )
-            
-            blended_text = response.choices[0].message.content.strip()
-            return blended_text
-            
-        except Exception as e:
-            logger.error(f"Error blending temporal elements: {e}")
-            # Fallback
-            return f"I remember that before {text1}, first {text2} happened"
+        client = get_openai_client()
     
-    async def _blend_weighted_memories(self, text1: str, text2: str, weight1: float, weight2: float) -> str:
+        prompt = f"""
+        You are creating a false memory that mixes timelines.
+    
+        MEMORY A: {text1}
+        MEMORY B: {text2}
+    
+        Task:
+          • Merge these memories into ONE narrative that scrambles their temporal order.
+          • The final memory must be in first-person and feel coherent to the rememberer.
+          • Begin the memory naturally (no meta preamble) and DO NOT add any explanation.
+    
+        Return ONLY the blended memory text.
         """
-        Blend memories with weights based on emotional intensity.
-        """
+    
         try:
-            prompt = f"""
-            Create a blended memory from these two memories, with the first memory weighted {weight1:.2f} and the second memory weighted {weight2:.2f}:
-            
-            Memory 1 ({weight1:.2f}): {text1}
-            Memory 2 ({weight2:.2f}): {text2}
-            
-            Generate a false memory that:
-            1. Incorporates more elements from the higher-weighted memory
-            2. Still includes some elements from the lower-weighted memory
-            3. Creates a coherent but false narrative that feels emotionally consistent
-            4. Maintains the emotional tone of the dominant memory
-            
-            The blended memory should be written in first person, as if the person genuinely remembers it this way.
-            
-            Return only the blended memory text with no explanation.
-            """
-            
-            response = await openai.ChatCompletion.acreate(
+            resp = await client.responses.create(
                 model="gpt-4.1-nano",
-                messages=[
-                    {"role": "system", "content": "You create emotionally-weighted false memories."},
-                    {"role": "user", "content": prompt}
-                ],
+                instructions="You create temporally-confused false memories.",
+                input=prompt,
                 temperature=0.7,
-                max_tokens=200
+                max_tokens=200,
             )
-            
-            blended_text = response.choices[0].message.content.strip()
-            return blended_text
-            
+            return resp.output_text.strip()
+    
         except Exception as e:
-            logger.error(f"Error blending weighted memories: {e}")
-            # Fallback
-            if weight1 >= weight2:
-                return f"I vividly remember that {text1}, and I think {text2} also happened"
-            else:
-                return f"I vividly remember that {text2}, and I think {text1} also happened"
+            logger.error("Temporal blend failed: %s", e)
+            # simple fallback – prepend a confusion marker
+            return f"I keep mixing them up: first {text2}, then somehow {text1}…"
+    
+    async def _blend_weighted_memories(
+        self,
+        text1: str,
+        text2: str,
+        weight1: float,
+        weight2: float,
+    ) -> str:
+        """
+        Produce a blended memory, favouring the higher-weighted source.
+        """
+        client = get_openai_client()
+    
+        prompt = f"""
+        MEMORY 1 (weight {weight1:.2f}): {text1}
+        MEMORY 2 (weight {weight2:.2f}): {text2}
+    
+        Create ONE false memory in first-person:
+          • Use more details from the memory with the HIGHER weight.
+          • Still weave in subtle elements from the lower-weighted memory.
+          • The tone/emotional colour should match the dominant (higher weight) memory.
+          • No prefaces or explanations — just the memory text.
+    
+        Return ONLY the blended memory text.
+        """
+    
+        try:
+            resp = await client.responses.create(
+                model="gpt-4.1-nano",
+                instructions="You craft emotionally weighted blended memories.",
+                input=prompt,
+                temperature=0.7,
+                max_tokens=200,
+            )
+            return resp.output_text.strip()
+    
+        except Exception as e:
+            logger.error("Weighted blend failed: %s", e)
+            # naive fallback – whichever has higher weight comes first
+            primary, secondary = (text1, text2) if weight1 >= weight2 else (text2, text1)
+            return f"I vividly remember that {primary}, and—though it’s hazy—{secondary} seems mixed in there too."
+
     
     async def _blend_with_gpt(self, text1: str, text2: str) -> str:
         """
-        Generic blending using GPT.
+        Generic “blend two memories” helper using the Responses API.
         """
+        client = get_openai_client()
+    
+        prompt = f"""
+        MEMORY 1: {text1}
+        MEMORY 2: {text2}
+    
+        Combine them into ONE plausible but incorrect memory, first-person POV.
+        Subtly merge details so it feels authentic yet slightly inconsistent.
+        Return ONLY the blended memory.
+        """
+    
         try:
-            prompt = f"""
-            Create a blended false memory from these two memories:
-            
-            Memory 1: {text1}
-            Memory 2: {text2}
-            
-            Generate a false memory that:
-            1. Combines elements from both memories in a plausible but incorrect way
-            2. Creates a memory that would feel real to the person remembering it
-            3. Has subtle inconsistencies that someone else might notice
-            
-            The blended memory should be written in first person, as if the person genuinely remembers it this way.
-            
-            Return only the blended memory text with no explanation.
-            """
-            
-            response = await openai.ChatCompletion.acreate(
+            resp = await client.responses.create(
                 model="gpt-4.1-nano",
-                messages=[
-                    {"role": "system", "content": "You create blended false memories."},
-                    {"role": "user", "content": prompt}
-                ],
+                instructions="You produce generic blended false memories.",
+                input=prompt,
                 temperature=0.7,
-                max_tokens=200
+                max_tokens=200,
             )
-            
-            blended_text = response.choices[0].message.content.strip()
-            return blended_text
-            
+            return resp.output_text.strip()
+    
         except Exception as e:
-            logger.error(f"Error in generic memory blending: {e}")
-            # Fallback
-            sentences1 = text1.split(".")
-            sentences2 = text2.split(".")
-            
-            if len(sentences1) >= 1 and len(sentences2) >= 1:
-                return f"{sentences1[0]}. {sentences2[0]}."
-            else:
-                return f"{text1} {text2}"
+            logger.error("Generic blend failed: %s", e)
+            # basic sentence join fallback
+            return f"{text1.rstrip('.')} … and somehow {text2.lstrip().capitalize()}."
     
     @with_transaction
     async def generate_intrusive_memory(self,
