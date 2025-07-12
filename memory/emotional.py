@@ -306,7 +306,7 @@ class EmotionalMemoryManager:
             """)
     
             # ---- Responses API call (strict JSON output) ----
-            resp = await client.responses.create(
+            resp = client.responses.create(
                 model=model,
                 instructions=(
                     "You are an emotion-analysis engine. "
