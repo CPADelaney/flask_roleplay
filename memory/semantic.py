@@ -222,79 +222,7 @@ class SemanticMemoryManager:
             "memories_analyzed": len(episodic_memories),
             "clusters_found": len(clusters)
         }
-    
-    async def create_semantic_tables():
-        """Create the necessary tables for the semantic memory system if they don't exist."""
-        try:
-            async with TransactionContext() as conn:
-                
-                await conn.execute("""
-                    CREATE TABLE IF NOT EXISTS SemanticNetworks (
-                        id SERIAL PRIMARY KEY,
-                        user_id INTEGER NOT NULL,
-                        conversation_id INTEGER NOT NULL,
-                        entity_type VARCHAR(50) NOT NULL,
-                        entity_id INTEGER NOT NULL,
-                        central_topic TEXT NOT NULL,
-                        network_data JSONB NOT NULL,
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-                        FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
-                    );
-                    
-                    CREATE INDEX IF NOT EXISTS idx_semantic_networks_entity 
-                    ON SemanticNetworks(user_id, conversation_id, entity_type, entity_id);
-                    
-                    CREATE INDEX IF NOT EXISTS idx_semantic_networks_topic 
-                    ON SemanticNetworks(central_topic);
-                    
-                    -- Table for tracking semantic patterns across memories
-                    CREATE TABLE IF NOT EXISTS SemanticPatterns (
-                        id SERIAL PRIMARY KEY,
-                        user_id INTEGER NOT NULL,
-                        conversation_id INTEGER NOT NULL,
-                        entity_type VARCHAR(50) NOT NULL,
-                        entity_id INTEGER NOT NULL,
-                        pattern_text TEXT NOT NULL,
-                        confidence FLOAT NOT NULL DEFAULT 0.5,
-                        source_memory_ids INTEGER[],
-                        pattern_type VARCHAR(50),
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-                        FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
-                    );
-                    
-                    CREATE INDEX IF NOT EXISTS idx_semantic_patterns_entity 
-                    ON SemanticPatterns(user_id, conversation_id, entity_type, entity_id);
-                    
-                    -- Table for counterfactual memories
-                    CREATE TABLE IF NOT EXISTS CounterfactualMemories (
-                        id SERIAL PRIMARY KEY,
-                        user_id INTEGER NOT NULL,
-                        conversation_id INTEGER NOT NULL,
-                        entity_type VARCHAR(50) NOT NULL,
-                        entity_id INTEGER NOT NULL,
-                        source_memory_id INTEGER NOT NULL,
-                        counterfactual_text TEXT NOT NULL,
-                        variation_type VARCHAR(50) NOT NULL,
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-                        FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
-                    );
-                    
-                    CREATE INDEX IF NOT EXISTS idx_counterfactual_entity 
-                    ON CounterfactualMemories(user_id, conversation_id, entity_type, entity_id);
-                    
-                    CREATE INDEX IF NOT EXISTS idx_counterfactual_source 
-                    ON CounterfactualMemories(source_memory_id);
-                """)
-                
-                logger.info("Semantic memory tables created successfully")
-                
-        except Exception as e:
-            logger.error(f"Error creating semantic memory tables: {e}")
-            raise
-    
+       
     async def _cluster_memories_by_similarity(self, memories: List[Memory]) -> List[List[Memory]]:
         """
         Group memories into clusters by semantic similarity.
@@ -1070,20 +998,25 @@ class SemanticMemoryManager:
                 if len(w) > 5 and w.lower() != current_topic.lower()
             ]
             return random.sample(words, min(3, len(words)))
+            
 
-    async def create_semantic_tables():
-        """Create the necessary tables for the semantic memory system if they don't exist."""
+async def create_semantic_tables():
+    """Create the necessary tables for the semantic memory system if they don't exist."""
+    try:
         async with TransactionContext() as conn:
+            
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS SemanticNetworks (
                     id SERIAL PRIMARY KEY,
                     user_id INTEGER NOT NULL,
                     conversation_id INTEGER NOT NULL,
-                    entity_type TEXT NOT NULL,
+                    entity_type VARCHAR(50) NOT NULL,
                     entity_id INTEGER NOT NULL,
                     central_topic TEXT NOT NULL,
                     network_data JSONB NOT NULL,
-                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
                 );
                 
                 CREATE INDEX IF NOT EXISTS idx_semantic_networks_entity 
@@ -1091,4 +1024,50 @@ class SemanticMemoryManager:
                 
                 CREATE INDEX IF NOT EXISTS idx_semantic_networks_topic 
                 ON SemanticNetworks(central_topic);
+                
+                -- Table for tracking semantic patterns across memories
+                CREATE TABLE IF NOT EXISTS SemanticPatterns (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER NOT NULL,
+                    conversation_id INTEGER NOT NULL,
+                    entity_type VARCHAR(50) NOT NULL,
+                    entity_id INTEGER NOT NULL,
+                    pattern_text TEXT NOT NULL,
+                    confidence FLOAT NOT NULL DEFAULT 0.5,
+                    source_memory_ids INTEGER[],
+                    pattern_type VARCHAR(50),
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+                );
+                
+                CREATE INDEX IF NOT EXISTS idx_semantic_patterns_entity 
+                ON SemanticPatterns(user_id, conversation_id, entity_type, entity_id);
+                
+                -- Table for counterfactual memories
+                CREATE TABLE IF NOT EXISTS CounterfactualMemories (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER NOT NULL,
+                    conversation_id INTEGER NOT NULL,
+                    entity_type VARCHAR(50) NOT NULL,
+                    entity_id INTEGER NOT NULL,
+                    source_memory_id INTEGER NOT NULL,
+                    counterfactual_text TEXT NOT NULL,
+                    variation_type VARCHAR(50) NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+                );
+                
+                CREATE INDEX IF NOT EXISTS idx_counterfactual_entity 
+                ON CounterfactualMemories(user_id, conversation_id, entity_type, entity_id);
+                
+                CREATE INDEX IF NOT EXISTS idx_counterfactual_source 
+                ON CounterfactualMemories(source_memory_id);
             """)
+            
+            logger.info("Semantic memory tables created successfully")
+            
+    except Exception as e:
+        logger.error(f"Error creating semantic memory tables: {e}")
+        raise
