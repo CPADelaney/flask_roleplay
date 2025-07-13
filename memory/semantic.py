@@ -759,6 +759,162 @@ class SemanticMemoryManager:
         
         return semantic_network
     
+    async def _generate_semantic_abstraction(
+        self,
+        memory_text: str,
+        abstraction_level: float,
+    ) -> str:
+        """
+        Create a semantic abstraction (minimal/moderate/high) via Responses API.
+        """
+        client = get_openai_client()
+        level = (
+            "minimal" if abstraction_level < 0.3
+            else "high" if abstraction_level > 0.7
+            else "moderate"
+        )
+    
+        prompt = f"""
+        Observation: {memory_text}
+    
+        Produce a {level} abstraction (≤ 50 words) capturing the general insight.
+        Return ONLY the abstraction.
+        """
+    
+        try:
+            resp = await client.responses.create(
+                model="gpt-4.1-nano",
+                instructions="You extract semantic abstractions.",
+                input=prompt,
+                temperature=0.4
+            )
+            
+            # Check if response exists and has content
+            if resp and hasattr(resp, 'output_text') and resp.output_text:
+                return resp.output_text.strip()
+            else:
+                logger.warning("Empty response from OpenAI for semantic abstraction")
+                # Fallback
+                return (
+                    f"General pattern observed: {memory_text[:100]}..."
+                    if len(memory_text) > 100 else f"General pattern observed: {memory_text}"
+                )
+                
+        except Exception as e:
+            logger.error("Semantic abstraction failed: %s", e)
+            return (
+                f"General pattern observed: {memory_text[:100]}..."
+                if len(memory_text) > 100 else f"General pattern observed: {memory_text}"
+            )
+    
+    async def _extract_pattern_from_cluster(
+        self,
+        cluster: List[Memory],
+        topic: str | None = None,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Extract a pattern from a cluster of Memory objects.
+        """
+        client = get_openai_client()
+    
+        memories_text = "\n".join(f"- {m.text}" for m in cluster)
+        topic_line = f"TOPIC FOCUS: {topic}" if topic else ""
+    
+        prompt = f"""
+        MEMORIES:
+        {memories_text}
+    
+        {topic_line}
+    
+        Identify pattern, confidence (0-1) and implications.
+        Respond JSON:
+        {{
+          "pattern": "...",
+          "confidence": 0.x,
+          "implications": "..."
+        }}
+        """
+    
+        try:
+            resp = await client.responses.create(
+                model="gpt-4.1-nano",
+                instructions="You extract patterns from memory clusters.",
+                input=prompt,
+                temperature=0.3
+            )
+            
+            # Check response validity
+            if not resp or not hasattr(resp, 'output_text') or not resp.output_text:
+                logger.warning("Empty response from OpenAI for pattern extraction")
+                return None
+                
+            output_text = resp.output_text.strip()
+            if not output_text:
+                logger.warning("Empty output_text from OpenAI for pattern extraction")
+                return None
+                
+            try:
+                return json.loads(output_text)
+            except json.JSONDecodeError as e:
+                logger.error(f"JSON decode error in pattern extraction: {e}. Response: {output_text[:100]}")
+                return None
+                
+        except Exception as e:
+            logger.error("Cluster pattern extraction failed: %s", e)
+            return None
+    
+    async def _generate_counterfactual_variation(
+        self,
+        memory_text: str,
+        variation_type: str,
+    ) -> str:
+        """
+        Counterfactual variation (alternative/opposite/exaggeration) via Responses API.
+        """
+        client = get_openai_client()
+    
+        description = {
+            "alternative": "what might have gone differently",
+            "opposite": "the opposite outcome",
+            "exaggeration": "an exaggerated version of events",
+        }.get(variation_type, "an alternative version")
+    
+        prompt = f"""
+        Original: {memory_text}
+    
+        Generate {description}. Begin with "What if..." and return ONLY the variation.
+        """
+    
+        try:
+            resp = await client.responses.create(
+                model="gpt-4.1-nano",
+                instructions="You generate counterfactual variations.",
+                input=prompt,
+                temperature=0.7
+            )
+            
+            # Check response validity
+            if resp and hasattr(resp, 'output_text') and resp.output_text:
+                return resp.output_text.strip()
+            else:
+                logger.warning("Empty response from OpenAI for counterfactual generation")
+                # Fallback
+                prefix = {
+                    "alternative": "What if instead ",
+                    "opposite": "What if the opposite happened and ",
+                    "exaggeration": "What if, to a much greater extent, ",
+                }.get(variation_type, "What if ")
+                return prefix + memory_text
+                
+        except Exception as e:
+            logger.error("Counterfactual generation failed: %s", e)
+            prefix = {
+                "alternative": "What if instead ",
+                "opposite": "What if the opposite happened and ",
+                "exaggeration": "What if, to a much greater extent, ",
+            }.get(variation_type, "What if ")
+            return prefix + memory_text
+    
     async def _extract_related_topics(
         self,
         memory_text: str,
@@ -774,29 +930,107 @@ class SemanticMemoryManager:
         Current topic: {current_topic}
     
         Return JSON array of 2-3 distinct but related topics.
+        Example: ["topic1", "topic2", "topic3"]
         """
     
         try:
-            resp = client.responses.create(
+            resp = await client.responses.create(
                 model="gpt-4.1-nano",
-                instructions="You extract related topics.",
+                instructions="You extract related topics. Always return a valid JSON array.",
                 input=prompt,
                 temperature=0.5
             )
-            data = json.loads(resp.output_text)
-            if isinstance(data, list):
-                return data
-            if isinstance(data, dict) and "topics" in data:
-                return data["topics"]
-            return []
+            
+            # Check if response exists and is not empty
+            if not resp or not hasattr(resp, 'output_text') or not resp.output_text:
+                logger.warning("Empty response from OpenAI for topic extraction")
+                # Use fallback
+                words = [
+                    w.capitalize()
+                    for w in memory_text.split()
+                    if len(w) > 5 and w.lower() != current_topic.lower()
+                ]
+                return random.sample(words, min(3, len(words)))
+            
+            output_text = resp.output_text.strip()
+            if not output_text:
+                logger.warning("Empty output_text from OpenAI for topic extraction")
+                # Use fallback
+                words = [
+                    w.capitalize()
+                    for w in memory_text.split()
+                    if len(w) > 5 and w.lower() != current_topic.lower()
+                ]
+                return random.sample(words, min(3, len(words)))
+                
+            try:
+                data = json.loads(output_text)
+                if isinstance(data, list):
+                    return data[:3]  # Limit to 3 topics
+                if isinstance(data, dict) and "topics" in data:
+                    return data["topics"][:3]
+                
+                logger.warning(f"Unexpected response format: {type(data)}")
+                # Use fallback
+                words = [
+                    w.capitalize()
+                    for w in memory_text.split()
+                    if len(w) > 5 and w.lower() != current_topic.lower()
+                ]
+                return random.sample(words, min(3, len(words)))
+                
+            except json.JSONDecodeError as e:
+                logger.error(f"JSON decode error in topic extraction: {e}. Response: {output_text[:100]}")
+                # Use fallback
+                words = [
+                    w.capitalize()
+                    for w in memory_text.split()
+                    if len(w) > 5 and w.lower() != current_topic.lower()
+                ]
+                return random.sample(words, min(3, len(words)))
+                
         except Exception as e:
             logger.error("Topic extraction failed: %s", e)
+            # Use fallback
             words = [
                 w.capitalize()
                 for w in memory_text.split()
                 if len(w) > 5 and w.lower() != current_topic.lower()
             ]
             return random.sample(words, min(3, len(words)))
+    ```
+    
+    ## Summary of changes made:
+    
+    1. **Added response validation** - Check if `resp`, `resp.output_text` exist before using them
+    2. **Added empty string checks** - Check if `output_text` is empty after stripping
+    3. **Better error messages** - Include partial response text in error logs
+    4. **Consistent fallback behavior** - All methods now have proper fallback logic
+    5. **Try-except around JSON parsing** - Separate exception handling for JSON decode errors
+    
+    ## Key pattern used throughout:
+    
+    ```python
+    # Check response validity
+    if not resp or not hasattr(resp, 'output_text') or not resp.output_text:
+        logger.warning("Empty response from OpenAI for [operation]")
+        # Use fallback logic
+        return fallback_value
+    
+    output_text = resp.output_text.strip()
+    if not output_text:
+        logger.warning("Empty output_text from OpenAI for [operation]")
+        # Use fallback logic
+        return fallback_value
+    
+    # Try to parse JSON (if needed)
+    try:
+        data = json.loads(output_text)
+        # Process data...
+    except json.JSONDecodeError as e:
+        logger.error(f"JSON decode error: {e}. Response: {output_text[:100]}")
+        # Use fallback logic
+        return fallback_value
 
 # Create the necessary tables if they don't exist
 async def create_semantic_tables():
