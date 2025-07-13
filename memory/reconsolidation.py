@@ -398,8 +398,7 @@ class ReconsolidationManager:
                 model="gpt-4.1-nano",
                 instructions="You simulate memory reconsolidation.",
                 input=prompt,
-                temperature=0.4,
-                max_tokens=300,
+                temperature=0.4
             )
             return resp.output_text.strip()
         except Exception as e:
