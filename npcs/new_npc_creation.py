@@ -2829,7 +2829,7 @@ class NPCCreationHandler:
         
         from lore.core import canon
         
-        # Create context - FIX
+        # Create context
         ctx = type('CanonContext', (), {
             'user_id': user_id,
             'conversation_id': conversation_id
@@ -2872,10 +2872,9 @@ class NPCCreationHandler:
                 arc_name = arc.get("name", "").strip().lower()
                 if arc_name in explicit_role_map:
                     rel_label = explicit_role_map[arc_name]
-                    # Add relationship from NPC to player using the explicit role
                     relationships.append({
                         "target_entity_type": "player",
-                        "target_entity_id": user_id,  # player ID
+                        "target_entity_id": user_id,
                         "relationship_label": rel_label
                     })
                     logging.info(f"Added explicit relationship '{rel_label}' for NPC {npc_id} to player.")
@@ -2929,26 +2928,26 @@ class NPCCreationHandler:
                     })
                     logging.info(f"Added relationship '{rel_type}' between NPC {npc_id} and NPC {old_npc_id}.")
         
-        # Finally, create these relationships canonically
+        # Create these relationships canonically - FIXED: Create new connection contexts as needed
         memory_system = await MemorySystem.get_instance(user_id, conversation_id)
         
         for rel in relationships:
             if rel["target_entity_type"] == "player":
-                # Create canonical social link
-                await canon.find_or_create_social_link(
-                    ctx, conn,
-                    user_id=user_id,  # Pass explicitly
-                    conversation_id=conversation_id,  # Pass explicitly
-                    entity1_type="npc",
-                    entity1_id=npc_id,
-                    entity2_type="player", 
-                    entity2_id=rel["target_entity_id"],
-                    link_type=rel["relationship_label"],
-                    link_level=10  # Default starting level
-                )
-                
-                # Update NPCStats relationships using canon system
+                # Create canonical social link with its own connection
                 async with get_db_connection_context() as conn:
+                    await canon.find_or_create_social_link(
+                        ctx, conn,
+                        user_id=user_id,
+                        conversation_id=conversation_id,
+                        entity1_type="npc",
+                        entity1_id=npc_id,
+                        entity2_type="player", 
+                        entity2_id=rel["target_entity_id"],
+                        link_type=rel["relationship_label"],
+                        link_level=10
+                    )
+                    
+                    # Update NPCStats relationships
                     rel_query = """
                         SELECT relationships FROM NPCStats
                         WHERE user_id=$1 AND conversation_id=$2 AND npc_id=$3
@@ -2965,25 +2964,23 @@ class NPCCreationHandler:
                     else:
                         current_relationships = relationships_json
                     
-                    # Add the new relationship
                     current_relationships.append({
                         "relationship_label": rel["relationship_label"],
                         "entity_type": "player", 
                         "entity_id": rel["target_entity_id"]
                     })
                     
-                    # Update using canon system
                     await canon.update_entity_canonically(
                         ctx, conn, "NPCStats", npc_id,
                         {"relationships": json.dumps(current_relationships)},
                         f"Establishing {rel['relationship_label']} relationship with player"
                     )
-                
+                    
             else:  # NPC to NPC relationship
                 old_npc_id = rel["target_entity_id"]
                 old_arche_summary = rel.get("target_archetype_summary", "")
                 
-                # Create forward link
+                # Create forward link (no conn needed for this function)
                 create_social_link(
                     user_id, conversation_id,
                     entity1_type="npc", entity1_id=npc_id,
@@ -2991,7 +2988,7 @@ class NPCCreationHandler:
                     link_type=rel["relationship_label"]
                 )
                 
-                # Update source NPC's relationships using canon system
+                # Update source NPC's relationships with new connection
                 async with get_db_connection_context() as conn:
                     rel_query = """
                         SELECT relationships FROM NPCStats
@@ -3009,28 +3006,26 @@ class NPCCreationHandler:
                     else:
                         current_relationships = relationships_json
                     
-                    # Add the new relationship
                     current_relationships.append({
                         "relationship_label": rel["relationship_label"],
                         "entity_type": "npc", 
                         "entity_id": old_npc_id
                     })
                     
-                    # Get target NPC name for reason
+                    # Get target NPC name
                     target_name_row = await conn.fetchrow(
                         "SELECT npc_name FROM NPCStats WHERE npc_id=$1", 
                         old_npc_id
                     )
                     old_npc_name = target_name_row['npc_name'] if target_name_row else f"NPC {old_npc_id}"
                     
-                    # Update using canon system
                     await canon.update_entity_canonically(
                         ctx, conn, "NPCStats", npc_id,
                         {"relationships": json.dumps(current_relationships)},
                         f"Establishing {rel['relationship_label']} relationship with NPC {old_npc_name}"
                     )
                 
-                # Create reverse link with reciprocal relationship
+                # Create reverse link
                 rec_type = self.dynamic_reciprocal_relationship(
                     rel["relationship_label"],
                     old_arche_summary
@@ -3043,7 +3038,7 @@ class NPCCreationHandler:
                     link_type=rec_type
                 )
                 
-                # Update target NPC's relationships using canon system
+                # Update target NPC's relationships with new connection
                 async with get_db_connection_context() as conn:
                     target_rel_query = """
                         SELECT relationships FROM NPCStats
@@ -3061,14 +3056,12 @@ class NPCCreationHandler:
                     else:
                         target_relationships = target_relationships_json
                     
-                    # Add the reciprocal relationship
                     target_relationships.append({
                         "relationship_label": rec_type,
                         "entity_type": "npc", 
                         "entity_id": npc_id
                     })
                     
-                    # Update using canon system
                     await canon.update_entity_canonically(
                         ctx, conn, "NPCStats", old_npc_id,
                         {"relationships": json.dumps(target_relationships)},
@@ -3077,10 +3070,15 @@ class NPCCreationHandler:
                 
                 # Generate shared memories for both NPCs
                 try:
-                    # Get target NPC name
-                    target_npc_name = old_npc_name
+                    # Get target NPC name with new connection
+                    async with get_db_connection_context() as conn:
+                        target_name_row = await conn.fetchrow(
+                            "SELECT npc_name FROM NPCStats WHERE npc_id=$1 AND user_id=$2 AND conversation_id=$3", 
+                            old_npc_id, user_id, conversation_id
+                        )
+                        target_npc_name = target_name_row['npc_name'] if target_name_row else f"NPC {old_npc_id}"
                     
-                    # Generate a relationship-specific memory for the new NPC
+                    # Generate a relationship-specific memory
                     specific_memory = await self.generate_relationship_specific_memory(
                         user_id, conversation_id, 
                         {"npc_id": npc_id, "npc_name": npc_name}, 
