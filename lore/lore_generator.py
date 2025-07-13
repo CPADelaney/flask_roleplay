@@ -52,6 +52,156 @@ logger = logging.getLogger(__name__)
 _LORE_GENERATOR_INSTANCES: Dict[Tuple[int, int], "DynamicLoreGenerator"] = {}
 
 #---------------------------
+# Core Implementation Functions (not decorated)
+#---------------------------
+
+async def _generate_foundation_lore_impl(ctx, environment_desc: str) -> Dict[str, Any]:
+    """
+    Implementation: Generate foundation lore (cosmology, magic system, etc.) for a given environment.
+    """
+    # Handle context properly - it might be a RunContextWrapper or a dict
+    if hasattr(ctx, 'context'):
+        run_ctx = RunContextWrapper(context=ctx.context)
+    elif isinstance(ctx, dict):
+        run_ctx = RunContextWrapper(context=ctx)
+    else:
+        run_ctx = ctx
+    
+    user_prompt = f"""
+    Generate cohesive foundational world lore for this environment:
+    {environment_desc}
+
+    Return as JSON with keys:
+    cosmology, magic_system, world_history, calendar_system, social_structure
+    """
+    
+    foundation_lore_agent = get_foundation_lore_agent()
+    result = await Runner.run(foundation_lore_agent, user_prompt, context=run_ctx.context)
+    final_output = result.final_output_as(FoundationLoreOutput)
+    return final_output.dict()
+
+async def _generate_factions_impl(ctx, environment_desc: str, social_structure: str) -> List[Dict[str, Any]]:
+    """
+    Implementation: Generate 3-5 distinct factions referencing environment_desc + social_structure.
+    """
+    if hasattr(ctx, 'context'):
+        run_ctx = RunContextWrapper(context=ctx.context)
+    elif isinstance(ctx, dict):
+        run_ctx = RunContextWrapper(context=ctx)
+    else:
+        run_ctx = ctx
+    
+    user_prompt = f"""
+    Generate 3-5 distinct factions for this environment:
+    Environment: {environment_desc}
+    Social Structure: {social_structure}
+    
+    Return JSON as an array of objects (matching FactionsOutput).
+    """
+    
+    factions_agent = get_factions_agent()
+    result = await Runner.run(factions_agent, user_prompt, context=run_ctx.context)
+    final_output = result.final_output_as(FactionsOutput)
+    return [f.dict() for f in final_output.__root__]
+
+async def _generate_cultural_elements_impl(ctx, environment_desc: str, faction_names: str) -> List[Dict[str, Any]]:
+    """
+    Implementation: Generate cultural elements (traditions, taboos, etc.) referencing environment + faction names.
+    """
+    if hasattr(ctx, 'context'):
+        run_ctx = RunContextWrapper(context=ctx.context)
+    elif isinstance(ctx, dict):
+        run_ctx = RunContextWrapper(context=ctx)
+    else:
+        run_ctx = ctx
+    
+    user_prompt = f"""
+    Generate 4-7 unique cultural elements for:
+    Environment: {environment_desc}
+    Factions: {faction_names}
+
+    Return JSON array matching CulturalElementsOutput.
+    """
+    
+    cultural_agent = get_cultural_agent()
+    result = await Runner.run(cultural_agent, user_prompt, context=run_ctx.context)
+    final_output = result.final_output_as(CulturalElementsOutput)
+    return [c.dict() for c in final_output.__root__]
+
+async def _generate_historical_events_impl(ctx, environment_desc: str, world_history: str, faction_names: str) -> List[Dict[str, Any]]:
+    """
+    Implementation: Generate historical events referencing environment, existing world_history, faction_names.
+    """
+    if hasattr(ctx, 'context'):
+        run_ctx = RunContextWrapper(context=ctx.context)
+    elif isinstance(ctx, dict):
+        run_ctx = RunContextWrapper(context=ctx)
+    else:
+        run_ctx = ctx
+    
+    user_prompt = f"""
+    Generate 5-7 significant historical events:
+    Environment: {environment_desc}
+    Existing World History: {world_history}
+    Factions: {faction_names}
+
+    Return JSON array matching HistoricalEventsOutput.
+    """
+    
+    history_agent = get_history_agent()
+    result = await Runner.run(history_agent, user_prompt, context=run_ctx.context)
+    final_output = result.final_output_as(HistoricalEventsOutput)
+    return [h.dict() for h in final_output.__root__]
+
+async def _generate_locations_impl(ctx, environment_desc: str, faction_names: str) -> List[Dict[str, Any]]:
+    """
+    Implementation: Generate 5-8 significant locations referencing environment_desc + faction names.
+    """
+    if hasattr(ctx, 'context'):
+        run_ctx = RunContextWrapper(context=ctx.context)
+    elif isinstance(ctx, dict):
+        run_ctx = RunContextWrapper(context=ctx)
+    else:
+        run_ctx = ctx
+    
+    user_prompt = f"""
+    Generate 5-8 significant locations for:
+    Environment: {environment_desc}
+    Factions: {faction_names}
+
+    Return JSON array matching LocationsOutput.
+    """
+    
+    locations_agent = get_locations_agent()
+    result = await Runner.run(locations_agent, user_prompt, context=run_ctx.context)
+    final_output = result.final_output_as(LocationsOutput)
+    return [l.dict() for l in final_output.__root__]
+
+async def _generate_quest_hooks_impl(ctx, faction_names: str, location_names: str) -> List[Dict[str, Any]]:
+    """
+    Implementation: Generate 5-7 quest hooks referencing existing factions, locations, etc.
+    """
+    if hasattr(ctx, 'context'):
+        run_ctx = RunContextWrapper(context=ctx.context)
+    elif isinstance(ctx, dict):
+        run_ctx = RunContextWrapper(context=ctx)
+    else:
+        run_ctx = ctx
+    
+    user_prompt = f"""
+    Generate 5-7 engaging quest hooks:
+    Factions: {faction_names}
+    Locations: {location_names}
+
+    Return JSON array matching QuestsOutput.
+    """
+    
+    quests_agent = get_quests_agent()
+    result = await Runner.run(quests_agent, user_prompt, context=run_ctx.context)
+    final_output = result.final_output_as(QuestsOutput)
+    return [q.dict() for q in final_output.__root__]
+
+#---------------------------
 # Function Tool Definitions with Nyx Governance
 #---------------------------
 
@@ -69,20 +219,7 @@ async def generate_foundation_lore(ctx, environment_desc: str) -> Dict[str, Any]
     Args:
         environment_desc: Environment description
     """
-    run_ctx = RunContextWrapper(context=ctx.context)
-    
-    user_prompt = f"""
-    Generate cohesive foundational world lore for this environment:
-    {environment_desc}
-
-    Return as JSON with keys:
-    cosmology, magic_system, world_history, calendar_system, social_structure
-    """
-    
-    foundation_lore_agent = get_foundation_lore_agent()
-    result = await Runner.run(foundation_lore_agent, user_prompt, context=run_ctx.context)
-    final_output = result.final_output_as(FoundationLoreOutput)
-    return final_output.dict()
+    return await _generate_foundation_lore_impl(ctx, environment_desc)
 
 @function_tool
 @with_governance(
@@ -99,20 +236,7 @@ async def generate_factions(ctx, environment_desc: str, social_structure: str) -
         environment_desc: Environment description
         social_structure: Social structure description
     """
-    run_ctx = RunContextWrapper(context=ctx.context)
-    
-    user_prompt = f"""
-    Generate 3-5 distinct factions for this environment:
-    Environment: {environment_desc}
-    Social Structure: {social_structure}
-    
-    Return JSON as an array of objects (matching FactionsOutput).
-    """
-    
-    factions_agent = get_factions_agent()
-    result = await Runner.run(factions_agent, user_prompt, context=run_ctx.context)
-    final_output = result.final_output_as(FactionsOutput)
-    return [f.dict() for f in final_output.__root__]
+    return await _generate_factions_impl(ctx, environment_desc, social_structure)
 
 @function_tool
 @with_governance(
@@ -129,20 +253,7 @@ async def generate_cultural_elements(ctx, environment_desc: str, faction_names: 
         environment_desc: Environment description
         faction_names: Comma-separated faction names
     """
-    run_ctx = RunContextWrapper(context=ctx.context)
-    
-    user_prompt = f"""
-    Generate 4-7 unique cultural elements for:
-    Environment: {environment_desc}
-    Factions: {faction_names}
-
-    Return JSON array matching CulturalElementsOutput.
-    """
-    
-    cultural_agent = get_cultural_agent()
-    result = await Runner.run(cultural_agent, user_prompt, context=run_ctx.context)
-    final_output = result.final_output_as(CulturalElementsOutput)
-    return [c.dict() for c in final_output.__root__]
+    return await _generate_cultural_elements_impl(ctx, environment_desc, faction_names)
 
 @function_tool
 @with_governance(
@@ -160,21 +271,7 @@ async def generate_historical_events(ctx, environment_desc: str, world_history: 
         world_history: Existing world history
         faction_names: Comma-separated faction names
     """
-    run_ctx = RunContextWrapper(context=ctx.context)
-    
-    user_prompt = f"""
-    Generate 5-7 significant historical events:
-    Environment: {environment_desc}
-    Existing World History: {world_history}
-    Factions: {faction_names}
-
-    Return JSON array matching HistoricalEventsOutput.
-    """
-    
-    history_agent = get_history_agent()
-    result = await Runner.run(history_agent, user_prompt, context=run_ctx.context)
-    final_output = result.final_output_as(HistoricalEventsOutput)
-    return [h.dict() for h in final_output.__root__]
+    return await _generate_historical_events_impl(ctx, environment_desc, world_history, faction_names)
 
 @function_tool
 @with_governance(
@@ -191,20 +288,7 @@ async def generate_locations(ctx, environment_desc: str, faction_names: str) -> 
         environment_desc: Environment description
         faction_names: Comma-separated faction names
     """
-    run_ctx = RunContextWrapper(context=ctx.context)
-    
-    user_prompt = f"""
-    Generate 5-8 significant locations for:
-    Environment: {environment_desc}
-    Factions: {faction_names}
-
-    Return JSON array matching LocationsOutput.
-    """
-    
-    locations_agent = get_locations_agent()
-    result = await Runner.run(locations_agent, user_prompt, context=run_ctx.context)
-    final_output = result.final_output_as(LocationsOutput)
-    return [l.dict() for l in final_output.__root__]
+    return await _generate_locations_impl(ctx, environment_desc, faction_names)
 
 @function_tool
 @with_governance(
@@ -221,20 +305,8 @@ async def generate_quest_hooks(ctx, faction_names: str, location_names: str) -> 
         faction_names: Comma-separated faction names
         location_names: Comma-separated location names
     """
-    run_ctx = RunContextWrapper(context=ctx.context)
-    
-    user_prompt = f"""
-    Generate 5-7 engaging quest hooks:
-    Factions: {faction_names}
-    Locations: {location_names}
+    return await _generate_quest_hooks_impl(ctx, faction_names, location_names)
 
-    Return JSON array matching QuestsOutput.
-    """
-    
-    quests_agent = get_quests_agent()
-    result = await Runner.run(quests_agent, user_prompt, context=run_ctx.context)
-    final_output = result.final_output_as(QuestsOutput)
-    return [q.dict() for q in final_output.__root__]
 #---------------------------
 # Component Generator Base Classes
 #---------------------------
@@ -626,8 +698,8 @@ class WorldBuilder(BaseGenerator):
             "conversation_id": self.conversation_id
         })
 
-        # Call the function tool with governance integration
-        foundation_data = await generate_foundation_lore(run_ctx, environment_desc)
+        # Call the implementation function instead of the function tool
+        foundation_data = await _generate_foundation_lore_impl(run_ctx, environment_desc)
 
         # Store in database
         for category, desc in foundation_data.items():
@@ -793,8 +865,8 @@ class FactionGenerator(BaseGenerator):
             "conversation_id": self.conversation_id
         })
 
-        # Produce a list of faction dicts via our sub-agent
-        factions_data = await generate_factions(run_ctx, environment_desc, social_structure)
+        # Call the implementation function
+        factions_data = await _generate_factions_impl(run_ctx, environment_desc, social_structure)
 
         # Store each in the DB
         for faction in factions_data:
@@ -853,7 +925,8 @@ class FactionGenerator(BaseGenerator):
         
         faction_names = ", ".join([f.get("name", "Unknown") for f in factions])
 
-        cultural_data = await generate_cultural_elements(run_ctx, environment_desc, faction_names)
+        # Call the implementation function
+        cultural_data = await _generate_cultural_elements_impl(run_ctx, environment_desc, faction_names)
 
         # Store them
         for element in cultural_data:
@@ -916,7 +989,8 @@ class FactionGenerator(BaseGenerator):
         world_history = foundation_data.get("world_history", "")
         faction_names = ", ".join([f.get("name","Unknown") for f in factions])
 
-        events_data = await generate_historical_events(run_ctx, environment_desc, world_history, faction_names)
+        # Call the implementation function
+        events_data = await _generate_historical_events_impl(run_ctx, environment_desc, world_history, faction_names)
 
         # Then store them
         for event in events_data:
@@ -975,7 +1049,8 @@ class FactionGenerator(BaseGenerator):
         
         faction_names = ", ".join([f.get("name","Unknown") for f in factions])
 
-        locations_data = await generate_locations(run_ctx, environment_desc, faction_names)
+        # Call the implementation function
+        locations_data = await _generate_locations_impl(run_ctx, environment_desc, faction_names)
 
         # Store each location
         for loc in locations_data:
@@ -1053,7 +1128,8 @@ class FactionGenerator(BaseGenerator):
         faction_names = ", ".join([f.get("name","Unknown") for f in factions])
         location_names = ", ".join([l.get("name","Unknown") for l in locations])
 
-        quests_data = await generate_quest_hooks(run_ctx, faction_names, location_names)
+        # Call the implementation function
+        quests_data = await _generate_quest_hooks_impl(run_ctx, faction_names, location_names)
 
         # Store them
         for quest in quests_data:
