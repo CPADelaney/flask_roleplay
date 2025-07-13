@@ -482,7 +482,7 @@ class LoreSystem:
         """
         The universal method for making a canonical change to the world state.
         This is the method that NyxUnifiedGovernor calls.
-
+    
         Args:
             entity_type (str): The type of entity (e.g., 'Nations', 'Factions').
             entity_identifier (Dict): A dict to find the entity (e.g., {'id': 123}).
@@ -494,7 +494,7 @@ class LoreSystem:
         from db.connection import get_db_connection_context
         
         logger.info(f"Proposing change to {entity_type} ({entity_identifier}) because: {reason}")
-
+    
         try:
             async with get_db_connection_context() as conn:
                 async with conn.transaction():
@@ -504,10 +504,10 @@ class LoreSystem:
                     select_query = f"SELECT * FROM {entity_type} WHERE {where_sql}"
                     
                     existing_entity = await conn.fetchrow(select_query, *entity_identifier.values())
-
+    
                     if not existing_entity:
                         return {"status": "error", "message": f"Entity not found: {entity_type} with {entity_identifier}"}
-
+    
                     # Step 2: Validate for conflicts
                     conflicts = []
                     for field, new_value in updates.items():
@@ -519,15 +519,16 @@ class LoreSystem:
                             )
                             conflicts.append(conflict_detail)
                             logger.warning(f"Conflict detected for {entity_type} ({entity_identifier}): {conflict_detail}")
-
+    
                     if conflicts:
                         # Step 3a: Handle conflict by generating a new narrative event
                         if hasattr(self, 'lore_dynamics_system'):
-                            await self.lore_dynamics_system.evolve_lore_with_event(
-                                f"A conflict arose: {reason}. Details: {', '.join(conflicts)}"
+                            conflict_event = self._create_conflict_event_description(
+                                entity_type, entity_identifier, existing_entity, updates, conflicts, reason
                             )
+                            await self.lore_dynamics_system.evolve_lore_with_event(conflict_event)
                         return {"status": "conflict_generated", "details": conflicts}
-
+    
                     # Step 3b: No conflict, commit the change
                     set_clauses = [f"{key} = ${i+1}" for i, key in enumerate(updates.keys())]
                     set_sql = ", ".join(set_clauses)
@@ -536,20 +537,128 @@ class LoreSystem:
                     
                     update_query = f"UPDATE {entity_type} SET {set_sql} WHERE {where_sql}"
                     await conn.execute(update_query, *update_values)
-
+    
                     # Step 4: Log the change as a canonical event in unified memory
                     event_text = f"The {entity_type} identified by {entity_identifier} was updated. Reason: {reason}. Changes: {updates}"
                     await canon.log_canonical_event(ctx, conn, event_text, tags=[entity_type.lower(), 'state_change'], significance=8)
             
             # Step 5: Propagate consequences to other systems (outside the transaction)
-            if hasattr(self, 'lore_dynamics_system'):
-                await self.lore_dynamics_system.evolve_lore_with_event(f"A world state change occurred: {reason}")
+            # Only trigger lore evolution for significant entity types
+            significant_entity_types = ["Nations", "Factions", "CulturalElements", "HistoricalEvents", 
+                                       "GeographicRegions", "WorldLore", "Locations", "QuestHooks"]
+            
+            if hasattr(self, 'lore_dynamics_system') and entity_type in significant_entity_types:
+                # Create a more specific event description
+                event_description = self._create_specific_event_description(
+                    entity_type, entity_identifier, existing_entity, updates, reason
+                )
+                await self.lore_dynamics_system.evolve_lore_with_event(event_description)
             
             return {"status": "committed", "entity_type": entity_type, "identifier": entity_identifier, "changes": updates}
-
+    
         except Exception as e:
             logger.exception(f"Failed to enact change for {entity_type} ({entity_identifier}): {e}")
             return {"status": "error", "message": str(e)}
+    
+    def _create_specific_event_description(self, entity_type: str, entity_identifier: Dict[str, Any], 
+                                          existing_entity: Any, updates: Dict[str, Any], reason: str) -> str:
+        """Create a specific event description for lore evolution based on entity type."""
+        
+        # Try to get the entity name from various common fields
+        entity_name = None
+        for name_field in ['name', 'location_name', 'quest_name', 'title']:
+            if name_field in existing_entity:
+                entity_name = existing_entity[name_field]
+                break
+        
+        if not entity_name:
+            entity_name = f"{entity_type} #{entity_identifier.get('id', 'unknown')}"
+        
+        # Create type-specific descriptions
+        if entity_type == "Nations":
+            change_details = []
+            if 'government_type' in updates:
+                change_details.append(f"its government shifted from {existing_entity.get('government_type', 'unknown')} to {updates['government_type']}")
+            if 'leader_npc_id' in updates:
+                change_details.append("new leadership took power")
+            if 'capital_id' in updates:
+                change_details.append("the capital was relocated")
+            
+            changes_text = ", ".join(change_details) if change_details else "significant internal changes occurred"
+            return f"The nation of {entity_name} underwent a major transformation: {reason}. As a result, {changes_text}. This political shift sends ripples through neighboring regions and allied factions."
+        
+        elif entity_type == "Factions":
+            change_details = []
+            if 'type' in updates:
+                change_details.append(f"transformed from a {existing_entity.get('type', 'unknown')} faction to a {updates['type']} faction")
+            if 'headquarters' in updates:
+                change_details.append(f"relocated their headquarters to {updates['headquarters']}")
+            if 'allies' in updates or 'rivals' in updates:
+                change_details.append("shifted their diplomatic alignments")
+            
+            changes_text = ", ".join(change_details) if change_details else "underwent significant restructuring"
+            return f"The {entity_name} faction experienced a pivotal moment: {reason}. The faction {changes_text}, marking a new chapter in their influence and operations. Their members and affiliates must now adapt to this new reality."
+        
+        elif entity_type == "CulturalElements":
+            element_type = existing_entity.get('type', 'tradition')
+            return f"The cultural {element_type} known as '{entity_name}' evolved significantly: {reason}. This transformation affects how it is practiced and perceived, potentially influencing related customs and beliefs throughout the regions where it holds sway."
+        
+        elif entity_type == "HistoricalEvents":
+            return f"New revelations about the historical event '{entity_name}' have come to light: {reason}. These discoveries force scholars and lorekeepers to reconsider its true impact and meaning, potentially rewriting portions of accepted history."
+        
+        elif entity_type == "GeographicRegions":
+            change_details = []
+            if 'governing_faction' in updates:
+                change_details.append(f"control shifted to {updates['governing_faction']}")
+            if 'climate' in updates:
+                change_details.append("experienced dramatic environmental changes")
+            
+            changes_text = ", ".join(change_details) if change_details else "underwent significant changes"
+            return f"The region of {entity_name} experienced momentous change: {reason}. The region {changes_text}, affecting all who dwell within its borders and potentially altering trade routes and strategic considerations."
+        
+        elif entity_type == "Locations":
+            return f"The location known as {entity_name} was dramatically altered: {reason}. These changes affect its significance, accessibility, or nature, potentially impacting nearby settlements and those who depend on or fear this place."
+        
+        elif entity_type == "QuestHooks":
+            return f"The quest '{entity_name}' has evolved unexpectedly: {reason}. New complications, opportunities, or revelations have emerged, changing the stakes for any who might pursue this adventure."
+        
+        else:
+            # Generic but still more detailed than before
+            field_changes = []
+            for field, new_value in updates.items():
+                if field in existing_entity:
+                    old_value = existing_entity[field]
+                    if old_value != new_value:
+                        field_changes.append(f"{field} changed from '{old_value}' to '{new_value}'")
+            
+            changes_summary = "; ".join(field_changes[:3])  # Limit to first 3 changes
+            if len(field_changes) > 3:
+                changes_summary += f"; and {len(field_changes) - 3} other changes"
+            
+            return f"A significant transformation occurred in the world's {entity_type}: {reason}. Specifically, {changes_summary}. These changes ripple through connected systems and relationships."
+    
+    def _create_conflict_event_description(self, entity_type: str, entity_identifier: Dict[str, Any],
+                                         existing_entity: Any, updates: Dict[str, Any], 
+                                         conflicts: List[str], reason: str) -> str:
+        """Create an event description for when a conflict is detected during updates."""
+        
+        # Try to get the entity name
+        entity_name = None
+        for name_field in ['name', 'location_name', 'quest_name', 'title']:
+            if name_field in existing_entity:
+                entity_name = existing_entity[name_field]
+                break
+        
+        if not entity_name:
+            entity_name = f"{entity_type} #{entity_identifier.get('id', 'unknown')}"
+        
+        # Create a narrative around the conflict
+        conflict_summary = conflicts[0] if conflicts else "Multiple conflicting changes were attempted"
+        
+        return (f"A conflict arose when attempting to change {entity_name} ({entity_type}): {reason}. "
+                f"The attempted changes were blocked due to: {conflict_summary}. "
+                f"This conflict represents competing forces or contradictory influences trying to shape "
+                f"the same aspect of the world, creating tension and potential for future developments.")
     
     # ---------------------------------------------------------------------
     # Cleanup
