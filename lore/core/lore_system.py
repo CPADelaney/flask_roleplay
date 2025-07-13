@@ -1,4 +1,4 @@
-# lore/lore_system.py (Refactored for Generic Changes)
+# lore/core/lore_system.py
 """
 The unified LoreSystem Orchestrator. This is the primary, public-facing entry point
 for all lore-related operations. It ensures consistency by using the Canon for
@@ -131,14 +131,92 @@ class LoreSystem:
                     await canon.log_canonical_event(ctx, conn, event_text, tags=[entity_type.lower(), 'state_change'], significance=8)
             
             # Step 5: Propagate consequences to other systems (outside the transaction)
-            dynamics = await self.registry.get_lore_dynamics()
-            await dynamics.evolve_lore_with_event(ctx, f"A world state change occurred: {reason}")
+            # Create a more specific event description that will pass validation
+            event_description = self._create_detailed_event_description(
+                entity_type, entity_identifier, updates, reason
+            )
+            
+            # Only propagate if the event is significant enough
+            if event_description:
+                dynamics = await self.registry.get_lore_dynamics()
+                await dynamics.evolve_lore_with_event(ctx, event_description)
             
             return {"status": "committed", "entity_type": entity_type, "identifier": entity_identifier, "changes": updates}
     
         except Exception as e:
             logger.exception(f"Failed to enact change for {entity_type} ({entity_identifier}): {e}")
             return {"status": "error", "message": str(e)}
+
+    def _create_detailed_event_description(
+        self, 
+        entity_type: str, 
+        entity_identifier: Dict[str, Any], 
+        updates: Dict[str, Any], 
+        reason: str
+    ) -> Optional[str]:
+        """
+        Create a detailed event description that will pass validation.
+        Returns None if the change is too minor to warrant lore evolution.
+        """
+        # Determine if this change is significant enough
+        significant_fields = {
+            'NPCStats': ['power_level', 'status', 'loyalty'],
+            'Factions': ['leader_npc_id', 'power_level', 'territory', 'allies', 'rivals'],
+            'Nations': ['leader_npc_id', 'government_type', 'stability'],
+            'Locations': ['controlling_faction', 'strategic_value'],
+            'NPCs': ['status', 'faction_affiliation', 'current_location']
+        }
+        
+        # Check if any significant fields were updated
+        if entity_type in significant_fields:
+            updated_significant_fields = [
+                field for field in significant_fields[entity_type] 
+                if field in updates
+            ]
+            if not updated_significant_fields:
+                # Not significant enough for lore evolution
+                return None
+        
+        # Build a detailed event description based on the entity type and changes
+        event_parts = []
+        
+        if entity_type == "NPCStats" and "power_level" in updates:
+            event_parts.append(f"A significant shift in power has occurred - someone's influence has changed dramatically")
+        elif entity_type == "Factions" and "leader_npc_id" in updates:
+            event_parts.append(f"Leadership has changed within a major faction")
+        elif entity_type == "Nations" and "leader_npc_id" in updates:
+            event_parts.append(f"A nation has experienced a change in leadership")
+        elif entity_type == "Locations" and "controlling_faction" in updates:
+            event_parts.append(f"Control of a strategic location has shifted to new hands")
+        else:
+            # Generic but still specific
+            event_parts.append(f"The {entity_type.lower()} structure has undergone important changes")
+        
+        # Add the reason
+        event_parts.append(f"This occurred because: {reason}")
+        
+        # Add specific change details for context
+        change_details = []
+        for field, value in updates.items():
+            if field in ['power_level', 'status', 'loyalty', 'stability']:
+                change_details.append(f"{field.replace('_', ' ')} has shifted")
+            elif field in ['leader_npc_id', 'controlling_faction']:
+                change_details.append(f"new leadership has been established")
+            elif field in ['territory', 'allies', 'rivals']:
+                change_details.append(f"{field} relationships have changed")
+        
+        if change_details:
+            event_parts.append(f"Specifically: {', '.join(change_details)}")
+        
+        # Add context about the broader implications
+        if entity_type in ["Nations", "Factions"]:
+            event_parts.append("This shift in power will ripple through the political landscape, affecting alliances and rivalries")
+        elif entity_type == "Locations":
+            event_parts.append("This territorial change may spark new conflicts or opportunities in the region")
+        elif entity_type == "NPCStats":
+            event_parts.append("This personal transformation will influence their relationships and standing in society")
+        
+        return ". ".join(event_parts)
 
     # --- Convenience Wrappers (Optional but Recommended) ---
     # These methods provide a clean, high-level API but all use the generic method internally.
