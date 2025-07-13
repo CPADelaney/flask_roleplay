@@ -42,7 +42,7 @@ from nyx.governance_helpers import with_governance
 from embedding.vector_store import generate_embedding
 from lore.managers.base_manager import BaseLoreManager
 from lore.utils.theming import MatriarchalThemingUtils
-from database.connection import get_db_connection_context
+from db.connection import get_db_connection_context
 
 if TYPE_CHECKING:
     from lore.core.registry import ManagerRegistry
