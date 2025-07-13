@@ -9,6 +9,7 @@ import logging
 import json
 from typing import Dict, Any, Optional, List
 
+from agents import RunContextWrapper
 from lore.core.registry import ManagerRegistry
 from lore.core import canon
 from db.connection import get_db_connection_context
@@ -58,6 +59,15 @@ class LoreSystem:
         """
         The universal method for making a canonical change to the world state.
         """
+        # Ensure we have a proper context object
+        if isinstance(ctx, str) or not hasattr(ctx, 'context'):
+            # Create a proper context object if we received something invalid
+            ctx = RunContextWrapper(context={
+                "user_id": self.user_id,
+                "conversation_id": self.conversation_id
+            })
+            logger.warning(f"Invalid context passed to propose_and_enact_change, created fallback context")
+        
         logger.info(f"Proposing change to {entity_type} ({entity_identifier}) because: {reason}")
     
         try:
@@ -88,7 +98,8 @@ class LoreSystem:
                     if conflicts:
                         # Step 3a: Handle conflict by generating a new narrative event
                         dynamics = await self.registry.get_lore_dynamics()
-                        await dynamics.evolve_lore_with_event(f"A conflict arose: {reason}. Details: {', '.join(conflicts)}")
+                        conflict_description = f"A conflict arose: {reason}. Details: {', '.join(conflicts)}"
+                        await dynamics.evolve_lore_with_event(ctx, conflict_description)
                         return {"status": "conflict_generated", "details": conflicts}
     
                     # Step 3b: No conflict, commit the change
@@ -223,6 +234,13 @@ class LoreSystem:
 
     async def execute_coup(self, ctx, nation_id: int, new_leader_id: int, reason: str):
         """A high-level wrapper for a coup event."""
+        # Ensure proper context
+        if isinstance(ctx, str) or not hasattr(ctx, 'context'):
+            ctx = RunContextWrapper(context={
+                "user_id": self.user_id,
+                "conversation_id": self.conversation_id
+            })
+        
         return await self.propose_and_enact_change(
             ctx=ctx,
             entity_type="Nations",
@@ -233,6 +251,13 @@ class LoreSystem:
 
     async def assign_faction_territory(self, ctx, faction_id: int, location_name: str, reason: str):
         """A high-level wrapper for a faction taking over territory."""
+        # Ensure proper context
+        if isinstance(ctx, str) or not hasattr(ctx, 'context'):
+            ctx = RunContextWrapper(context={
+                "user_id": self.user_id,
+                "conversation_id": self.conversation_id
+            })
+        
         location_id = None
         # First, ensure the location exists canonically
         async with get_db_connection_context() as conn:
