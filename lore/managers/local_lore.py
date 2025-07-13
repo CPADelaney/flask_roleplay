@@ -12,15 +12,21 @@ This module provides advanced narrative crafting capabilities including:
 - Oral vs written tradition analysis
 
 All lore elements emphasize matriarchal themes and feminine authority.
+
+External API:
+    The decorated function-tool wrappers at the bottom of this module
+    (add_urban_myth, add_local_history, etc.) are the public API.
+    Import and use these functions, not the class methods directly.
 """
 
 import logging
 import json
 import random
 import asyncio
-from typing import Dict, List, Any, Optional, AsyncGenerator, Tuple, TypedDict, Literal
+from typing import Dict, List, Any, Optional, AsyncGenerator, Tuple, TypedDict, Literal, TYPE_CHECKING
 from pydantic import BaseModel, Field, ConfigDict
 from enum import Enum
+from datetime import datetime
 
 # Agents SDK imports
 from agents import (
@@ -36,8 +42,48 @@ from nyx.governance_helpers import with_governance
 from embedding.vector_store import generate_embedding
 from lore.managers.base_manager import BaseLoreManager
 from lore.utils.theming import MatriarchalThemingUtils
+from database.connection import get_db_connection_context
+
+if TYPE_CHECKING:
+    from lore.core.registry import ManagerRegistry
+    import asyncpg
 
 logger = logging.getLogger(__name__)
+
+# ===== HELPER TO GET MANAGER FROM CONTEXT =====
+async def _get_local_lore_manager_from_ctx(ctx) -> "LocalLoreManager":
+    """
+    Resolve the LocalLoreManager linked to this RunContextWrapper or dict.
+    
+    Args:
+        ctx: RunContextWrapper or dict containing user_id and conversation_id
+        
+    Returns:
+        LocalLoreManager instance for the given context
+        
+    Raises:
+        ValueError: If context doesn't contain required IDs
+    """
+    if hasattr(ctx, "context"):
+        c = ctx.context
+    else:
+        c = ctx
+    
+    user_id = c.get("user_id")
+    conv_id = c.get("conversation_id")
+    
+    if not user_id or not conv_id:
+        raise ValueError("Context must contain user_id and conversation_id")
+    
+    # Use registry to get/create the manager
+    from lore.core.registry import ManagerRegistry
+    registry = ManagerRegistry(user_id, conv_id)
+    
+    # Ensure manager is initialized
+    await registry.get_manager("local_lore")
+    
+    # Return the LocalLoreManager instance
+    return await registry.get_local_lore_manager()
 
 # ===== ENUMS =====
 class NarrativeStyle(str, Enum):
@@ -263,11 +309,8 @@ class LoreEvolutionResult(BaseModel):
 class SpecializedAgents:
     """Container for all specialized agents used by LocalLoreManager."""
     
-# ===== SPECIALIZED AGENTS =====
-class SpecializedAgents:
-    """Container for all specialized agents used by LocalLoreManager."""
-    
-    def __init__(self):
+    def __init__(self, theme_guardrail: InputGuardrail, coherence_guardrail: OutputGuardrail):
+        """Initialize specialized agents with guardrails."""
         # Evolution specialists
         self.folklore_agent = Agent(
             name="FolkloreEvolutionAgent",
@@ -279,7 +322,9 @@ class SpecializedAgents:
             ),
             model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.9),
-            output_type=str
+            output_type=str,
+            input_guardrails=[theme_guardrail],
+            output_guardrails=[coherence_guardrail]
         )
         
         self.historical_agent = Agent(
@@ -291,7 +336,9 @@ class SpecializedAgents:
             ),
             model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.8),
-            output_type=str
+            output_type=str,
+            input_guardrails=[theme_guardrail],
+            output_guardrails=[coherence_guardrail]
         )
         
         self.supernatural_agent = Agent(
@@ -303,7 +350,9 @@ class SpecializedAgents:
             ),
             model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.9),
-            output_type=str
+            output_type=str,
+            input_guardrails=[theme_guardrail],
+            output_guardrails=[coherence_guardrail]
         )
         
         # Connection specialists
@@ -316,7 +365,9 @@ class SpecializedAgents:
             ),
             model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.8),
-            output_type=NarrativeConnection
+            output_type=NarrativeConnection,
+            input_guardrails=[theme_guardrail],
+            output_guardrails=[coherence_guardrail],
         )
         
         self.history_landmark_connector = Agent(
@@ -328,7 +379,9 @@ class SpecializedAgents:
             ),
             model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.8),
-            output_type=NarrativeConnection
+            output_type=NarrativeConnection,
+            input_guardrails=[theme_guardrail],
+            output_guardrails=[coherence_guardrail],
         )
         
         # Analysis specialists
@@ -341,7 +394,8 @@ class SpecializedAgents:
             ),
             model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.7),
-            output_type=ConsistencyCheckResult
+            output_type=ConsistencyCheckResult,
+            input_guardrails=[theme_guardrail]
         )
         
         self.transmission_agent = Agent(
@@ -353,7 +407,8 @@ class SpecializedAgents:
             ),
             model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.8),
-            output_type=MythTransmissionResult
+            output_type=MythTransmissionResult,
+            input_guardrails=[theme_guardrail]
         )
         
         # Creative specialists
@@ -366,7 +421,8 @@ class SpecializedAgents:
             ),
             model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.9),
-            output_type=List[LegendVariant]
+            output_type=List[LegendVariant],
+            input_guardrails=[theme_guardrail]
         )
         
         self.tourism_agent = Agent(
@@ -378,7 +434,8 @@ class SpecializedAgents:
             ),
             model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.8),
-            output_type=TouristDevelopment
+            output_type=TouristDevelopment,
+            input_guardrails=[theme_guardrail]
         )
         
         self.tradition_agent = Agent(
@@ -390,7 +447,8 @@ class SpecializedAgents:
             ),
             model="gpt-4.1-nano",
             model_settings=ModelSettings(temperature=0.8),
-            output_type=TraditionDynamics
+            output_type=TraditionDynamics,
+            input_guardrails=[theme_guardrail]
         )
         
         # Master evolution agent with handoffs
@@ -419,7 +477,9 @@ class SpecializedAgents:
                     tool_name_override="evolve_as_supernatural",
                     tool_description_override="Evolve myth with supernatural elements"
                 )
-            ]
+            ],
+            input_guardrails=[theme_guardrail],
+            output_guardrails=[coherence_guardrail],
         )
 
 # ===== GUARDRAILS =====
@@ -458,61 +518,59 @@ class LocalLoreManager(BaseLoreManager):
     """
     Enhanced manager for local lore elements with specialized agents,
     narrative evolution, and comprehensive world-building capabilities.
+    
+    Note: Use the function-tool wrappers (add_urban_myth, etc.) for external access,
+    not the class methods directly.
     """
 
     def __init__(self, user_id: int, conversation_id: int):
         super().__init__(user_id, conversation_id)
         self.cache_namespace = "locallore"
         
-        # Keep specialized agents as a separate attribute
-        self.specialized_agents = SpecializedAgents()
-        
-        # Maintain a dictionary for compatibility with base class
-        # This maps agent names to the specialized agent instances
-        self.agents = {
-            # Evolution specialists
-            "folklore": self.specialized_agents.folklore_agent,
-            "historical": self.specialized_agents.historical_agent,
-            "supernatural": self.specialized_agents.supernatural_agent,
-            
-            # Connection specialists
-            "myth_history_connector": self.specialized_agents.myth_history_connector,
-            "history_landmark_connector": self.specialized_agents.history_landmark_connector,
-            
-            # Analysis specialists
-            "consistency": self.specialized_agents.consistency_agent,
-            "transmission": self.specialized_agents.transmission_agent,
-            
-            # Creative specialists
-            "variant": self.specialized_agents.variant_agent,
-            "tourism": self.specialized_agents.tourism_agent,
-            "tradition": self.specialized_agents.tradition_agent,
-            
-            # Master coordinator
-            "myth_evolution": self.specialized_agents.myth_evolution_agent
-        }
-        
         # Initialize guardrails as InputGuardrail/OutputGuardrail instances
         self.theme_guardrail = InputGuardrail(matriarchal_theme_guardrail)
         self.coherence_guardrail = OutputGuardrail(content_coherence_guardrail)
+        
+        # Initialize specialized agents with guardrails
+        self.specialized_agents = SpecializedAgents(
+            self.theme_guardrail, 
+            self.coherence_guardrail
+        )
+        
+        # Empty agents dict - will be populated in initialize_agents
+        self.agents = {}
 
     async def initialize_agents(self):
         """
         Override agent initialization to handle both dictionary and specialized agents.
         """
         try:
-            # Call base class to add foundation agent
+            # Call base class first to get any foundation agents
             await super().initialize_agents()
             
-            # The specialized agents are already initialized via SpecializedAgents()
-            # Add guardrails to all specialized agents
-            for agent_name, agent in self.agents.items():
-                if isinstance(agent, Agent) and agent_name != "foundation":
-                    # Add guardrails if not already present
-                    if not hasattr(agent, 'input_guardrails'):
-                        agent.input_guardrails = []
-                    if not hasattr(agent, 'output_guardrails'):
-                        agent.output_guardrails = []
+            # Now merge in our specialized agents
+            self.agents.update({
+                # Evolution specialists
+                "folklore": self.specialized_agents.folklore_agent,
+                "historical": self.specialized_agents.historical_agent,
+                "supernatural": self.specialized_agents.supernatural_agent,
+                
+                # Connection specialists
+                "myth_history_connector": self.specialized_agents.myth_history_connector,
+                "history_landmark_connector": self.specialized_agents.history_landmark_connector,
+                
+                # Analysis specialists
+                "consistency": self.specialized_agents.consistency_agent,
+                "transmission": self.specialized_agents.transmission_agent,
+                
+                # Creative specialists
+                "variant": self.specialized_agents.variant_agent,
+                "tourism": self.specialized_agents.tourism_agent,
+                "tradition": self.specialized_agents.tradition_agent,
+                
+                # Master coordinator
+                "myth_evolution": self.specialized_agents.myth_evolution_agent
+            })
             
             logger.info(f"All agents initialized for {self.__class__.__name__} user {self.user_id}")
             
@@ -693,17 +751,10 @@ class LocalLoreManager(BaseLoreManager):
         
         raise KeyError(f"Agent '{agent_name}' not found")
 
-    # ===== URBAN MYTH OPERATIONS =====
+    # ===== URBAN MYTH OPERATIONS - IMPLEMENTATION =====
     
-    @with_governance(
-        agent_type=AgentType.NARRATIVE_CRAFTER,
-        action_type="add_urban_myth",
-        action_description="Adding urban myth: {input.name}",
-        id_from_context=lambda ctx: "local_lore_manager"
-    )
-    @function_tool
-    async def add_urban_myth(self, ctx, input: MythCreationInput) -> int:
-        """Add an urban myth using canon system."""
+    async def _add_urban_myth_impl(self, ctx, input: MythCreationInput) -> int:
+        """Add an urban myth using canon system. (Implementation)"""
         with trace("AddUrbanMyth", metadata={"myth_name": input.name}):
             await self.ensure_initialized()
             
@@ -748,17 +799,10 @@ class LocalLoreManager(BaseLoreManager):
             logger.info(f"Created urban myth '{input.name}' with ID {myth_id}")
             return myth_id
         
-    # ===== LOCAL HISTORY OPERATIONS =====
+    # ===== LOCAL HISTORY OPERATIONS - IMPLEMENTATION =====
     
-    @with_governance(
-        agent_type=AgentType.NARRATIVE_CRAFTER,
-        action_type="add_local_history",
-        action_description="Adding local history: {input.event_name}",
-        id_from_context=lambda ctx: "local_lore_manager"
-    )
-    @function_tool
-    async def add_local_history(self, ctx, input: HistoryCreationInput) -> int:
-        """Add local history using canon system."""
+    async def _add_local_history_impl(self, ctx, input: HistoryCreationInput) -> int:
+        """Add local history using canon system. (Implementation)"""
         with trace("AddLocalHistory", metadata={"event_name": input.event_name}):
             await self.ensure_initialized()
             
@@ -810,17 +854,10 @@ class LocalLoreManager(BaseLoreManager):
             logger.info(f"Created local history '{input.event_name}' with ID {event_id}")
             return event_id
             
-    # ===== LANDMARK OPERATIONS =====
+    # ===== LANDMARK OPERATIONS - IMPLEMENTATION =====
     
-    @with_governance(
-        agent_type=AgentType.NARRATIVE_CRAFTER,
-        action_type="add_landmark",
-        action_description="Adding landmark: {input.name}",
-        id_from_context=lambda ctx: "local_lore_manager"
-    )
-    @function_tool
-    async def add_landmark(self, ctx, input: LandmarkCreationInput) -> int:
-        """Add landmark using canon system."""
+    async def _add_landmark_impl(self, ctx, input: LandmarkCreationInput) -> int:
+        """Add landmark using canon system. (Implementation)"""
         with trace("AddLandmark", metadata={"landmark_name": input.name}):
             await self.ensure_initialized()
             
@@ -828,7 +865,7 @@ class LocalLoreManager(BaseLoreManager):
             async with get_db_connection_context() as conn:
                 location = await conn.fetchrow("SELECT * FROM Locations WHERE id = $1", input.location_id)
                 if not location:
-                    return {"error": "Location not found"}
+                    raise ValueError(f"Location with ID {input.location_id} not found")
             
             # Apply matriarchal theming
             themed_description = MatriarchalThemingUtils.apply_matriarchal_theme(
@@ -891,23 +928,16 @@ class LocalLoreManager(BaseLoreManager):
             logger.info(f"Created landmark '{input.name}' with ID {landmark_id}")
             return landmark_id
         
-    # ===== MYTH EVOLUTION =====
+    # ===== MYTH EVOLUTION - IMPLEMENTATION =====
     
-    @with_governance(
-        agent_type=AgentType.NARRATIVE_CRAFTER,
-        action_type="evolve_myth",
-        action_description="Evolving urban myth: {myth_id}",
-        id_from_context=lambda ctx: "local_lore_manager"
-    )
-    @function_tool
-    async def evolve_myth(
+    async def _evolve_myth_impl(
         self,
         ctx,
         myth_id: int,
         evolution_type: EvolutionType,
         causal_factors: Optional[List[str]] = None
     ) -> NarrativeEvolution:
-        """Evolve myth using canon system for updates."""
+        """Evolve myth using canon system for updates. (Implementation)"""
         with trace(
             "EvolveMythWithAgent", 
             group_id=self.trace_group_id,
@@ -921,14 +951,14 @@ class LocalLoreManager(BaseLoreManager):
             causal_factors = causal_factors or ["natural evolution"]
             
             # Fetch the myth
-            async with self.get_connection_pool() as pool:
-                async with pool.acquire() as conn:
-                    myth = await conn.fetchrow("""
-                        SELECT * FROM UrbanMyths WHERE id = $1
-                    """, myth_id)
-                    
-                    if not myth:
-                        raise ValueError(f"Myth with ID {myth_id} not found")
+            pool = await self.get_connection_pool()
+            async with pool.acquire() as conn:
+                myth = await conn.fetchrow("""
+                    SELECT * FROM UrbanMyths WHERE id = $1
+                """, myth_id)
+                
+                if not myth:
+                    raise ValueError(f"Myth with ID {myth_id} not found")
             
             myth_data = dict(myth)
             
@@ -954,7 +984,7 @@ class LocalLoreManager(BaseLoreManager):
     Return only the evolved description.
     """
             
-            # Select agent based on evolution type - now using the new pattern
+            # Select agent based on evolution type
             agent_map = {
                 EvolutionType.CULTURAL: self.specialized_agents.folklore_agent,
                 EvolutionType.POLITICAL: self.specialized_agents.historical_agent,
@@ -964,10 +994,6 @@ class LocalLoreManager(BaseLoreManager):
             }
             
             selected_agent = agent_map.get(evolution_type, self.specialized_agents.myth_evolution_agent)
-            
-            # Add guardrails to the agent
-            selected_agent.input_guardrails = [self.theme_guardrail]
-            selected_agent.output_guardrails = [self.coherence_guardrail]
             
             # Run the evolution
             result = await Runner.run(
@@ -1034,6 +1060,12 @@ class LocalLoreManager(BaseLoreManager):
                 matriarchal_impact=stat_changes.get('matriarchal_impact')
             )
 
+    def _attach_guardrail_once(self, agent: Agent, *, input_gr=None, output_gr=None):
+        if input_gr and input_gr not in agent.input_guardrails:
+            agent.input_guardrails.append(input_gr)
+        if output_gr and output_gr not in agent.output_guardrails:
+            agent.output_guardrails.append(output_gr)
+
     def _calculate_evolution_stats(self, evolution_type: EvolutionType) -> Dict[str, Any]:
         """Calculate stat changes based on evolution type."""
         stat_map = {
@@ -1065,7 +1097,7 @@ class LocalLoreManager(BaseLoreManager):
         }
         return stat_map.get(evolution_type, stat_map[EvolutionType.NATURAL])
 
-    # ===== NARRATIVE CONNECTIONS =====
+    # ===== NARRATIVE CONNECTIONS - IMPLEMENTATION =====
     
     async def _create_narrative_connection(
         self,
@@ -1098,43 +1130,17 @@ class LocalLoreManager(BaseLoreManager):
         
         return connection_id
 
-    @with_governance(
-        agent_type=AgentType.NARRATIVE_CRAFTER,
-        action_type="connect_myth_history",
-        action_description="Connecting myth {myth_id} to history {history_id}",
-        id_from_context=lambda ctx: "local_lore_manager"
-    )
-    @function_tool
-    async def connect_myth_history(
-        self,
-        ctx,
-        myth_id: int,
-        history_id: int
-    ) -> NarrativeConnection:
-        """Create a narrative connection between a myth and historical event."""
-        with trace(
-            "ConnectMythHistory", 
-            group_id=self.trace_group_id,
-            metadata={
-                **self.trace_metadata, 
-                "myth_id": myth_id,
-                "history_id": history_id
-            }
-        ):
+    async def _connect_myth_history_impl(self, ctx, myth_id: int, history_id: int) -> NarrativeConnection:
+        with trace("ConnectMythHistory", group_id=self.trace_group_id,
+                   metadata={**self.trace_metadata, "myth_id": myth_id, "history_id": history_id}):
             run_ctx = self.create_run_context(ctx)
-            
-            # Fetch both elements
-            async with self.get_connection_pool() as pool:
-                async with pool.acquire() as conn:
-                    myth = await conn.fetchrow(
-                        "SELECT * FROM UrbanMyths WHERE id = $1", myth_id
-                    )
-                    history = await conn.fetchrow(
-                        "SELECT * FROM LocalHistories WHERE id = $1", history_id
-                    )
-                    
-                    if not myth or not history:
-                        raise ValueError("Myth or history not found")
+    
+            pool = await self.get_connection_pool()
+            async with pool.acquire() as conn:
+                myth = await conn.fetchrow("SELECT * FROM UrbanMyths WHERE id=$1", myth_id)
+                history = await conn.fetchrow("SELECT * FROM LocalHistories WHERE id=$1", history_id)
+                if not myth or not history:
+                    raise ValueError("Myth or history not found")
             
             # Create connection prompt
             connection_prompt = f"""
@@ -1166,68 +1172,34 @@ Be specific and compelling in your connection.
             connection: NarrativeConnection = result.final_output
             
             # Store the connection
-            async with self.get_connection_pool() as pool:
-                async with pool.acquire() as conn:
-                    connection_id = await self._create_narrative_connection(
-                        conn,
-                        "myth", myth_id,
-                        "history", history_id,
-                        connection.connection_type,
-                        connection.connection_description,
-                        connection.connection_strength
-                    )
-                    
-                    # Update cross-references
-                    await self._update_cross_references(
-                        conn, "myth", myth_id, "history", history_id
-                    )
-            
+            pool = await self.get_connection_pool()
+            async with pool.acquire() as conn:      # <── re-use same pool
+                await self._create_narrative_connection(
+                    conn, "myth", myth_id, "history", history_id,
+                    connection.connection_type, connection.connection_description,
+                    connection.connection_strength
+                )
+                await self._update_cross_references(conn, "myth", myth_id, "history", history_id)
             return connection
 
-    @with_governance(
-        agent_type=AgentType.NARRATIVE_CRAFTER,
-        action_type="connect_history_landmark",
-        action_description="Connecting history {history_id} to landmark {landmark_id}",
-        id_from_context=lambda ctx: "local_lore_manager"
-    )
-    @function_tool
-    async def connect_history_landmark(
-        self,
-        ctx,
-        history_id: int,
-        landmark_id: int
-    ) -> NarrativeConnection:
-        """Create a narrative connection between a historical event and landmark."""
-        with trace(
-            "ConnectHistoryLandmark", 
-            group_id=self.trace_group_id,
-            metadata={
-                **self.trace_metadata, 
-                "history_id": history_id,
-                "landmark_id": landmark_id
-            }
-        ):
+    async def _connect_history_landmark_impl(self, ctx, history_id: int, landmark_id: int) -> NarrativeConnection:
+        with trace("ConnectHistoryLandmark", group_id=self.trace_group_id,
+                   metadata={**self.trace_metadata, "history_id": history_id, "landmark_id": landmark_id}):
             run_ctx = self.create_run_context(ctx)
-            
-            # Fetch both elements
-            async with self.get_connection_pool() as pool:
-                async with pool.acquire() as conn:
-                    history = await conn.fetchrow(
-                        "SELECT * FROM LocalHistories WHERE id = $1", history_id
+    
+            pool = await self.get_connection_pool()
+            async with pool.acquire() as conn:
+                history = await conn.fetchrow("SELECT * FROM LocalHistories WHERE id=$1", history_id)
+                landmark = await conn.fetchrow("SELECT * FROM Landmarks WHERE id=$1", landmark_id)
+                if not history or not landmark:
+                    raise ValueError("History or landmark not found")
+                
+                # Verify same location
+                if history["location_id"] != landmark["location_id"]:
+                    logger.warning(
+                        f"History and landmark in different locations: "
+                        f"{history['location_id']} vs {landmark['location_id']}"
                     )
-                    landmark = await conn.fetchrow(
-                        "SELECT * FROM Landmarks WHERE id = $1", landmark_id
-                    )
-                    
-                    if not history or not landmark:
-                        raise ValueError("History or landmark not found")
-                    
-                    # Verify same location
-                    if history["location_id"] != landmark["location_id"]:
-                        logger.warning(
-                            f"History and landmark in different locations: "
-                            f"{history['location_id']} vs {landmark['location_id']}"
-                        )
             
             # Create connection prompt
             connection_prompt = f"""
@@ -1261,22 +1233,14 @@ Be historically plausible and culturally sensitive.
             connection: NarrativeConnection = result.final_output
             
             # Store the connection
-            async with self.get_connection_pool() as pool:
-                async with pool.acquire() as conn:
-                    connection_id = await self._create_narrative_connection(
-                        conn,
-                        "history", history_id,
-                        "landmark", landmark_id,
-                        connection.connection_type,
-                        connection.connection_description,
-                        connection.connection_strength
-                    )
-                    
-                    # Update cross-references
-                    await self._update_cross_references(
-                        conn, "history", history_id, "landmark", landmark_id
-                    )
-            
+            pool = await self.get_connection_pool()
+            async with pool.acquire() as conn:
+                await self._create_narrative_connection(
+                    conn, "history", history_id, "landmark", landmark_id,
+                    connection.connection_type, connection.connection_description,
+                    connection.connection_strength
+                )
+                await self._update_cross_references(conn, "history", history_id, "landmark", landmark_id)
             return connection
             
     async def _update_cross_references(
@@ -1312,22 +1276,15 @@ Be historically plausible and culturally sensitive.
                 WHERE id = $2 AND NOT ($1 = ANY(COALESCE(connected_histories, ARRAY[]::integer[])))
             """, id1, id2)
 
-    # ===== NARRATIVE CONSISTENCY =====
+    # ===== NARRATIVE CONSISTENCY - IMPLEMENTATION =====
     
-    @with_governance(
-        agent_type=AgentType.NARRATIVE_CRAFTER,
-        action_type="ensure_narrative_consistency",
-        action_description="Ensuring narrative consistency for location {location_id}",
-        id_from_context=lambda ctx: "local_lore_manager"
-    )
-    @function_tool
-    async def ensure_narrative_consistency(
+    async def _ensure_narrative_consistency_impl(
         self,
         ctx,
         location_id: int,
         auto_fix: bool = True
     ) -> ConsistencyCheckResult:
-        """Analyze and optionally fix narrative inconsistencies for a location."""
+        """Analyze and optionally fix narrative inconsistencies for a location. (Implementation)"""
         with trace(
             "EnsureNarrativeConsistency", 
             group_id=self.trace_group_id,
@@ -1340,10 +1297,15 @@ Be historically plausible and culturally sensitive.
             run_ctx = self.create_run_context(ctx)
             
             # Get all lore for the location
-            location_lore = await self.get_location_lore(run_ctx, location_id)
+            location_lore = await self._get_location_lore_impl(run_ctx, location_id)
             
-            # Get all connections
-            connections = await self._get_location_connections(location_id)
+            # Get all connections (passing already fetched IDs for efficiency)
+            connections = await self._get_location_connections_efficient(
+                location_id,
+                [m.id for m in location_lore.myths if m.id],
+                [h.id for h in location_lore.histories if h.id],
+                [l.id for l in location_lore.landmarks if l.id]
+            )
             
             # Prepare consistency check prompt
             consistency_prompt = f"""
@@ -1410,96 +1372,11 @@ Be historically plausible and culturally sensitive.
             
             return consistency_result
 
-    def _format_cultural_elements(self, elements: List[Any]) -> str:
-        """Format cultural elements for prompts."""
-        if not elements:
-            return "No cultural context available"
-        
-        formatted = []
-        for elem in elements:
-            formatted.append(
-                f"- {elem['name']} ({elem['element_type']}): {elem['description']}"
-            )
-        return "\n".join(formatted)
-
-    async def _apply_transmission_results(
-        self,
-        myth_id: int,
-        original_myth: Dict[str, Any],
-        transmission_result: MythTransmissionResult
-    ):
-        """Apply the results of myth transmission simulation."""
-        async with self.get_connection_pool() as pool:
-            async with pool.acquire() as conn:
-                # Update the original myth
-                updated_regions = (
-                    transmission_result.original_regions + 
-                    transmission_result.new_regions
-                )
-                
-                await conn.execute("""
-                    UPDATE UrbanMyths
-                    SET regions_known = $1,
-                        believability = $2,
-                        spread_rate = $3
-                    WHERE id = $4
-                """, updated_regions, transmission_result.final_believability,
-                    transmission_result.final_spread_rate, myth_id)
-                
-                # Create regional variants if specified
-                for i, transformation in enumerate(
-                    transmission_result.transformation_details[:transmission_result.variants_created]
-                ):
-                    if 'variant_description' in transformation:
-                        variant_name = (
-                            f"{original_myth['name']} "
-                            f"({transmission_result.new_regions[i % len(transmission_result.new_regions)]} Variant)"
-                        )
-                        
-                        # Create variant as a new myth
-                        variant_input = MythCreationInput(
-                            name=variant_name,
-                            description=transformation['variant_description'],
-                            origin_location=transmission_result.new_regions[
-                                i % len(transmission_result.new_regions)
-                            ],
-                            origin_event=f"Transmission of '{original_myth['name']}'",
-                            believability=transmission_result.final_believability,
-                            spread_rate=transmission_result.final_spread_rate,
-                            regions_known=[transmission_result.new_regions[
-                                i % len(transmission_result.new_regions)
-                            ]],
-                            narrative_style=NarrativeStyle(
-                                original_myth.get('narrative_style', 'folklore')
-                            ),
-                            themes=original_myth.get('themes', []),
-                            matriarchal_elements=original_myth.get('matriarchal_elements', [])
-                        )
-                        
-                        variant_id = await self.add_urban_myth(
-                            RunContextWrapper(context={}), variant_input
-                        )
-                        
-                        # Create connection between original and variant
-                        await self._create_narrative_connection(
-                            conn, "myth", myth_id, "myth", variant_id,
-                            ConnectionType.DERIVATIVE,
-                            f"Regional variant from transmission to {variant_input.origin_location}",
-                            6
-                        )
-
-    # ===== LOCATION LORE OPERATIONS =====
+    # ===== LOCATION LORE OPERATIONS - IMPLEMENTATION =====
     
-    @with_governance(
-        agent_type=AgentType.NARRATIVE_CRAFTER,
-        action_type="get_location_lore",
-        action_description="Getting all lore for location: {location_id}",
-        id_from_context=lambda ctx: "local_lore_manager"
-    )
-    @function_tool
-    async def get_location_lore(self, ctx, location_id: int) -> LocationLoreResult:
+    async def _get_location_lore_impl(self, ctx, location_id: int) -> LocationLoreResult:
         """
-        Get all lore associated with a location.
+        Get all lore associated with a location. (Implementation)
         
         Args:
             location_id: ID of the location
@@ -1512,83 +1389,76 @@ Be historically plausible and culturally sensitive.
         if cached:
             return LocationLoreResult(**cached)
 
-        async with self.get_connection_pool() as pool:
-            async with pool.acquire() as conn:
-                # Get location
-                location = await conn.fetchrow("""
-                    SELECT id, location_name, location_type, description
-                    FROM Locations
-                    WHERE id = $1
-                """, location_id)
-                
-                if not location:
-                    raise ValueError(f"Location with ID {location_id} not found")
+        pool = await self.get_connection_pool()
+        async with pool.acquire() as conn:
+            # Get location
+            location = await conn.fetchrow("""
+                SELECT id, location_name, location_type, description
+                FROM Locations
+                WHERE id = $1
+            """, location_id)
+            
+            if not location:
+                raise ValueError(f"Location with ID {location_id} not found")
 
-                location_data = dict(location)
+            location_data = dict(location)
 
-                # Get histories
-                histories = await conn.fetch("""
-                    SELECT * FROM LocalHistories
-                    WHERE location_id = $1
-                    ORDER BY significance DESC, creation_date DESC
-                """, location_id)
+            # Get histories
+            histories = await conn.fetch("""
+                SELECT * FROM LocalHistories
+                WHERE location_id = $1
+                ORDER BY significance DESC, creation_date DESC
+            """, location_id)
 
-                # Get landmarks
-                landmarks = await conn.fetch("""
-                    SELECT * FROM Landmarks
-                    WHERE location_id = $1
-                    ORDER BY matriarchal_significance DESC, creation_date DESC
-                """, location_id)
+            # Get landmarks
+            landmarks = await conn.fetch("""
+                SELECT * FROM Landmarks
+                WHERE location_id = $1
+                ORDER BY matriarchal_significance DESC, creation_date DESC
+            """, location_id)
 
-                # Get myths (by location name or in regions_known)
-                location_name = location_data["location_name"]
-                myths = await conn.fetch("""
-                    SELECT * FROM UrbanMyths
-                    WHERE origin_location = $1 
-                       OR $1 = ANY(regions_known)
-                    ORDER BY believability DESC, spread_rate DESC
-                """, location_name)
+            # Get myths (by location name or in regions_known)
+            location_name = location_data["location_name"]
+            myths = await conn.fetch("""
+                SELECT * FROM UrbanMyths
+                WHERE origin_location = $1 
+                   OR $1 = ANY(regions_known)
+                ORDER BY believability DESC, spread_rate DESC
+            """, location_name)
 
-                # Get connections
-                connections = await self._get_location_connections(location_id)
-                
-                # Convert to models
-                result = LocationLoreResult(
-                    location=location_data,
-                    histories=[LocalHistory(**dict(h)) for h in histories],
-                    landmarks=[Landmark(**dict(l)) for l in landmarks],
-                    myths=[UrbanMyth(**dict(m)) for m in myths],
-                    connections=[
-                        NarrativeConnection(
-                            element1_type=c['element1_type'],
-                            element1_id=c['element1_id'],
-                            element2_type=c['element2_type'],
-                            element2_id=c['element2_id'],
-                            connection_type=ConnectionType(c['connection_type']),
-                            connection_description=c['connection_description'],
-                            connection_strength=c['connection_strength']
-                        ) for c in connections
-                    ],
-                    total_elements=len(histories) + len(landmarks) + len(myths)
-                )
-                
-                self.set_cache(cache_key, result.model_dump())
-                return result
+            # Get connections
+            connections = await self._get_location_connections(location_id)
+            
+            # Convert to models
+            result = LocationLoreResult(
+                location=location_data,
+                histories=[LocalHistory(**dict(h)) for h in histories],
+                landmarks=[Landmark(**dict(l)) for l in landmarks],
+                myths=[UrbanMyth(**dict(m)) for m in myths],
+                connections=[
+                    NarrativeConnection(
+                        element1_type=c['element1_type'],
+                        element1_id=c['element1_id'],
+                        element2_type=c['element2_type'],
+                        element2_id=c['element2_id'],
+                        connection_type=ConnectionType(c['connection_type']),
+                        connection_description=c['connection_description'],
+                        connection_strength=c['connection_strength']
+                    ) for c in connections
+                ],
+                total_elements=len(histories) + len(landmarks) + len(myths)
+            )
+            
+            self.set_cache(cache_key, result.model_dump())
+            return result
 
-    @with_governance(
-        agent_type=AgentType.NARRATIVE_CRAFTER,
-        action_type="generate_location_lore",
-        action_description="Generating lore for location: {location_data.id}",
-        id_from_context=lambda ctx: "local_lore_manager"
-    )
-    @function_tool
-    async def generate_location_lore(
+    async def _generate_location_lore_impl(
         self, 
         ctx, 
         location_data: LocationDataInput
     ) -> Dict[str, Any]:
         """
-        Generate comprehensive lore for a location using specialized agents.
+        Generate comprehensive lore for a location using specialized agents. (Implementation)
         
         Args:
             location_data: LocationDataInput with location information
@@ -1645,258 +1515,14 @@ Be historically plausible and culturally sensitive.
                 )
             }
 
-    async def _generate_myths_for_location(
-        self, 
-        ctx, 
-        location_data: LocationDataInput
-    ) -> List[int]:
-        """Generate urban myths for a location."""
-        prompt = f"""
-        Generate 2-3 compelling urban myths for this location:
-        
-        LOCATION: {location_data.location_name} ({location_data.location_type})
-        DESCRIPTION: {location_data.description}
-        
-        Create myths that:
-        1. Feel authentic to the location
-        2. Have varying believability (some more plausible than others)
-        3. Include strong matriarchal themes
-        4. Connect to local fears, hopes, or mysteries
-        5. Could spread to neighboring regions
-        
-        Return a JSON array of myth objects with these fields:
-        - name: string
-        - description: string (detailed, 2-3 sentences)
-        - believability: number (1-10)
-        - spread_rate: number (1-10)
-        - themes: array of strings
-        - origin_event: string (optional)
-        """
-        
-        # Create a specialized myth generation agent
-        myth_gen_agent = Agent(
-            name="LocationMythGenerator",
-            instructions="You create authentic urban myths for specific locations.",
-            model="gpt-4.1-nano",
-            model_settings=ModelSettings(temperature=0.85),
-            output_type=List[Dict[str, Any]]
-        )
-        
-        result = await Runner.run(
-            myth_gen_agent,
-            prompt,
-            context=ctx.context,
-            run_config=RunConfig(workflow_name="GenerateLocationMyths")
-        )
-        
-        generated_ids = []
-        for myth_data in result.final_output:
-            try:
-                myth_input = MythCreationInput(
-                    name=myth_data['name'],
-                    description=myth_data['description'],
-                    origin_location=location_data.location_name,
-                    origin_event=myth_data.get('origin_event'),
-                    believability=myth_data.get('believability', 6),
-                    spread_rate=myth_data.get('spread_rate', 5),
-                    regions_known=[location_data.location_name],
-                    themes=myth_data.get('themes', ['mystery']),
-                    matriarchal_elements=['feminine wisdom', 'matriarchal power']
-                )
-                
-                myth_id = await self.add_urban_myth(ctx, myth_input)
-                generated_ids.append(myth_id)
-                
-            except Exception as e:
-                logger.error(f"Error creating myth: {e}")
-        
-        return generated_ids
-
-    async def _generate_histories_for_location(
-        self, 
-        ctx, 
-        location_data: LocationDataInput
-    ) -> List[int]:
-        """Generate historical events for a location."""
-        prompt = f"""
-        Generate 2-3 significant historical events for this location:
-        
-        LOCATION: {location_data.location_name} ({location_data.location_type})
-        DESCRIPTION: {location_data.description}
-        
-        Create events that:
-        1. Show the location's development over time
-        2. Include at least one event centered on female leadership
-        3. Have lasting impacts on the location
-        4. Vary in time periods (ancient, recent, etc.)
-        5. Could connect to local myths or landmarks
-        
-        Return a JSON array of event objects with these fields:
-        - event_name: string
-        - description: string (detailed, 2-3 sentences)
-        - date_description: string (e.g., "Three centuries ago", "Last decade")
-        - significance: number (1-10)
-        - impact_type: string (cultural, political, economic, religious)
-        - notable_figures: array of strings (names)
-        - current_relevance: string (how it affects the location today)
-        """
-        
-        history_gen_agent = Agent(
-            name="LocationHistoryGenerator",
-            instructions="You create compelling historical events for locations.",
-            model="gpt-4.1-nano",
-            model_settings=ModelSettings(temperature=0.8),
-            output_type=List[Dict[str, Any]]
-        )
-        
-        result = await Runner.run(
-            history_gen_agent,
-            prompt,
-            context=ctx.context,
-            run_config=RunConfig(workflow_name="GenerateLocationHistory")
-        )
-        
-        generated_ids = []
-        for event_data in result.final_output:
-            try:
-                history_input = HistoryCreationInput(
-                    location_id=location_data.id,
-                    event_name=event_data['event_name'],
-                    description=event_data['description'],
-                    date_description=event_data.get('date_description', 'Some time ago'),
-                    significance=event_data.get('significance', 5),
-                    impact_type=event_data.get('impact_type', 'cultural'),
-                    notable_figures=event_data.get('notable_figures', []),
-                    current_relevance=event_data.get('current_relevance')
-                )
-                
-                history_id = await self.add_local_history(ctx, history_input)
-                generated_ids.append(history_id)
-                
-            except Exception as e:
-                logger.error(f"Error creating history: {e}")
-        
-        return generated_ids
-
-    async def _generate_landmarks_for_location(
-        self, 
-        ctx, 
-        location_data: LocationDataInput
-    ) -> List[int]:
-        """Generate landmarks for a location."""
-        prompt = f"""
-        Generate 2-3 significant landmarks for this location:
-        
-        LOCATION: {location_data.location_name} ({location_data.location_type})
-        DESCRIPTION: {location_data.description}
-        
-        Create landmarks that:
-        1. Include both natural and constructed features
-        2. Have at least one with high matriarchal significance
-        3. Could be settings for myths or historical events
-        4. Have interesting architectural or natural features
-        5. Serve current purposes in the community
-        
-        Return a JSON array of landmark objects with these fields:
-        - name: string
-        - landmark_type: string (natural, structure, monument, sacred_site)
-        - description: string (detailed, 2-3 sentences)
-        - historical_significance: string (optional)
-        - current_use: string
-        - controlled_by: string (who maintains/owns it)
-        - architectural_style: string (if applicable)
-        - matriarchal_significance: string (low, moderate, high)
-        """
-        
-        landmark_gen_agent = Agent(
-            name="LocationLandmarkGenerator",
-            instructions="You create memorable landmarks for locations.",
-            model="gpt-4.1-nano",
-            model_settings=ModelSettings(temperature=0.8),
-            output_type=List[Dict[str, Any]]
-        )
-        
-        result = await Runner.run(
-            landmark_gen_agent,
-            prompt,
-            context=ctx.context,
-            run_config=RunConfig(workflow_name="GenerateLocationLandmarks")
-        )
-        
-        generated_ids = []
-        for landmark_data in result.final_output:
-            try:
-                landmark_input = LandmarkCreationInput(
-                    name=landmark_data['name'],
-                    location_id=location_data.id,
-                    landmark_type=landmark_data.get('landmark_type', 'structure'),
-                    description=landmark_data['description'],
-                    historical_significance=landmark_data.get('historical_significance'),
-                    current_use=landmark_data.get('current_use'),
-                    controlled_by=landmark_data.get('controlled_by'),
-                    architectural_style=landmark_data.get('architectural_style'),
-                    matriarchal_significance=landmark_data.get(
-                        'matriarchal_significance', 'moderate'
-                    )
-                )
-                
-                landmark_id = await self.add_landmark(ctx, landmark_input)
-                generated_ids.append(landmark_id)
-                
-            except Exception as e:
-                logger.error(f"Error creating landmark: {e}")
-        
-        return generated_ids
-
-    async def _generate_initial_connections(
-        self,
-        ctx,
-        myth_ids: List[int],
-        history_ids: List[int],
-        landmark_ids: List[int]
-    ) -> int:
-        """Generate initial narrative connections between newly created elements."""
-        connections_created = 0
-        
-        # Connect some myths to histories
-        if myth_ids and history_ids:
-            for i in range(min(2, len(myth_ids), len(history_ids))):
-                try:
-                    await self.connect_myth_history(
-                        ctx, myth_ids[i], history_ids[i % len(history_ids)]
-                    )
-                    connections_created += 1
-                except Exception as e:
-                    logger.error(f"Error connecting myth to history: {e}")
-        
-        # Connect some histories to landmarks
-        if history_ids and landmark_ids:
-            for i in range(min(2, len(history_ids), len(landmark_ids))):
-                try:
-                    await self.connect_history_landmark(
-                        ctx, history_ids[i], landmark_ids[i % len(landmark_ids)]
-                    )
-                    connections_created += 1
-                except Exception as e:
-                    logger.error(f"Error connecting history to landmark: {e}")
-        
-        return connections_created
-
-    @with_governance(
-        agent_type=AgentType.NARRATIVE_CRAFTER,
-        action_type="evolve_location_lore",
-        action_description="Evolving lore for location: {location_id}",
-        id_from_context=lambda ctx: "local_lore_manager"
-    )
-    @function_tool
-    async def evolve_location_lore(
+    async def _evolve_location_lore_impl(
         self, 
         ctx, 
         location_id: int, 
         event_description: str
     ) -> LoreEvolutionResult:
         """
-        Evolve location lore based on a significant event.
+        Evolve location lore based on a significant event. (Implementation)
         Uses canon system to ensure changes are consistent.
         
         Args:
@@ -1922,7 +1548,7 @@ Be historically plausible and culturally sensitive.
             }
         ):
             # Get current lore
-            location_lore = await self.get_location_lore(ctx, location_id)
+            location_lore = await self._get_location_lore_impl(ctx, location_id)
             
             # Apply matriarchal theming to the event
             themed_event = MatriarchalThemingUtils.apply_matriarchal_theme(
@@ -2008,7 +1634,7 @@ Return a JSON object with your analysis and specific recommendations.
                             narrative_category="contemporary"
                         )
                         
-                        history_id = await self.add_local_history(run_ctx, history_input)
+                        history_id = await self._add_local_history_impl(run_ctx, history_input)
                         evolution_result.new_history = LocalHistory(
                             id=history_id,
                             **history_input.model_dump()
@@ -2045,7 +1671,7 @@ Return a JSON object with your analysis and specific recommendations.
                             themes=['contemporary', 'transformation']
                         )
                         
-                        myth_id = await self.add_urban_myth(run_ctx, myth_input)
+                        myth_id = await self._add_urban_myth_impl(run_ctx, myth_input)
                         evolution_result.new_myth = UrbanMyth(
                             id=myth_id,
                             **myth_input.model_dump()
@@ -2101,7 +1727,7 @@ Return a JSON object with your analysis and specific recommendations.
                                 matriarchal_significance="high"
                             )
                             
-                            landmark_id = await self.add_landmark(ctx, landmark_input)
+                            landmark_id = await self._add_landmark_impl(ctx, landmark_input)
                             evolution_result.new_landmark = Landmark(
                                 id=landmark_id,
                                 **landmark_input.model_dump()
@@ -2109,7 +1735,7 @@ Return a JSON object with your analysis and specific recommendations.
             
             # Create connections between new elements
             if evolution_result.new_history and evolution_result.new_myth:
-                await self.connect_myth_history(
+                await self._connect_myth_history_impl(
                     run_ctx,
                     evolution_result.new_myth.id,
                     evolution_result.new_history.id
@@ -2120,101 +1746,15 @@ Return a JSON object with your analysis and specific recommendations.
             
             return evolution_result
 
-    def _generate_event_title(self, event: str) -> str:
-        """Generate a title for a historical event."""
-        # Simple heuristic - take first few significant words
-        words = event.split()[:5]
-        return ' '.join(w for w in words if len(w) > 3).title()
-
-    def _generate_myth_title(self, event: str) -> str:
-        """Generate a title for a myth based on an event."""
-        titles = [
-            "Legend of", "Tale of", "Mystery of", "Whispers of", "Shadow of"
-        ]
-        return f"{random.choice(titles)} {self._generate_event_title(event)}"
-
-    def _mythologize_event(self, event: str) -> str:
-        """Transform an event into mythological language."""
-        return (
-            f"They say that when {event.lower()}, the very spirits of the land "
-            f"stirred with ancient power. Some claim to have seen signs and portents, "
-            f"while others speak of the Matriarch's blessing upon those who witnessed it."
-        )
-
-    async def _handle_landmark_evolution(
-        self,
-        ctx,
-        location_lore: LocationLoreResult,
-        event: str,
-        evolution_result: LoreEvolutionResult
-    ) -> LoreEvolutionResult:
-        """Handle landmark creation or modification due to an event."""
-        # Randomly choose to create new or modify existing
-        if location_lore.landmarks and random.random() > 0.3:
-            # Modify existing landmark
-            landmark_to_modify = random.choice(location_lore.landmarks)
-            
-            new_description = (
-                f"{landmark_to_modify.description} "
-                f"Recent events have left their mark here - {event.lower()}"
-            )
-            
-            async with self.get_connection_pool() as pool:
-                async with pool.acquire() as conn:
-                    await conn.execute("""
-                        UPDATE Landmarks
-                        SET description = $1,
-                            historical_significance = COALESCE(
-                                historical_significance || ' ' || $2,
-                                $2
-                            )
-                        WHERE id = $3
-                    """, new_description, f"Site of recent events: {event}",
-                        landmark_to_modify.id)
-            
-            evolution_result.updated_landmark = {
-                "id": landmark_to_modify.id,
-                "name": landmark_to_modify.name,
-                "change": "Updated due to recent events"
-            }
-        else:
-            # Create new landmark
-            landmark_input = LandmarkCreationInput(
-                name=f"Memorial of {self._generate_event_title(event)}",
-                location_id=evolution_result.location_id,
-                landmark_type="monument",
-                description=(
-                    f"A newly erected monument commemorating the recent events. {event}"
-                ),
-                current_use="Memorial and gathering place",
-                controlled_by="The Council of Matriarchs",
-                matriarchal_significance="high"
-            )
-            
-            landmark_id = await self.add_landmark(ctx, landmark_input)
-            evolution_result.new_landmark = Landmark(
-                id=landmark_id,
-                **landmark_input.model_dump()
-            )
-        
-        return evolution_result
-
-    # ===== SPECIALIZED FEATURES =====
+    # ===== SPECIALIZED FEATURES - IMPLEMENTATION =====
     
-    @with_governance(
-        agent_type=AgentType.NARRATIVE_CRAFTER,
-        action_type="generate_legend_variants",
-        action_description="Creating legend variants for myth {myth_id}",
-        id_from_context=lambda ctx: "local_lore_manager"
-    )
-    @function_tool
-    async def generate_legend_variants(
+    async def _generate_legend_variants_impl(
         self,
         ctx,
         myth_id: int,
         variant_count: int = 3
     ) -> Dict[str, Any]:
-        """Create contradictory versions of a myth."""
+        """Create contradictory versions of a myth. (Implementation)"""
         run_ctx = self.create_run_context(ctx)
         
         with trace(
@@ -2227,13 +1767,13 @@ Return a JSON object with your analysis and specific recommendations.
             }
         ):
             # Fetch the myth
-            async with self.get_connection_pool() as pool:
-                async with pool.acquire() as conn:
-                    myth = await conn.fetchrow(
-                        "SELECT * FROM UrbanMyths WHERE id = $1", myth_id
-                    )
-                    if not myth:
-                        raise ValueError(f"Myth with ID {myth_id} not found")
+            pool = await self.get_connection_pool()
+            async with pool.acquire() as conn:
+                myth = await conn.fetchrow(
+                    "SELECT * FROM UrbanMyths WHERE id = $1", myth_id
+                )
+                if not myth:
+                    raise ValueError(f"Myth with ID {myth_id} not found")
             
             myth_data = dict(myth)
             
@@ -2265,23 +1805,23 @@ different antagonists, different outcomes, etc.
             variants: List[LegendVariant] = result.final_output
             
             # Store variants in versions_json
-            async with self.get_connection_pool() as pool:
-                async with pool.acquire() as conn:
-                    versions_json = myth_data.get('versions_json') or {}
-                    if 'contradictory_variants' not in versions_json:
-                        versions_json['contradictory_variants'] = []
-                    
-                    # Add new variants
-                    for variant in variants:
-                        versions_json['contradictory_variants'].append(
-                            variant.model_dump()
-                        )
-                    
-                    await conn.execute("""
-                        UPDATE UrbanMyths
-                        SET versions_json = $1
-                        WHERE id = $2
-                    """, json.dumps(versions_json), myth_id)
+            pool = await self.get_connection_pool()
+            async with pool.acquire() as conn:
+                versions_json = myth_data.get('versions_json') or {}
+                if 'contradictory_variants' not in versions_json:
+                    versions_json['contradictory_variants'] = []
+                
+                # Add new variants
+                for variant in variants:
+                    versions_json['contradictory_variants'].append(
+                        variant.model_dump()
+                    )
+                
+                await conn.execute("""
+                    UPDATE UrbanMyths
+                    SET versions_json = $1
+                    WHERE id = $2
+                """, json.dumps(versions_json), myth_id)
             
             return {
                 "myth_id": myth_id,
@@ -2290,19 +1830,12 @@ different antagonists, different outcomes, etc.
                 "variants": [v.model_dump() for v in variants]
             }
             
-    @with_governance(
-        agent_type=AgentType.NARRATIVE_CRAFTER,
-        action_type="develop_tourist_attraction",
-        action_description="Developing tourism for myth {myth_id}",
-        id_from_context=lambda ctx: "local_lore_manager"
-    )
-    @function_tool
-    async def develop_tourist_attraction(
+    async def _develop_tourist_attraction_impl(
         self,
         ctx,
         myth_id: int
     ) -> TouristDevelopment:
-        """Transform a myth into a tourist attraction plan."""
+        """Transform a myth into a tourist attraction plan. (Implementation)"""
         run_ctx = self.create_run_context(ctx)
         
         with trace(
@@ -2311,13 +1844,13 @@ different antagonists, different outcomes, etc.
             metadata={**self.trace_metadata, "myth_id": myth_id}
         ):
             # Fetch the myth
-            async with self.get_connection_pool() as pool:
-                async with pool.acquire() as conn:
-                    myth = await conn.fetchrow(
-                        "SELECT * FROM UrbanMyths WHERE id = $1", myth_id
-                    )
-                    if not myth:
-                        raise ValueError(f"Myth with ID {myth_id} not found")
+            pool = await self.get_connection_pool()
+            async with pool.acquire() as conn:
+                myth = await conn.fetchrow(
+                    "SELECT * FROM UrbanMyths WHERE id = $1", myth_id
+                )
+                if not myth:
+                    raise ValueError(f"Myth with ID {myth_id} not found")
             
             myth_data = dict(myth)
             
@@ -2352,32 +1885,25 @@ Balance commercialization with cultural preservation.
             tourism_plan: TouristDevelopment = result.final_output
             
             # Store in versions_json
-            async with self.get_connection_pool() as pool:
-                async with pool.acquire() as conn:
-                    versions_json = myth_data.get('versions_json') or {}
-                    versions_json['tourist_development'] = tourism_plan.model_dump()
-                    
-                    await conn.execute("""
-                        UPDATE UrbanMyths
-                        SET versions_json = $1
-                        WHERE id = $2
-                    """, json.dumps(versions_json), myth_id)
+            pool = await self.get_connection_pool()
+            async with pool.acquire() as conn:
+                versions_json = myth_data.get('versions_json') or {}
+                versions_json['tourist_development'] = tourism_plan.model_dump()
+                
+                await conn.execute("""
+                    UPDATE UrbanMyths
+                    SET versions_json = $1
+                    WHERE id = $2
+                """, json.dumps(versions_json), myth_id)
             
             return tourism_plan
 
-    @with_governance(
-        agent_type=AgentType.NARRATIVE_CRAFTER,
-        action_type="simulate_tradition_dynamics",
-        action_description="Simulating tradition dynamics for myth {myth_id}",
-        id_from_context=lambda ctx: "local_lore_manager"
-    )
-    @function_tool
-    async def simulate_tradition_dynamics(
+    async def _simulate_tradition_dynamics_impl(
         self,
         ctx,
         myth_id: int
     ) -> TraditionDynamics:
-        """Compare oral vs written tradition versions of a myth."""
+        """Compare oral vs written tradition versions of a myth. (Implementation)"""
         run_ctx = self.create_run_context(ctx)
         
         with trace(
@@ -2386,13 +1912,13 @@ Balance commercialization with cultural preservation.
             metadata={**self.trace_metadata, "myth_id": myth_id}
         ):
             # Fetch the myth
-            async with self.get_connection_pool() as pool:
-                async with pool.acquire() as conn:
-                    myth = await conn.fetchrow(
-                        "SELECT * FROM UrbanMyths WHERE id = $1", myth_id
-                    )
-                    if not myth:
-                        raise ValueError(f"Myth with ID {myth_id} not found")
+            pool = await self.get_connection_pool()
+            async with pool.acquire() as conn:
+                myth = await conn.fetchrow(
+                    "SELECT * FROM UrbanMyths WHERE id = $1", myth_id
+                )
+                if not myth:
+                    raise ValueError(f"Myth with ID {myth_id} not found")
             
             myth_data = dict(myth)
             
@@ -2424,249 +1950,27 @@ Show specific differences in language, detail, and emphasis.
             tradition_analysis: TraditionDynamics = result.final_output
             
             # Store in versions_json
-            async with self.get_connection_pool() as pool:
-                async with pool.acquire() as conn:
-                    versions_json = myth_data.get('versions_json') or {}
-                    versions_json['tradition_dynamics'] = tradition_analysis.model_dump()
-                    
-                    await conn.execute("""
-                        UPDATE UrbanMyths
-                        SET versions_json = $1
-                        WHERE id = $2
-                    """, json.dumps(versions_json), myth_id)
+            pool = await self.get_connection_pool()
+            async with pool.acquire() as conn:
+                versions_json = myth_data.get('versions_json') or {}
+                versions_json['tradition_dynamics'] = tradition_analysis.model_dump()
+                
+                await conn.execute("""
+                    UPDATE UrbanMyths
+                    SET versions_json = $1
+                    WHERE id = $2
+                """, json.dumps(versions_json), myth_id)
             
             return tradition_analysis
 
-    # ===== GOVERNANCE REGISTRATION =====
-    
-    async def register_with_governance(self):
-        """Register with Nyx governance system."""
-        await super().register_with_governance(
-            agent_type=AgentType.NARRATIVE_CRAFTER,
-            agent_id="local_lore_manager",
-            directive_text=(
-                "Create and manage comprehensive local lore including myths, "
-                "histories, and landmarks with strong matriarchal themes and "
-                "rich narrative connections."
-            ),
-            scope="world_building",
-            priority=DirectivePriority.MEDIUM
-        )
-
-    # ===== UTILITY METHODS =====
-    
-    def create_run_context(self, ctx) -> RunContextWrapper:
-        """Create a run context from the provided context."""
-        if isinstance(ctx, RunContextWrapper):
-            return ctx
-        return RunContextWrapper(context=ctx.context if hasattr(ctx, 'context') else {})
-    
-    async def get_connection_pool(self):
-        """Get database connection pool from base class."""
-        # This should be implemented in BaseLoreManager
-        return await super().get_connection_pool()
-    
-    def get_cache(self, key: str) -> Optional[Any]:
-        """Get cached value."""
-        return super().get_cache(f"{self.cache_namespace}:{key}")
-    
-    def set_cache(self, key: str, value: Any, ttl: int = 3600):
-        """Set cached value."""
-        return super().set_cache(f"{self.cache_namespace}:{key}", value, ttl)
-    
-    def invalidate_cache(self, key: str):
-        """Invalidate specific cache key."""
-        return super().invalidate_cache(f"{self.cache_namespace}:{key}")
-    
-    def invalidate_cache_pattern(self, pattern: str):
-        """Invalidate cache keys matching pattern."""
-        return super().invalidate_cache_pattern(f"{self.cache_namespace}:{pattern}")
-
-# End of LocalLoreManager Matriarchal representation gaps
-
-    def _summarize_elements(self, elements: List[Any], element_type: str) -> str:
-        """Create a summary of lore elements for the consistency check."""
-        if not elements:
-            return "None"
-        
-        summaries = []
-        for elem in elements[:5]:  # Limit to first 5 for brevity
-            if element_type == 'myth':
-                summaries.append(
-                    f"- {elem.name}: {elem.description[:100]}... "
-                    f"(Believability: {elem.believability}/10)"
-                )
-            elif element_type == 'history':
-                summaries.append(
-                    f"- {elem.event_name}: {elem.description[:100]}... "
-                    f"(Date: {elem.date_description})"
-                )
-            elif element_type == 'landmark':
-                summaries.append(
-                    f"- {elem.name}: {elem.description[:100]}... "
-                    f"(Type: {elem.landmark_type})"
-                )
-        
-        if len(elements) > 5:
-            summaries.append(f"... and {len(elements) - 5} more")
-        
-        return "\n".join(summaries)
-
-    def _summarize_connections(self, connections: List[Dict[str, Any]]) -> str:
-        """Summarize narrative connections."""
-        if not connections:
-            return "None"
-        
-        summaries = []
-        for conn in connections[:5]:
-            summaries.append(
-                f"- {conn['element1_type']} #{conn['element1_id']} → "
-                f"{conn['element2_type']} #{conn['element2_id']}: "
-                f"{conn['connection_type']} (Strength: {conn['connection_strength']}/10)"
-            )
-        
-        if len(connections) > 5:
-            summaries.append(f"... and {len(connections) - 5} more")
-        
-        return "\n".join(summaries)
-
-    async def _get_location_connections(self, location_id: int) -> List[Dict[str, Any]]:
-        """Get all narrative connections for a location."""
-        async with self.get_connection_pool() as pool:
-            async with pool.acquire() as conn:
-                # Get location lore IDs
-                location_lore = await self.get_location_lore(
-                    RunContextWrapper(context={}), location_id
-                )
-                
-                myth_ids = [m.id for m in location_lore.myths if m.id]
-                history_ids = [h.id for h in location_lore.histories if h.id]
-                landmark_ids = [l.id for l in location_lore.landmarks if l.id]
-                
-                all_connections = []
-                
-                # Fetch connections for each type
-                for element_type, ids in [
-                    ("myth", myth_ids),
-                    ("history", history_ids),
-                    ("landmark", landmark_ids)
-                ]:
-                    if ids:
-                        connections = await conn.fetch("""
-                            SELECT * FROM NarrativeConnections
-                            WHERE (element1_type = $1 AND element1_id = ANY($2::int[]))
-                               OR (element2_type = $1 AND element2_id = ANY($2::int[]))
-                        """, element_type, ids)
-                        
-                        all_connections.extend([dict(c) for c in connections])
-                
-                # Deduplicate
-                seen = set()
-                unique_connections = []
-                for conn in all_connections:
-                    if conn['id'] not in seen:
-                        seen.add(conn['id'])
-                        unique_connections.append(conn)
-                
-                return unique_connections
-
-    async def _apply_consistency_fixes(self, suggested_fixes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Apply consistency fixes using canon system."""
-        applied_fixes = []
-        
-        async with get_db_connection_context() as conn:
-            from lore.core import canon
-            
-            for fix in suggested_fixes:
-                try:
-                    if 'element_type' in fix and 'element_id' in fix:
-                        if fix['element_type'] == 'myth' and 'new_description' in fix:
-                            await canon.update_urban_myth(
-                                self.create_run_context({}), conn, 
-                                fix['element_id'], 
-                                {"description": fix['new_description']}
-                            )
-                            applied_fixes.append(fix)
-                            
-                        elif fix['element_type'] == 'history' and 'new_description' in fix:
-                            # Update history via direct SQL since it's less complex
-                            await conn.execute("""
-                                UPDATE LocalHistories SET description = $1 WHERE id = $2
-                            """, fix['new_description'], fix['element_id'])
-                            applied_fixes.append(fix)
-                            
-                        elif fix['element_type'] == 'landmark' and 'new_description' in fix:
-                            await canon.update_landmark(
-                                self.create_run_context({}), conn,
-                                fix['element_id'],
-                                {"description": fix['new_description']}
-                            )
-                            applied_fixes.append(fix)
-                            
-                    elif 'connection_id' in fix and 'new_description' in fix:
-                        # Update connection
-                        await conn.execute("""
-                            UPDATE NarrativeConnections
-                            SET connection_description = $1, validated = TRUE
-                            WHERE id = $2
-                        """, fix['new_description'], fix['connection_id'])
-                        applied_fixes.append(fix)
-                        
-                except Exception as e:
-                    logger.error(f"Error applying consistency fix: {e}")
-        
-        return applied_fixes
-    
-    async def _create_suggested_connections(
-        self, suggested_connections: List[NarrativeConnection]
-    ) -> List[int]:
-        """Create suggested narrative connections."""
-        created_ids = []
-        
-        async with self.get_connection_pool() as pool:
-            async with pool.acquire() as conn:
-                for connection in suggested_connections:
-                    try:
-                        connection_id = await self._create_narrative_connection(
-                            conn,
-                            connection.element1_type,
-                            connection.element1_id,
-                            connection.element2_type,
-                            connection.element2_id,
-                            connection.connection_type,
-                            connection.connection_description,
-                            connection.connection_strength
-                        )
-                        
-                        created_ids.append(connection_id)
-                        logger.info(
-                            f"Created suggested connection #{connection_id} between "
-                            f"{connection.element1_type} #{connection.element1_id} and "
-                            f"{connection.element2_type} #{connection.element2_id}"
-                        )
-                    
-                    except Exception as e:
-                        logger.error(f"Error creating suggested connection: {e}")
-        
-        return created_ids
-
-    # ===== MYTH TRANSMISSION =====
-    
-    @with_governance(
-        agent_type=AgentType.NARRATIVE_CRAFTER,
-        action_type="simulate_myth_transmission",
-        action_description="Simulating transmission of myth {myth_id}",
-        id_from_context=lambda ctx: "local_lore_manager"
-    )
-    @function_tool
-    async def simulate_myth_transmission(
+    async def _simulate_myth_transmission_impl(
         self,
         ctx,
         myth_id: int,
         target_regions: List[str],
         transmission_steps: int = 3
     ) -> MythTransmissionResult:
-        """Simulate how a myth spreads and transforms across regions."""
+        """Simulate how a myth spreads and transforms across regions. (Implementation)"""
         with trace(
             "SimulateMythTransmission", 
             group_id=self.trace_group_id,
@@ -2679,22 +1983,22 @@ Show specific differences in language, detail, and emphasis.
             run_ctx = self.create_run_context(ctx)
             
             # Fetch the myth
-            async with self.get_connection_pool() as pool:
-                async with pool.acquire() as conn:
-                    myth = await conn.fetchrow(
-                        "SELECT * FROM UrbanMyths WHERE id = $1", myth_id
-                    )
-                    
-                    if not myth:
-                        raise ValueError(f"Myth with ID {myth_id} not found")
-                    
-                    # Get cultural context
-                    cultural_elements = await conn.fetch("""
-                        SELECT name, element_type, description
-                        FROM CulturalElements
-                        ORDER BY RANDOM()
-                        LIMIT 5
-                    """)
+            pool = await self.get_connection_pool()
+            async with pool.acquire() as conn:
+                myth = await conn.fetchrow(
+                    "SELECT * FROM UrbanMyths WHERE id = $1", myth_id
+                )
+                
+                if not myth:
+                    raise ValueError(f"Myth with ID {myth_id} not found")
+                
+                # Get cultural context
+                cultural_elements = await conn.fetch("""
+                    SELECT name, element_type, description
+                    FROM CulturalElements
+                    ORDER BY RANDOM()
+                    LIMIT 5
+                """)
             
             myth_data = dict(myth)
             original_regions = myth_data.get("regions_known", [])
@@ -2753,6 +2057,8 @@ Show specific differences in language, detail, and emphasis.
             
             return transmission_result
 
+    # ===== HELPER METHODS =====
+    
     def _format_cultural_elements(self, elements: List[Any]) -> str:
         """Format cultural elements for prompts."""
         if not elements:
@@ -2772,82 +2078,912 @@ Show specific differences in language, detail, and emphasis.
         transmission_result: MythTransmissionResult
     ):
         """Apply the results of myth transmission simulation."""
-        async with self.get_connection_pool() as pool:
-            async with pool.acquire() as conn:
-                # Update the original myth
-                updated_regions = (
-                    transmission_result.original_regions + 
-                    transmission_result.new_regions
+        pool = await self.get_connection_pool()
+        async with pool.acquire() as conn:
+            # Update the original myth
+            updated_regions = (
+                transmission_result.original_regions + 
+                transmission_result.new_regions
+            )
+            
+            await conn.execute("""
+                UPDATE UrbanMyths
+                SET regions_known = $1,
+                    believability = $2,
+                    spread_rate = $3
+                WHERE id = $4
+            """, updated_regions, transmission_result.final_believability,
+                transmission_result.final_spread_rate, myth_id)
+            
+            # Create regional variants if specified
+            for i, transformation in enumerate(
+                transmission_result.transformation_details[:transmission_result.variants_created]
+            ):
+                if 'variant_description' in transformation:
+                    variant_name = (
+                        f"{original_myth['name']} "
+                        f"({transmission_result.new_regions[i % len(transmission_result.new_regions)]} Variant)"
+                    )
+                    
+                    # Create variant as a new myth
+                    variant_input = MythCreationInput(
+                        name=variant_name,
+                        description=transformation['variant_description'],
+                        origin_location=transmission_result.new_regions[
+                            i % len(transmission_result.new_regions)
+                        ],
+                        origin_event=f"Transmission of '{original_myth['name']}'",
+                        believability=transmission_result.final_believability,
+                        spread_rate=transmission_result.final_spread_rate,
+                        regions_known=[transmission_result.new_regions[
+                            i % len(transmission_result.new_regions)
+                        ]],
+                        narrative_style=NarrativeStyle(
+                            original_myth.get('narrative_style', 'folklore')
+                        ),
+                        themes=original_myth.get('themes', []),
+                        matriarchal_elements=original_myth.get('matriarchal_elements', [])
+                    )
+                    
+                    variant_id = await self._add_urban_myth_impl(
+                        RunContextWrapper(context={}), variant_input
+                    )
+                    
+                    # Create connection between original and variant
+                    await self._create_narrative_connection(
+                        conn, "myth", myth_id, "myth", variant_id,
+                        ConnectionType.DERIVATIVE,
+                        f"Regional variant from transmission to {variant_input.origin_location}",
+                        6
+                    )
+
+    async def _generate_myths_for_location(
+        self, 
+        ctx, 
+        location_data: LocationDataInput
+    ) -> List[int]:
+        """Generate urban myths for a location."""
+        prompt = f"""
+        Generate 2-3 compelling urban myths for this location:
+        
+        LOCATION: {location_data.location_name} ({location_data.location_type})
+        DESCRIPTION: {location_data.description}
+        
+        Create myths that:
+        1. Feel authentic to the location
+        2. Have varying believability (some more plausible than others)
+        3. Include strong matriarchal themes
+        4. Connect to local fears, hopes, or mysteries
+        5. Could spread to neighboring regions
+        
+        Return a JSON array of myth objects with these fields:
+        - name: string
+        - description: string (detailed, 2-3 sentences)
+        - believability: number (1-10)
+        - spread_rate: number (1-10)
+        - themes: array of strings
+        - origin_event: string (optional)
+        """
+        
+        # Create a specialized myth generation agent
+        myth_gen_agent = Agent(
+            name="LocationMythGenerator",
+            instructions="You create authentic urban myths for specific locations.",
+            model="gpt-4.1-nano",
+            model_settings=ModelSettings(temperature=0.85),
+            output_type=List[Dict[str, Any]]
+        )
+        
+        result = await Runner.run(
+            myth_gen_agent,
+            prompt,
+            context=ctx.context,
+            run_config=RunConfig(workflow_name="GenerateLocationMyths")
+        )
+        
+        generated_ids = []
+        for myth_data in result.final_output:
+            try:
+                myth_input = MythCreationInput(
+                    name=myth_data['name'],
+                    description=myth_data['description'],
+                    origin_location=location_data.location_name,
+                    origin_event=myth_data.get('origin_event'),
+                    believability=myth_data.get('believability', 6),
+                    spread_rate=myth_data.get('spread_rate', 5),
+                    regions_known=[location_data.location_name],
+                    themes=myth_data.get('themes', ['mystery']),
+                    matriarchal_elements=['feminine wisdom', 'matriarchal power']
                 )
                 
-                await conn.execute("""
-                    UPDATE UrbanMyths
-                    SET regions_known = $1,
-                        believability = $2,
-                        spread_rate = $3
-                    WHERE id = $4
-                """, updated_regions, transmission_result.final_believability,
-                    transmission_result.final_spread_rate, myth_id)
+                myth_id = await self._add_urban_myth_impl(ctx, myth_input)
+                generated_ids.append(myth_id)
                 
-                # Create regional variants if specified
-                for i, transformation in enumerate(
-                    transmission_result.transformation_details[:transmission_result.variants_created]
-                ):
-                    if 'variant_description' in transformation:
-                        variant_name = (
-                            f"{original_myth['name']} "
-                            f"({transmission_result.new_regions[i % len(transmission_result.new_regions)]} Variant)"
-                        )
-                        
-                        # Create variant as a new myth
-                        variant_input = MythCreationInput(
-                            name=variant_name,
-                            description=transformation['variant_description'],
-                            origin_location=transmission_result.new_regions[
-                                i % len(transmission_result.new_regions)
-                            ],
-                            origin_event=f"Transmission of '{original_myth['name']}'",
-                            believability=transmission_result.final_believability,
-                            spread_rate=transmission_result.final_spread_rate,
-                            regions_known=[transmission_result.new_regions[
-                                i % len(transmission_result.new_regions)
-                            ]],
-                            narrative_style=NarrativeStyle(
-                                original_myth.get('narrative_style', 'folklore')
-                            ),
-                            themes=original_myth.get('themes', []),
-                            matriarchal_elements=original_myth.get('matriarchal_elements', [])
-                        )
-                        
-                        variant_id = await self.add_urban_myth(
-                            RunContextWrapper(context={}), variant_input
-                        )
-                        
-                        # Create connection between original and variant
-                        await self._create_narrative_connection(
-                            conn, "myth", myth_id, "myth", variant_id,
-                            ConnectionType.DERIVATIVE,
-                            f"Regional variant from transmission to {variant_input.origin_location}",
-                            6
-                        )
+            except Exception as e:
+                logger.error(f"Error creating myth: {e}")
+        
+        return generated_ids
 
-    async def _update_myth_versions_json(self, myth_id: int, key: str, data: Any) -> None:
-        """Update versions_json field using canon system."""
-        async with get_db_connection_context() as conn:
-            # Get current versions_json
-            versions_json = await conn.fetchval(
-                "SELECT versions_json FROM UrbanMyths WHERE id = $1", myth_id
-            ) or {}
-            
-            if isinstance(versions_json, str):
-                versions_json = json.loads(versions_json)
-            
-            # Update with new data
-            versions_json[key] = data
-            
-            # Update via canon
-            from lore.core import canon
-            await canon.update_urban_myth(
-                self.create_run_context({}), conn, myth_id,
-                {"versions_json": json.dumps(versions_json)}
+    async def _generate_histories_for_location(
+        self, 
+        ctx, 
+        location_data: LocationDataInput
+    ) -> List[int]:
+        """Generate historical events for a location."""
+        prompt = f"""
+        Generate 2-3 significant historical events for this location:
+        
+        LOCATION: {location_data.location_name} ({location_data.location_type})
+        DESCRIPTION: {location_data.description}
+        
+        Create events that:
+        1. Show the location's development over time
+        2. Include at least one event centered on female leadership
+        3. Have lasting impacts on the location
+        4. Vary in time periods (ancient, recent, etc.)
+        5. Could connect to local myths or landmarks
+        
+        Return a JSON array of event objects with these fields:
+        - event_name: string
+        - description: string (detailed, 2-3 sentences)
+        - date_description: string (e.g., "Three centuries ago", "Last decade")
+        - significance: number (1-10)
+        - impact_type: string (cultural, political, economic, religious)
+        - notable_figures: array of strings (names)
+        - current_relevance: string (how it affects the location today)
+        """
+        
+        history_gen_agent = Agent(
+            name="LocationHistoryGenerator",
+            instructions="You create compelling historical events for locations.",
+            model="gpt-4.1-nano",
+            model_settings=ModelSettings(temperature=0.8),
+            output_type=List[Dict[str, Any]]
+        )
+        
+        result = await Runner.run(
+            history_gen_agent,
+            prompt,
+            context=ctx.context,
+            run_config=RunConfig(workflow_name="GenerateLocationHistory")
+        )
+        
+        generated_ids = []
+        for event_data in result.final_output:
+            try:
+                history_input = HistoryCreationInput(
+                    location_id=location_data.id,
+                    event_name=event_data['event_name'],
+                    description=event_data['description'],
+                    date_description=event_data.get('date_description', 'Some time ago'),
+                    significance=event_data.get('significance', 5),
+                    impact_type=event_data.get('impact_type', 'cultural'),
+                    notable_figures=event_data.get('notable_figures', []),
+                    current_relevance=event_data.get('current_relevance')
+                )
+                
+                history_id = await self._add_local_history_impl(ctx, history_input)
+                generated_ids.append(history_id)
+                
+            except Exception as e:
+                logger.error(f"Error creating history: {e}")
+        
+        return generated_ids
+
+    async def _generate_landmarks_for_location(
+        self, 
+        ctx, 
+        location_data: LocationDataInput
+    ) -> List[int]:
+        """Generate landmarks for a location."""
+        prompt = f"""
+        Generate 2-3 significant landmarks for this location:
+        
+        LOCATION: {location_data.location_name} ({location_data.location_type})
+        DESCRIPTION: {location_data.description}
+        
+        Create landmarks that:
+        1. Include both natural and constructed features
+        2. Have at least one with high matriarchal significance
+        3. Could be settings for myths or historical events
+        4. Have interesting architectural or natural features
+        5. Serve current purposes in the community
+        
+        Return a JSON array of landmark objects with these fields:
+        - name: string
+        - landmark_type: string (natural, structure, monument, sacred_site)
+        - description: string (detailed, 2-3 sentences)
+        - historical_significance: string (optional)
+        - current_use: string
+        - controlled_by: string (who maintains/owns it)
+        - architectural_style: string (if applicable)
+        - matriarchal_significance: string (low, moderate, high)
+        """
+        
+        landmark_gen_agent = Agent(
+            name="LocationLandmarkGenerator",
+            instructions="You create memorable landmarks for locations.",
+            model="gpt-4.1-nano",
+            model_settings=ModelSettings(temperature=0.8),
+            output_type=List[Dict[str, Any]]
+        )
+        
+        result = await Runner.run(
+            landmark_gen_agent,
+            prompt,
+            context=ctx.context,
+            run_config=RunConfig(workflow_name="GenerateLocationLandmarks")
+        )
+        
+        generated_ids = []
+        for landmark_data in result.final_output:
+            try:
+                landmark_input = LandmarkCreationInput(
+                    name=landmark_data['name'],
+                    location_id=location_data.id,
+                    landmark_type=landmark_data.get('landmark_type', 'structure'),
+                    description=landmark_data['description'],
+                    historical_significance=landmark_data.get('historical_significance'),
+                    current_use=landmark_data.get('current_use'),
+                    controlled_by=landmark_data.get('controlled_by'),
+                    architectural_style=landmark_data.get('architectural_style'),
+                    matriarchal_significance=landmark_data.get(
+                        'matriarchal_significance', 'moderate'
+                    )
+                )
+                
+                landmark_id = await self._add_landmark_impl(ctx, landmark_input)
+                generated_ids.append(landmark_id)
+                
+            except Exception as e:
+                logger.error(f"Error creating landmark: {e}")
+        
+        return generated_ids
+
+    async def _generate_initial_connections(
+        self,
+        ctx,
+        myth_ids: List[int],
+        history_ids: List[int],
+        landmark_ids: List[int]
+    ) -> int:
+        """Generate initial narrative connections between newly created elements."""
+        connections_created = 0
+        
+        # Connect some myths to histories
+        if myth_ids and history_ids:
+            for i in range(min(2, len(myth_ids), len(history_ids))):
+                try:
+                    await self._connect_myth_history_impl(
+                        ctx, myth_ids[i], history_ids[i % len(history_ids)]
+                    )
+                    connections_created += 1
+                except Exception as e:
+                    logger.error(f"Error connecting myth to history: {e}")
+        
+        # Connect some histories to landmarks
+        if history_ids and landmark_ids:
+            for i in range(min(2, len(history_ids), len(landmark_ids))):
+                try:
+                    await self._connect_history_landmark_impl(
+                        ctx, history_ids[i], landmark_ids[i % len(landmark_ids)]
+                    )
+                    connections_created += 1
+                except Exception as e:
+                    logger.error(f"Error connecting history to landmark: {e}")
+        
+        return connections_created
+
+    def _generate_event_title(self, event: str) -> str:
+        """Generate a title for a historical event."""
+        # Simple heuristic - take first few significant words
+        words = event.split()[:5]
+        return ' '.join(w for w in words if len(w) > 3).title()
+
+    def _generate_myth_title(self, event: str) -> str:
+        """Generate a title for a myth based on an event."""
+        titles = [
+            "Legend of", "Tale of", "Mystery of", "Whispers of", "Shadow of"
+        ]
+        return f"{random.choice(titles)} {self._generate_event_title(event)}"
+
+    def _mythologize_event(self, event: str) -> str:
+        """Transform an event into mythological language."""
+        return (
+            f"They say that when {event.lower()}, the very spirits of the land "
+            f"stirred with ancient power. Some claim to have seen signs and portents, "
+            f"while others speak of the Matriarch's blessing upon those who witnessed it."
+        )
+
+    def _summarize_elements(self, elements: List[Any], element_type: str) -> str:
+        """Create a summary of lore elements for the consistency check."""
+        if not elements:
+            return "None"
+        
+        summaries = []
+        for elem in elements[:5]:  # Limit to first 5 for brevity
+            if element_type == 'myth':
+                summaries.append(
+                    f"- {elem.name}: {elem.description[:100]}... "
+                    f"(Believability: {elem.believability}/10)"
+                )
+            elif element_type == 'history':
+                summaries.append(
+                    f"- {elem.event_name}: {elem.description[:100]}... "
+                    f"(Date: {elem.date_description})"
+                )
+            elif element_type == 'landmark':
+                summaries.append(
+                    f"- {elem.name}: {elem.description[:100]}... "
+                    f"(Type: {elem.landmark_type})"
+                )
+        
+        if len(elements) > 5:
+            summaries.append(f"... and {len(elements) - 5} more")
+        
+        return "\n".join(summaries)
+
+    def _summarize_connections(self, connections: List[Dict[str, Any]]) -> str:
+        if not connections:
+            return "None"
+    
+        lines = []
+        for c in connections[:5]:
+            lines.append(
+                f"- {c['element1_type']} #{c['element1_id']} → "
+                f"{c['element2_type']} #{c['element2_id']}: "
+                f"{str(c['connection_type'])} (Strength: {c['connection_strength']}/10)"
             )
+        
+        if len(connections) > 5:
+            lines.append(f"... and {len(connections) - 5} more")
+        
+        return "\n".join(lines)
+
+    async def _get_location_connections(
+        self, location_id: int
+    ) -> List[Dict[str, Any]]:
+        """
+        Return *all* NarrativeConnections touching any lore element
+        that belongs to the given location – without calling
+        `_get_location_lore_impl()` (avoids infinite recursion).
+        """
+        pool = await self.get_connection_pool()
+        async with pool.acquire() as conn:
+            # grab ids directly – no other helper calls
+            myth_ids = [
+                r["id"]
+                for r in await conn.fetch(
+                    """
+                    SELECT id
+                    FROM UrbanMyths
+                    WHERE origin_location = (
+                            SELECT location_name FROM Locations WHERE id = $1
+                         )
+                       OR $1 = ANY(regions_known)
+                    """,
+                    location_id,
+                )
+            ]
+            history_ids = [
+                r["id"]
+                for r in await conn.fetch(
+                    "SELECT id FROM LocalHistories WHERE location_id = $1", location_id
+                )
+            ]
+            landmark_ids = [
+                r["id"]
+                for r in await conn.fetch(
+                    "SELECT id FROM Landmarks WHERE location_id = $1", location_id
+                )
+            ]
+    
+        # delegate to the efficient helper
+        return await self._get_location_connections_efficient(
+            location_id, myth_ids, history_ids, landmark_ids
+        )
+
+    async def _get_location_connections_efficient(
+        self, 
+        location_id: int,
+        myth_ids: List[int],
+        history_ids: List[int],
+        landmark_ids: List[int]
+    ) -> List[Dict[str, Any]]:
+        """Get all narrative connections for a location (efficient version)."""
+        pool = await self.get_connection_pool()
+        async with pool.acquire() as conn:
+            all_connections = []
+            
+            # Fetch connections for each type
+            for element_type, ids in [
+                ("myth", myth_ids),
+                ("history", history_ids),
+                ("landmark", landmark_ids)
+            ]:
+                if ids:
+                    connections = await conn.fetch("""
+                        SELECT * FROM NarrativeConnections
+                        WHERE (element1_type = $1 AND element1_id = ANY($2::int[]))
+                           OR (element2_type = $1 AND element2_id = ANY($2::int[]))
+                    """, element_type, ids)
+                    
+                    all_connections.extend([dict(c) for c in connections])
+            
+            # Deduplicate
+            seen = set()
+            unique_connections = []
+            for conn in all_connections:
+                if conn['id'] not in seen:
+                    seen.add(conn['id'])
+                    unique_connections.append(conn)
+            
+            return unique_connections
+
+    async def _apply_consistency_fixes(self, suggested_fixes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Apply consistency fixes using canon system."""
+        applied_fixes = []
+        
+        async with get_db_connection_context() as conn:
+            from lore.core import canon
+            
+            for fix in suggested_fixes:
+                try:
+                    if 'element_type' in fix and 'element_id' in fix:
+                        if fix['element_type'] == 'myth' and 'new_description' in fix:
+                            await canon.update_urban_myth(
+                                self.create_run_context({}), conn, 
+                                fix['element_id'], 
+                                {"description": fix['new_description']}
+                            )
+                            applied_fixes.append(fix)
+                            
+                        elif fix['element_type'] == 'history' and 'new_description' in fix:
+                            # Update history via direct SQL since it's less complex
+                            await conn.execute("""
+                                UPDATE LocalHistories SET description = $1 WHERE id = $2
+                            """, fix['new_description'], fix['element_id'])
+                            applied_fixes.append(fix)
+                            
+                        elif fix['element_type'] == 'landmark' and 'new_description' in fix:
+                            await canon.update_landmark(
+                                self.create_run_context({}), conn,
+                                fix['element_id'],
+                                {"description": fix['new_description']}
+                            )
+                            applied_fixes.append(fix)
+                            
+                    elif 'connection_id' in fix and 'new_description' in fix:
+                        # Update connection
+                        await conn.execute("""
+                            UPDATE NarrativeConnections
+                            SET connection_description = $1, validated = TRUE
+                            WHERE id = $2
+                        """, fix['new_description'], fix['connection_id'])
+                        applied_fixes.append(fix)
+                        
+                except Exception as e:
+                    logger.error(f"Error applying consistency fix: {e}")
+        
+        return applied_fixes
+    
+    async def _create_suggested_connections(
+        self, suggested_connections: List[NarrativeConnection]
+    ) -> List[int]:
+        """Create suggested narrative connections."""
+        created_ids = []
+        
+        pool = await self.get_connection_pool()
+        async with pool.acquire() as conn:
+            for connection in suggested_connections:
+                try:
+                    connection_id = await self._create_narrative_connection(
+                        conn,
+                        connection.element1_type,
+                        connection.element1_id,
+                        connection.element2_type,
+                        connection.element2_id,
+                        connection.connection_type,
+                        connection.connection_description,
+                        connection.connection_strength
+                    )
+                    
+                    created_ids.append(connection_id)
+                    logger.info(
+                        f"Created suggested connection #{connection_id} between "
+                        f"{connection.element1_type} #{connection.element1_id} and "
+                        f"{connection.element2_type} #{connection.element2_id}"
+                    )
+                
+                except Exception as e:
+                    logger.error(f"Error creating suggested connection: {e}")
+        
+        return created_ids
+
+    # ===== GOVERNANCE REGISTRATION =====
+    
+    async def register_with_governance(self):
+        """Register with Nyx governance system."""
+        await super().register_with_governance(
+            agent_type=AgentType.NARRATIVE_CRAFTER,
+            agent_id="local_lore_manager",
+            directive_text=(
+                "Create and manage comprehensive local lore including myths, "
+                "histories, and landmarks with strong matriarchal themes and "
+                "rich narrative connections."
+            ),
+            scope="world_building",
+            priority=DirectivePriority.MEDIUM
+        )
+
+    # ===== UTILITY METHODS =====
+    
+    def create_run_context(self, ctx) -> RunContextWrapper:
+        """Create a run context from the provided context."""
+        if isinstance(ctx, RunContextWrapper):
+            return ctx
+        return RunContextWrapper(context=ctx.context if hasattr(ctx, 'context') else {})
+    
+    async def get_connection_pool(self) -> "asyncpg.Pool":
+        """Get database connection pool from base class."""
+        return await super().get_connection_pool()
+    
+    def get_cache(self, key: str) -> Optional[Any]:
+        """Get cached value."""
+        return super().get_cache(f"{self.cache_namespace}:{key}")
+    
+    def set_cache(self, key: str, value: Any, ttl: int = 3600):
+        """Set cached value."""
+        return super().set_cache(f"{self.cache_namespace}:{key}", value, ttl)
+    
+    def invalidate_cache(self, key: str):
+        """Invalidate specific cache key."""
+        return super().invalidate_cache(f"{self.cache_namespace}:{key}")
+    
+    def invalidate_cache_pattern(self, pattern: str):
+        """Invalidate cache keys matching pattern."""
+        return super().invalidate_cache_pattern(f"{self.cache_namespace}:{pattern}")
+
+# ===== FUNCTION TOOL WRAPPERS =====
+# These are the decorated wrappers that external code will call
+
+@function_tool
+@with_governance(
+    agent_type=AgentType.NARRATIVE_CRAFTER,
+    action_type="add_urban_myth",
+    action_description="Adding urban myth: {input.name}",
+    id_from_context=lambda ctx: "local_lore_manager"
+)
+async def add_urban_myth(ctx, input: MythCreationInput) -> int:
+    """
+    Add an urban myth to the lore system.
+    
+    Args:
+        ctx: Context containing user and conversation IDs
+        input: MythCreationInput with myth details
+        
+    Returns:
+        ID of the created myth
+    """
+    mgr = await _get_local_lore_manager_from_ctx(ctx)
+    return await mgr._add_urban_myth_impl(ctx, input)
+
+@function_tool
+@with_governance(
+    agent_type=AgentType.NARRATIVE_CRAFTER,
+    action_type="add_local_history",
+    action_description="Adding local history: {input.event_name}",
+    id_from_context=lambda ctx: "local_lore_manager"
+)
+async def add_local_history(ctx, input: HistoryCreationInput) -> int:
+    """
+    Add a historical event to a location.
+    
+    Args:
+        ctx: Context containing user and conversation IDs
+        input: HistoryCreationInput with event details
+        
+    Returns:
+        ID of the created history
+    """
+    mgr = await _get_local_lore_manager_from_ctx(ctx)
+    return await mgr._add_local_history_impl(ctx, input)
+
+@function_tool
+@with_governance(
+    agent_type=AgentType.NARRATIVE_CRAFTER,
+    action_type="add_landmark",
+    action_description="Adding landmark: {input.name}",
+    id_from_context=lambda ctx: "local_lore_manager"
+)
+async def add_landmark(ctx, input: LandmarkCreationInput) -> int:
+    """
+    Add a landmark to a location.
+    
+    Args:
+        ctx: Context containing user and conversation IDs
+        input: LandmarkCreationInput with landmark details
+        
+    Returns:
+        ID of the created landmark
+    """
+    mgr = await _get_local_lore_manager_from_ctx(ctx)
+    return await mgr._add_landmark_impl(ctx, input)
+
+@function_tool
+@with_governance(
+    agent_type=AgentType.NARRATIVE_CRAFTER,
+    action_type="evolve_myth",
+    action_description="Evolving urban myth: {myth_id}",
+    id_from_context=lambda ctx: "local_lore_manager"
+)
+async def evolve_myth(
+    ctx,
+    myth_id: int,
+    evolution_type: EvolutionType,
+    causal_factors: Optional[List[str]] = None
+) -> NarrativeEvolution:
+    """
+    Evolve an urban myth based on specified factors.
+    
+    Args:
+        ctx: Context containing user and conversation IDs
+        myth_id: ID of the myth to evolve
+        evolution_type: Type of evolution to apply
+        causal_factors: Optional list of factors causing evolution
+        
+    Returns:
+        NarrativeEvolution with before/after states
+    """
+    mgr = await _get_local_lore_manager_from_ctx(ctx)
+    return await mgr._evolve_myth_impl(ctx, myth_id, evolution_type, causal_factors)
+
+@function_tool
+@with_governance(
+    agent_type=AgentType.NARRATIVE_CRAFTER,
+    action_type="connect_myth_history",
+    action_description="Connecting myth {myth_id} to history {history_id}",
+    id_from_context=lambda ctx: "local_lore_manager"
+)
+async def connect_myth_history(ctx, myth_id: int, history_id: int) -> NarrativeConnection:
+    """
+    Create a narrative connection between a myth and historical event.
+    
+    Args:
+        ctx: Context containing user and conversation IDs
+        myth_id: ID of the myth
+        history_id: ID of the historical event
+        
+    Returns:
+        NarrativeConnection describing the link
+    """
+    mgr = await _get_local_lore_manager_from_ctx(ctx)
+    return await mgr._connect_myth_history_impl(ctx, myth_id, history_id)
+
+@function_tool
+@with_governance(
+    agent_type=AgentType.NARRATIVE_CRAFTER,
+    action_type="connect_history_landmark",
+    action_description="Connecting history {history_id} to landmark {landmark_id}",
+    id_from_context=lambda ctx: "local_lore_manager"
+)
+async def connect_history_landmark(ctx, history_id: int, landmark_id: int) -> NarrativeConnection:
+    """
+    Create a narrative connection between a historical event and landmark.
+    
+    Args:
+        ctx: Context containing user and conversation IDs
+        history_id: ID of the historical event
+        landmark_id: ID of the landmark
+        
+    Returns:
+        NarrativeConnection describing the link
+    """
+    mgr = await _get_local_lore_manager_from_ctx(ctx)
+    return await mgr._connect_history_landmark_impl(ctx, history_id, landmark_id)
+
+@function_tool
+@with_governance(
+    agent_type=AgentType.NARRATIVE_CRAFTER,
+    action_type="ensure_narrative_consistency",
+    action_description="Ensuring narrative consistency for location {location_id}",
+    id_from_context=lambda ctx: "local_lore_manager"
+)
+async def ensure_narrative_consistency(
+    ctx,
+    location_id: int,
+    auto_fix: bool = True
+) -> ConsistencyCheckResult:
+    """
+    Check and optionally fix narrative consistency for a location.
+    
+    Args:
+        ctx: Context containing user and conversation IDs
+        location_id: ID of the location to check
+        auto_fix: Whether to apply suggested fixes automatically
+        
+    Returns:
+        ConsistencyCheckResult with issues and fixes
+    """
+    mgr = await _get_local_lore_manager_from_ctx(ctx)
+    return await mgr._ensure_narrative_consistency_impl(ctx, location_id, auto_fix)
+
+@function_tool
+@with_governance(
+    agent_type=AgentType.NARRATIVE_CRAFTER,
+    action_type="get_location_lore",
+    action_description="Getting all lore for location: {location_id}",
+    id_from_context=lambda ctx: "local_lore_manager"
+)
+async def get_location_lore(ctx, location_id: int) -> LocationLoreResult:
+    """
+    Get all lore associated with a location.
+    
+    Args:
+        ctx: Context containing user and conversation IDs
+        location_id: ID of the location
+        
+    Returns:
+        LocationLoreResult with all myths, histories, landmarks, and connections
+    """
+    mgr = await _get_local_lore_manager_from_ctx(ctx)
+    return await mgr._get_location_lore_impl(ctx, location_id)
+
+@function_tool
+@with_governance(
+    agent_type=AgentType.NARRATIVE_CRAFTER,
+    action_type="generate_location_lore",
+    action_description="Generating lore for location: {location_data.id}",
+    id_from_context=lambda ctx: "local_lore_manager"
+)
+async def generate_location_lore(ctx, location_data: LocationDataInput) -> Dict[str, Any]:
+    """
+    Generate comprehensive lore for a location.
+    
+    Args:
+        ctx: Context containing user and conversation IDs
+        location_data: LocationDataInput with location details
+        
+    Returns:
+        Dictionary with generation statistics
+    """
+    mgr = await _get_local_lore_manager_from_ctx(ctx)
+    return await mgr._generate_location_lore_impl(ctx, location_data)
+
+@function_tool
+@with_governance(
+    agent_type=AgentType.NARRATIVE_CRAFTER,
+    action_type="evolve_location_lore",
+    action_description="Evolving lore for location: {location_id}",
+    id_from_context=lambda ctx: "local_lore_manager"
+)
+async def evolve_location_lore(
+    ctx,
+    location_id: int,
+    event_description: str
+) -> LoreEvolutionResult:
+    """
+    Evolve location lore based on a significant event.
+    
+    Args:
+        ctx: Context containing user and conversation IDs
+        location_id: ID of the location
+        event_description: Description of the event causing evolution
+        
+    Returns:
+        LoreEvolutionResult with changes made
+    """
+    mgr = await _get_local_lore_manager_from_ctx(ctx)
+    return await mgr._evolve_location_lore_impl(ctx, location_id, event_description)
+
+@function_tool
+@with_governance(
+    agent_type=AgentType.NARRATIVE_CRAFTER,
+    action_type="generate_legend_variants",
+    action_description="Creating legend variants for myth {myth_id}",
+    id_from_context=lambda ctx: "local_lore_manager"
+)
+async def generate_legend_variants(
+    ctx,
+    myth_id: int,
+    variant_count: int = 3
+) -> Dict[str, Any]:
+    """
+    Create contradictory versions of a myth.
+    
+    Args:
+        ctx: Context containing user and conversation IDs
+        myth_id: ID of the myth
+        variant_count: Number of variants to create
+        
+    Returns:
+        Dictionary with created variants
+    """
+    mgr = await _get_local_lore_manager_from_ctx(ctx)
+    return await mgr._generate_legend_variants_impl(ctx, myth_id, variant_count)
+
+@function_tool
+@with_governance(
+    agent_type=AgentType.NARRATIVE_CRAFTER,
+    action_type="develop_tourist_attraction",
+    action_description="Developing tourism for myth {myth_id}",
+    id_from_context=lambda ctx: "local_lore_manager"
+)
+async def develop_tourist_attraction(ctx, myth_id: int) -> TouristDevelopment:
+    """
+    Transform a myth into a tourist attraction plan.
+    
+    Args:
+        ctx: Context containing user and conversation IDs
+        myth_id: ID of the myth
+        
+    Returns:
+        TouristDevelopment plan
+    """
+    mgr = await _get_local_lore_manager_from_ctx(ctx)
+    return await mgr._develop_tourist_attraction_impl(ctx, myth_id)
+
+@function_tool
+@with_governance(
+    agent_type=AgentType.NARRATIVE_CRAFTER,
+    action_type="simulate_tradition_dynamics",
+    action_description="Simulating tradition dynamics for myth {myth_id}",
+    id_from_context=lambda ctx: "local_lore_manager"
+)
+async def simulate_tradition_dynamics(ctx, myth_id: int) -> TraditionDynamics:
+    """
+    Compare oral vs written tradition versions of a myth.
+    
+    Args:
+        ctx: Context containing user and conversation IDs
+        myth_id: ID of the myth
+        
+    Returns:
+        TraditionDynamics comparison
+    """
+    mgr = await _get_local_lore_manager_from_ctx(ctx)
+    return await mgr._simulate_tradition_dynamics_impl(ctx, myth_id)
+
+@function_tool
+@with_governance(
+    agent_type=AgentType.NARRATIVE_CRAFTER,
+    action_type="simulate_myth_transmission",
+    action_description="Simulating transmission of myth {myth_id}",
+    id_from_context=lambda ctx: "local_lore_manager"
+)
+async def simulate_myth_transmission(
+    ctx,
+    myth_id: int,
+    target_regions: List[str],
+    transmission_steps: int = 3
+) -> MythTransmissionResult:
+    """
+    Simulate how a myth spreads and transforms across regions.
+    
+    Args:
+        ctx: Context containing user and conversation IDs
+        myth_id: ID of the myth
+        target_regions: List of regions to spread to
+        transmission_steps: Number of transmission steps to simulate
+        
+    Returns:
+        MythTransmissionResult with transformation details
+    """
+    mgr = await _get_local_lore_manager_from_ctx(ctx)
+    return await mgr._simulate_myth_transmission_impl(ctx, myth_id, target_regions, transmission_steps)
+
+# ===== DEPRECATED COMPATIBILITY SHIMS =====
+# These are provided to guide users to the new API
+
+def _deprecated_method_notice():
+    """Helper to create deprecation notice."""
+    return (
+        "This method has been moved to a function-tool wrapper. "
+        "Import and use the function directly instead of calling the class method. "
+        "Example: from lore.managers.local_lore import add_urban_myth"
+    )
+
+# If needed, you can add deprecation warnings to the class methods
+# LocalLoreManager.add_urban_myth = lambda self, *args: (_ for _ in ()).throw(
+#     DeprecationWarning(_deprecated_method_notice())
+# )
