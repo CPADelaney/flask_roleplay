@@ -2981,7 +2981,7 @@ class NPCCreationHandler:
                 old_arche_summary = rel.get("target_archetype_summary", "")
                 
                 # Create forward link (no conn needed for this function)
-                create_social_link(
+                await create_social_link(
                     user_id, conversation_id,
                     entity1_type="npc", entity1_id=npc_id,
                     entity2_type="npc", entity2_id=old_npc_id,
@@ -3031,7 +3031,7 @@ class NPCCreationHandler:
                     old_arche_summary
                 )
                 
-                create_social_link(
+                await create_social_link(
                     user_id, conversation_id,
                     entity1_type="npc", entity1_id=old_npc_id,
                     entity2_type="npc", entity2_id=npc_id,
