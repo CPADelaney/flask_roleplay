@@ -282,7 +282,7 @@ class NPCContext:
         Returns:
             Initialized LoreSystem instance
         """
-        from lore.lore_system import LoreSystem
+        from lore.core.lore_system import LoreSystem
         lore_system = LoreSystem.get_instance(user_id, conversation_id)
         await lore_system.initialize()
         return lore_system    
@@ -749,7 +749,7 @@ async def get_lore_system(user_id: int, conversation_id: int):
     Returns:
         Initialized LoreSystem instance
     """
-    from lore.lore_system import LoreSystem
+    from lore.core.lore_system import LoreSystem
     lore_system = LoreSystem.get_instance(user_id, conversation_id)
     await lore_system.initialize()
     return lore_system
@@ -783,7 +783,7 @@ class NPCAgent:
             user_id: The player or user ID
             conversation_id: The conversation/scene ID
         """
-        from lore.lore_system import LoreSystem
+        from lore.core.lore_system import LoreSystem
         self.npc_id = npc_id
         self.user_id = user_id
         self.conversation_id = conversation_id
@@ -832,7 +832,7 @@ class NPCAgent:
         
     async def _get_story_context(self) -> Dict[str, Any]:
         """Get story context with enhanced lore integration."""
-        from lore.lore_system import LoreSystem
+        from lore.core.lore_system import LoreSystem
         
         # Create basic story context
         story_context = {
@@ -853,7 +853,7 @@ class NPCAgent:
         
     async def _determine_npc_role(self) -> Dict[str, Any]:
         """Determine NPC role with lore-aware analysis."""
-        from lore.lore_system import LoreSystem
+        from lore.core.lore_system import LoreSystem
         
         # Create basic role determination
         role = {
@@ -874,7 +874,7 @@ class NPCAgent:
         
     async def _process_lore_change(self, lore_change: Dict[str, Any]) -> Dict[str, Any]:
         """Process a lore change and update NPC state."""
-        from lore.lore_system import LoreSystem
+        from lore.core.lore_system import LoreSystem
         # Get affected NPCs
         affected_npcs = await self._get_affected_npcs(lore_change)
         
@@ -895,7 +895,7 @@ class NPCAgent:
         
     async def _get_affected_npcs(self, lore_change: Dict[str, Any]) -> List[int]:
         """Get list of NPCs affected by a lore change."""
-        from lore.lore_system import LoreSystem
+        from lore.core.lore_system import LoreSystem
         
         affected_npcs = set()  # Use set to avoid duplicates
         
@@ -1432,7 +1432,7 @@ class NPCAgent:
             Dict[str, Any]: Dictionary containing speech patterns, dialects, and language preferences
             for the NPC, integrated with the lore system.
         """
-        from lore.lore_system import LoreSystem
+        from lore.core.lore_system import LoreSystem
         try:
             # Get lore system instance
             lore_system = await get_lore_system(self.user_id, self.conversation_id)
