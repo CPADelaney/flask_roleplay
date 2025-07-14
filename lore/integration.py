@@ -438,7 +438,7 @@ class NPCLoreIntegration(BaseIntegration):
             import random
             
             # Get dialect details from language system
-            from lore.lore_system import LoreSystem
+            from lore.core.lore_system import LoreSystem
             
             # Get dialect details
             dialect = await self._get_dialect_details(dialect_id)
