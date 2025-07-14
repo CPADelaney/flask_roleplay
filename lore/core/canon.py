@@ -1109,6 +1109,9 @@ async def find_or_create_location(ctx, conn, location_name: str, **kwargs) -> st
     Find or create a location canonically.
     Returns the location name (locations use name as primary identifier).
     """
+    # Ensure we have a proper context
+    ctx = ensure_canonical_context(ctx)
+    
     # Check exact match
     existing = await conn.fetchrow("""
         SELECT id, location_name, description
@@ -1195,6 +1198,8 @@ async def find_or_create_faction(ctx, conn, faction_name: str, **kwargs) -> int:
     """
     Find or create a faction with semantic matching.
     """
+    ctx = ensure_canonical_context(ctx)
+    
     # Check exact match
     existing = await conn.fetchrow("""
         SELECT id FROM Factions
@@ -1282,6 +1287,8 @@ async def find_or_create_historical_event(ctx, conn, event_name: str, **kwargs) 
     """
     Find or create a historical event with semantic matching.
     """
+    ctx = ensure_canonical_context(ctx)
+    
     # Check exact match
     existing = await conn.fetchrow("""
         SELECT id FROM HistoricalEvents
@@ -1368,6 +1375,8 @@ async def find_or_create_notable_figure(ctx, conn, figure_name: str, **kwargs) -
     """
     Find or create a notable figure with semantic matching.
     """
+    ctx = ensure_canonical_context(ctx)
+    
     # Check exact match
     existing = await conn.fetchrow("""
         SELECT id FROM NotableFigures
@@ -1689,19 +1698,12 @@ async def find_or_create_social_link(ctx, conn, **kwargs) -> int:
     """
     Find or create a social link between two entities.
     """
-    # Handle different context types
-    if hasattr(ctx, 'context') and isinstance(ctx.context, dict):
-        # RunContextWrapper style
-        user_id = kwargs.get('user_id', ctx.context.get('user_id'))
-        conversation_id = kwargs.get('conversation_id', ctx.context.get('conversation_id'))
-    elif hasattr(ctx, 'user_id') and hasattr(ctx, 'conversation_id'):
-        # Direct attribute style
-        user_id = kwargs.get('user_id', ctx.user_id)
-        conversation_id = kwargs.get('conversation_id', ctx.conversation_id)
-    else:
-        # Fallback to kwargs only
-        user_id = kwargs.get('user_id')
-        conversation_id = kwargs.get('conversation_id')
+    # Ensure we have a proper context
+    ctx = ensure_canonical_context(ctx)
+    
+    # Now we can use ctx.user_id and ctx.conversation_id directly
+    user_id = kwargs.get('user_id', ctx.user_id)
+    conversation_id = kwargs.get('conversation_id', ctx.conversation_id)
     
     if not user_id or not conversation_id:
         raise ValueError("user_id and conversation_id are required")
@@ -1759,6 +1761,7 @@ async def find_or_create_npc_group(ctx, conn, group_data: Dict[str, Any]) -> int
     """
     Find or create an NPC group.
     """
+    ctx = ensure_canonical_context(ctx)
     group_name = group_data['name']
     
     # Check if group exists
@@ -1850,6 +1853,7 @@ async def find_or_create_addiction(
     Find or create an addiction entry.
     Updates the level if the addiction already exists.
     """
+    ctx = ensure_canonical_context(ctx)
     # Ensure table exists
     await ensure_addiction_table_exists(ctx, conn)
     
@@ -1889,6 +1893,7 @@ async def find_or_create_player_stats(
     Find or create player stats entry with initial values.
     Does not update existing stats, only creates if missing.
     """
+    ctx = ensure_canonical_context(ctx)
     # Check if player stats exist
     exists = await conn.fetchval("""
         SELECT COUNT(*) FROM PlayerStats
@@ -2009,59 +2014,6 @@ async def update_player_stat_canonically(
         reason
     )
 
-async def find_or_create_inventory_item(
-    ctx, conn,
-    item_name: str,
-    player_name: str = "Chase",
-    **item_data
-) -> int:
-    """
-    Find or create an inventory item for a player.
-    """
-    # Check if item already exists
-    existing = await conn.fetchrow("""
-        SELECT item_id, quantity FROM PlayerInventory
-        WHERE user_id = $1 AND conversation_id = $2 
-        AND player_name = $3 AND item_name = $4
-    """, ctx.user_id, ctx.conversation_id, player_name, item_name)
-    
-    if existing:
-        # Update quantity if provided
-        if 'quantity' in item_data:
-            new_quantity = existing['quantity'] + item_data['quantity']
-            await conn.execute("""
-                UPDATE PlayerInventory 
-                SET quantity = $1, date_acquired = CURRENT_TIMESTAMP
-                WHERE item_id = $2
-            """, new_quantity, existing['item_id'])
-        return existing['item_id']
-    
-    # Create new item
-    item_id = await conn.fetchval("""
-        INSERT INTO PlayerInventory (
-            user_id, conversation_id, player_name, item_name,
-            item_description, item_category, item_properties,
-            quantity, equipped, date_acquired
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, CURRENT_TIMESTAMP)
-        RETURNING item_id
-    """,
-        ctx.user_id, ctx.conversation_id, player_name, item_name,
-        item_data.get('item_description', ''),
-        item_data.get('item_category', 'misc'),
-        json.dumps(item_data.get('item_properties', {})),
-        item_data.get('quantity', 1),
-        item_data.get('equipped', False)
-    )
-    
-    await log_canonical_event(
-        ctx, conn,
-        f"Player {player_name} acquired new item: {item_name}",
-        tags=['inventory', 'item_acquisition', item_data.get('item_category', 'misc')],
-        significance=4
-    )
-    
-    return item_id
-
 async def find_or_create_currency(
     ctx, conn,
     currency_name: str,
@@ -2070,6 +2022,7 @@ async def find_or_create_currency(
     """
     Find or create a currency system.
     """
+    ctx = ensure_canonical_context(ctx)
     # Check if currency exists
     existing = await conn.fetchrow("""
         SELECT id FROM CurrencySystem
@@ -2557,6 +2510,8 @@ async def find_or_create_inventory_item(
     """
     Find or create an inventory item for a player.
     """
+    ctx = ensure_canonical_context(ctx)
+    
     # Check if item already exists
     existing = await conn.fetchrow("""
         SELECT item_id, quantity FROM PlayerInventory
@@ -2638,6 +2593,7 @@ async def find_or_create_currency_system(
     """
     Find or create a currency system.
     """
+    ctx = ensure_canonical_context(ctx)
     # Check if currency exists
     existing = await conn.fetchrow("""
         SELECT id FROM CurrencySystem
@@ -2684,6 +2640,9 @@ async def find_or_create_event(ctx, conn, event_name: str, **kwargs) -> int:
     """
     Find or create an event canonically with semantic matching.
     """
+    # Ensure we have a proper context
+    ctx = ensure_canonical_context(ctx)
+    
     # Check exact match
     existing = await conn.fetchrow("""
         SELECT id FROM Events
@@ -2767,6 +2726,7 @@ async def find_or_create_quest(ctx, conn, quest_name: str, **kwargs) -> int:
     """
     Find or create a quest canonically.
     """
+    ctx = ensure_canonical_context(ctx)
     # Check exact match
     existing = await conn.fetchrow("""
         SELECT quest_id FROM Quests
