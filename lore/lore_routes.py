@@ -11,7 +11,7 @@ from quart import Blueprint, request, jsonify, session
 from typing import Dict, Any
 
 # Import core lore system
-from lore.lore_system import LoreSystem
+from lore.core.lore_system import LoreSystem
 
 # Import route utilities - these would need to be updated for Quart
 from routes.auth import require_login
