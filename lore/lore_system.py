@@ -430,7 +430,8 @@ class LoreSystem:
         High-level call to produce local myths/histories/landmarks
         from the LocalLoreManager.
         """
-        return await self.local_lore_manager.generate_location_lore(None, location_data)
+        return await self.local_lore_manager._generate_location_lore_impl(ctx, location_data)
+
 
     # ---------------------------------------------------------------------
     # Lore Generation & Evolution
@@ -459,7 +460,11 @@ class LoreSystem:
     # Additionally, you could unify dynamic-lore updates with the LoreDynamicsSystem:
     async def mature_world_over_time(self, days_passed: int = 7) -> Dict[str, Any]:
         """Example: call the LoreDynamicsSystem to mature lore over time."""
-        return await self.lore_dynamics_system.mature_lore_over_time(days_passed)
+        ctx = RunContextWrapper(context={
+            "user_id": self.user_id,
+            "conversation_id": self.conversation_id
+        })
+        return await self.lore_dynamics_system.mature_lore_over_time.fn(ctx, days_passed)
     
     # ---------------------------------------------------------------------
     # Canon Methods (NEW) - These are critical for the system to work
@@ -526,7 +531,7 @@ class LoreSystem:
                             conflict_event = self._create_conflict_event_description(
                                 entity_type, entity_identifier, existing_entity, updates, conflicts, reason
                             )
-                            await self.lore_dynamics_system.evolve_lore_with_event(conflict_event)
+                            await self.lore_dynamics_system.evolve_lore_with_event.fn(ctx, conflict_event)
                         return {"status": "conflict_generated", "details": conflicts}
     
                     # Step 3b: No conflict, commit the change
@@ -552,7 +557,7 @@ class LoreSystem:
                 event_description = self._create_specific_event_description(
                     entity_type, entity_identifier, existing_entity, updates, reason
                 )
-                await self.lore_dynamics_system.evolve_lore_with_event(event_description)
+                await self.lore_dynamics_system.evolve_lore_with_event.fn(ctx, event_description)
             
             return {"status": "committed", "entity_type": entity_type, "identifier": entity_identifier, "changes": updates}
     
