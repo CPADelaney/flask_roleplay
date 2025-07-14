@@ -591,10 +591,10 @@ class NPCCreationHandler:
             from lore.core import canon
             
             # Create context
-            ctx = RunContextWrapper(context={
+            ctx = type("CanonCtx", (), {
                 "user_id": user_id,
                 "conversation_id": conversation_id
-            })
+            })()
             
             query = """
                 SELECT memory FROM NPCStats
@@ -2830,10 +2830,10 @@ class NPCCreationHandler:
         from lore.core import canon
         
         # Create context
-        ctx = RunContextWrapper(context={
-            'user_id': user_id,
-            'conversation_id': conversation_id
-        })
+        ctx = type("CanonCtx", (), {
+            "user_id": user_id,
+            "conversation_id": conversation_id
+        })()
             
         relationships = []
     
@@ -3149,10 +3149,10 @@ class NPCCreationHandler:
             from lore.core import canon
             
             # Create context - FIX
-            ctx = RunContextWrapper(context={
-                'user_id': user_id,
-                'conversation_id': conversation_id
-            })
+            ctx = type("CanonCtx", (), {
+                "user_id": user_id,
+                "conversation_id": conversation_id
+            })()
                         
             npc_name = npc_data.get("npc_name", "Unknown")
             target_name = target_data.get("npc_name", "Unknown")
@@ -3545,10 +3545,10 @@ class NPCCreationHandler:
             from lore.core import canon
             
             # Create context - FIX: Use simple object instead of RunContextWrapper
-            ctx = RunContextWrapper(context={
-                'user_id': user_id,
-                'conversation_id': conversation_id
-            })
+            ctx = type("CanonCtx", (), {
+                "user_id": user_id,
+                "conversation_id": conversation_id
+            })()
             
             flashback_manager = FlashbackManager(user_id, conversation_id)
             
@@ -3682,10 +3682,10 @@ class NPCCreationHandler:
             from lore.core import canon
             
             # Create context - FIX
-            ctx = RunContextWrapper(context={
-                'user_id': user_id,
-                'conversation_id': conversation_id
-            })
+            ctx = type("CanonCtx", (), {
+                "user_id": user_id,
+                "conversation_id": conversation_id
+            })()
             
             mask_manager = ProgressiveRevealManager(user_id, conversation_id)
             
@@ -3766,10 +3766,10 @@ class NPCCreationHandler:
             from lore.core import canon
             
             # Create context - FIX
-            ctx = RunContextWrapper(context={
-                'user_id': user_id,
-                'conversation_id': conversation_id
-            })
+            ctx = type("CanonCtx", (), {
+                "user_id": user_id,
+                "conversation_id": conversation_id
+            })()
         
             
             if not relationships:
@@ -3966,10 +3966,10 @@ class NPCCreationHandler:
             from lore.core import canon
             
             # Create context - FIX
-            ctx = RunContextWrapper(context={
-                'user_id': user_id,
-                'conversation_id': conversation_id
-            })
+            ctx = type("CanonCtx", (), {
+                "user_id": user_id,
+                "conversation_id": conversation_id
+            })()
             
             # Create maintenance schedule entry in database
             async with get_db_connection_context() as conn:
