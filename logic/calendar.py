@@ -12,6 +12,7 @@ import asyncpg
 from db.connection import get_db_connection_context
 from logic.chatgpt_integration import get_openai_client, build_message_history, safe_json_loads
 from lore.core import canon
+from agents import RunContextWrapper
 
 # Configure logging as needed.
 logging.basicConfig(level=logging.INFO)
@@ -166,20 +167,16 @@ async def store_calendar_names(user_id: int, conversation_id: int, calendar_name
         # Convert data to JSON string
         value_json = json.dumps(calendar_names)
         
-        # Create a context object for canon
-        ctx = type('obj', (object,), {'user_id': user_id, 'conversation_id': conversation_id})
+        # Create a context object for canon - UPDATE THIS
+        ctx = RunContextWrapper(context={
+            'user_id': user_id,
+            'conversation_id': conversation_id
+        })
         
         # Use canon to update CurrentRoleplay
         await canon.update_current_roleplay(
             ctx, conn, 
             'CalendarNames', value_json
-        )
-
-        logging.info(f"Stored CalendarNames successfully for user {user_id}, convo {conversation_id}.")
-
-    except Exception as e:
-        logging.exception(
-            f"Unexpected error storing calendar names for user {user_id}, convo {conversation_id}: {e}"
         )
 
 async def update_calendar_names(user_id, conversation_id, environment_desc) -> dict:
