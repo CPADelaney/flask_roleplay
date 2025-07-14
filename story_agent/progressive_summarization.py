@@ -14,7 +14,7 @@ from db.connection import get_db_connection_context, initialize_connection_pool,
 
 # Import canon and lore system
 from lore.core import canon
-from lore.lore_system import LoreSystem
+from lore.core.lore_system import LoreSystem
 
 # Try to import OpenAI for summarization
 try:
