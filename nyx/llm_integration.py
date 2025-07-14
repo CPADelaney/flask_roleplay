@@ -258,41 +258,191 @@ async def generate_embedding(text: str) -> List[float]:
 
 # Add these functions to the existing llm_integration.py file
 
-async def get_text_embedding(text: str) -> List[float]:
+async def get_text_embedding(text: str, model: str = "text-embedding-3-small", dimensions: Optional[int] = None) -> List[float]:
     """
-    Get embedding vector for text.
+    Get embedding vector for text using OpenAI's latest embedding models.
     
     Args:
         text: Text to get embedding for
+        model: Embedding model to use (default: text-embedding-3-small)
+        dimensions: Optional dimensions to reduce embedding size (must be less than model's default)
         
     Returns:
         List of embedding vector values
     """
     try:
-        # In production, this would call an actual LLM API
-        # For example, with OpenAI:
-        # response = await openai.Embedding.acreate(
-        #     input=text,
-        #     model="text-embedding-ada-002"
-        # )
-        # return np.array(response["data"][0]["embedding"])
+        # Validate model choice
+        valid_models = ["text-embedding-3-small", "text-embedding-3-large", "text-embedding-ada-002"]
+        if model not in valid_models:
+            logger.warning(f"Invalid model {model}, using text-embedding-3-small")
+            model = "text-embedding-3-small"
         
-        # For this implementation, we'll use a simpler approach
-        # This is a placeholder - not for production use
-        from sklearn.feature_extraction.text import TfidfVectorizer
+        # Check dimensions parameter
+        max_dimensions = {
+            "text-embedding-3-small": 1536,
+            "text-embedding-3-large": 3072,
+            "text-embedding-ada-002": 1536
+        }
         
-        # Create a simple embedding based on TF-IDF
-        vectorizer = TfidfVectorizer(max_features=1536)
-        tfidf_matrix = vectorizer.fit_transform([text])
+        if dimensions:
+            if dimensions > max_dimensions[model]:
+                logger.warning(f"Requested dimensions {dimensions} exceeds max {max_dimensions[model]} for {model}")
+                dimensions = None
+            elif dimensions < 1:
+                logger.warning(f"Invalid dimensions {dimensions}, must be positive")
+                dimensions = None
         
-        # Convert to dense array and pad/truncate to 1536 dimensions
-        dense_vector = tfidf_matrix.toarray()[0]
-        padded_vector = np.zeros(1536)
-        padded_vector[:min(len(dense_vector), 1536)] = dense_vector[:1536]
+        # Clean and validate text
+        text = text.replace("\n", " ").strip()
+        if not text:
+            logger.warning("Empty text provided for embedding, returning zero vector")
+            return [0.0] * (dimensions or max_dimensions[model])
         
-        return padded_vector
+        # Check token count (8192 limit for all models)
+        try:
+            import tiktoken
+            encoding = tiktoken.get_encoding("cl100k_base")
+            num_tokens = len(encoding.encode(text))
+            
+            if num_tokens > 8192:
+                logger.warning(f"Text has {num_tokens} tokens, exceeding limit of 8192. Truncating...")
+                # Truncate to roughly 8000 tokens to leave some buffer
+                tokens = encoding.encode(text)[:8000]
+                text = encoding.decode(tokens)
+        except ImportError:
+            # If tiktoken not available, use character-based approximation
+            # ~4 chars per token is a rough estimate
+            max_chars = 32000  # ~8000 tokens
+            if len(text) > max_chars:
+                logger.warning(f"Text too long ({len(text)} chars), truncating to {max_chars} chars")
+                text = text[:max_chars] + "..."
+        
+        # Get client
+        if not openai.api_key:
+            openai.api_key = os.getenv("OPENAI_API_KEY")
+            if not openai.api_key:
+                raise ValueError("OpenAI API key not configured. Set OPENAI_API_KEY environment variable.")
+        
+        # Create embedding with retry logic
+        for attempt in range(3):
+            try:
+                # Build request parameters
+                params = {
+                    "model": model,
+                    "input": text,
+                    "encoding_format": "float"  # Ensure we get floats, not base64
+                }
+                
+                # Add dimensions parameter if specified
+                if dimensions:
+                    params["dimensions"] = dimensions
+                
+                # Make async request
+                # Note: The latest OpenAI SDK might use a different async pattern
+                if hasattr(openai, 'AsyncOpenAI'):
+                    # New client style
+                    client = openai.AsyncOpenAI(api_key=openai.api_key)
+                    response = await client.embeddings.create(**params)
+                else:
+                    # Old style with asyncio.to_thread for sync client
+                    response = await asyncio.to_thread(
+                        openai.embeddings.create,
+                        **params
+                    )
+                
+                # Extract embedding
+                embedding = response.data[0].embedding
+                
+                # Validate embedding
+                expected_dims = dimensions or max_dimensions[model]
+                if len(embedding) != expected_dims:
+                    logger.warning(
+                        f"Unexpected embedding dimension: {len(embedding)}, expected {expected_dims}"
+                    )
+                
+                # Ensure all values are floats
+                return list(map(float, embedding))
+                
+            except openai.RateLimitError as e:
+                if attempt < 2:
+                    wait_time = 2 ** (attempt + 1)  # 2, 4 seconds
+                    logger.warning(f"Rate limit hit, retrying in {wait_time}s: {e}")
+                    await asyncio.sleep(wait_time)
+                else:
+                    logger.error(f"Rate limit exceeded after retries: {e}")
+                    raise
+                    
+            except openai.BadRequestError as e:
+                # Handle token limit errors specifically
+                if "maximum context length" in str(e) or "tokens" in str(e).lower():
+                    # Retry with more aggressive truncation
+                    text = text[:len(text)//2] + "..."
+                    logger.warning(f"Token limit error, retrying with truncated text ({len(text)} chars)")
+                    if attempt < 2:
+                        continue
+                logger.error(f"Bad request error: {e}")
+                raise
+                
+            except Exception as e:
+                if attempt < 2:
+                    wait_time = 2 ** attempt
+                    logger.warning(f"Error on attempt {attempt + 1}, retrying in {wait_time}s: {e}")
+                    await asyncio.sleep(wait_time)
+                else:
+                    logger.error(f"Failed to get embedding after retries: {e}")
+                    raise
         
     except Exception as e:
         logger.error(f"Error getting text embedding: {e}")
-        # Return a zero vector as fallback
-        return np.zeros(1536)
+        
+        # Return zero vector with appropriate dimensions
+        default_dims = 1536  # Default to small model dimensions
+        if model == "text-embedding-3-large" and not dimensions:
+            default_dims = 3072
+        elif dimensions:
+            default_dims = dimensions
+            
+        return [0.0] * default_dims
+
+
+# Add a helper function for cosine similarity (mentioned in the docs)
+def cosine_similarity(a: List[float], b: List[float]) -> float:
+    """
+    Calculate cosine similarity between two vectors.
+    
+    Args:
+        a: First vector
+        b: Second vector
+        
+    Returns:
+        Cosine similarity between -1 and 1
+    """
+    import numpy as np
+    
+    a = np.array(a)
+    b = np.array(b)
+    
+    # Handle zero vectors
+    norm_a = np.linalg.norm(a)
+    norm_b = np.linalg.norm(b)
+    
+    if norm_a == 0 or norm_b == 0:
+        return 0.0
+    
+    # Compute cosine similarity
+    return np.dot(a, b) / (norm_a * norm_b)
+
+
+# Update the existing generate_embedding function to use the new models
+async def generate_embedding(text: str) -> List[float]:
+    """
+    Generate an embedding vector for text using OpenAI's API.
+    Legacy wrapper that calls get_text_embedding.
+    
+    Args:
+        text: Text to generate embedding for
+        
+    Returns:
+        Embedding vector as list of floats
+    """
+    return await get_text_embedding(text, model="text-embedding-3-small")
