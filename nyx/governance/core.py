@@ -114,10 +114,12 @@ class NyxUnifiedGovernor(
         from lore.core.lore_system import LoreSystem
         
         # Get an instance of the LoreSystem
-        self.lore_system = LoreSystem.get_instance(self.user_id, self.conversation_id)
+        # FIX: await the async get_instance call
+        self.lore_system = await LoreSystem.get_instance(self.user_id, self.conversation_id)
         
         # Set the governor on the lore system (dependency injection)
-        await self.lore_system.set_governor(self)
+        # FIX: set_governor is not async, so don't await it
+        self.lore_system.set_governor(self)
         
         # Initialize the lore system WITH the governor reference
         await self.lore_system.initialize(governor=self)  # Pass self as governor
@@ -130,7 +132,7 @@ class NyxUnifiedGovernor(
         from memory.memory_integration import MemoryIntegration
         self.memory_integration = MemoryIntegration(self.user_id, self.conversation_id)
         await self.memory_integration.initialize()
-
+    
         from nyx.integrate import JointMemoryGraph
         self.memory_graph = JointMemoryGraph(self.user_id, self.conversation_id)
         
