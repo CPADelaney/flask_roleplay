@@ -710,61 +710,72 @@ class NyxUnifiedGovernor(
 
     async def _initialize_systems(self):
         """Initialize memory system, game state, and discover agents."""
-        import functools                        # <-- add this
+        import functools, asyncio                       # ← keep both
         logger.info("Initializing core systems")
-    
-        # --- LoreSystem ----------------------------------------------------
+
+        # ── LoreSystem ────────────────────────────────────────────────────
+        logger.info("[INIT-A] LoreSystem.get_instance")
         from lore.core.lore_system import LoreSystem
-        self.lore_system = await LoreSystem.get_instance(self.user_id, self.conversation_id)
+        self.lore_system = await LoreSystem.get_instance(self.user_id,
+                                                         self.conversation_id)
         self.lore_system.set_governor(self)
         await self.lore_system.initialize(governor=self)
-    
-        # --- Memory bridge -------------------------------------------------
+        logger.info("[INIT-B] LoreSystem ready")
+
+        # ── Memory bridge ────────────────────────────────────────────────
+        logger.info("[INIT-C] Memory bridge get_memory_nyx_bridge")
         from memory.memory_nyx_integration import get_memory_nyx_bridge
         self.memory_system = await get_memory_nyx_bridge(
             self.user_id, self.conversation_id, governor=self
         )
-    
-        # --- Memory-integration helpers -----------------------------------
+        logger.info("[INIT-D] Memory bridge ready")
+
+        # ── Memory-integration helpers ───────────────────────────────────
+        logger.info("[INIT-E] MemoryIntegration initialize")
         from memory.memory_integration import MemoryIntegration
-        self.memory_integration = MemoryIntegration(self.user_id, self.conversation_id)
+        self.memory_integration = MemoryIntegration(self.user_id,
+                                                    self.conversation_id)
         await self.memory_integration.initialize()
-    
-        # --- JointMemoryGraph (off-thread, 8-second watchdog) -------------
-        logger.debug("[core] building JointMemoryGraph")
-    
+        logger.info("[INIT-F] MemoryIntegration ready")
+
+        # ── JointMemoryGraph (spawned in thread, 8-s watchdog) ───────────
+        logger.info("[INIT-G] building JointMemoryGraph")
         async def _build_jmg(uid, cid):
             from nyx.integrate import JointMemoryGraph
             return JointMemoryGraph(uid, cid)
-    
+
         try:
             self.memory_graph = await asyncio.wait_for(
-                asyncio.to_thread(functools.partial(_build_jmg,
-                                                    self.user_id,
-                                                    self.conversation_id)),
+                asyncio.to_thread(
+                    functools.partial(_build_jmg, self.user_id, self.conversation_id)
+                ),
                 timeout=8.0
             )
+            logger.info("[INIT-H] JointMemoryGraph ready")
         except asyncio.TimeoutError:
-            logger.warning("JointMemoryGraph build timed out – continuing without it")
+            logger.warning("[INIT-H] JointMemoryGraph build timed-out – continuing")
             self.memory_graph = None
         except Exception as exc:
-            logger.error(f"JointMemoryGraph build failed: {exc!r}")
+            logger.error(f"[INIT-H] JointMemoryGraph build failed: {exc!r}")
             self.memory_graph = None
-        else:
-            logger.debug("[core] JointMemoryGraph ready")
-    
-        # --- everything else ----------------------------------------------
-        logger.debug("[core] about to init game_state")           # ①
+
+        # ── Game-state snapshot ──────────────────────────────────────────
+        logger.info("[INIT-I] initialize_game_state")
         self.game_state = await self.initialize_game_state()
-        logger.debug("[core] game_state ready") 
-    
-        # discover/register other agents *once*
+        logger.info("[INIT-J] game_state ready")
+
+        # ── Dynamic agent discovery ──────────────────────────────────────
+        logger.info("[INIT-K] discover_and_register_agents")
         await super().discover_and_register_agents()
-    
-        # load goals, metrics, etc.
+        logger.info("[INIT-L] dynamic agent discovery done")
+
+        # ── Load goals / metrics / learning state ────────────────────────
+        logger.info("[INIT-M] _load_initial_state")
         await self._load_initial_state()
-    
+        logger.info("[INIT-N] load_initial_state finished")
+
         logger.info("Core systems initialized successfully")
+
 
 
     async def _load_initial_state(self):
