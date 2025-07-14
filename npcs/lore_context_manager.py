@@ -22,7 +22,7 @@ from nyx.nyx_governance import AgentType, DirectiveType
 from nyx.governance_helpers import with_governance, with_governance_permission, with_action_reporting
 from db.connection import get_db_connection_context
 from lore.core import canon
-from lore.lore_system import LoreSystem
+from lore.core.lore_system import LoreSystem
 
 logger = logging.getLogger(__name__)
 
