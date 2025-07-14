@@ -1448,7 +1448,7 @@ class StorytellerAgent:
             # If time advanced and confirmed, update the database
             if time_result.time_advanced and confirm_advance:
                 # NEW: Use LoreSystem instead of direct database writes
-                from lore.lore_system import LoreSystem
+                from lore.core.lore_system import LoreSystem
                 lore_system = await LoreSystem.get_instance(user_id, conversation_id)
                 
                 new_time = time_result.new_time
@@ -1857,7 +1857,7 @@ class StorytellerAgent:
             update_data = result.final_output
             
             # NEW: Use LoreSystem for updates instead of direct database operations
-            from lore.lore_system import LoreSystem
+            from lore.core.lore_system import LoreSystem
             lore_system = await LoreSystem.get_instance(user_id, conversation_id)
             
             # Process each type of update through LoreSystem
