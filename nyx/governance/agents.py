@@ -13,6 +13,9 @@ from .constants import DirectiveType, DirectivePriority, AgentType
 from utils.caching import CACHE_TTL, NPC_DIRECTIVE_CACHE, AGENT_DIRECTIVE_CACHE
 from utils.cache_manager import CacheManager
 
+import asyncio, importlib, inspect
+from contextlib import suppress
+
 logger = logging.getLogger(__name__)
 
 _directive_cache_manager = CacheManager(
@@ -21,6 +24,9 @@ _directive_cache_manager = CacheManager(
     ttl=CACHE_TTL.DIRECTIVES
 )
 
+ASYNC_IMPORT_TIMEOUT = 4.0      # sec per module
+AGENT_INIT_TIMEOUT   = 6.0      # sec per agent.__init__
+MAX_TOTAL_DISCOVERY  = 20.0     # fail-safe ceiling for the whole routine
 
 class AgentGovernanceMixin:
     """Handles agent coordination and management functions."""
@@ -144,16 +150,30 @@ class AgentGovernanceMixin:
         }
         logger.info(f"Action report processed: {report_id} from {agent_type} / {agent_id}")
         return {"success": True, "report_id": report_id}
-
+    
+    async def _safe_import(module_path: str):
+        """
+        Import a module in a worker-thread so that any slow I/O
+        (network, disk, heavy static initialisation) can’t stall the loop.
+        """
+        return await asyncio.to_thread(importlib.import_module, module_path)
+    
+    
     async def discover_and_register_agents(self):
         """
-        Discover and register available agents in the system dynamically.
+        Non-blocking agent discovery:
+        • each import guarded with per-module timeout
+        • each agent instantiation guarded with timeout
+        • whole routine bounded by MAX_TOTAL_DISCOVERY
+        • every register_agent queued – we don’t await the queue consumer
         """
-        logger.info(f"Discovering and registering agents for user {self.user_id}, conversation {self.conversation_id}")
-        
-        registered_count = 0
-        
-        # Define agent modules and their expected classes
+        logger.info(
+            f"[discover] starting for user={self.user_id}, conv={self.conversation_id}"
+        )
+    
+        start_ts = asyncio.get_event_loop().time()
+        registered = 0
+    
         agent_modules = [
             ("story_agent.story_director_agent", "StoryDirector", AgentType.STORY_DIRECTOR),
             ("logic.universal_updater_agent", "UniversalUpdaterAgent", AgentType.UNIVERSAL_UPDATER),
@@ -165,69 +185,96 @@ class AgentGovernanceMixin:
             ("agents.activity_analyzer", "ActivityAnalyzerAgent", AgentType.ACTIVITY_ANALYZER),
             ("agents.memory_manager", "MemoryManagerAgent", AgentType.MEMORY_MANAGER),
         ]
-        
+    
         for module_path, class_name, agent_type in agent_modules:
+    
+            # --- fail-safe for the whole discovery loop
+            if asyncio.get_event_loop().time() - start_ts > MAX_TOTAL_DISCOVERY:
+                logger.warning("[discover] hard stop – hit MAX_TOTAL_DISCOVERY")
+                break
+    
+            # ------------------------------------------------------------
+            # 1) import
+            # ------------------------------------------------------------
             try:
-                # Dynamically import the module
-                module = importlib.import_module(module_path)
-                
-                # Get the agent class
-                agent_class = getattr(module, class_name, None)
-                
-                if agent_class:
-                    # Create instance
-                    agent_instance = agent_class(self.user_id, self.conversation_id)
-                    
-                    # Register with governance
-                    agent_id = f"{agent_type}_{self.conversation_id}"
-                    await self.register_agent(
-                        agent_type=agent_type,
-                        agent_instance=agent_instance,
-                        agent_id=agent_id
+                with suppress(asyncio.TimeoutError):
+                    module = await asyncio.wait_for(
+                        _safe_import(module_path),
+                        timeout=ASYNC_IMPORT_TIMEOUT
                     )
-                    
-                    registered_count += 1
-                    logger.info(f"Registered {agent_type} agent: {class_name}")
-                else:
-                    logger.warning(f"Class {class_name} not found in module {module_path}")
-                    
-            except ImportError as e:
-                logger.debug(f"Could not import {module_path}: {e}")
             except Exception as e:
-                logger.warning(f"Could not register agent from {module_path}: {e}")
-        
-        # Also discover and register NPC agents
+                logger.debug(f"[discover] import failed {module_path}: {e!r}")
+                continue
+    
+            agent_cls = getattr(module, class_name, None)
+            if not agent_cls:
+                logger.warning(f"[discover] {class_name} missing in {module_path}")
+                continue
+    
+            # ------------------------------------------------------------
+            # 2) instantiate (can be heavy)
+            # ------------------------------------------------------------
+            try:
+                with suppress(asyncio.TimeoutError):
+                    agent_instance = await asyncio.wait_for(
+                        asyncio.to_thread(agent_cls, self.user_id, self.conversation_id),
+                        timeout=AGENT_INIT_TIMEOUT
+                    )
+            except Exception as e:
+                logger.debug(f"[discover] init failed {class_name}: {e!r}")
+                continue
+    
+            # ------------------------------------------------------------
+            # 3) queue for registration – no blocking I/O here
+            # ------------------------------------------------------------
+            agent_id = f"{agent_type}_{self.conversation_id}"
+            try:
+                # NOTE: governor.register_agent is the queued version, so this is O(µs)
+                asyncio.create_task(
+                    self.register_agent(
+                        agent_type=agent_type,
+                        agent_id=agent_id,
+                        agent_instance=agent_instance
+                    )
+                )
+                registered += 1
+                logger.info(f"[discover] queued {agent_type} → {agent_id}")
+            except Exception as e:
+                logger.debug(f"[discover] queue failed {agent_id}: {e!r}")
+    
+        # ------------------------------------------------------------
+        # 4) NPC-agents – run in background to avoid blocking init
+        # ------------------------------------------------------------
+        asyncio.create_task(_discover_npc_agents(self))
+    
+        logger.info(f"[discover] completed – {registered} static agents queued")
+        return registered > 0
+    
+    
+    async def _discover_npc_agents(governor):
+        """background helper – NPC lookup may hit the DB"""
         try:
             async with get_db_connection_context() as conn:
-                # Get active NPCs that might need agents
-                active_npcs = await conn.fetch("""
-                    SELECT npc_id, npc_name FROM NPCStats
-                    WHERE user_id = $1 AND conversation_id = $2 AND is_active = TRUE
-                    LIMIT 10
-                """, self.user_id, self.conversation_id)
-                
-                for npc in active_npcs:
-                    try:
-                        from npcs.npc_agent import NPCAgent
-                        npc_agent = NPCAgent(self.user_id, self.conversation_id, npc["npc_id"])
-                        
-                        await self.register_agent(
-                            agent_type=AgentType.NPC,
-                            agent_instance=npc_agent,
-                            agent_id=f"npc_{npc['npc_id']}"
-                        )
-                        
-                        registered_count += 1
-                        logger.info(f"Registered NPC agent for {npc['npc_name']} (ID: {npc['npc_id']})")
-                        
-                    except Exception as e:
-                        logger.debug(f"Could not register NPC agent for {npc['npc_name']}: {e}")
-                        
+                rows = await conn.fetch("""
+                    SELECT npc_id, npc_name
+                    FROM   NPCStats
+                    WHERE  user_id=$1 AND conversation_id=$2 AND is_active
+                    LIMIT  10
+                """, governor.user_id, governor.conversation_id)
+    
+            for row in rows:
+                from npcs.npc_agent import NPCAgent
+                npc_agent = NPCAgent(governor.user_id,
+                                     governor.conversation_id,
+                                     row["npc_id"])
+                await governor.register_agent(
+                    agent_type=AgentType.NPC,
+                    agent_id=f"npc_{row['npc_id']}",
+                    agent_instance=npc_agent
+                )
+                logger.info(f"[discover] NPC agent queued for {row['npc_name']}")
         except Exception as e:
-            logger.warning(f"Could not discover NPC agents: {e}")
-        
-        logger.info(f"Agent discovery completed. Registered {registered_count} agents.")
-        return registered_count > 0
+            logger.warning(f"[discover] NPC discovery failed: {e!r}")
 
     async def handle_directive(
         self,
