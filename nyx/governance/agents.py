@@ -787,75 +787,147 @@ class AgentGovernanceMixin:
     async def _execute_setup_task(self, agents: List[Any], context: Dict[str, Any]) -> Dict[str, Any]:
         """Execute setup task with agents."""
         setup_results = []
+        initialized_systems = set()
         
         for agent in agents:
             result = None
+            agent_name = agent.__class__.__name__
             
-            # Try different initialization methods
-            if hasattr(agent, "initialize_systems"):
-                result = await agent.initialize_systems(context)
-            elif hasattr(agent, "initialize"):
-                result = await agent.initialize()
-            elif hasattr(agent, "handle_directive"):
-                # Use directive-based initialization
-                result = await agent.handle_directive({
-                    "type": DirectiveType.ACTION,
-                    "data": {
-                        "action": "initialize",
-                        "context": context
-                    }
-                })
-            
-            if result:
+            try:
+                # Check if agent has already been initialized in this context
+                if hasattr(agent, '_initialized') and agent._initialized:
+                    setup_results.append({
+                        "agent": agent_name,
+                        "status": "already_initialized",
+                        "result": {"success": True}
+                    })
+                    continue
+                
+                # Try different initialization methods based on agent type
+                if hasattr(agent, "initialize_systems"):
+                    result = await agent.initialize_systems(context)
+                elif hasattr(agent, "initialize"):
+                    result = await agent.initialize()
+                elif hasattr(agent, "setup"):
+                    result = await agent.setup(context)
+                elif hasattr(agent, "handle_directive"):
+                    # Use directive-based initialization
+                    result = await agent.handle_directive({
+                        "type": DirectiveType.ACTION,
+                        "data": {
+                            "action": "initialize",
+                            "context": context,
+                            "systems": list(initialized_systems)
+                        }
+                    })
+                
+                if result:
+                    setup_results.append({
+                        "agent": agent_name,
+                        "status": "initialized",
+                        "result": result
+                    })
+                    
+                    # Track initialized systems
+                    if isinstance(result, dict) and "initialized_systems" in result:
+                        initialized_systems.update(result["initialized_systems"])
+                        
+                    # Mark agent as initialized
+                    if hasattr(agent, '_initialized'):
+                        agent._initialized = True
+                else:
+                    setup_results.append({
+                        "agent": agent_name,
+                        "status": "no_initialization_needed",
+                        "reason": "Agent requires no setup"
+                    })
+                    
+            except Exception as e:
+                logger.error(f"Error initializing {agent_name}: {e}")
                 setup_results.append({
-                    "agent": agent.__class__.__name__,
-                    "status": "initialized",
-                    "result": result
-                })
-            else:
-                setup_results.append({
-                    "agent": agent.__class__.__name__,
-                    "status": "skipped",
-                    "reason": "No initialization method found"
+                    "agent": agent_name,
+                    "status": "error",
+                    "error": str(e)
                 })
         
         return {
             "status": "completed",
             "results": setup_results,
-            "initialized_count": sum(1 for r in setup_results if r["status"] == "initialized")
+            "initialized_count": sum(1 for r in setup_results if r["status"] == "initialized"),
+            "initialized_systems": list(initialized_systems)
         }
-
+    
     async def _execute_planning_task(self, agents: List[Any], context: Dict[str, Any]) -> Dict[str, Any]:
         """Execute planning task with planning-capable agents."""
         plans = []
+        planning_metadata = {
+            "constraints": [],
+            "opportunities": [],
+            "risks": []
+        }
         
         for agent in agents:
+            agent_name = agent.__class__.__name__
             plan = None
             
-            if hasattr(agent, "generate_plan"):
-                plan = await agent.generate_plan(context)
-            elif hasattr(agent, "handle_directive"):
-                # Use directive-based planning
-                result = await agent.handle_directive({
-                    "type": DirectiveType.ACTION,
-                    "data": {
-                        "action": "generate_plan",
-                        "context": context
-                    }
-                })
-                if result and result.get("success"):
-                    plan = result.get("plan")
-            
-            if plan:
-                plans.append(plan)
+            try:
+                # Check agent capabilities
+                capabilities = self.agent_capabilities.get(
+                    agent.__class__.__name__, 
+                    getattr(agent, 'capabilities', [])
+                )
+                
+                if "planning" in capabilities or "strategy_development" in capabilities:
+                    if hasattr(agent, "generate_plan"):
+                        plan = await agent.generate_plan(context)
+                    elif hasattr(agent, "create_strategy"):
+                        plan = await agent.create_strategy(context)
+                    elif hasattr(agent, "plan_execution"):
+                        plan = await agent.plan_execution(context)
+                    elif hasattr(agent, "handle_directive"):
+                        # Use directive-based planning
+                        result = await agent.handle_directive({
+                            "type": DirectiveType.ACTION,
+                            "data": {
+                                "action": "generate_plan",
+                                "context": context,
+                                "existing_plans": plans
+                            }
+                        })
+                        if result and result.get("success"):
+                            plan = result.get("plan")
+                    
+                    if plan:
+                        plans.append({
+                            "agent": agent_name,
+                            "plan": plan,
+                            "priority": getattr(agent, 'planning_priority', 5)
+                        })
+                        
+                        # Extract metadata
+                        if isinstance(plan, dict):
+                            planning_metadata["constraints"].extend(
+                                plan.get("constraints", [])
+                            )
+                            planning_metadata["opportunities"].extend(
+                                plan.get("opportunities", [])
+                            )
+                            planning_metadata["risks"].extend(
+                                plan.get("risks", [])
+                            )
+                            
+            except Exception as e:
+                logger.error(f"Error getting plan from {agent_name}: {e}")
         
         # Merge plans intelligently
         merged_plan = await self._merge_plans(plans, context)
+        merged_plan["metadata"] = planning_metadata
         
         return {
             "status": "completed",
             "merged_plan": merged_plan,
-            "plan_count": len(plans)
+            "plan_count": len(plans),
+            "contributing_agents": [p["agent"] for p in plans]
         }
 
     async def _merge_plans(self, plans: List[Dict[str, Any]], context: Dict[str, Any] = None) -> Dict[str, Any]:
@@ -1311,32 +1383,86 @@ class AgentGovernanceMixin:
 
     def _get_resource_limit(self, resource: str) -> float:
         """Get the limit for a specific resource based on game state."""
-        # Base limits
+        # Base limits that can be configured
         base_limits = {
             "memory": 1000,      # MB
             "computation": 100,   # CPU seconds
             "time": 3600,        # seconds
             "narrative_tokens": 10000,  # story elements
             "agent_actions": 50,        # per phase
-            "coordination_attempts": 20  # per goal
+            "coordination_attempts": 20,  # per goal
+            "influence": 100,     # influence points
+            "money": 10000,      # currency
+            "supplies": 1000     # generic supplies
         }
+        
+        # Get actual limits from database if available
+        try:
+            # This would need async, but for now we'll use cached values
+            if hasattr(self, '_resource_limits_cache'):
+                base_limits.update(self._resource_limits_cache)
+        except:
+            pass
         
         # Dynamic adjustments based on game state
         if hasattr(self, 'game_state') and self.game_state:
             # Adjust based on number of active entities
             active_npcs = len(self.game_state.get('current_npcs', []))
             active_quests = len(self.game_state.get('active_quests', []))
+            active_conflicts = len(getattr(self, 'active_conflicts', []))
             
-            # Scale limits based on complexity
-            complexity_factor = 1.0 + (active_npcs * 0.05) + (active_quests * 0.1)
+            # Calculate complexity factor
+            complexity_factor = 1.0
+            complexity_factor += (active_npcs * 0.05)  # 5% per NPC
+            complexity_factor += (active_quests * 0.1)  # 10% per quest
+            complexity_factor += (active_conflicts * 0.15)  # 15% per conflict
             
+            # Apply different scaling based on resource type
             if resource in ["memory", "computation"]:
-                return base_limits[resource] * complexity_factor
+                # Scale up for processing resources
+                return base_limits.get(resource, 100) * complexity_factor
             elif resource == "time":
                 # Less time with more complexity to maintain pacing
-                return base_limits[resource] / (1.0 + (complexity_factor - 1.0) * 0.5)
+                return base_limits.get(resource, 3600) / (1.0 + (complexity_factor - 1.0) * 0.5)
+            elif resource in ["agent_actions", "coordination_attempts"]:
+                # More actions allowed with complexity
+                return base_limits.get(resource, 50) * (1.0 + (complexity_factor - 1.0) * 0.3)
+            elif resource == "narrative_tokens":
+                # Narrative tokens scale with story complexity
+                narrative_stage = self.game_state.get('narrative_state', {}).get('stage', 'beginning')
+                stage_multipliers = {
+                    'beginning': 0.8,
+                    'rising_action': 1.0,
+                    'climax': 1.5,
+                    'falling_action': 1.2,
+                    'resolution': 0.9
+                }
+                stage_mult = stage_multipliers.get(narrative_stage, 1.0)
+                return base_limits.get(resource, 10000) * complexity_factor * stage_mult
         
         return base_limits.get(resource, float("inf"))
+    
+    async def _load_resource_limits(self):
+        """Load resource limits from configuration or database."""
+        try:
+            async with get_db_connection_context() as conn:
+                # Load system configuration
+                config_rows = await conn.fetch("""
+                    SELECT config_key, config_value
+                    FROM SystemConfig
+                    WHERE category = 'resource_limits'
+                """)
+                
+                self._resource_limits_cache = {}
+                for row in config_rows:
+                    try:
+                        self._resource_limits_cache[row['config_key']] = float(row['config_value'])
+                    except:
+                        pass
+                        
+        except Exception as e:
+            logger.warning(f"Could not load resource limits: {e}")
+            self._resource_limits_cache = {}
 
     async def _extract_goals_from_memories(self, memories: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Extract goals from memory objects using proper memory structure."""
