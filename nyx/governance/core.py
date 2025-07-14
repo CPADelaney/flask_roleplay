@@ -710,42 +710,60 @@ class NyxUnifiedGovernor(
 
     async def _initialize_systems(self):
         """Initialize memory system, game state, and discover agents."""
+        import functools                        # <-- add this
         logger.info("Initializing core systems")
-        
-        # Import LoreSystem locally to avoid circular import
+    
+        # --- LoreSystem ----------------------------------------------------
         from lore.core.lore_system import LoreSystem
-        
-        # Get an instance of the LoreSystem
         self.lore_system = await LoreSystem.get_instance(self.user_id, self.conversation_id)
-        
-        # Set the governor on the lore system (dependency injection)
         self.lore_system.set_governor(self)
-        
-        # Initialize the lore system WITH the governor reference
         await self.lore_system.initialize(governor=self)
     
-        # Initialize other systems
+        # --- Memory bridge -------------------------------------------------
         from memory.memory_nyx_integration import get_memory_nyx_bridge
-        self.memory_system = await get_memory_nyx_bridge(self.user_id, self.conversation_id, governor=self)
-        
-        # Initialize memory integration
+        self.memory_system = await get_memory_nyx_bridge(
+            self.user_id, self.conversation_id, governor=self
+        )
+    
+        # --- Memory-integration helpers -----------------------------------
         from memory.memory_integration import MemoryIntegration
         self.memory_integration = MemoryIntegration(self.user_id, self.conversation_id)
         await self.memory_integration.initialize()
-
-        logger.debug("[core] about to import JointMemoryGraph")
-        from nyx.integrate import JointMemoryGraph
-        logger.debug("[core] imported JointMemoryGraph – constructing")
-        self.memory_graph = JointMemoryGraph(self.user_id, self.conversation_id)
-        logger.debug("[core] JointMemoryGraph constructed")
-        
+    
+        # --- JointMemoryGraph (off-thread, 8-second watchdog) -------------
+        logger.debug("[core] building JointMemoryGraph")
+    
+        async def _build_jmg(uid, cid):
+            from nyx.integrate import JointMemoryGraph
+            return JointMemoryGraph(uid, cid)
+    
+        try:
+            self.memory_graph = await asyncio.wait_for(
+                asyncio.to_thread(functools.partial(_build_jmg,
+                                                    self.user_id,
+                                                    self.conversation_id)),
+                timeout=8.0
+            )
+        except asyncio.TimeoutError:
+            logger.warning("JointMemoryGraph build timed out – continuing without it")
+            self.memory_graph = None
+        except Exception as exc:
+            logger.error(f"JointMemoryGraph build failed: {exc!r}")
+            self.memory_graph = None
+        else:
+            logger.debug("[core] JointMemoryGraph ready")
+    
+        # --- everything else ----------------------------------------------
         self.game_state = await self.initialize_game_state()
-        
-        # Call the mixin version, not our deleted placeholder
+    
+        # discover/register other agents *once*
         await super().discover_and_register_agents()
+    
+        # load goals, metrics, etc.
         await self._load_initial_state()
-        
+    
         logger.info("Core systems initialized successfully")
+
 
     async def _load_initial_state(self):
         """Load goals and agent state from memory."""
