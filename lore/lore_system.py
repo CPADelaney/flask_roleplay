@@ -498,6 +498,149 @@ class LoreSystem:
         from lore.core import canon
         from db.connection import get_db_connection_context
         
+        # Comprehensive mapping of entity types to their JSON/JSONB fields and array fields
+        json_fields = {
+            # Core tables
+            "StateUpdates": ["update_payload"],
+            "Settings": ["enhanced_features", "stat_modifiers", "activity_examples"],
+            "Locations": ["open_hours"],  # Arrays handled separately
+            
+            # NPC-related tables
+            "NPCStats": ["relationships", "personality_traits", "hobbies", "likes", 
+                         "dislikes", "affiliations", "schedule", "archetypes", 
+                         "physical_description", "memory", "personality_patterns",
+                         "trauma_triggers", "flashback_triggers", "revelation_plan"],
+            "NPCGroups": ["group_data"],
+            "NPCEvolution": ["mask_slippage_events", "evolution_events"],
+            "NPCAgentState": ["current_state", "last_decision"],
+            "NPCVisualAttributes": ["outfit_variations", "accessories", "expressions", "poses"],
+            "NPCVisualEvolution": ["previous_state", "current_state"],
+            "NPCMemories": ["associated_entities"],
+            "NPCMasks": ["mask_data"],
+            
+            # Player-related tables
+            "PlayerInventory": ["item_properties"],
+            "PlayerPerks": ["perk_properties"],
+            "PlayerSpecialRewards": ["reward_properties"],
+            "PlayerJournal": ["entry_metadata", "tags"],
+            "PlayerManipulationAttempts": ["goal", "leverage_used"],
+            "PlayerConflictInvolvement": ["actions_taken", "manipulated_by"],
+            
+            # Memory system tables
+            "unified_memories": ["metadata"],
+            "MemoryMaintenanceSchedule": ["maintenance_schedule"],
+            "memory_telemetry": ["metadata"],
+            "SemanticNetworks": ["network_data"],
+            
+            # Game mechanics tables
+            "Archetypes": ["baseline_stats", "progression_rules", "setting_examples", "unique_traits"],
+            "Activities": ["purpose", "stat_integration", "intensity_tiers", "setting_variants"],
+            "ActivityEffects": ["effects", "flags"],
+            "IntensityTiers": ["key_features", "activity_examples", "permanent_effects"],
+            "Interactions": ["detailed_rules", "task_examples", "agency_overrides"],
+            "PlotTriggers": ["key_features", "stat_dynamics", "examples", "triggers"],
+            
+            # Faction/political tables
+            "Factions": ["leadership_structure"],
+            
+            # World lore tables
+            "NationalConflicts": ["public_opinion"],
+            "JointMemories": ["tags", "metadata"],
+            "PoliticalEntities": ["relations", "power_centers"],
+            "ConflictSimulations": ["primary_actors", "timeline", "diplomatic_events", 
+                                    "military_events", "civilian_impact", "resolution_scenarios", 
+                                    "most_likely_outcome"],
+            "BorderDisputes": ["resolution_attempts"],
+            
+            # Social/relationship tables
+            "SocialLinks": ["link_history", "dynamics", "experienced_crossroads", 
+                            "experienced_rituals"],
+            "RelationshipEvolution": ["evolution_history"],
+            "interaction_history": ["emotional_impact", "relationship_changes"],
+            
+            # Conflict system tables
+            "ConflictStakeholders": ["alliances", "rivalries"],
+            "ResolutionPaths": ["requirements", "stakeholders_involved", "key_challenges"],
+            "PathStoryBeats": ["involved_npcs"],
+            
+            # Nyx system tables
+            "nyx_brain_checkpoints": ["serialized_state"],
+            "nyx_brain_events": ["event_payload"],
+            "NyxAgentState": ["current_goals", "predicted_futures"],
+            "nyx_dm_messages": ["message"],
+            "NyxNPCDirectives": ["directive"],
+            "JointMemoryGraph": ["tags", "metadata"],
+            "NyxAgentDirectives": ["directive"],
+            "NyxActionTracking": ["action_data", "result_data"],
+            "NyxAgentCommunication": ["message_content", "response_content"],
+            "NyxJointMemoryGraph": ["tags", "metadata"],
+            "NyxNarrativeGovernance": ["governance_policy", "theme_directives", 
+                                       "pacing_directives", "character_directives"],
+            "nyx1_strategy_injections": ["payload"],
+            "nyx1_strategy_logs": ["kink_profile", "decision_meta"],
+            "NyxAgentRegistry": ["capabilities"],
+            
+            # Other system tables
+            "scenario_states": ["state_data"],
+            "performance_metrics": ["metrics", "error_log"],
+            "learning_metrics": ["metrics", "learned_patterns"],
+            "ImageFeedback": ["npc_names"],
+            "UserKinkProfile": ["trigger_context"],
+            "ContextEvolution": ["context_data", "changes"],
+        }
+        
+        # Array fields (TEXT[], INTEGER[], etc) - these need special handling
+        array_fields = {
+            "Locations": ["notable_features", "hidden_aspects", "access_restrictions", "local_customs"],
+            "Factions": ["values", "goals", "membership_requirements", "rivals", "allies", 
+                         "secret_activities", "recruitment_methods"],
+            "Nations": ["major_resources", "major_cities", "cultural_traits", "neighboring_nations"],
+            "NationalConflicts": ["involved_nations", "recent_developments"],
+            "CulturalElements": ["practiced_by"],
+            "CulinaryTraditions": ["ingredients", "adopted_by"],
+            "SocialCustoms": ["adopted_by"],
+            "GeographicRegions": ["natural_resources", "notable_features", "major_settlements", 
+                                  "cultural_traits", "dangers", "terrain_features"],
+            "PoliticalEntities": ["internal_conflicts"],
+            "BorderDisputes": ["female_leaders_involved"],
+            "UrbanMyths": ["regions_known", "themes", "matriarchal_elements"],
+            "LocalHistories": ["notable_figures", "connected_myths", "related_landmarks"],
+            "Landmarks": ["legends", "connected_histories"],
+            "HistoricalEvents": ["involved_entities", "consequences", "disputed_facts", 
+                                 "commemorations", "primary_sources"],
+            "NotableFigures": ["faction_affiliations", "achievements", "failures", 
+                               "personality_traits", "hidden_aspects", "influence_areas", 
+                               "controversial_actions", "relationships"],
+            "CanonicalEvents": ["tags"],
+            "nyx_brain_checkpoints": ["merged_from"],
+            "nyx1_scene_templates": ["tags"],
+            "unified_memories": ["tags"],
+        }
+        
+        # Convert Python objects to JSON strings for comparison and storage
+        processed_updates = {}
+        entity_json_fields = json_fields.get(entity_type, [])
+        entity_array_fields = array_fields.get(entity_type, [])
+        
+        for field, value in updates.items():
+            if field in entity_json_fields and value is not None and not isinstance(value, str):
+                # Convert lists and dicts to JSON strings
+                processed_updates[field] = json.dumps(value)
+            elif field in entity_array_fields and value is not None:
+                # Array fields - ensure they're lists
+                if isinstance(value, str):
+                    # If it's a JSON string, parse it
+                    try:
+                        value = json.loads(value)
+                    except:
+                        # If not JSON, treat as single-element array
+                        value = [value]
+                if not isinstance(value, list):
+                    value = [value]
+                processed_updates[field] = value
+            else:
+                processed_updates[field] = value
+        
         logger.info(f"Proposing change to {entity_type} ({entity_identifier}) because: {reason}")
     
         try:
@@ -513,17 +656,81 @@ class LoreSystem:
                     if not existing_entity:
                         return {"status": "error", "message": f"Entity not found: {entity_type} with {entity_identifier}"}
     
-                    # Step 2: Validate for conflicts
+                    # Step 2: Validate for conflicts (with special handling for JSON and array fields)
                     conflicts = []
-                    for field, new_value in updates.items():
-                        if field in existing_entity and existing_entity[field] is not None and existing_entity[field] != new_value:
-                            conflict_detail = (
-                                f"Conflict on field '{field}'. "
-                                f"Current value: '{existing_entity[field]}'. "
-                                f"Proposed value: '{new_value}'."
-                            )
-                            conflicts.append(conflict_detail)
-                            logger.warning(f"Conflict detected for {entity_type} ({entity_identifier}): {conflict_detail}")
+                    for field, new_value in processed_updates.items():
+                        if field in existing_entity:
+                            current_value = existing_entity[field]
+                            
+                            # Special handling for JSON fields - compare as JSON objects
+                            if field in entity_json_fields and current_value is not None:
+                                try:
+                                    # Parse current value if it's a string
+                                    if isinstance(current_value, str):
+                                        current_obj = json.loads(current_value)
+                                    else:
+                                        current_obj = current_value
+                                    
+                                    # Parse new value if it's a string
+                                    if isinstance(new_value, str):
+                                        new_obj = json.loads(new_value)
+                                    else:
+                                        new_obj = new_value
+                                    
+                                    # Compare as objects, not strings
+                                    if current_obj != new_obj:
+                                        # Special case: Don't conflict when adding to empty array
+                                        if isinstance(current_obj, list) and isinstance(new_obj, list):
+                                            if len(current_obj) == 0 and len(new_obj) > 0:
+                                                # This is just adding to an empty list, not a conflict
+                                                continue
+                                        
+                                        # Special case: Don't conflict when adding to empty dict
+                                        if isinstance(current_obj, dict) and isinstance(new_obj, dict):
+                                            if len(current_obj) == 0 and len(new_obj) > 0:
+                                                # This is just adding to an empty dict, not a conflict
+                                                continue
+                                        
+                                        conflict_detail = (
+                                            f"Conflict on field '{field}'. "
+                                            f"Current value: '{json.dumps(current_obj)}'. "
+                                            f"Proposed value: '{json.dumps(new_obj)}'."
+                                        )
+                                        conflicts.append(conflict_detail)
+                                        logger.warning(f"Conflict detected for {entity_type} ({entity_identifier}): {conflict_detail}")
+                                except json.JSONDecodeError as e:
+                                    # Fall back to string comparison if JSON parsing fails
+                                    if current_value != new_value:
+                                        conflict_detail = (
+                                            f"Conflict on field '{field}' (JSON parse error). "
+                                            f"Current value: '{current_value}'. "
+                                            f"Proposed value: '{new_value}'."
+                                        )
+                                        conflicts.append(conflict_detail)
+                            # Special handling for array fields
+                            elif field in entity_array_fields:
+                                # Compare arrays element by element
+                                if current_value is not None and set(current_value or []) != set(new_value or []):
+                                    # Allow adding to empty arrays
+                                    if not current_value and new_value:
+                                        continue
+                                    conflict_detail = (
+                                        f"Conflict on array field '{field}'. "
+                                        f"Current value: {current_value}. "
+                                        f"Proposed value: {new_value}."
+                                    )
+                                    conflicts.append(conflict_detail)
+                                    logger.warning(f"Conflict detected for {entity_type} ({entity_identifier}): {conflict_detail}")
+                            else:
+                                # Regular field comparison
+                                if current_value is not None and current_value != new_value:
+                                    conflict_detail = (
+                                        f"Conflict on field '{field}'. "
+                                        f"Current value: '{current_value}'. "
+                                        f"Proposed value: '{new_value}'."
+                                    )
+                                    conflicts.append(conflict_detail)
+                                    logger.warning(f"Conflict detected for {entity_type} ({entity_identifier}): {conflict_detail}")
     
                     if conflicts:
                         # Step 3a: Handle conflict by generating a new narrative event
@@ -535,12 +742,47 @@ class LoreSystem:
                         return {"status": "conflict_generated", "details": conflicts}
     
                     # Step 3b: No conflict, commit the change
-                    set_clauses = [f"{key} = ${i+1}" for i, key in enumerate(updates.keys())]
-                    set_sql = ", ".join(set_clauses)
-                    # The entity identifier values come after the update values
-                    update_values = list(updates.values()) + list(entity_identifier.values())
+                    # Add type conversion for known boolean columns
+                    boolean_columns = ['introduced', 'is_active', 'is_consolidated', 'is_archived',
+                                       'fantasy_flag', 'consolidated', 'has_triggered_consequence',
+                                       'is_revealed', 'is_public', 'is_completed', 'public_knowledge',
+                                       'success', 'willing_to_betray_faction', 'equipped', 'used',
+                                       'marked_for_review', 'dismissed', 'active']
                     
-                    update_query = f"UPDATE {entity_type} SET {set_sql} WHERE {where_sql}"
+                    # Build SET clauses with proper casting for boolean and array columns
+                    set_clauses = []
+                    update_values = []
+                    
+                    for i, (key, value) in enumerate(processed_updates.items()):
+                        if key in boolean_columns:
+                            # Ensure it's a boolean and use explicit cast
+                            bool_value = bool(value) if not isinstance(value, bool) else value
+                            set_clauses.append(f"{key} = ${i+1}::boolean")
+                            update_values.append(bool_value)
+                        elif key in entity_array_fields:
+                            # Handle array fields with proper casting
+                            array_type = self._get_array_type(entity_type, key)
+                            set_clauses.append(f"{key} = ${i+1}::{array_type}")
+                            update_values.append(value)
+                        else:
+                            set_clauses.append(f"{key} = ${i+1}")
+                            update_values.append(value)
+                    
+                    set_sql = ", ".join(set_clauses)
+                    
+                    # Build WHERE clause with proper placeholder numbering
+                    # Start numbering after the SET clause placeholders
+                    where_clauses_update = []
+                    num_updates = len(processed_updates)
+                    for i, key in enumerate(entity_identifier.keys()):
+                        placeholder_num = num_updates + i + 1
+                        where_clauses_update.append(f"{key} = ${placeholder_num}")
+                    where_sql_update = " AND ".join(where_clauses_update)
+                    
+                    # Add the entity identifier values
+                    update_values.extend(list(entity_identifier.values()))
+                    
+                    update_query = f"UPDATE {entity_type} SET {set_sql} WHERE {where_sql_update}"
                     await conn.execute(update_query, *update_values)
     
                     # Step 4: Log the change as a canonical event in unified memory
@@ -548,22 +790,93 @@ class LoreSystem:
                     await canon.log_canonical_event(ctx, conn, event_text, tags=[entity_type.lower(), 'state_change'], significance=8)
             
             # Step 5: Propagate consequences to other systems (outside the transaction)
-            # Only trigger lore evolution for significant entity types
-            significant_entity_types = ["Nations", "Factions", "CulturalElements", "HistoricalEvents", 
-                                       "GeographicRegions", "WorldLore", "Locations", "QuestHooks"]
+            # Create a more specific event description that will pass validation
+            event_description = self._create_detailed_event_description(
+                entity_type, entity_identifier, updates, reason
+            )
             
-            if hasattr(self, 'lore_dynamics_system') and entity_type in significant_entity_types:
-                # Create a more specific event description
-                event_description = self._create_specific_event_description(
-                    entity_type, entity_identifier, existing_entity, updates, reason
-                )
-                await self.lore_dynamics_system.evolve_lore_with_event.fn(ctx, event_description)
+            # Only propagate if the event is significant enough
+            if event_description:
+                dynamics = await self.registry.get_lore_dynamics()
+                
+                # Call the method directly without .fn
+                if hasattr(dynamics, 'evolve_lore_with_event'):
+                    # It's a manager instance, call the method
+                    await dynamics.evolve_lore_with_event(ctx, event_description)
+                else:
+                    # It might be the method directly
+                    await dynamics(ctx, event_description)
             
             return {"status": "committed", "entity_type": entity_type, "identifier": entity_identifier, "changes": updates}
     
         except Exception as e:
             logger.exception(f"Failed to enact change for {entity_type} ({entity_identifier}): {e}")
             return {"status": "error", "message": str(e)}
+    
+    def _get_array_type(self, entity_type: str, field: str) -> str:
+        """Determine the PostgreSQL array type for a given field."""
+        # Map of fields to their array types
+        text_array_fields = {
+            "values", "goals", "membership_requirements", "secret_activities", 
+            "recruitment_methods", "major_resources", "major_cities", "cultural_traits",
+            "neighboring_nations", "recent_developments", "practiced_by", "ingredients",
+            "adopted_by", "resources", "notable_features", "major_settlements", 
+            "dangers", "terrain_features", "internal_conflicts", "female_leaders_involved",
+            "regions_known", "themes", "matriarchal_elements", "notable_figures",
+            "connected_myths", "related_landmarks", "legends", "connected_histories",
+            "involved_entities", "consequences", "disputed_facts", "commemorations",
+            "primary_sources", "faction_affiliations", "achievements", "failures",
+            "personality_traits", "hidden_aspects", "influence_areas", "controversial_actions",
+            "relationships", "tags", "merged_from", "hidden_aspects", "access_restrictions",
+            "local_customs", "natural_resources"
+        }
+        
+        integer_array_fields = {
+            "rivals", "allies", "involved_nations", "adopted_by"
+        }
+        
+        if field in text_array_fields:
+            return "TEXT[]"
+        elif field in integer_array_fields:
+            return "INTEGER[]"
+        else:
+            # Default to TEXT[] if unknown
+            return "TEXT[]"
+    
+    def _create_detailed_event_description(
+        self, 
+        entity_type: str, 
+        entity_identifier: Dict[str, Any], 
+        updates: Dict[str, Any], 
+        reason: str
+    ) -> str:
+        """Create a detailed event description for lore evolution."""
+        # Map entity types to more descriptive names
+        entity_descriptions = {
+            "NPCStats": "character",
+            "Factions": "faction",
+            "Nations": "nation",
+            "Locations": "location",
+            "HistoricalEvents": "historical event",
+            "CulturalElements": "cultural element",
+            "GeographicRegions": "geographic region",
+            "PoliticalEntities": "political entity",
+            "Conflicts": "conflict",
+            "NotableFigures": "notable figure"
+        }
+        
+        entity_desc = entity_descriptions.get(entity_type, entity_type.lower())
+        
+        # Create a natural language description of the changes
+        change_descriptions = []
+        for field, value in updates.items():
+            # Make field names more human-readable
+            readable_field = field.replace('_', ' ').title()
+            change_descriptions.append(f"{readable_field} was updated")
+        
+        changes_text = ", ".join(change_descriptions) if change_descriptions else "significant changes occurred"
+        
+        return f"A {entity_desc} underwent important changes: {reason}. Specifically, {changes_text}. This may have ripple effects throughout the connected systems."
     
     def _create_specific_event_description(self, entity_type: str, entity_identifier: Dict[str, Any], 
                                           existing_entity: Any, updates: Dict[str, Any], reason: str) -> str:
