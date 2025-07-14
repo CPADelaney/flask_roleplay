@@ -381,41 +381,89 @@ class NyxUnifiedGovernor:
         for agent_type, agents_dict in self.registered_agents.items():
             if agent_type not in self.agent_performance:
                 self.agent_performance[agent_type] = {}
+                
             for agent_id, agent in agents_dict.items():
+                # Default metrics structure based on UniversalUpdaterAgent
+                default_metrics = {
+                    "updates_processed": 0,
+                    "success_rate": 0.0,
+                    "average_processing_time": 0.0,
+                    "strategies": {},
+                    "last_action_time": None,
+                    "total_actions": 0,
+                    "successful_actions": 0,
+                    "failed_actions": 0,
+                    "coordination_score": 0.0
+                }
+                
                 if hasattr(agent, 'get_performance_metrics'):
-                    metrics = await agent.get_performance_metrics()
-                    self.agent_performance[agent_type][agent_id] = metrics
-                    for strategy, data in metrics.get("strategies", {}).items():
-                        if strategy not in self.strategy_effectiveness:
-                            self.strategy_effectiveness[strategy] = {
-                                "success": 0,
-                                "total": 0,
-                                "agents": {}
-                            }
-                        self.strategy_effectiveness[strategy]["success"] += data["success"]
-                        self.strategy_effectiveness[strategy]["total"] += data["total"]
-                        self.strategy_effectiveness[strategy]["agents"][f"{agent_type}:{agent_id}"] = data
+                    try:
+                        metrics = await agent.get_performance_metrics()
+                        # Merge with defaults to ensure all fields exist
+                        for key, value in default_metrics.items():
+                            if key not in metrics:
+                                metrics[key] = value
+                    except:
+                        metrics = default_metrics
+                else:
+                    metrics = default_metrics
+                    
+                self.agent_performance[agent_type][agent_id] = metrics
+                
+                # Update strategy effectiveness tracking
+                for strategy, data in metrics.get("strategies", {}).items():
+                    if strategy not in self.strategy_effectiveness:
+                        self.strategy_effectiveness[strategy] = {
+                            "success": 0,
+                            "total": 0,
+                            "agents": {}
+                        }
+                    self.strategy_effectiveness[strategy]["success"] += data.get("success", 0)
+                    self.strategy_effectiveness[strategy]["total"] += data.get("total", 0)
+                    self.strategy_effectiveness[strategy]["agents"][f"{agent_type}:{agent_id}"] = data
 
     async def _load_learning_state(self):
         """Load and aggregate learning/adaptation patterns for all agents."""
         for agent_type, agents_dict in self.registered_agents.items():
             if agent_type not in self.agent_learning:
                 self.agent_learning[agent_type] = {}
+                
             for agent_id, agent in agents_dict.items():
+                # Default learning state structure
+                default_learning = {
+                    "patterns": {},
+                    "adaptations": [],
+                    "learning_rate": 0.0,
+                    "total_learnings": 0,
+                    "successful_adaptations": 0,
+                    "failed_adaptations": 0
+                }
+                
                 if hasattr(agent, "get_learning_state"):
-                    learning_data = await agent.get_learning_state()
-                    self.agent_learning[agent_type][agent_id] = learning_data
-
-                    for pattern, data in learning_data.get("patterns", {}).items():
-                        if pattern not in self.adaptation_patterns:
-                            self.adaptation_patterns[pattern] = {
-                                "success": 0,
-                                "total": 0,
-                                "agents": {}
-                            }
-                        self.adaptation_patterns[pattern]["success"] += data["success"]
-                        self.adaptation_patterns[pattern]["total"] += data["total"]
-                        self.adaptation_patterns[pattern]["agents"][f"{agent_type}:{agent_id}"] = data
+                    try:
+                        learning_data = await agent.get_learning_state()
+                        # Merge with defaults
+                        for key, value in default_learning.items():
+                            if key not in learning_data:
+                                learning_data[key] = value
+                    except:
+                        learning_data = default_learning
+                else:
+                    learning_data = default_learning
+                    
+                self.agent_learning[agent_type][agent_id] = learning_data
+    
+                # Aggregate patterns
+                for pattern, data in learning_data.get("patterns", {}).items():
+                    if pattern not in self.adaptation_patterns:
+                        self.adaptation_patterns[pattern] = {
+                            "success": 0,
+                            "total": 0,
+                            "agents": {}
+                        }
+                    self.adaptation_patterns[pattern]["success"] += data.get("success", 0)
+                    self.adaptation_patterns[pattern]["total"] += data.get("total", 0)
+                    self.adaptation_patterns[pattern]["agents"][f"{agent_type}:{agent_id}"] = data
 
     async def coordinate_agents_for_goal(
         self,
@@ -549,6 +597,21 @@ class NyxUnifiedGovernor:
     async def _identify_relevant_agents(self, requirements: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Identify agents relevant to goal requirements."""
         relevant_agents = []
+        
+        # Define standard capabilities for known agent types
+        agent_capabilities = {
+            AgentType.UNIVERSAL_UPDATER: ["narrative_analysis", "state_extraction", "state_updating"],
+            AgentType.STORY_DIRECTOR: ["narrative_planning", "plot_development", "pacing_control"],
+            AgentType.CONFLICT_ANALYST: ["conflict_detection", "resolution_planning", "stake_analysis"],
+            AgentType.NARRATIVE_CRAFTER: ["content_creation", "dialogue_generation", "scene_crafting"],
+            AgentType.RESOURCE_OPTIMIZER: ["resource_management", "optimization", "allocation"],
+            AgentType.RELATIONSHIP_MANAGER: ["relationship_tracking", "social_dynamics", "bond_management"],
+            AgentType.MEMORY_MANAGER: ["memory_storage", "memory_recall", "memory_organization"],
+            AgentType.SCENE_MANAGER: ["scene_composition", "atmosphere_control", "transition_management"],
+            AgentType.ACTIVITY_ANALYZER: ["activity_tracking", "pattern_recognition", "behavior_analysis"],
+            AgentType.NPC: ["dialogue", "movement", "interaction", "emotion"]
+        }
+        
         for agent_type, agents_dict in self.registered_agents.items():
             for agent_id, agent in agents_dict.items():
                 # Check if agent type is required
@@ -560,21 +623,32 @@ class NyxUnifiedGovernor:
                         "relevance": 1.0
                     })
                     continue
-                # Capabilities match
+                    
+                # Get capabilities either from agent method or predefined list
                 capabilities = []
                 if hasattr(agent, 'get_capabilities'):
-                    capabilities = await agent.get_capabilities()
+                    try:
+                        capabilities = await agent.get_capabilities()
+                    except:
+                        capabilities = agent_capabilities.get(agent_type, [])
+                else:
+                    capabilities = agent_capabilities.get(agent_type, [])
+                
+                # Capabilities match
                 capability_match = sum(
                     1 for cap in requirements["capabilities"]
                     if cap in capabilities
                 ) / len(requirements["capabilities"]) if requirements["capabilities"] else 0
+                
                 if capability_match > 0.5:
                     relevant_agents.append({
                         "type": agent_type,
                         "id": agent_id,
                         "instance": agent,
-                        "relevance": capability_match
+                        "relevance": capability_match,
+                        "capabilities": capabilities
                     })
+        
         relevant_agents.sort(key=lambda x: x["relevance"], reverse=True)
         return relevant_agents
     
@@ -1007,44 +1081,135 @@ class NyxUnifiedGovernor:
         
         raise ValueError(f"Unknown task type: {task['type']}")
     
-    async def _execute_setup_task(
-        self,
-        agents: List[Any],
-        context: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """Execute setup task with memory-capable agents."""
+    async def _execute_setup_task(self, agents: List[Any], context: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute setup task with agents."""
         setup_results = []
         
         for agent in agents:
+            result = None
+            
+            # Try different initialization methods
             if hasattr(agent, "initialize_systems"):
                 result = await agent.initialize_systems(context)
-                setup_results.append(result)
+            elif hasattr(agent, "initialize"):
+                result = await agent.initialize()
+            elif hasattr(agent, "handle_directive"):
+                # Use directive-based initialization
+                result = await agent.handle_directive({
+                    "type": DirectiveType.ACTION,
+                    "data": {
+                        "action": "initialize",
+                        "context": context
+                    }
+                })
+            
+            if result:
+                setup_results.append({
+                    "agent": agent.__class__.__name__,
+                    "status": "initialized",
+                    "result": result
+                })
+            else:
+                setup_results.append({
+                    "agent": agent.__class__.__name__,
+                    "status": "skipped",
+                    "reason": "No initialization method found"
+                })
         
         return {
             "status": "completed",
-            "results": setup_results
+            "results": setup_results,
+            "initialized_count": sum(1 for r in setup_results if r["status"] == "initialized")
         }
     
-    async def _execute_planning_task(
-        self,
-        agents: List[Any],
-        context: Dict[str, Any]
-    ) -> Dict[str, Any]:
+    async def _execute_planning_task(self, agents: List[Any], context: Dict[str, Any]) -> Dict[str, Any]:
         """Execute planning task with planning-capable agents."""
         plans = []
         
         for agent in agents:
+            plan = None
+            
             if hasattr(agent, "generate_plan"):
                 plan = await agent.generate_plan(context)
+            elif hasattr(agent, "handle_directive"):
+                # Use directive-based planning
+                result = await agent.handle_directive({
+                    "type": DirectiveType.ACTION,
+                    "data": {
+                        "action": "generate_plan",
+                        "context": context
+                    }
+                })
+                if result and result.get("success"):
+                    plan = result.get("plan")
+            
+            if plan:
                 plans.append(plan)
         
-        # Merge plans
-        merged_plan = await self._merge_plans(plans)
+        # Merge plans intelligently
+        merged_plan = await self._merge_plans_intelligently(plans, context)
         
         return {
             "status": "completed",
-            "merged_plan": merged_plan
+            "merged_plan": merged_plan,
+            "plan_count": len(plans)
         }
+    
+    async def _merge_plans_intelligently(self, plans: List[Dict[str, Any]], context: Dict[str, Any]) -> Dict[str, Any]:
+        """Intelligently merge multiple plans."""
+        merged = {
+            "tasks": [],
+            "dependencies": [],
+            "timeline": [],
+            "resources": {},
+            "conflicts": [],
+            "priority_score": 0.0
+        }
+        
+        # Track task IDs to avoid duplicates
+        task_ids = set()
+        dependency_ids = set()
+        
+        for plan in plans:
+            # Merge tasks with deduplication
+            for task in plan.get("tasks", []):
+                task_id = task.get("id", f"{task.get('type', 'unknown')}_{len(task_ids)}")
+                if task_id not in task_ids:
+                    task_ids.add(task_id)
+                    task["id"] = task_id
+                    merged["tasks"].append(task)
+            
+            # Merge dependencies with conflict detection
+            for dep in plan.get("dependencies", []):
+                dep_id = f"{dep.get('from', 'unknown')}_{dep.get('to', 'unknown')}"
+                if dep_id not in dependency_ids:
+                    dependency_ids.add(dep_id)
+                    merged["dependencies"].append(dep)
+                else:
+                    # Track conflicting dependencies
+                    merged["conflicts"].append({
+                        "type": "dependency_conflict",
+                        "detail": dep
+                    })
+            
+            # Merge timeline events
+            merged["timeline"].extend(plan.get("timeline", []))
+            
+            # Aggregate resources
+            for resource, amount in plan.get("resources", {}).items():
+                if resource not in merged["resources"]:
+                    merged["resources"][resource] = 0
+                merged["resources"][resource] += amount
+        
+        # Sort timeline by timestamp
+        merged["timeline"].sort(key=lambda x: x.get("timestamp", 0))
+        
+        # Calculate priority score based on conflicts and resource usage
+        conflict_penalty = len(merged["conflicts"]) * 0.1
+        resource_efficiency = 1.0 / (1.0 + sum(merged["resources"].values()) / 100)
+        merged["priority_score"] = max(0, 1.0 - conflict_penalty) * resource_efficiency
+        
+        return merged
     
     async def _execute_execution_task(
         self,
@@ -1117,34 +1282,6 @@ class NyxUnifiedGovernor:
             "status": "completed",
             "results": cleanup_results
         }
-    
-    async def _merge_plans(self, plans: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Merge multiple plans into a single coherent plan."""
-        merged = {
-            "tasks": [],
-            "dependencies": [],
-            "timeline": [],
-            "resources": {}
-        }
-        
-        # Merge tasks
-        for plan in plans:
-            merged["tasks"].extend(plan.get("tasks", []))
-            merged["dependencies"].extend(plan.get("dependencies", []))
-            merged["timeline"].extend(plan.get("timeline", []))
-            
-            # Merge resources
-            for resource, amount in plan.get("resources", {}).items():
-                if resource not in merged["resources"]:
-                    merged["resources"][resource] = 0
-                merged["resources"][resource] += amount
-        
-        # Deduplicate and sort
-        merged["tasks"] = list({t["id"]: t for t in merged["tasks"]}.values())
-        merged["dependencies"] = list({d["id"]: d for d in merged["dependencies"]}.values())
-        merged["timeline"].sort(key=lambda x: x["timestamp"])
-        
-        return merged
     
     async def _calculate_plan_metrics(
         self,
@@ -1325,13 +1462,33 @@ class NyxUnifiedGovernor:
         return False
     
     def _get_resource_limit(self, resource: str) -> float:
-        """Get the limit for a specific resource."""
-        limits = {
-            "memory": 1000,  # MB
-            "computation": 100,  # CPU seconds
-            "time": 3600  # seconds
+        """Get the limit for a specific resource based on game state."""
+        # Base limits
+        base_limits = {
+            "memory": 1000,      # MB
+            "computation": 100,   # CPU seconds
+            "time": 3600,        # seconds
+            "narrative_tokens": 10000,  # story elements
+            "agent_actions": 50,        # per phase
+            "coordination_attempts": 20  # per goal
         }
-        return limits.get(resource, float("inf"))
+        
+        # Dynamic adjustments based on game state
+        if hasattr(self, 'game_state') and self.game_state:
+            # Adjust based on number of active entities
+            active_npcs = len(self.game_state.get('current_npcs', []))
+            active_quests = len(self.game_state.get('active_quests', []))
+            
+            # Scale limits based on complexity
+            complexity_factor = 1.0 + (active_npcs * 0.05) + (active_quests * 0.1)
+            
+            if resource in ["memory", "computation"]:
+                return base_limits[resource] * complexity_factor
+            elif resource == "time":
+                # Less time with more complexity to maintain pacing
+                return base_limits[resource] / (1.0 + (complexity_factor - 1.0) * 0.5)
+        
+        return base_limits.get(resource, float("inf"))
     
     def _parse_timeframe(self, timeframe: str) -> float:
         """Parse timeframe string into seconds."""
@@ -2394,12 +2551,7 @@ class NyxUnifiedGovernor:
     async def _analyze_agent_conflict(self, agent1_type: str, agent1_id: str,
                                     agent2_type: str, agent2_id: str,
                                     conflict_details: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Analyze a conflict between agents.
-        
-        Returns:
-            Analysis results including impact assessment
-        """
+        """Analyze a conflict between agents with dynamic scoring."""
         analysis = {
             "agents": [
                 {"type": agent1_type, "id": agent1_id},
@@ -2409,26 +2561,96 @@ class NyxUnifiedGovernor:
             "severity": conflict_details.get("severity", 5),
             "narrative_impact": 0.0,
             "world_consistency_impact": 0.0,
-            "player_experience_impact": 0.0
+            "player_experience_impact": 0.0,
+            "resolution_difficulty": 0.0
         }
-
-        # Calculate impacts based on conflict type and agent types
-        if conflict_details.get("type") == "narrative_contradiction":
-            analysis["narrative_impact"] = 0.8
-            analysis["world_consistency_impact"] = 0.6
-        elif conflict_details.get("type") == "resource_competition":
-            analysis["narrative_impact"] = 0.3
-            analysis["world_consistency_impact"] = 0.2
-        elif conflict_details.get("type") == "goal_conflict":
-            analysis["narrative_impact"] = 0.5
-            analysis["player_experience_impact"] = 0.4
-
-        # Adjust based on agent types
-        if AgentType.STORY_DIRECTOR in [agent1_type, agent2_type]:
-            analysis["narrative_impact"] *= 1.5
-        if AgentType.UNIVERSAL_UPDATER in [agent1_type, agent2_type]:
-            analysis["world_consistency_impact"] *= 1.5
-
+    
+        # Dynamic scoring based on conflict type and context
+        conflict_type = conflict_details.get("type", "unknown")
+        
+        # Base impact scores
+        impact_matrix = {
+            "narrative_contradiction": {
+                "narrative_impact": 0.8,
+                "world_consistency_impact": 0.6,
+                "player_experience_impact": 0.4,
+                "resolution_difficulty": 0.7
+            },
+            "resource_competition": {
+                "narrative_impact": 0.3,
+                "world_consistency_impact": 0.2,
+                "player_experience_impact": 0.5,
+                "resolution_difficulty": 0.4
+            },
+            "goal_conflict": {
+                "narrative_impact": 0.5,
+                "world_consistency_impact": 0.3,
+                "player_experience_impact": 0.6,
+                "resolution_difficulty": 0.5
+            },
+            "timing_conflict": {
+                "narrative_impact": 0.4,
+                "world_consistency_impact": 0.2,
+                "player_experience_impact": 0.3,
+                "resolution_difficulty": 0.3
+            },
+            "authority_conflict": {
+                "narrative_impact": 0.6,
+                "world_consistency_impact": 0.7,
+                "player_experience_impact": 0.5,
+                "resolution_difficulty": 0.8
+            }
+        }
+        
+        # Get base scores
+        base_scores = impact_matrix.get(conflict_type, {
+            "narrative_impact": 0.5,
+            "world_consistency_impact": 0.5,
+            "player_experience_impact": 0.5,
+            "resolution_difficulty": 0.5
+        })
+        
+        # Apply base scores
+        for key, value in base_scores.items():
+            analysis[key] = value
+        
+        # Adjust based on agent types and their importance
+        agent_importance = {
+            AgentType.STORY_DIRECTOR: 1.5,
+            AgentType.UNIVERSAL_UPDATER: 1.3,
+            AgentType.SCENE_MANAGER: 1.2,
+            AgentType.CONFLICT_ANALYST: 1.1,
+            AgentType.NPC: 0.9
+        }
+        
+        # Calculate importance multiplier
+        importance1 = agent_importance.get(agent1_type, 1.0)
+        importance2 = agent_importance.get(agent2_type, 1.0)
+        avg_importance = (importance1 + importance2) / 2
+        
+        # Scale impacts by importance
+        analysis["narrative_impact"] *= avg_importance
+        analysis["world_consistency_impact"] *= avg_importance
+        
+        # Adjust based on severity
+        severity_multiplier = conflict_details.get("severity", 5) / 10.0
+        for impact_type in ["narrative_impact", "world_consistency_impact", "player_experience_impact"]:
+            analysis[impact_type] *= (0.5 + severity_multiplier)
+        
+        # Cap all values at 1.0
+        for key in ["narrative_impact", "world_consistency_impact", "player_experience_impact", "resolution_difficulty"]:
+            analysis[key] = min(1.0, analysis[key])
+        
+        # Add context about the conflict
+        analysis["context"] = {
+            "current_game_state": self.game_state,
+            "recent_conflicts": len([c for c in self.coordination_history[-10:] if c.get("type") == "conflict"]),
+            "agent_performance": {
+                agent1_type: self.agent_performance.get(agent1_type, {}).get(agent1_id, {}),
+                agent2_type: self.agent_performance.get(agent2_type, {}).get(agent2_id, {})
+            }
+        }
+        
         return analysis
 
     async def _make_conflict_decision(self, conflict_analysis: Dict[str, Any]) -> Dict[str, Any]:
