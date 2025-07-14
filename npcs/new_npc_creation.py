@@ -3037,12 +3037,19 @@ class NPCCreationHandler:
                     old_arche_summary
                 )
                 
-                await create_social_link(
-                    user_id, conversation_id,
-                    entity1_type="npc", entity1_id=old_npc_id,
-                    entity2_type="npc", entity2_id=npc_id,
-                    link_type=rec_type
-                )
+                # FIXED: Use canon for reverse link too
+                async with get_db_connection_context() as conn:
+                    await canon.find_or_create_social_link(
+                        ctx, conn,
+                        user_id=user_id,
+                        conversation_id=conversation_id,
+                        entity1_type="npc",
+                        entity1_id=old_npc_id,
+                        entity2_type="npc",
+                        entity2_id=npc_id,
+                        link_type=rec_type,
+                        link_level=10
+                    )
                 
                 # Update target NPC's relationships with new connection
                 async with get_db_connection_context() as conn:
