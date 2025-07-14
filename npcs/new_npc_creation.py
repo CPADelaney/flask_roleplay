@@ -2954,15 +2954,18 @@ class NPCCreationHandler:
                     """
                     
                     row = await conn.fetchrow(rel_query, user_id, conversation_id, npc_id)
-                    relationships_json = row['relationships'] if row else "[]"
+                    relationships_json = row['relationships'] if row else None
                     
-                    if isinstance(relationships_json, str):
+                    # FIX: Handle None values properly
+                    if relationships_json is None:
+                        current_relationships = []
+                    elif isinstance(relationships_json, str):
                         try:
                             current_relationships = json.loads(relationships_json)
                         except:
                             current_relationships = []
                     else:
-                        current_relationships = relationships_json
+                        current_relationships = relationships_json if relationships_json else []
                     
                     current_relationships.append({
                         "relationship_label": rel["relationship_label"],
@@ -3002,15 +3005,18 @@ class NPCCreationHandler:
                     """
                     
                     row = await conn.fetchrow(rel_query, user_id, conversation_id, npc_id)
-                    relationships_json = row['relationships'] if row else "[]"
+                    relationships_json = row['relationships'] if row else None
                     
-                    if isinstance(relationships_json, str):
+                    # FIX: Handle None values properly
+                    if relationships_json is None:
+                        current_relationships = []
+                    elif isinstance(relationships_json, str):
                         try:
                             current_relationships = json.loads(relationships_json)
                         except:
                             current_relationships = []
                     else:
-                        current_relationships = relationships_json
+                        current_relationships = relationships_json if relationships_json else []
                     
                     current_relationships.append({
                         "relationship_label": rel["relationship_label"],
@@ -3059,15 +3065,18 @@ class NPCCreationHandler:
                     """
                     
                     row = await conn.fetchrow(target_rel_query, user_id, conversation_id, old_npc_id)
-                    target_relationships_json = row['relationships'] if row else "[]"
+                    target_relationships_json = row['relationships'] if row else None
                     
-                    if isinstance(target_relationships_json, str):
+                    # FIX: Handle None values properly
+                    if target_relationships_json is None:
+                        target_relationships = []
+                    elif isinstance(target_relationships_json, str):
                         try:
                             target_relationships = json.loads(target_relationships_json)
                         except:
                             target_relationships = []
                     else:
-                        target_relationships = target_relationships_json
+                        target_relationships = target_relationships_json if target_relationships_json else []
                     
                     target_relationships.append({
                         "relationship_label": rec_type,
