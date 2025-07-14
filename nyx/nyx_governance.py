@@ -293,43 +293,87 @@ class NyxUnifiedGovernor:
 
     async def discover_and_register_agents(self):
         """
-        Discover and register available agents in the system.
+        Discover and register available agents in the system dynamically.
         """
         logger.info(f"Discovering and registering agents for user {self.user_id}, conversation {self.conversation_id}")
         
-        # Example of registering some default agents
+        registered_count = 0
+        
+        # Define agent modules and their expected classes
+        agent_modules = [
+            ("story_agent.story_director_agent", "StoryDirector", AgentType.STORY_DIRECTOR),
+            ("logic.universal_updater_agent", "UniversalUpdaterAgent", AgentType.UNIVERSAL_UPDATER),
+            ("agents.scene_manager", "SceneManagerAgent", AgentType.SCENE_MANAGER),
+            ("agents.conflict_analyst", "ConflictAnalystAgent", AgentType.CONFLICT_ANALYST),
+            ("agents.narrative_crafter", "NarrativeCrafterAgent", AgentType.NARRATIVE_CRAFTER),
+            ("agents.resource_optimizer", "ResourceOptimizerAgent", AgentType.RESOURCE_OPTIMIZER),
+            ("agents.relationship_manager", "RelationshipManagerAgent", AgentType.RELATIONSHIP_MANAGER),
+            ("agents.activity_analyzer", "ActivityAnalyzerAgent", AgentType.ACTIVITY_ANALYZER),
+            ("agents.memory_manager", "MemoryManagerAgent", AgentType.MEMORY_MANAGER),
+        ]
+        
+        for module_path, class_name, agent_type in agent_modules:
+            try:
+                # Dynamically import the module
+                module = importlib.import_module(module_path)
+                
+                # Get the agent class
+                agent_class = getattr(module, class_name, None)
+                
+                if agent_class:
+                    # Create instance
+                    agent_instance = agent_class(self.user_id, self.conversation_id)
+                    
+                    # Register with governance
+                    agent_id = f"{agent_type}_{self.conversation_id}"
+                    await self.register_agent(
+                        agent_type=agent_type,
+                        agent_instance=agent_instance,
+                        agent_id=agent_id
+                    )
+                    
+                    registered_count += 1
+                    logger.info(f"Registered {agent_type} agent: {class_name}")
+                else:
+                    logger.warning(f"Class {class_name} not found in module {module_path}")
+                    
+            except ImportError as e:
+                logger.debug(f"Could not import {module_path}: {e}")
+            except Exception as e:
+                logger.warning(f"Could not register agent from {module_path}: {e}")
+        
+        # Also discover and register NPC agents
         try:
-            # Register story director if available
-            try:
-                from story_agent.story_director_agent import StoryDirector
-                story_director = StoryDirector(self.user_id, self.conversation_id)
-                await self.register_agent(
-                    agent_type=AgentType.STORY_DIRECTOR,
-                    agent_instance=story_director,
-                    agent_id="story_director"
-                )
-                logger.info("Registered story director agent")
-            except (ImportError, Exception) as e:
-                logger.warning(f"Could not register story director: {e}")
-            
-            # Register universal updater if available
-            try:
-                from logic.universal_updater_agent import UniversalUpdaterAgent
-                universal_updater = UniversalUpdaterAgent(self.user_id, self.conversation_id)
-                await self.register_agent(
-                    agent_type=AgentType.UNIVERSAL_UPDATER,
-                    agent_instance=universal_updater,
-                    agent_id="universal_updater"
-                )
-                logger.info("Registered universal updater agent")
-            except (ImportError, Exception) as e:
-                logger.warning(f"Could not register universal updater: {e}")
-            
-            return True
+            async with get_db_connection_context() as conn:
+                # Get active NPCs that might need agents
+                active_npcs = await conn.fetch("""
+                    SELECT npc_id, npc_name FROM NPCStats
+                    WHERE user_id = $1 AND conversation_id = $2 AND is_active = TRUE
+                    LIMIT 10
+                """, self.user_id, self.conversation_id)
+                
+                for npc in active_npcs:
+                    try:
+                        from npcs.npc_agent import NPCAgent
+                        npc_agent = NPCAgent(self.user_id, self.conversation_id, npc["npc_id"])
+                        
+                        await self.register_agent(
+                            agent_type=AgentType.NPC,
+                            agent_instance=npc_agent,
+                            agent_id=f"npc_{npc['npc_id']}"
+                        )
+                        
+                        registered_count += 1
+                        logger.info(f"Registered NPC agent for {npc['npc_name']} (ID: {npc['npc_id']})")
+                        
+                    except Exception as e:
+                        logger.debug(f"Could not register NPC agent for {npc['npc_name']}: {e}")
+                        
         except Exception as e:
-            logger.error(f"Error during agent discovery and registration: {e}")
-            return False
-
+            logger.warning(f"Could not discover NPC agents: {e}")
+        
+        logger.info(f"Agent discovery completed. Registered {registered_count} agents.")
+        return registered_count > 0
     # ... rest of the file remains the same ...
     
     async def _update_performance_metrics(self):
@@ -2106,16 +2150,6 @@ class NyxUnifiedGovernor:
                                     reason: str) -> Dict[str, Any]:
         """
         Create or update a relationship between two NPCs.
-        
-        Args:
-            npc1_name: Name of first NPC
-            npc2_name: Name of second NPC
-            relationship_type: Type of relationship
-            details: Relationship details
-            reason: Narrative reason
-            
-        Returns:
-            Result of the operation
         """
         if not self._initialized:
             await self.initialize()
@@ -2138,9 +2172,31 @@ class NyxUnifiedGovernor:
     
         # Create or update the social link
         async with get_db_connection_context() as conn:
-            await conn.execute("""...""", ...)
+            # First create/update the SocialLinks entry
+            link_id = await conn.fetchval("""
+                INSERT INTO SocialLinks (
+                    user_id, conversation_id,
+                    entity1_type, entity1_id, entity2_type, entity2_id,
+                    link_type, link_level, link_history, dynamics,
+                    relationship_stage
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11)
+                ON CONFLICT (user_id, conversation_id, entity1_type, entity1_id, entity2_type, entity2_id)
+                DO UPDATE SET 
+                    link_type = EXCLUDED.link_type,
+                    link_level = EXCLUDED.link_level,
+                    dynamics = EXCLUDED.dynamics,
+                    relationship_stage = EXCLUDED.relationship_stage
+                RETURNING link_id
+            """, 
+                self.user_id, self.conversation_id,
+                'npc', npc1_id, 'npc', npc2_id,
+                relationship_type, details.get('link_level', 50),
+                json.dumps([{"timestamp": datetime.now().isoformat(), "event": reason}]),
+                json.dumps(details), details.get('stage', 'acquaintance')
+            )
             
-            # Update NPC relationships field
+            # Update NPCs' relationships fields
+            relationships = {}
             for npc_id, other_name in [(npc1_id, npc2_name), (npc2_id, npc1_name)]:
                 # Get current relationships
                 current_rels = await conn.fetchval("""
@@ -2153,17 +2209,15 @@ class NyxUnifiedGovernor:
                     "level": details.get("link_level", 50),
                     "details": details
                 }
-        
-        # Now update through LoreSystem (outside the connection context)
-        for npc_id, other_name in [(npc1_id, npc2_name), (npc2_id, npc1_name)]:
-            # Update through LoreSystem
-            await self.lore_system.propose_and_enact_change(
-                ctx=ctx,
-                entity_type="NPCStats",
-                entity_identifier={"npc_id": npc_id},
-                updates={"relationships": json.dumps(relationships)},
-                reason=f"Relationship update: {reason}"
-            )
+                
+                # Update through LoreSystem (outside the connection context)
+                await self.lore_system.propose_and_enact_change(
+                    ctx=ctx,
+                    entity_type="NPCStats",
+                    entity_identifier={"npc_id": npc_id},
+                    updates={"relationships": relationships},
+                    reason=f"Relationship update: {reason}"
+                )
     
         return {"status": "committed", "relationship_created": True}
 
@@ -2509,6 +2563,95 @@ class NyxUnifiedGovernor:
                 })
         
         return learnings
+
+    async def get_current_state(self, user_id: int, conversation_id: int) -> Dict[str, Any]:
+        """
+        Get the current state of the game world including narrative, character, and world state.
+        """
+        # Use the existing game state if available
+        if hasattr(self, 'game_state') and self.game_state:
+            base_state = self.game_state
+        else:
+            base_state = await self.initialize_game_state(force=True)
+        
+        # Get additional narrative context
+        narrative_context = {}
+        character_state = {}
+        world_state = {}
+        
+        async with get_db_connection_context() as conn:
+            # Get current narrative stage/arc
+            narrative_stage = await conn.fetchval("""
+                SELECT value FROM CurrentRoleplay
+                WHERE user_id = $1 AND conversation_id = $2 AND key = 'NarrativeStage'
+            """, user_id, conversation_id)
+            
+            if narrative_stage:
+                narrative_context["current_arc"] = narrative_stage
+                
+            # Get active plot points
+            active_quests = await conn.fetch("""
+                SELECT quest_name, progress_detail FROM Quests
+                WHERE user_id = $1 AND conversation_id = $2 AND status = 'In Progress'
+            """, user_id, conversation_id)
+            
+            narrative_context["plot_points"] = [
+                {"name": q["quest_name"], "details": q["progress_detail"]} 
+                for q in active_quests
+            ]
+            
+            # Get player character state
+            player_stats = await conn.fetchrow("""
+                SELECT * FROM PlayerStats
+                WHERE user_id = $1 AND conversation_id = $2 AND player_name = 'Chase'
+            """, user_id, conversation_id)
+            
+            if player_stats:
+                character_state = dict(player_stats)
+                
+            # Get player relationships
+            relationships = await conn.fetch("""
+                SELECT sl.*, ns.npc_name 
+                FROM SocialLinks sl
+                JOIN NPCStats ns ON sl.entity2_id = ns.npc_id
+                WHERE sl.user_id = $1 AND sl.conversation_id = $2 
+                AND sl.entity1_type = 'player' AND sl.entity2_type = 'npc'
+            """, user_id, conversation_id)
+            
+            character_state["relationships"] = {
+                r["npc_name"]: {
+                    "type": r["link_type"],
+                    "level": r["link_level"],
+                    "stage": r["relationship_stage"]
+                } for r in relationships
+            }
+            
+            # Get world rules and systems
+            world_rules = await conn.fetch("""
+                SELECT rule_name, condition, effect FROM GameRules
+            """)
+            
+            world_state["rules"] = {
+                r["rule_name"]: {
+                    "condition": r["condition"],
+                    "effect": r["effect"]
+                } for r in world_rules
+            }
+            
+            # Get current setting info
+            setting_name = await conn.fetchval("""
+                SELECT value FROM CurrentRoleplay
+                WHERE user_id = $1 AND conversation_id = $2 AND key = 'CurrentSetting'
+            """, user_id, conversation_id)
+            
+            world_state["setting"] = setting_name or "Unknown"
+        
+        return {
+            "game_state": base_state,
+            "narrative_context": narrative_context,
+            "character_state": character_state,
+            "world_state": world_state
+        }
 
     async def handle_player_disagreement(
         self,
@@ -2927,30 +3070,125 @@ class NyxUnifiedGovernor:
         
         return None
 
-    def _would_disrupt_plot(
-        self,
-        action_type: str,
-        action_details: Dict[str, Any],
-        narrative_context: Dict[str, Any]
-    ) -> bool:
+    async def _suggest_narrative_alternative(self, current_state: Dict[str, Any], 
+                                           context: Dict[str, Any]) -> Dict[str, Any]:
+        """Generate an alternative that maintains narrative coherence."""
+        narrative_context = current_state.get("narrative_context", {})
+        current_arc = narrative_context.get("current_arc", "")
+        plot_points = narrative_context.get("plot_points", [])
+        
+        # Analyze current narrative state
+        active_plots = [p["name"] for p in plot_points]
+        
+        return {
+            "type": "narrative_alternative",
+            "suggestion": "Consider an action that advances the current story arc",
+            "specific_options": [
+                f"Engage with the '{active_plots[0]}' questline" if active_plots else "Explore character relationships",
+                "Develop your character through meaningful choices",
+                "Investigate mysteries related to the current setting"
+            ],
+            "reasoning": "This alternative maintains narrative momentum while respecting story coherence"
+        }
+    
+    async def _suggest_character_alternative(self, character_state: Dict[str, Any], 
+                                           context: Dict[str, Any]) -> Dict[str, Any]:
+        """Generate an alternative that respects character development."""
+        relationships = character_state.get("relationships", {})
+        stats = {k: v for k, v in character_state.items() 
+                 if k in ["corruption", "confidence", "willpower", "obedience"]}
+        
+        # Find opportunities based on current character state
+        suggestions = []
+        
+        # Suggest based on stats
+        if stats.get("confidence", 0) < 30:
+            suggestions.append("Build confidence through small victories")
+        if stats.get("willpower", 0) < 40:
+            suggestions.append("Exercise restraint to strengthen willpower")
+            
+        # Suggest based on relationships
+        for npc, rel in relationships.items():
+            if rel["level"] < 30:
+                suggestions.append(f"Improve your relationship with {npc}")
+        
+        return {
+            "type": "character_alternative",
+            "suggestion": "Focus on character development that aligns with your journey",
+            "specific_options": suggestions[:3] if suggestions else [
+                "Reflect on recent events in your journal",
+                "Seek guidance from a trusted NPC",
+                "Train to improve your abilities"
+            ],
+            "reasoning": "Character consistency creates more meaningful progression"
+        }
+    
+    async def _suggest_world_alternative(self, world_state: Dict[str, Any], 
+                                       context: Dict[str, Any]) -> Dict[str, Any]:
+        """Generate an alternative that respects world rules."""
+        setting = world_state.get("setting", "Unknown")
+        rules = world_state.get("rules", {})
+        
+        return {
+            "type": "world_alternative",
+            "suggestion": f"Work within the established rules of {setting}",
+            "specific_options": [
+                "Use existing game mechanics to achieve your goal",
+                "Find creative solutions within world constraints",
+                "Seek help from factions or NPCs with relevant expertise"
+            ],
+            "reasoning": "Respecting world consistency enhances immersion"
+        }
+    
+    async def _suggest_experience_alternative(self, current_state: Dict[str, Any], 
+                                            context: Dict[str, Any]) -> Dict[str, Any]:
+        """Generate an alternative that enhances player experience."""
+        game_state = current_state.get("game_state", {})
+        active_quests = game_state.get("active_quests", [])
+        current_npcs = game_state.get("current_npcs", [])
+        
+        options = []
+        
+        if active_quests:
+            options.append(f"Progress the '{active_quests[0]['quest_name']}' quest")
+        if current_npcs:
+            options.append(f"Interact with {current_npcs[0]['npc_name']} who is nearby")
+        
+        options.extend([
+            "Explore a new area of the game world",
+            "Engage with the unique mechanics of this setting",
+            "Pursue personal goals that interest you"
+        ])
+        
+        return {
+            "type": "experience_alternative",
+            "suggestion": "Choose actions that enhance your enjoyment",
+            "specific_options": options[:3],
+            "reasoning": "Player agency and engagement are paramount"
+        }
+
+    def _would_disrupt_plot(self, action_type: str, action_details: Dict[str, Any], 
+                           narrative_context: Dict[str, Any]) -> bool:
         """Check if an action would disrupt the current plot."""
-        # Get current plot points and story arcs
         current_arc = narrative_context.get("current_arc", {})
         plot_points = narrative_context.get("plot_points", [])
         
-        # Check if action would skip or invalidate plot points
-        if action_type == "skip_plot_point":
-            return True
-            
-        # Check if action would contradict established plot elements
-        if action_type == "contradict_plot":
-            return True
-            
-        # Check if action would break story arc progression
-        if action_type == "break_arc_progression":
-            return True
-            
-        return False
+        # Check for actual plot disruption patterns
+        disruption_indicators = [
+            # Killing key NPCs
+            action_type == "kill" and action_details.get("target") in narrative_context.get("key_npcs", []),
+            # Destroying important locations
+            action_type == "destroy" and action_details.get("target") in narrative_context.get("key_locations", []),
+            # Revealing secrets prematurely
+            action_type == "reveal" and action_details.get("secret_id") in narrative_context.get("pending_reveals", []),
+            # Skipping required progression
+            action_type == "travel" and action_details.get("destination") in narrative_context.get("locked_areas", []),
+            # Breaking quest chains
+            action_type == "abandon" and action_details.get("quest_id") in [p.get("id") for p in plot_points]
+        ]
+        
+        return any(disruption_indicators)
+
 
     def _would_affect_pacing(
         self,
@@ -2994,26 +3232,36 @@ class NyxUnifiedGovernor:
             
         return True
 
-    def _aligns_with_motivation(
-        self,
-        action_type: str,
-        action_details: Dict[str, Any],
-        character_state: Dict[str, Any]
-    ) -> bool:
+    def _aligns_with_motivation(self, action_type: str, action_details: Dict[str, Any], 
+                               character_state: Dict[str, Any]) -> bool:
         """Check if an action aligns with character motivations."""
-        # Get character motivations and goals
         motivations = character_state.get("motivations", [])
         goals = character_state.get("goals", [])
+        personality = character_state.get("personality_traits", [])
         
-        # Check if action contradicts motivations
-        if action_type == "contradict_motivation":
+        # Analyze action against character profile
+        if action_type == "betray" and "loyal" in personality:
+            return False
+        if action_type == "steal" and "honest" in personality:
+            return False
+        if action_type == "help" and "selfish" in personality:
             return False
             
-        # Check if action aligns with goals
-        if action_type == "align_with_goal":
-            return True
-            
+        # Check if action advances any goals
+        action_target = action_details.get("target", "")
+        action_objective = action_details.get("objective", "")
+        
+        for goal in goals:
+            if action_target in goal or action_objective in goal:
+                return True
+                
+        # Default to checking if it's not explicitly against motivations
+        for motivation in motivations:
+            if action_type in ["abandon", "betray", "destroy"] and motivation in action_details.get("affects", []):
+                return False
+                
         return True
+
 
     def _disrupts_development(
         self,
@@ -3056,26 +3304,30 @@ class NyxUnifiedGovernor:
             
         return True
 
-    def _violates_world_rules(
-        self,
-        action_type: str,
-        action_details: Dict[str, Any],
-        world_state: Dict[str, Any]
-    ) -> bool:
+    def _violates_world_rules(self, action_type: str, action_details: Dict[str, Any], 
+                             world_state: Dict[str, Any]) -> bool:
         """Check if an action violates established world rules."""
-        # Get world rules and systems
         rules = world_state.get("rules", {})
         systems = world_state.get("systems", {})
         
-        # Check if action violates rules
-        if action_type == "violate_rule":
-            return True
+        # Check against game rules
+        for rule_name, rule_data in rules.items():
+            condition = rule_data.get("condition", "")
             
-        # Check if action breaks systems
-        if action_type == "break_system":
-            return True
-            
+            # Simple pattern matching for rule conditions
+            if action_type in condition:
+                # More sophisticated rule checking would go here
+                if "prohibited" in rule_data.get("effect", ""):
+                    return True
+                    
+        # Check against magic/physics systems
+        if "magic_system" in systems:
+            magic_rules = systems["magic_system"]
+            if action_type == "cast" and not self._has_required_resources(action_details, magic_rules):
+                return True
+                
         return False
+
 
     def _maintains_logical_consistency(
         self,
@@ -3182,3 +3434,14 @@ class NyxUnifiedGovernor:
             
         return True
     
+    def _has_required_resources(self, action_details: Dict[str, Any], 
+                               magic_rules: Dict[str, Any]) -> bool:
+        """Check if player has resources required for magic action."""
+        # This would check mana, components, etc.
+        required = action_details.get("requirements", {})
+        available = action_details.get("available_resources", {})
+        
+        for resource, amount in required.items():
+            if available.get(resource, 0) < amount:
+                return False
+        return True
