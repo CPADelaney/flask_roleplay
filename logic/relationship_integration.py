@@ -17,7 +17,7 @@ import asyncpg
 from db.connection import get_db_connection_context
 from logic.fully_integrated_npc_system import IntegratedNPCSystem
 from lore.core import canon
-from lore.lore_system import LoreSystem
+from lore.core.lore_system import LoreSystem
 
 logger = logging.getLogger(__name__)
 
