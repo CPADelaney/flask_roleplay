@@ -1154,43 +1154,376 @@ class FactionGenerator(BaseGenerator):
 
         return quests_data
     
-    # Database storage methods - these would need to be implemented based on your DB schema
+    # Database storage methods - implementing based on schema and patterns from other modules
     async def _store_faction(self, faction_data: Dict[str, Any]) -> int:
         """Store a faction in the database."""
-        # Implementation placeholder
-        return 0
+        try:
+            async with self.get_connection_pool() as pool:
+                async with pool.acquire() as conn:
+                    # Check if faction already exists
+                    existing = await conn.fetchval("""
+                        SELECT id FROM Factions 
+                        WHERE user_id = $1 AND conversation_id = $2 AND name = $3
+                    """, self.user_id, self.conversation_id, faction_data.get('name'))
+                    
+                    if existing:
+                        logger.info(f"Faction '{faction_data['name']}' already exists with id {existing}")
+                        return existing
+                    
+                    # Generate embedding for faction
+                    embedding_text = f"{faction_data['name']} {faction_data['description']}"
+                    embedding = await generate_embedding(embedding_text)
+                    
+                    # Insert faction
+                    faction_id = await conn.fetchval("""
+                        INSERT INTO Factions (
+                            user_id, conversation_id, name, type, description,
+                            values, goals, hierarchy, resources, territory,
+                            meeting_schedule, membership_requirements, 
+                            public_reputation, secret_activities, power_level,
+                            influence_scope, recruitment_methods, leadership_structure,
+                            founding_story, embedding, created_at
+                        ) VALUES (
+                            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
+                            $13, $14, $15, $16, $17, $18, $19, $20, NOW()
+                        ) RETURNING id
+                    """, 
+                        self.user_id, self.conversation_id,
+                        faction_data.get('name'),
+                        faction_data.get('type', 'organization'),
+                        faction_data.get('description'),
+                        faction_data.get('values', []),
+                        faction_data.get('goals', []),
+                        faction_data.get('hierarchy_type', 'formal'),
+                        faction_data.get('resources', []),
+                        faction_data.get('headquarters'),  # Using headquarters as territory
+                        faction_data.get('meeting_schedule'),
+                        faction_data.get('membership_requirements', []),
+                        faction_data.get('public_reputation', 'neutral'),
+                        faction_data.get('secret_activities', []),
+                        faction_data.get('power_level', 5),
+                        faction_data.get('influence_scope', 'local'),
+                        faction_data.get('recruitment_methods', []),
+                        json.dumps(faction_data.get('leadership_structure', {})),
+                        faction_data.get('founding_story', f"Founded as a {faction_data.get('type', 'organization')}."),
+                        embedding
+                    )
+                    
+                    # Handle allies and rivals relationships
+                    if faction_data.get('allies'):
+                        await conn.execute("""
+                            UPDATE Factions SET allies = $1 WHERE id = $2
+                        """, faction_data['allies'], faction_id)
+                    
+                    if faction_data.get('rivals'):
+                        await conn.execute("""
+                            UPDATE Factions SET rivals = $1 WHERE id = $2
+                        """, faction_data['rivals'], faction_id)
+                    
+                    logger.info(f"Stored faction '{faction_data['name']}' with id {faction_id}")
+                    return faction_id
+                    
+        except Exception as e:
+            logger.error(f"Error storing faction: {e}")
+            return 0
     
     async def _store_cultural_element(self, element_data: Dict[str, Any]) -> int:
         """Store a cultural element in the database."""
-        # Implementation placeholder
-        return 0
+        try:
+            async with self.get_connection_pool() as pool:
+                async with pool.acquire() as conn:
+                    # Generate embedding
+                    embedding_text = f"{element_data['name']} {element_data['description']}"
+                    embedding = await generate_embedding(embedding_text)
+                    
+                    # Insert cultural element
+                    element_id = await conn.fetchval("""
+                        INSERT INTO CulturalElements (
+                            user_id, conversation_id, name, element_type,
+                            description, practiced_by, significance,
+                            historical_origin, embedding
+                        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                        RETURNING id
+                    """,
+                        self.user_id, self.conversation_id,
+                        element_data.get('name'),
+                        element_data.get('type', 'tradition'),
+                        element_data.get('description'),
+                        element_data.get('practiced_by', []),
+                        element_data.get('significance', 5),
+                        element_data.get('historical_origin', ''),
+                        embedding
+                    )
+                    
+                    logger.info(f"Stored cultural element '{element_data['name']}' with id {element_id}")
+                    return element_id
+                    
+        except Exception as e:
+            logger.error(f"Error storing cultural element: {e}")
+            return 0
     
     async def _store_historical_event(self, event_data: Dict[str, Any]) -> int:
         """Store a historical event in the database."""
-        # Implementation placeholder
-        return 0
+        try:
+            async with self.get_connection_pool() as pool:
+                async with pool.acquire() as conn:
+                    # Generate embedding
+                    embedding_text = f"{event_data['name']} {event_data['description']}"
+                    embedding = await generate_embedding(embedding_text)
+                    
+                    # Extract participating factions
+                    participating_factions = event_data.get('participating_factions', [])
+                    
+                    # Insert historical event
+                    event_id = await conn.fetchval("""
+                        INSERT INTO HistoricalEvents (
+                            user_id, conversation_id, name, description,
+                            date_description, event_type, significance,
+                            involved_entities, location, consequences,
+                            cultural_impact, disputed_facts, commemorations,
+                            primary_sources, embedding
+                        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+                        RETURNING id
+                    """,
+                        self.user_id, self.conversation_id,
+                        event_data.get('name'),
+                        event_data.get('description'),
+                        event_data.get('date_description', 'Unknown date'),
+                        event_data.get('event_type', 'political'),
+                        event_data.get('significance', 5),
+                        participating_factions,  # involved_entities
+                        event_data.get('location'),
+                        event_data.get('consequences', []),
+                        event_data.get('cultural_impact', 'moderate'),
+                        event_data.get('disputed_facts', []),
+                        event_data.get('commemorations', []),
+                        event_data.get('primary_sources', []),
+                        embedding
+                    )
+                    
+                    logger.info(f"Stored historical event '{event_data['name']}' with id {event_id}")
+                    return event_id
+                    
+        except Exception as e:
+            logger.error(f"Error storing historical event: {e}")
+            return 0
     
     async def _store_location(self, location_data: Dict[str, Any]) -> int:
         """Store a location in the database."""
-        # Implementation placeholder
-        return 0
+        try:
+            async with self.get_connection_pool() as pool:
+                async with pool.acquire() as conn:
+                    # Generate embedding
+                    embedding_text = f"{location_data['name']} {location_data['description']}"
+                    embedding = await generate_embedding(embedding_text)
+                    
+                    # Insert location
+                    location_id = await conn.fetchval("""
+                        INSERT INTO Locations (
+                            user_id, conversation_id, location_name, description,
+                            location_type, parent_location, cultural_significance,
+                            economic_importance, strategic_value, population_density,
+                            notable_features, hidden_aspects, access_restrictions,
+                            local_customs, embedding
+                        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+                        RETURNING id
+                    """,
+                        self.user_id, self.conversation_id,
+                        location_data.get('name'),
+                        location_data.get('description'),
+                        location_data.get('type', 'settlement'),
+                        location_data.get('parent_location'),
+                        location_data.get('cultural_significance', 'moderate'),
+                        location_data.get('economic_importance', 'moderate'),
+                        location_data.get('strategic_importance', 5),  # mapped from strategic_importance
+                        location_data.get('population_density', 'moderate'),
+                        location_data.get('notable_features', []),
+                        location_data.get('hidden_secrets', []),  # mapped to hidden_aspects
+                        location_data.get('access_restrictions', []),
+                        location_data.get('local_customs', []),
+                        embedding
+                    )
+                    
+                    logger.info(f"Stored location '{location_data['name']}' with id {location_id}")
+                    return location_id
+                    
+        except Exception as e:
+            logger.error(f"Error storing location: {e}")
+            return 0
     
     async def _store_location_lore(self, location_id: int, founding_story: str,
                                   hidden_secrets: List[str], local_legends: List[str],
                                   historical_significance: str) -> int:
         """Store location lore in the database."""
-        # Implementation placeholder
-        return 0
+        try:
+            async with self.get_connection_pool() as pool:
+                async with pool.acquire() as conn:
+                    # Check if we have an existing LocationLore table or use LocalHistories
+                    table_exists = await conn.fetchval("""
+                        SELECT EXISTS (
+                            SELECT FROM information_schema.tables 
+                            WHERE table_name = 'locationlore'
+                        );
+                    """)
+                    
+                    if table_exists:
+                        # Use LocationLore table if it exists
+                        lore_id = await conn.fetchval("""
+                            INSERT INTO LocationLore (
+                                user_id, conversation_id, location_id,
+                                founding_story, hidden_secrets, local_legends,
+                                historical_significance
+                            ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+                            RETURNING id
+                        """,
+                            self.user_id, self.conversation_id, location_id,
+                            founding_story, hidden_secrets, local_legends,
+                            historical_significance
+                        )
+                    else:
+                        # Use LocalHistories table as fallback
+                        # Generate embedding for the history
+                        embedding_text = f"{founding_story} {historical_significance}"
+                        embedding = await generate_embedding(embedding_text)
+                        
+                        lore_id = await conn.fetchval("""
+                            INSERT INTO LocalHistories (
+                                user_id, conversation_id, location_id,
+                                event_name, description, date_description,
+                                significance, impact_type, connected_myths,
+                                related_landmarks, narrative_category, embedding
+                            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                            RETURNING id
+                        """,
+                            self.user_id, self.conversation_id, location_id,
+                            "Founding Story",
+                            founding_story,
+                            "At the founding",
+                            8,  # High significance for founding story
+                            "foundational",
+                            local_legends,
+                            [],  # related_landmarks
+                            "origin",
+                            embedding
+                        )
+                        
+                        # Store hidden secrets as separate entries if they exist
+                        for secret in hidden_secrets:
+                            if secret:
+                                secret_embedding = await generate_embedding(secret)
+                                await conn.execute("""
+                                    INSERT INTO LocalHistories (
+                                        user_id, conversation_id, location_id,
+                                        event_name, description, date_description,
+                                        significance, impact_type, narrative_category, embedding
+                                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                                """,
+                                    self.user_id, self.conversation_id, location_id,
+                                    "Hidden Secret",
+                                    secret,
+                                    "Unknown",
+                                    7,  # High significance for secrets
+                                    "secret",
+                                    "mystery",
+                                    secret_embedding
+                                )
+                    
+                    logger.info(f"Stored location lore for location {location_id}")
+                    return lore_id
+                    
+        except Exception as e:
+            logger.error(f"Error storing location lore: {e}")
+            return 0
     
     async def _connect_faction_to_location(self, location_id: int, faction_name: str) -> bool:
         """Connect a faction to a location in the database."""
-        # Implementation placeholder
-        return False
+        try:
+            async with self.get_connection_pool() as pool:
+                async with pool.acquire() as conn:
+                    # Find the faction by name
+                    faction_id = await conn.fetchval("""
+                        SELECT id FROM Factions 
+                        WHERE user_id = $1 AND conversation_id = $2 AND name = $3
+                    """, self.user_id, self.conversation_id, faction_name)
+                    
+                    if not faction_id:
+                        logger.warning(f"Faction '{faction_name}' not found")
+                        return False
+                    
+                    # Update the location's controlling faction
+                    # Note: The schema shows 'controlling_faction' as TEXT in Locations table
+                    await conn.execute("""
+                        UPDATE Locations 
+                        SET controlling_faction = $1
+                        WHERE id = $2 AND user_id = $3 AND conversation_id = $4
+                    """, faction_name, location_id, self.user_id, self.conversation_id)
+                    
+                    # Also update the faction's territory if needed
+                    # Get current territory
+                    current_territory = await conn.fetchval("""
+                        SELECT territory FROM Factions WHERE id = $1
+                    """, faction_id)
+                    
+                    # Get location name
+                    location_name = await conn.fetchval("""
+                        SELECT location_name FROM Locations WHERE id = $1
+                    """, location_id)
+                    
+                    if location_name:
+                        # Update faction territory to include this location
+                        new_territory = f"{current_territory}, {location_name}" if current_territory else location_name
+                        await conn.execute("""
+                            UPDATE Factions SET territory = $1 WHERE id = $2
+                        """, new_territory, faction_id)
+                    
+                    logger.info(f"Connected faction '{faction_name}' to location {location_id}")
+                    return True
+                    
+        except Exception as e:
+            logger.error(f"Error connecting faction to location: {e}")
+            return False
     
     async def _store_quest(self, quest_data: Dict[str, Any]) -> int:
         """Store a quest in the database."""
-        # Implementation placeholder
-        return 0
+        try:
+            async with self.get_connection_pool() as pool:
+                async with pool.acquire() as conn:
+                    # Generate embedding
+                    quest_description = quest_data.get('description', '')
+                    objectives_text = ' '.join(quest_data.get('objectives', []))
+                    embedding_text = f"{quest_data['quest_name']} {quest_description} {objectives_text}"
+                    embedding = await generate_embedding(embedding_text)
+                    
+                    # Insert quest
+                    quest_id = await conn.fetchval("""
+                        INSERT INTO Quests (
+                            user_id, conversation_id, quest_name,
+                            status, progress_detail, quest_giver,
+                            reward, embedding
+                        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                        RETURNING quest_id
+                    """,
+                        self.user_id, self.conversation_id,
+                        quest_data.get('quest_name'),
+                        'Available',  # Default status
+                        json.dumps({
+                            'description': quest_data.get('description', ''),
+                            'objectives': quest_data.get('objectives', []),
+                            'location': quest_data.get('location', ''),
+                            'difficulty': quest_data.get('difficulty', 5),
+                            'lore_significance': quest_data.get('lore_significance', '')
+                        }),
+                        quest_data.get('quest_giver'),
+                        quest_data.get('rewards', 'Unknown rewards'),
+                        embedding
+                    )
+                    
+                    logger.info(f"Stored quest '{quest_data['quest_name']}' with id {quest_id}")
+                    return quest_id
+                    
+        except Exception as e:
+            logger.error(f"Error storing quest: {e}")
+            return 0
 
 class LoreEvolution(BaseGenerator):
     """Handles lore evolution over time."""
