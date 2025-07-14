@@ -6,7 +6,7 @@ from logic.meltdown_logic import (
     record_meltdown_dialog,
     append_meltdown_file, glitchify_text
 )
-from lore.lore_system import LoreSystem
+from lore.core.lore_system import LoreSystem
 from lore.core import canon
 import json
 
