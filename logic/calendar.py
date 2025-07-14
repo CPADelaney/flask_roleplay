@@ -178,6 +178,9 @@ async def store_calendar_names(user_id: int, conversation_id: int, calendar_name
             ctx, conn, 
             'CalendarNames', value_json
         )
+    except Exception as e:
+        logging.error(f"Error storing calendar names: {e}")
+        raise  # Re-raise the exception after logging
 
 async def update_calendar_names(user_id, conversation_id, environment_desc) -> dict:
     """
