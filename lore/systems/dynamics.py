@@ -554,6 +554,9 @@ class LoreDynamicsSystem(BaseLoreManager):
             # Input guardrail for event validation
             input_guardrail = InputGuardrail(guardrail_function=self._validate_event_description)
             
+            # Get cached function tools
+            function_tools = self._create_function_tools()
+            
             # Evolving agent that orchestrates the steps
             evolution_agent = Agent(
                 name="LoreEvolutionAgent",
@@ -565,12 +568,7 @@ class LoreDynamicsSystem(BaseLoreManager):
                 model="gpt-4.1-nano",
                 model_settings=ModelSettings(temperature=0.9),
                 input_guardrails=[input_guardrail],
-                tools=[
-                    self._identify_affected_lore, 
-                    self._generate_lore_updates,
-                    self._apply_lore_updates,
-                    self._generate_consequential_lore
-                ]
+                tools=function_tools  # Use the cached function tools
             )
             
             run_config = RunConfig(
@@ -589,10 +587,10 @@ class LoreDynamicsSystem(BaseLoreManager):
             {event_description}
             
             Please:
-            1) Identify affected lore elements with _identify_affected_lore
-            2) Generate updates for each with _generate_lore_updates
-            3) Apply them via _apply_lore_updates
-            4) Generate potential new lore elements with _generate_consequential_lore
+            1) Identify affected lore elements with identify_affected_lore
+            2) Generate updates for each with generate_lore_updates
+            3) Apply them via apply_lore_updates
+            4) Generate potential new lore elements with generate_consequential_lore
             
             Finally, provide a summary of changes made and their significance.
             """
@@ -1041,53 +1039,64 @@ class LoreDynamicsSystem(BaseLoreManager):
                 except Exception as e:
                     logging.error(f"Error saving new {lore_type} '{name}': {e}")
 
-    @function_tool
-    async def _identify_affected_lore(self, input: IdentifyAffectedLoreInput) -> IdentifyAffectedLoreOutput:
-        """
-        Identify lore elements that might be impacted by an event.
-        Tool wrapper for agents.
-        """
-        affected_elements = await self._identify_affected_lore_impl(input.event_description)
-        # Convert to Pydantic models
-        elements = [AffectedLoreElement(**elem) for elem in affected_elements]
-        return IdentifyAffectedLoreOutput(affected_elements=elements)
-    
-    @function_tool
-    async def _generate_lore_updates(self, input: GenerateLoreUpdatesInput) -> GenerateLoreUpdatesOutput:
-        """
-        Generate updates for affected lore elements.
-        Tool wrapper for agents.
-        """
-        # Convert Pydantic models back to dicts for implementation
-        affected_elements = [elem.dict() for elem in input.affected_elements]
-        updates = await self._generate_lore_updates_impl(affected_elements, input.event_description)
-        # Convert to Pydantic models
-        update_models = [LoreUpdate(**update) for update in updates]
-        return GenerateLoreUpdatesOutput(updates=update_models)
-    
-    @function_tool
-    async def _apply_lore_updates(self, input: ApplyLoreUpdatesInput) -> ApplyLoreUpdatesOutput:
-        """
-        Apply lore updates to the database.
-        Tool wrapper for agents.
-        """
-        # Convert Pydantic models back to dicts for implementation
-        updates = [update.dict() for update in input.updates]
-        await self._apply_lore_updates_impl(updates)
-        return ApplyLoreUpdatesOutput(success=True, applied_count=len(updates))
-    
-    @function_tool
-    async def _generate_consequential_lore(self, input: GenerateConsequentialLoreInput) -> GenerateConsequentialLoreOutput:
-        """
-        Generate new lore elements as consequences of an event.
-        Tool wrapper for agents.
-        """
-        # Convert Pydantic models back to dicts for implementation
-        affected_elements = [elem.dict() for elem in input.affected_elements]
-        new_elements = await self._generate_consequential_lore_impl(input.event_description, affected_elements)
-        # Convert to Pydantic models
-        element_models = [LoreElement(**elem) for elem in new_elements]
-        return GenerateConsequentialLoreOutput(new_elements=element_models)
+    def _create_function_tools(self):
+        """Create function tools that can be used by agents. Cached to avoid recreation."""
+        # Cache the tools to avoid recreating them every time
+        if getattr(self, "_cached_tools", None):
+            return self._cached_tools
+        
+        @function_tool
+        async def identify_affected_lore(
+            input: IdentifyAffectedLoreInput,
+        ) -> IdentifyAffectedLoreOutput:
+            """Identify lore elements that might be impacted by an event."""
+            affected_elements = await self._identify_affected_lore_impl(input.event_description)
+            # Convert to Pydantic models
+            elements = [AffectedLoreElement(**elem) for elem in affected_elements]
+            return IdentifyAffectedLoreOutput(affected_elements=elements)
+        
+        @function_tool
+        async def generate_lore_updates(
+            input: GenerateLoreUpdatesInput,
+        ) -> GenerateLoreUpdatesOutput:
+            """Generate updates for affected lore elements."""
+            # Convert Pydantic models back to dicts for implementation
+            affected_elements = [elem.dict() for elem in input.affected_elements]
+            updates = await self._generate_lore_updates_impl(affected_elements, input.event_description)
+            # Convert to Pydantic models
+            update_models = [LoreUpdate(**update) for update in updates]
+            return GenerateLoreUpdatesOutput(updates=update_models)
+        
+        @function_tool
+        async def apply_lore_updates(
+            input: ApplyLoreUpdatesInput,
+        ) -> ApplyLoreUpdatesOutput:
+            """Apply lore updates to the database."""
+            # Convert Pydantic models back to dicts for implementation
+            updates = [update.dict() for update in input.updates]
+            await self._apply_lore_updates_impl(updates)
+            return ApplyLoreUpdatesOutput(success=True, applied_count=len(updates))
+        
+        @function_tool
+        async def generate_consequential_lore(
+            input: GenerateConsequentialLoreInput,
+        ) -> GenerateConsequentialLoreOutput:
+            """Generate new lore elements as consequences of an event."""
+            # Convert Pydantic models back to dicts for implementation
+            affected_elements = [elem.dict() for elem in input.affected_elements]
+            new_elements = await self._generate_consequential_lore_impl(input.event_description, affected_elements)
+            # Convert to Pydantic models
+            element_models = [LoreElement(**elem) for elem in new_elements]
+            return GenerateConsequentialLoreOutput(new_elements=element_models)
+        
+        # Cache the tools
+        self._cached_tools = [
+            identify_affected_lore,
+            generate_lore_updates,
+            apply_lore_updates,
+            generate_consequential_lore,
+        ]
+        return self._cached_tools
     
     #===========================================================================
     # AGENT-IFY OUR EVENT TYPE DECISION
