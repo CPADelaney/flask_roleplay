@@ -16,7 +16,7 @@ from db.connection import get_db_connection_context
 from memory.wrapper import MemorySystem
 from lore.core import canon
 from agents import RunContextWrapper
-from lore.lore_system import LoreSystem
+from lore.core.lore_system import LoreSystem
 
 logger = logging.getLogger(__name__)
 
