@@ -195,7 +195,9 @@ class NPCHandler:
             # Also store in unified_memories table for compatibility
             async with get_db_connection_context() as conn:
                 # Create context for canon
-                ctx = type('obj', (object,), {
+                from agents import RunContextWrapper
+                
+                ctx = RunContextWrapper(context={
                     'user_id': self.user_id,
                     'conversation_id': self.conversation_id,
                     'npc_id': npc_id
@@ -227,7 +229,9 @@ class NPCHandler:
             lore_system = await LoreSystem.get_instance(self.user_id, self.conversation_id)
             
             # Create context for governance
-            ctx = type('obj', (object,), {
+            from agents import RunContextWrapper
+            
+            ctx = RunContextWrapper(context={
                 'user_id': self.user_id,
                 'conversation_id': self.conversation_id,
                 'npc_id': npc_id
@@ -639,7 +643,9 @@ class NPCHandler:
             lore_system = await LoreSystem.get_instance(self.user_id, self.conversation_id)
             
             # Create context for governance
-            ctx = type('obj', (object,), {
+            from agents import RunContextWrapper
+            
+            ctx = RunContextWrapper(context={
                 'user_id': self.user_id,
                 'conversation_id': self.conversation_id
             })
