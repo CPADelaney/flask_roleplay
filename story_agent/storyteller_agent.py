@@ -349,10 +349,10 @@ class StorytellerAgent:
                 stage_info = change.value
                 if isinstance(stage_info, dict) and "name" in stage_info:
                     # Create a memory about the stage change
-                    ctx = type('obj', (object,), {'context': {
-                        'user_id': self.directive_handler.user_id, 
+                    ctx = RunContextWrapper(context={
+                        'user_id': self.directive_handler.user_id,
                         'conversation_id': self.directive_handler.conversation_id
-                    }})
+                    })
                     
                     await self.create_memory_for_nyx(
                         ctx,
@@ -422,10 +422,10 @@ class StorytellerAgent:
         
         # Create a memory for significant changes
         if significant_changes and npc_names:
-            ctx = type('obj', (object,), {'context': {
-                'user_id': self.directive_handler.user_id, 
+            ctx = RunContextWrapper(context={
+                'user_id': self.directive_handler.user_id,
                 'conversation_id': self.directive_handler.conversation_id
-            }})
+            })
             
             memory_content = f"NPC changes detected: {'; '.join(details)}"
             
@@ -458,8 +458,12 @@ class StorytellerAgent:
                 return {"result": "error", "reason": "No user input provided"}
             
             # Create context
-            ctx = type('obj', (object,), {'context': {'user_id': self.directive_handler.user_id, 'conversation_id': self.directive_handler.conversation_id, 'user_input': user_input}})
-            
+            ctx = RunContextWrapper(context={
+                'user_id': self.directive_handler.user_id,
+                'conversation_id': self.directive_handler.conversation_id,
+                'user_input': user_input
+            })
+                    
             # Get comprehensive context with vector search
             context_data = await self.get_comprehensive_context(ctx, user_input)
             
@@ -480,7 +484,10 @@ class StorytellerAgent:
             confirm_advance = params.get("confirm_advance", True)
             
             # Create context
-            ctx = type('obj', (object,), {'context': {'user_id': self.directive_handler.user_id, 'conversation_id': self.directive_handler.conversation_id}})
+            ctx = RunContextWrapper(context={
+                'user_id': self.directive_handler.user_id,
+                'conversation_id': self.directive_handler.conversation_id
+            })
             
             # Process time advancement
             time_result = await self.process_time_advancement(
@@ -542,7 +549,10 @@ class StorytellerAgent:
         
         if location:
             # Create context
-            ctx = type('obj', (object,), {'context': {'user_id': self.directive_handler.user_id, 'conversation_id': self.directive_handler.conversation_id}})
+            ctx = RunContextWrapper(context={
+                'user_id': self.directive_handler.user_id,
+                'conversation_id': self.directive_handler.conversation_id
+            })
             
             # Get NPCs for this location
             npcs = await self.get_nearby_npcs(ctx, location)
@@ -2072,7 +2082,12 @@ class StorytellerAgent:
             
             # 3. Process any pending directives
             tracker.start_phase("process_directives")
-            ctx = type('obj', (object,), {'context': {'user_id': user_id, 'conversation_id': conversation_id, 'user_input': user_input}})
+            ctx = RunContextWrapper(context={
+                'user_id': self.directive_handler.user_id,
+                'conversation_id': self.directive_handler.conversation_id,
+                'user_input': user_input
+            })
+            
             await self.process_governance_directive(ctx)
             tracker.end_phase()
             
@@ -2288,7 +2303,10 @@ class StorytellerAgent:
             
             # Create memory for error
             try:
-                ctx = type('obj', (object,), {'context': {'user_id': user_id, 'conversation_id': conversation_id}})
+                ctx = RunContextWrapper(context={
+                    'user_id': user_id,
+                    'conversation_id': conversation_id
+                })
                 await self.create_memory_for_nyx(
                     ctx,
                     f"Error processing story beat: {str(e)}",
