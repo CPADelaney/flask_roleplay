@@ -487,7 +487,8 @@ def create_memory_agent(user_id: int, conversation_id: int):
         input_guardrails=[
             InputGuardrail(guardrail_function=validate_entity_input)
         ],
-        model_settings=ModelSettings(temperature=0.3)
+        model_settings=ModelSettings(temperature=0.3),
+        model="gpt-4.1-nano"
     )
     
     memory_agent = MemoryAgentWrapper(base_agent, memory_context)
