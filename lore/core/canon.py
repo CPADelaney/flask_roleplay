@@ -2807,22 +2807,8 @@ async def create_game_setting(ctx, conn, setting_name: str, **kwargs) -> None:
     """
     Create or update the game setting canonically.
     """
-    # Handle different context types to extract user_id and conversation_id
-    if hasattr(ctx, 'context') and isinstance(ctx.context, dict):
-        # RunContextWrapper style
-        user_id = ctx.context.get('user_id')
-        conversation_id = ctx.context.get('conversation_id')
-    elif hasattr(ctx, 'user_id') and hasattr(ctx, 'conversation_id'):
-        # Direct attribute style (CanonicalContext)
-        user_id = ctx.user_id
-        conversation_id = ctx.conversation_id
-    else:
-        # Try to get from ctx as dict
-        user_id = ctx.get('user_id') if hasattr(ctx, 'get') else None
-        conversation_id = ctx.get('conversation_id') if hasattr(ctx, 'get') else None
-    
-    if not user_id or not conversation_id:
-        raise ValueError(f"Missing user_id or conversation_id in context: {type(ctx)}")
+    # Ensure we have a proper context - this is what's missing!
+    ctx = ensure_canonical_context(ctx)
     
     # Store environment description
     env_desc = kwargs.get('environment_desc', '')
@@ -2847,7 +2833,7 @@ async def create_game_setting(ctx, conn, setting_name: str, **kwargs) -> None:
             UPDATE conversations
             SET conversation_name = $1
             WHERE id = $2 AND user_id = $3
-        """, kwargs['scenario_name'], conversation_id, user_id)  # Fixed parameter order
+        """, kwargs['scenario_name'], ctx.conversation_id, ctx.user_id)
     
     await log_canonical_event(
         ctx, conn,
@@ -2855,6 +2841,7 @@ async def create_game_setting(ctx, conn, setting_name: str, **kwargs) -> None:
         tags=['setting', 'world_creation', 'canon'],
         significance=9
     )
+    
 async def store_player_schedule(ctx, conn, player_name: str, schedule: Dict[str, Any]) -> None:
     """
     Store a player's schedule canonically.
