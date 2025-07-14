@@ -20,7 +20,7 @@ from memory.wrapper import MemorySystem
 from .lore_context_manager import LoreContextManager
 from db.connection import get_db_connection_context  # Updated import
 from lore.core import canon
-from lore.lore_system import LoreSystem
+from lore.core.lore_system import LoreSystem
 from agents import RunContextWrapper
 
 logger = logging.getLogger(__name__)
