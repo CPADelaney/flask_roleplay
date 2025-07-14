@@ -64,14 +64,10 @@ from .nyx_task_integration import NyxTaskIntegration
 from memory.memory_integration import MemoryIntegration
 from .scene_manager_sdk import SceneContext
 from .user_model_sdk import UserModelContext, UserModelManager
+
 from lore.core.lore_system import LoreSystem
 
 logger = logging.getLogger(__name__)
-
-# Initialize components
-lore_system = LoreSystem()
-lore_validator = ValidationManager()
-error_handler = ErrorHandler()
 
 _GOVERNANCE_CACHE: Dict[Tuple[int, int], NyxUnifiedGovernor] = {}
 _GOVERNANCE_INIT_LOCKS: Dict[Tuple[int, int], asyncio.Lock] = {}
