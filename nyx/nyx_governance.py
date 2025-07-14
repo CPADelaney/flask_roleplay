@@ -22,7 +22,8 @@ import pkgutil
 import re
 from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional, Tuple, Union, Callable, Set, TYPE_CHECKING
-from utils.caching import CacheManager, CACHE_TTL
+from utils.caching import CACHE_TTL
+from utils.cache_manager import CacheManager
 from nyx.llm_integration import generate_text_completion
 
 import asyncpg
