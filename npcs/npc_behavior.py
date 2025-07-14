@@ -346,7 +346,7 @@ class BehaviorEvolution:
         """
         try:
             # Get LoreSystem instance
-            from lore.lore_system import LoreSystem
+            from lore.core.lore_system import LoreSystem
             lore_system = await LoreSystem.get_instance(self.user_id, self.conversation_id)
             
             # Create context for governance
