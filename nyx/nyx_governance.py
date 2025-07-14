@@ -22,6 +22,8 @@ import pkgutil
 import re
 from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional, Tuple, Union, Callable, Set, TYPE_CHECKING
+from utils.caching import CacheManager, CACHE_TTL
+from nyx.llm_integration import generate_text_completion
 
 import asyncpg
 
@@ -49,6 +51,12 @@ from nyx.llm_integration import generate_text_completion, generate_reflection
 from utils.caching import CACHE_TTL, NPC_DIRECTIVE_CACHE, AGENT_DIRECTIVE_CACHE
 
 logger = logging.getLogger(__name__)
+
+_directive_cache_manager = CacheManager(
+    name="agent_directives",
+    max_size=1000,
+    ttl=CACHE_TTL.DIRECTIVES
+)
 
 class DirectiveType:
     """Constants for directive types."""
@@ -894,69 +902,40 @@ class NyxUnifiedGovernor:
         return criteria
 
     async def get_agent_directives(self, agent_type: str, agent_id: Union[int, str]) -> List[Dict[str, Any]]:
-        """
-        Get directives for a specific agent.
-        
-        Args:
-            agent_type: Type of agent
-            agent_id: ID of agent
-            
-        Returns:
-            List of active directives for the agent
-        """
+        """Get directives for a specific agent with proper caching."""
         # Get the cache key for this agent
         cache_key = f"agent_directives:{agent_type}:{agent_id}"
         
-        # Define the function to fetch directives if not in cache
-        async def fetch_agent_directives():
-            active_directives = []
-            now = datetime.now()
-            
-            # Filter directives for this agent type and ID
-            for directive_id, directive in self.directives.items():
-                if (directive.get("agent_type") == agent_type and 
-                    str(directive.get("agent_id")) == str(agent_id) and
-                    directive.get("status") == "active"):
-                    
-                    # Check if still active (not expired)
-                    if "expires_at" in directive:
-                        expires_at = datetime.fromisoformat(directive["expires_at"])
-                        if expires_at <= now:
-                            continue  # Skip expired directives
-                    
-                    active_directives.append(directive)
-            
-            # Sort by priority (highest first)
-            active_directives.sort(key=lambda d: d.get("priority", 0), reverse=True)
-            return active_directives
-    
-        # Try to get from cache first, fall back to fetching
-        if AGENT_DIRECTIVE_CACHE is not None:
-            try:
-                # Don't use keyword arguments with dict.get
-                ttl_value = getattr(CACHE_TTL, 'DIRECTIVES', 300)
-                
-                # Use a cache method that supports TTL properly
-                if hasattr(AGENT_DIRECTIVE_CACHE, 'get_with_ttl'):
-                    directives = await AGENT_DIRECTIVE_CACHE.get_with_ttl(
-                        cache_key, 
-                        fetch_agent_directives,
-                        ttl_value
-                    )
-                # Or implement a fallback approach
-                elif cache_key in AGENT_DIRECTIVE_CACHE:
-                    directives = AGENT_DIRECTIVE_CACHE[cache_key]
-                else:
-                    directives = await fetch_agent_directives()
-                    AGENT_DIRECTIVE_CACHE[cache_key] = directives
-                    # Set expiration separately if needed
-                
-                return directives
-            except Exception as e:
-                logger.error(f"Error fetching agent directives from cache: {e}")
+        # Try to get from cache first
+        cached_directives = await _directive_cache_manager.get(cache_key)
+        if cached_directives is not None:
+            return cached_directives
         
-        # Direct fetch if cache fails or isn't available
-        return await fetch_agent_directives()
+        # Fetch directives if not in cache
+        active_directives = []
+        now = datetime.now()
+        
+        # Filter directives for this agent type and ID
+        for directive_id, directive in self.directives.items():
+            if (directive.get("agent_type") == agent_type and 
+                str(directive.get("agent_id")) == str(agent_id) and
+                directive.get("status") == "active"):
+                
+                # Check if still active (not expired)
+                if "expires_at" in directive:
+                    expires_at = datetime.fromisoformat(directive["expires_at"])
+                    if expires_at <= now:
+                        continue  # Skip expired directives
+                
+                active_directives.append(directive)
+        
+        # Sort by priority (highest first)
+        active_directives.sort(key=lambda d: d.get("priority", 0), reverse=True)
+        
+        # Cache the result
+        await _directive_cache_manager.set(cache_key, active_directives, ttl=CACHE_TTL.DIRECTIVES)
+        
+        return active_directives
     
     async def _execute_coordination_plan(
         self,
@@ -1147,7 +1126,7 @@ class NyxUnifiedGovernor:
                 plans.append(plan)
         
         # Merge plans intelligently
-        merged_plan = await self._merge_plans_intelligently(plans, context)
+        merged_plan = await self._merge_plans(plans, context)
         
         return {
             "status": "completed",
@@ -1155,61 +1134,156 @@ class NyxUnifiedGovernor:
             "plan_count": len(plans)
         }
     
-    async def _merge_plans_intelligently(self, plans: List[Dict[str, Any]], context: Dict[str, Any]) -> Dict[str, Any]:
-        """Intelligently merge multiple plans."""
+    async def _merge_plans(self, plans: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Merge multiple plans with intelligent conflict resolution."""
         merged = {
             "tasks": [],
             "dependencies": [],
             "timeline": [],
             "resources": {},
             "conflicts": [],
-            "priority_score": 0.0
+            "resolution_strategy": "collaborative",
+            "estimated_duration": 0
         }
         
-        # Track task IDs to avoid duplicates
-        task_ids = set()
-        dependency_ids = set()
+        # Track unique identifiers
+        task_registry = {}  # task_id -> task
+        dependency_registry = {}  # (from, to) -> dependency
         
+        # First pass: collect all unique tasks
         for plan in plans:
-            # Merge tasks with deduplication
             for task in plan.get("tasks", []):
-                task_id = task.get("id", f"{task.get('type', 'unknown')}_{len(task_ids)}")
-                if task_id not in task_ids:
-                    task_ids.add(task_id)
-                    task["id"] = task_id
-                    merged["tasks"].append(task)
-            
-            # Merge dependencies with conflict detection
-            for dep in plan.get("dependencies", []):
-                dep_id = f"{dep.get('from', 'unknown')}_{dep.get('to', 'unknown')}"
-                if dep_id not in dependency_ids:
-                    dependency_ids.add(dep_id)
-                    merged["dependencies"].append(dep)
-                else:
-                    # Track conflicting dependencies
+                task_id = task.get("id", f"{task.get('type', 'unknown')}_{len(task_registry)}")
+                
+                if task_id in task_registry:
+                    # Task conflict - merge or choose better version
+                    existing = task_registry[task_id]
+                    
+                    # Merge agents lists
+                    existing_agents = set(existing.get("agents", []))
+                    new_agents = set(task.get("agents", []))
+                    existing["agents"] = list(existing_agents.union(new_agents))
+                    
+                    # Take higher priority
+                    existing["priority"] = max(
+                        existing.get("priority", 0),
+                        task.get("priority", 0)
+                    )
+                    
+                    # Record conflict
                     merged["conflicts"].append({
-                        "type": "dependency_conflict",
-                        "detail": dep
+                        "type": "task_merge",
+                        "task_id": task_id,
+                        "resolution": "merged_agents_and_priority"
                     })
+                else:
+                    task["id"] = task_id
+                    task_registry[task_id] = task
+        
+        # Second pass: resolve dependencies
+        for plan in plans:
+            for dep in plan.get("dependencies", []):
+                dep_key = (dep.get("from"), dep.get("to"))
+                
+                if dep_key in dependency_registry:
+                    # Dependency conflict
+                    existing = dependency_registry[dep_key]
+                    
+                    # Check for circular dependencies
+                    reverse_key = (dep_key[1], dep_key[0])
+                    if reverse_key in dependency_registry:
+                        merged["conflicts"].append({
+                            "type": "circular_dependency",
+                            "tasks": [dep_key[0], dep_key[1]],
+                            "resolution": "removed_reverse"
+                        })
+                        # Remove the reverse dependency
+                        del dependency_registry[reverse_key]
+                else:
+                    dependency_registry[dep_key] = dep
+        
+        # Build final lists
+        merged["tasks"] = list(task_registry.values())
+        merged["dependencies"] = list(dependency_registry.values())
+        
+        # Sort tasks by priority and dependencies
+        merged["tasks"] = self._topological_sort_tasks(
+            merged["tasks"],
+            merged["dependencies"]
+        )
+        
+        # Merge timelines and calculate duration
+        all_events = []
+        for plan in plans:
+            all_events.extend(plan.get("timeline", []))
+        
+        if all_events:
+            all_events.sort(key=lambda x: x.get("timestamp", 0))
+            merged["timeline"] = all_events
             
-            # Merge timeline events
-            merged["timeline"].extend(plan.get("timeline", []))
-            
-            # Aggregate resources
+            # Estimate duration
+            if len(all_events) >= 2:
+                start = all_events[0].get("timestamp", 0)
+                end = all_events[-1].get("timestamp", 0)
+                merged["estimated_duration"] = end - start
+        
+        # Aggregate resources with conflict detection
+        for plan in plans:
             for resource, amount in plan.get("resources", {}).items():
                 if resource not in merged["resources"]:
                     merged["resources"][resource] = 0
-                merged["resources"][resource] += amount
+                
+                # Check for resource conflicts
+                new_total = merged["resources"][resource] + amount
+                limit = self._get_resource_limit(resource)
+                
+                if new_total > limit:
+                    merged["conflicts"].append({
+                        "type": "resource_overflow",
+                        "resource": resource,
+                        "requested": new_total,
+                        "limit": limit,
+                        "resolution": "capped_at_limit"
+                    })
+                    merged["resources"][resource] = limit
+                else:
+                    merged["resources"][resource] = new_total
         
-        # Sort timeline by timestamp
-        merged["timeline"].sort(key=lambda x: x.get("timestamp", 0))
-        
-        # Calculate priority score based on conflicts and resource usage
-        conflict_penalty = len(merged["conflicts"]) * 0.1
-        resource_efficiency = 1.0 / (1.0 + sum(merged["resources"].values()) / 100)
-        merged["priority_score"] = max(0, 1.0 - conflict_penalty) * resource_efficiency
+        # Determine resolution strategy based on conflicts
+        if len(merged["conflicts"]) > 5:
+            merged["resolution_strategy"] = "sequential"  # Too many conflicts, run sequentially
+        elif any(c["type"] == "circular_dependency" for c in merged["conflicts"]):
+            merged["resolution_strategy"] = "reordered"  # Had to reorder tasks
         
         return merged
+    
+    def _topological_sort_tasks(self, tasks: List[Dict], dependencies: List[Dict]) -> List[Dict]:
+        """Sort tasks based on dependencies."""
+        # Build adjacency list
+        graph = {task["id"]: [] for task in tasks}
+        in_degree = {task["id"]: 0 for task in tasks}
+        
+        for dep in dependencies:
+            if dep["from"] in graph and dep["to"] in graph:
+                graph[dep["from"]].append(dep["to"])
+                in_degree[dep["to"]] += 1
+        
+        # Kahn's algorithm
+        queue = [task_id for task_id, degree in in_degree.items() if degree == 0]
+        sorted_ids = []
+        
+        while queue:
+            current = queue.pop(0)
+            sorted_ids.append(current)
+            
+            for neighbor in graph[current]:
+                in_degree[neighbor] -= 1
+                if in_degree[neighbor] == 0:
+                    queue.append(neighbor)
+        
+        # Map back to tasks
+        task_map = {task["id"]: task for task in tasks}
+        return [task_map[task_id] for task_id in sorted_ids if task_id in task_map]
     
     async def _execute_execution_task(
         self,
@@ -1368,36 +1442,86 @@ class NyxUnifiedGovernor:
         output: Dict[str, Any],
         agents: List[Any]
     ) -> Dict[str, Any]:
-        """Calculate metrics for a single task."""
+        """Calculate metrics for a single task with actual measurements."""
+        import time
+        
         metrics = {
             "coordination_score": 0.0,
             "learning_score": 0.0,
             "resource_usage": {},
-            "start_time": time.time(),
-            "end_time": time.time()
+            "start_time": task.get("start_time", time.time()),
+            "end_time": time.time(),
+            "duration": 0.0,
+            "agent_count": len(agents),
+            "success_rate": 0.0
         }
+        
+        # Calculate actual duration
+        metrics["duration"] = metrics["end_time"] - metrics["start_time"]
         
         # Calculate coordination score based on agent interaction
         if len(agents) > 1:
-            interaction_count = sum(
-                1 for result in output.get("results", [])
-                if result.get("interaction_count", 0) > 0
-            )
-            metrics["coordination_score"] = interaction_count / len(agents)
+            # Check for actual coordination indicators in output
+            coordination_indicators = 0
+            
+            # Look for cross-agent references
+            for result in output.get("results", []):
+                if isinstance(result, dict):
+                    # Check if result references other agents
+                    result_str = str(result).lower()
+                    for agent in agents:
+                        agent_name = agent.__class__.__name__.lower()
+                        if agent_name in result_str:
+                            coordination_indicators += 1
+                    
+                    # Check for explicit coordination fields
+                    if result.get("coordinated_with"):
+                        coordination_indicators += len(result["coordinated_with"])
+                    if result.get("shared_data"):
+                        coordination_indicators += 1
+            
+            metrics["coordination_score"] = min(1.0, coordination_indicators / (len(agents) * 2))
         
         # Calculate learning score based on adaptations
-        adaptation_count = sum(
-            1 for result in output.get("results", [])
-            if result.get("adapted", False)
-        )
-        metrics["learning_score"] = adaptation_count / len(agents)
+        adaptation_count = 0
+        successful_adaptations = 0
         
-        # Calculate resource usage
         for result in output.get("results", []):
-            for resource, amount in result.get("resource_usage", {}).items():
-                if resource not in metrics["resource_usage"]:
-                    metrics["resource_usage"][resource] = 0
-                metrics["resource_usage"][resource] += amount
+            if isinstance(result, dict):
+                if result.get("adapted", False):
+                    adaptation_count += 1
+                    if result.get("adaptation_successful", True):
+                        successful_adaptations += 1
+                
+                # Check for learning indicators
+                if result.get("patterns_learned"):
+                    adaptation_count += len(result["patterns_learned"])
+                    successful_adaptations += len(result["patterns_learned"])
+        
+        if adaptation_count > 0:
+            metrics["learning_score"] = successful_adaptations / adaptation_count
+        
+        # Calculate resource usage from actual measurements
+        for result in output.get("results", []):
+            if isinstance(result, dict) and "resource_usage" in result:
+                for resource, amount in result["resource_usage"].items():
+                    if resource not in metrics["resource_usage"]:
+                        metrics["resource_usage"][resource] = 0
+                    metrics["resource_usage"][resource] += amount
+        
+        # Add computed resource usage
+        metrics["resource_usage"]["time"] = metrics["duration"]
+        metrics["resource_usage"]["agents"] = len(agents)
+        
+        # Calculate success rate
+        successful_results = sum(
+            1 for r in output.get("results", [])
+            if isinstance(r, dict) and r.get("success", False)
+        )
+        total_results = len(output.get("results", []))
+        
+        if total_results > 0:
+            metrics["success_rate"] = successful_results / total_results
         
         return metrics
     
@@ -3234,35 +3358,59 @@ class NyxUnifiedGovernor:
         current_state: Dict[str, Any],
         context: Dict[str, Any]
     ) -> str:
-        """Generate detailed reasoning for disagreement."""
-        reasoning_parts = []
+        """Generate detailed reasoning for disagreement using LLM."""
+        # Build a detailed prompt for the LLM
+        concern_descriptions = {
+            "narrative_impact": "The action would disrupt narrative flow and pacing",
+            "character_consistency": "The action doesn't align with character motivations",
+            "world_integrity": "The action violates world rules and consistency",
+            "player_experience": "The action would negatively impact player experience"
+        }
         
-        for concern in concerns:
-            if concern == "narrative_impact":
-                reasoning_parts.append(
-                    "This action would significantly disrupt the current narrative flow and pacing."
-                )
-            elif concern == "character_consistency":
-                reasoning_parts.append(
-                    "This action doesn't align with the established character motivations and development."
-                )
-            elif concern == "world_integrity":
-                reasoning_parts.append(
-                    "This action would violate established world rules and logical consistency."
-                )
-            elif concern == "player_experience":
-                reasoning_parts.append(
-                    "This action would negatively impact the overall player experience and immersion."
-                )
+        # Create context for the LLM
+        prompt = f"""
+        As Nyx, the governance system, explain why you disagree with a player's action.
         
-        # Add narrative context if available
-        narrative_context = current_state.get("narrative_context", {})
-        if narrative_context:
-            reasoning_parts.append(
-                f"Current narrative context: {narrative_context.get('description', '')}"
+        Primary concerns:
+        {', '.join([concern_descriptions.get(c, c) for c in concerns])}
+        
+        Current narrative context:
+        - Arc: {current_state.get('narrative_context', {}).get('current_arc', 'Unknown')}
+        - Active quests: {', '.join([q['name'] for q in current_state.get('narrative_context', {}).get('plot_points', [])])}
+        - Player location: {current_state.get('game_state', {}).get('current_location', 'Unknown')}
+        
+        Character state:
+        - Stats: {current_state.get('character_state', {}).get('corruption', 'Unknown')} corruption
+        - Key relationships: {len(current_state.get('character_state', {}).get('relationships', {}))} active
+        
+        Provide a concise but authoritative explanation (2-3 sentences) that:
+        1. Clearly states the main issue
+        2. References specific game context
+        3. Maintains Nyx's dominant personality
+        """
+        
+        try:
+            reasoning = await generate_text_completion(
+                system_prompt="You are Nyx, an authoritative governance system maintaining narrative coherence.",
+                user_prompt=prompt,
+                temperature=0.7,
+                max_tokens=200,
+                task_type="decision"
             )
-        
-        return " ".join(reasoning_parts)
+            return reasoning.strip()
+        except Exception as e:
+            logger.error(f"Error generating reasoning with LLM: {e}")
+            # Fallback to improved static reasoning
+            reasoning_parts = []
+            for concern in concerns[:2]:  # Focus on top 2 concerns
+                reasoning_parts.append(concern_descriptions.get(concern, f"Issue with {concern}"))
+            
+            # Add context
+            arc = current_state.get('narrative_context', {}).get('current_arc')
+            if arc:
+                reasoning_parts.append(f"This conflicts with the current {arc} narrative arc.")
+            
+            return " ".join(reasoning_parts)
 
     async def _generate_alternative_suggestion(
         self,
@@ -3270,35 +3418,63 @@ class NyxUnifiedGovernor:
         current_state: Dict[str, Any],
         context: Dict[str, Any]
     ) -> Optional[Dict[str, Any]]:
-        """Generate an alternative suggestion that addresses concerns."""
-        # Get current narrative elements
-        narrative_context = current_state.get("narrative_context", {})
-        character_state = current_state.get("character_state", {})
-        world_state = current_state.get("world_state", {})
-        
-        # Generate alternative based on primary concern
+        """Generate an alternative suggestion using LLM for better context awareness."""
         primary_concern = concerns[0] if concerns else None
         
-        if primary_concern == "narrative_impact":
-            return await self._suggest_narrative_alternative(
-                current_state,
-                context
+        # Build context for alternative generation
+        prompt = f"""
+        As Nyx, suggest an alternative action for the player that addresses these concerns:
+        {', '.join(concerns)}
+        
+        Current game state:
+        - Location: {current_state.get('game_state', {}).get('current_location', 'Unknown')}
+        - Active quests: {[q['quest_name'] for q in current_state.get('game_state', {}).get('active_quests', [])]}
+        - Nearby NPCs: {[n['npc_name'] for n in current_state.get('game_state', {}).get('current_npcs', [])][:3]}
+        
+        Generate 3 specific, actionable alternatives that:
+        1. Respect the current narrative
+        2. Offer meaningful player agency
+        3. Are contextually appropriate
+        
+        Format as a JSON object with 'specific_options' array.
+        """
+        
+        try:
+            response = await generate_text_completion(
+                system_prompt="You are Nyx, suggesting alternatives that enhance the game experience.",
+                user_prompt=prompt,
+                temperature=0.8,
+                max_tokens=300,
+                task_type="decision"
             )
+            
+            # Try to parse as JSON
+            import json
+            try:
+                suggestions = json.loads(response)
+                if "specific_options" in suggestions:
+                    return {
+                        "type": f"{primary_concern}_alternative",
+                        "suggestion": f"Consider actions that respect {primary_concern.replace('_', ' ')}",
+                        "specific_options": suggestions["specific_options"][:3],
+                        "reasoning": "These alternatives maintain game coherence while preserving player agency"
+                    }
+            except json.JSONDecodeError:
+                pass
+        except Exception as e:
+            logger.error(f"Error generating alternatives with LLM: {e}")
+        
+        # Fallback to improved context-aware suggestions
+        if primary_concern == "narrative_impact":
+            return await self._suggest_narrative_alternative(current_state, context)
         elif primary_concern == "character_consistency":
             return await self._suggest_character_alternative(
-                character_state,
-                context
-            )
+                current_state.get("character_state", {}), context)
         elif primary_concern == "world_integrity":
             return await self._suggest_world_alternative(
-                world_state,
-                context
-            )
+                current_state.get("world_state", {}), context)
         elif primary_concern == "player_experience":
-            return await self._suggest_experience_alternative(
-                current_state,
-                context
-            )
+            return await self._suggest_experience_alternative(current_state, context)
         
         return None
 
