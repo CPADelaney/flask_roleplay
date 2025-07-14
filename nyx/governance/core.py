@@ -726,7 +726,7 @@ class NyxUnifiedGovernor(
     
         # Initialize other systems
         from memory.memory_nyx_integration import get_memory_nyx_bridge
-        self.memory_system = await get_memory_nyx_bridge(self.user_id, self.conversation_id)
+        self.memory_system = await get_memory_nyx_bridge(self.user_id, self.conversation_id, governor=self)
         
         # Initialize memory integration
         from memory.memory_integration import MemoryIntegration
