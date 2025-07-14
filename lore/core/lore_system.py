@@ -99,7 +99,7 @@ class LoreSystem:
                         # Step 3a: Handle conflict by generating a new narrative event
                         dynamics = await self.registry.get_lore_dynamics()
                         conflict_description = f"A conflict arose: {reason}. Details: {', '.join(conflicts)}"
-                        await dynamics.evolve_lore_with_event(ctx, conflict_description)
+                        await dynamics.evolve_lore_with_event.fn(ctx, conflict_description)
                         return {"status": "conflict_generated", "details": conflicts}
     
                     # Step 3b: No conflict, commit the change
@@ -150,7 +150,7 @@ class LoreSystem:
             # Only propagate if the event is significant enough
             if event_description:
                 dynamics = await self.registry.get_lore_dynamics()
-                await dynamics.evolve_lore_with_event(ctx, event_description)
+                await dynamics.evolve_lore_with_event.fn(ctx, event_description)
             
             return {"status": "committed", "entity_type": entity_type, "identifier": entity_identifier, "changes": updates}
     
