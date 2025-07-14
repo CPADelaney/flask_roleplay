@@ -555,7 +555,7 @@ class NPCLearningAdaptation:
             
             # Use LoreSystem to update the intensity value
             result = await self._lore_system.propose_and_enact_change(
-                ctx=type('obj', (object,), {
+                ctx=RunContextWrapper(context={
                     'user_id': self.user_id,
                     'conversation_id': self.conversation_id,
                     'npc_id': self.npc_id
@@ -601,7 +601,7 @@ class NPCLearningAdaptation:
             
             # Use LoreSystem to update the stat value
             result = await self._lore_system.propose_and_enact_change(
-                ctx=type('obj', (object,), {
+                ctx=RunContextWrapper(context={
                     'user_id': self.user_id,
                     'conversation_id': self.conversation_id,
                     'npc_id': self.npc_id
