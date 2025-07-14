@@ -496,11 +496,11 @@ Your response MUST be valid JSON with exactly this structure:
             openai_client = get_openai_client()
             
             # Call the OpenAI API asynchronously using the new Responses API
-            response = openai_client.chat.responses.create(
-                model="gpt-4.1-nano", 
-                messages=messages,
+            resp = client.responses.create(
+                model="gpt-4.1-nano",
+                input=prompt,
                 temperature=0.7,
-                response_format={"type": "json_object"}
+                text={"format": {"type": "json_object"}},
             )
 
             memory_output = response.choices[0].message.content.strip()
