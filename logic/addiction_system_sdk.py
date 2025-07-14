@@ -40,7 +40,7 @@ from db.connection import get_db_connection_context
 
 # Import canon and lore system for canonical writes
 from lore.core import canon
-from lore.lore_system import LoreSystem
+from lore.core.lore_system import LoreSystem
 
 # Nyx governance integration
 # Moved imports to function level to avoid circular imports
