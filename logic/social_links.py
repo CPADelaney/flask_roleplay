@@ -25,7 +25,7 @@ import asyncpg
 
 # Import canon and LoreSystem
 from lore.core import canon
-from lore.lore_system import LoreSystem
+from lore.core.lore_system import LoreSystem
 
 # ~~~~~~~~~ Agents SDK imports ~~~~~~~~~
 from agents import (
