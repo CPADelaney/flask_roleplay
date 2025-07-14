@@ -1350,30 +1350,41 @@ class NyxUnifiedGovernor:
         
         return amount * multipliers[unit]
 
-
-    def _extract_goals_from_memories(self, memories):
-        """Extract goals from memory objects"""
+    async def _extract_goals_from_memories(self, memories: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Extract goals from memory objects using proper memory structure."""
         goals = []
+        
         for memory in memories:
-            # Look for goal info in memory text or metadata
-            if "goal" in memory.get("text", "").lower():
-                # Parse goal information from memory
-                # This is a placeholder implementation - enhance based on your memory format
-                goals.append({
-                    "id": memory.get("id"),
-                    "description": memory.get("text"),
-                    "status": "active"
-                })
-            
-            # Check metadata for goal information
+            memory_text = memory.get("memory_text", "").lower()
+            memory_type = memory.get("memory_type", "")
             metadata = memory.get("metadata", {})
-            if metadata.get("type") == "goal":
-                goals.append({
-                    "id": memory.get("id"),
-                    "description": memory.get("text"),
-                    "status": metadata.get("status", "active")
-                })
-                
+            
+            # Check if memory contains goal information
+            goal_keywords = ["goal", "objective", "mission", "quest", "task", "achieve", "complete"]
+            
+            if any(keyword in memory_text for keyword in goal_keywords) or memory_type == "goal":
+                # Extract goal details from metadata if available
+                if metadata.get("goal_data"):
+                    goals.append({
+                        "id": memory.get("id"),
+                        "description": metadata["goal_data"].get("description", memory_text),
+                        "status": metadata["goal_data"].get("status", "active"),
+                        "priority": metadata["goal_data"].get("priority", 5),
+                        "deadline": metadata["goal_data"].get("deadline"),
+                        "progress": metadata["goal_data"].get("progress", 0)
+                    })
+                else:
+                    # Parse goal from text
+                    goals.append({
+                        "id": memory.get("id"),
+                        "description": memory_text,
+                        "status": "active",
+                        "priority": 5,
+                        "progress": 0
+                    })
+        
+        # Sort by priority
+        goals.sort(key=lambda g: g.get("priority", 5), reverse=True)
         return goals
 
     async def orchestrate_narrative_shift(self, reason: str, shift_type: str = "local", shift_details: Optional[Dict[str, Any]] = None):
@@ -1693,15 +1704,13 @@ class NyxUnifiedGovernor:
         except Exception as e:
             logger.error(f"Error adding personality trait: {e}")
             return [new_trait]
+                
     async def _get_faction_id_by_name(self, faction_name: str) -> Optional[int]:
         """
-        Retrieve a faction ID by name.
-        Note: Your schema doesn't have a dedicated Factions table, 
-        so this assumes you'll add one or use an existing pattern.
+        Retrieve a faction ID by name from the Factions table.
         """
         try:
             async with get_db_connection_context() as conn:
-                # If you have a Factions table (not in current schema)
                 result = await conn.fetchval("""
                     SELECT id FROM Factions 
                     WHERE name = $1 AND user_id = $2 AND conversation_id = $3
@@ -1712,11 +1721,11 @@ class NyxUnifiedGovernor:
             return None
     
     async def _get_nation_id_by_name(self, nation_name: str) -> Optional[int]:
-        """Retrieve a nation ID by name."""
+        """Retrieve a nation ID by name from the Nations table."""
         try:
             async with get_db_connection_context() as conn:
                 result = await conn.fetchval("""
-                    SELECT id FROM nations 
+                    SELECT id FROM Nations 
                     WHERE LOWER(name) = LOWER($1)
                 """, nation_name)
                 return result
@@ -1725,7 +1734,7 @@ class NyxUnifiedGovernor:
             return None
     
     async def _get_npc_id_by_name(self, npc_name: str) -> Optional[int]:
-        """Retrieve an NPC ID by name."""
+        """Retrieve an NPC ID by name from NPCStats."""
         try:
             async with get_db_connection_context() as conn:
                 result = await conn.fetchval("""
@@ -1736,6 +1745,7 @@ class NyxUnifiedGovernor:
         except Exception as e:
             logger.error(f"Error retrieving NPC ID for '{npc_name}': {e}")
             return None
+
 
     
     async def create_local_group(self, group_data: Dict[str, Any], reason: str) -> Dict[str, Any]:
@@ -3167,101 +3177,409 @@ class NyxUnifiedGovernor:
             "reasoning": "Player agency and engagement are paramount"
         }
 
-    def _would_disrupt_plot(self, action_type: str, action_details: Dict[str, Any], 
-                           narrative_context: Dict[str, Any]) -> bool:
-        """Check if an action would disrupt the current plot."""
-        current_arc = narrative_context.get("current_arc", {})
-        plot_points = narrative_context.get("plot_points", [])
-        
-        # Check for actual plot disruption patterns
-        disruption_indicators = [
-            # Killing key NPCs
-            action_type == "kill" and action_details.get("target") in narrative_context.get("key_npcs", []),
-            # Destroying important locations
-            action_type == "destroy" and action_details.get("target") in narrative_context.get("key_locations", []),
-            # Revealing secrets prematurely
-            action_type == "reveal" and action_details.get("secret_id") in narrative_context.get("pending_reveals", []),
-            # Skipping required progression
-            action_type == "travel" and action_details.get("destination") in narrative_context.get("locked_areas", []),
-            # Breaking quest chains
-            action_type == "abandon" and action_details.get("quest_id") in [p.get("id") for p in plot_points]
-        ]
-        
-        return any(disruption_indicators)
+    async def _would_disrupt_plot(self, action_type: str, action_details: Dict[str, Any], 
+                                 narrative_context: Dict[str, Any]) -> bool:
+        """Check if an action would disrupt the current plot using actual game data."""
+        try:
+            async with get_db_connection_context() as conn:
+                # Check if action affects active quests
+                if action_type in ['abandon_quest', 'fail_quest']:
+                    quest_name = action_details.get('quest_name', '')
+                    active_quest = await conn.fetchval("""
+                        SELECT quest_id FROM Quests
+                        WHERE user_id = $1 AND conversation_id = $2 
+                        AND quest_name = $3 AND status = 'In Progress'
+                    """, self.user_id, self.conversation_id, quest_name)
+                    if active_quest:
+                        return True
+                
+                # Check if killing a quest-critical NPC
+                if action_type == 'kill_npc':
+                    target_npc = action_details.get('target', '')
+                    # Check if NPC is a quest giver for active quests
+                    is_quest_giver = await conn.fetchval("""
+                        SELECT COUNT(*) FROM Quests
+                        WHERE user_id = $1 AND conversation_id = $2
+                        AND quest_giver = $3 AND status = 'In Progress'
+                    """, self.user_id, self.conversation_id, target_npc)
+                    if is_quest_giver > 0:
+                        return True
+                    
+                    # Check if NPC is involved in active conflicts
+                    is_conflict_stakeholder = await conn.fetchval("""
+                        SELECT COUNT(*) FROM ConflictStakeholders cs
+                        JOIN Conflicts c ON cs.conflict_id = c.conflict_id
+                        JOIN NPCStats n ON cs.npc_id = n.npc_id
+                        WHERE c.user_id = $1 AND c.conversation_id = $2
+                        AND n.npc_name = $3 AND c.is_active = TRUE
+                    """, self.user_id, self.conversation_id, target_npc)
+                    if is_conflict_stakeholder > 0:
+                        return True
+                
+                # Check if destroying a location that's narratively important
+                if action_type == 'destroy_location':
+                    location_name = action_details.get('target', '')
+                    # Check if location has high cultural significance
+                    significance = await conn.fetchval("""
+                        SELECT cultural_significance FROM Locations
+                        WHERE user_id = $1 AND conversation_id = $2
+                        AND location_name = $3
+                    """, self.user_id, self.conversation_id, location_name)
+                    if significance in ['high', 'critical', 'sacred']:
+                        return True
+                    
+                    # Check if location is tied to active events
+                    has_events = await conn.fetchval("""
+                        SELECT COUNT(*) FROM Events
+                        WHERE user_id = $1 AND conversation_id = $2
+                        AND location = $3 AND end_time > CURRENT_TIMESTAMP
+                    """, self.user_id, self.conversation_id, location_name)
+                    if has_events > 0:
+                        return True
+                
+                # Check if action would skip locked content
+                if action_type == 'travel':
+                    destination = action_details.get('destination', '')
+                    # Check access restrictions
+                    restrictions = await conn.fetchval("""
+                        SELECT access_restrictions FROM Locations
+                        WHERE user_id = $1 AND conversation_id = $2
+                        AND location_name = $3
+                    """, self.user_id, self.conversation_id, destination)
+                    if restrictions and len(restrictions) > 0:
+                        # Check if player meets requirements
+                        # This would need more complex logic based on your access system
+                        return True
+                        
+            return False
+        except Exception as e:
+            logger.error(f"Error checking plot disruption: {e}")
+            return False
 
 
-    def _would_affect_pacing(
-        self,
-        action_type: str,
-        action_details: Dict[str, Any],
-        narrative_context: Dict[str, Any]
-    ) -> bool:
+    async def _would_affect_pacing(self, action_type: str, action_details: Dict[str, Any],
+                                  narrative_context: Dict[str, Any]) -> bool:
         """Check if an action would negatively affect story pacing."""
-        # Get current pacing information
-        current_pacing = narrative_context.get("pacing", {})
-        tension_level = current_pacing.get("tension_level", 0.5)
-        
-        # Check if action would break tension
-        if action_type == "break_tension":
-            return True
+        try:
+            async with get_db_connection_context() as conn:
+                # Get current narrative stage
+                current_stage = await conn.fetchval("""
+                    SELECT value FROM CurrentRoleplay
+                    WHERE user_id = $1 AND conversation_id = $2 AND key = 'NarrativeStage'
+                """, self.user_id, self.conversation_id)
+                
+                # Check recent major events
+                recent_events = await conn.fetch("""
+                    SELECT ce.event_text, ce.significance, ce.timestamp
+                    FROM CanonicalEvents ce
+                    WHERE ce.user_id = $1 AND ce.conversation_id = $2
+                    AND ce.timestamp > CURRENT_TIMESTAMP - INTERVAL '1 hour'
+                    AND ce.significance >= 7
+                    ORDER BY ce.timestamp DESC
+                    LIMIT 5
+                """, self.user_id, self.conversation_id)
+                
+                # If many high-significance events recently, another major action might rush pacing
+                if len(recent_events) >= 3 and action_details.get('significance', 5) >= 7:
+                    return True
+                
+                # Check if action type matches narrative stage expectations
+                stage_pacing_map = {
+                    'introduction': ['explore', 'talk', 'observe'],
+                    'rising_action': ['quest', 'conflict', 'relationship'],
+                    'climax': ['confront', 'resolve', 'decide'],
+                    'falling_action': ['aftermath', 'reconcile', 'rebuild'],
+                    'resolution': ['reflect', 'celebrate', 'depart']
+                }
+                
+                expected_actions = stage_pacing_map.get(current_stage, [])
+                if action_type not in expected_actions and current_stage in stage_pacing_map:
+                    # Action doesn't match narrative stage
+                    return True
+                    
+            return False
+        except Exception as e:
+            logger.error(f"Error checking pacing impact: {e}")
+            return False
+
+python# Updated methods for NyxUnifiedGovernor class
+
+async def _get_faction_id_by_name(self, faction_name: str) -> Optional[int]:
+    """
+    Retrieve a faction ID by name from the Factions table.
+    """
+    try:
+        async with get_db_connection_context() as conn:
+            result = await conn.fetchval("""
+                SELECT id FROM Factions 
+                WHERE name = $1 AND user_id = $2 AND conversation_id = $3
+            """, faction_name, self.user_id, self.conversation_id)
+            return result
+    except Exception as e:
+        logger.error(f"Error retrieving faction ID for '{faction_name}': {e}")
+        return None
+
+async def _get_nation_id_by_name(self, nation_name: str) -> Optional[int]:
+    """Retrieve a nation ID by name from the Nations table."""
+    try:
+        async with get_db_connection_context() as conn:
+            result = await conn.fetchval("""
+                SELECT id FROM Nations 
+                WHERE LOWER(name) = LOWER($1)
+            """, nation_name)
+            return result
+    except Exception as e:
+        logger.error(f"Error retrieving nation ID for '{nation_name}': {e}")
+        return None
+
+async def _get_npc_id_by_name(self, npc_name: str) -> Optional[int]:
+    """Retrieve an NPC ID by name from NPCStats."""
+    try:
+        async with get_db_connection_context() as conn:
+            result = await conn.fetchval("""
+                SELECT npc_id FROM NPCStats 
+                WHERE npc_name = $1 AND user_id = $2 AND conversation_id = $3
+            """, npc_name, self.user_id, self.conversation_id)
+            return result
+    except Exception as e:
+        logger.error(f"Error retrieving NPC ID for '{npc_name}': {e}")
+        return None
+
+async def _would_disrupt_plot(self, action_type: str, action_details: Dict[str, Any], 
+                             narrative_context: Dict[str, Any]) -> bool:
+    """Check if an action would disrupt the current plot using actual game data."""
+    try:
+        async with get_db_connection_context() as conn:
+            # Check if action affects active quests
+            if action_type in ['abandon_quest', 'fail_quest']:
+                quest_name = action_details.get('quest_name', '')
+                active_quest = await conn.fetchval("""
+                    SELECT quest_id FROM Quests
+                    WHERE user_id = $1 AND conversation_id = $2 
+                    AND quest_name = $3 AND status = 'In Progress'
+                """, self.user_id, self.conversation_id, quest_name)
+                if active_quest:
+                    return True
             
-        # Check if action would rush or slow pacing
-        if action_type == "affect_pacing":
-            return True
+            # Check if killing a quest-critical NPC
+            if action_type == 'kill_npc':
+                target_npc = action_details.get('target', '')
+                # Check if NPC is a quest giver for active quests
+                is_quest_giver = await conn.fetchval("""
+                    SELECT COUNT(*) FROM Quests
+                    WHERE user_id = $1 AND conversation_id = $2
+                    AND quest_giver = $3 AND status = 'In Progress'
+                """, self.user_id, self.conversation_id, target_npc)
+                if is_quest_giver > 0:
+                    return True
+                
+                # Check if NPC is involved in active conflicts
+                is_conflict_stakeholder = await conn.fetchval("""
+                    SELECT COUNT(*) FROM ConflictStakeholders cs
+                    JOIN Conflicts c ON cs.conflict_id = c.conflict_id
+                    JOIN NPCStats n ON cs.npc_id = n.npc_id
+                    WHERE c.user_id = $1 AND c.conversation_id = $2
+                    AND n.npc_name = $3 AND c.is_active = TRUE
+                """, self.user_id, self.conversation_id, target_npc)
+                if is_conflict_stakeholder > 0:
+                    return True
             
+            # Check if destroying a location that's narratively important
+            if action_type == 'destroy_location':
+                location_name = action_details.get('target', '')
+                # Check if location has high cultural significance
+                significance = await conn.fetchval("""
+                    SELECT cultural_significance FROM Locations
+                    WHERE user_id = $1 AND conversation_id = $2
+                    AND location_name = $3
+                """, self.user_id, self.conversation_id, location_name)
+                if significance in ['high', 'critical', 'sacred']:
+                    return True
+                
+                # Check if location is tied to active events
+                has_events = await conn.fetchval("""
+                    SELECT COUNT(*) FROM Events
+                    WHERE user_id = $1 AND conversation_id = $2
+                    AND location = $3 AND end_time > CURRENT_TIMESTAMP
+                """, self.user_id, self.conversation_id, location_name)
+                if has_events > 0:
+                    return True
+            
+            # Check if action would skip locked content
+            if action_type == 'travel':
+                destination = action_details.get('destination', '')
+                # Check access restrictions
+                restrictions = await conn.fetchval("""
+                    SELECT access_restrictions FROM Locations
+                    WHERE user_id = $1 AND conversation_id = $2
+                    AND location_name = $3
+                """, self.user_id, self.conversation_id, destination)
+                if restrictions and len(restrictions) > 0:
+                    # Check if player meets requirements
+                    # This would need more complex logic based on your access system
+                    return True
+                    
+        return False
+    except Exception as e:
+        logger.error(f"Error checking plot disruption: {e}")
         return False
 
-    def _maintains_thematic_consistency(
-        self,
-        action_type: str,
-        action_details: Dict[str, Any],
-        narrative_context: Dict[str, Any]
-    ) -> bool:
-        """Check if an action maintains thematic consistency."""
-        # Get current themes and motifs
-        themes = narrative_context.get("themes", [])
-        motifs = narrative_context.get("motifs", [])
-        
-        # Check if action aligns with themes
-        if action_type == "contradict_theme":
-            return False
+async def _would_affect_pacing(self, action_type: str, action_details: Dict[str, Any],
+                              narrative_context: Dict[str, Any]) -> bool:
+    """Check if an action would negatively affect story pacing."""
+    try:
+        async with get_db_connection_context() as conn:
+            # Get current narrative stage
+            current_stage = await conn.fetchval("""
+                SELECT value FROM CurrentRoleplay
+                WHERE user_id = $1 AND conversation_id = $2 AND key = 'NarrativeStage'
+            """, self.user_id, self.conversation_id)
             
-        # Check if action maintains motif consistency
-        if action_type == "break_motif":
-            return False
+            # Check recent major events
+            recent_events = await conn.fetch("""
+                SELECT ce.event_text, ce.significance, ce.timestamp
+                FROM CanonicalEvents ce
+                WHERE ce.user_id = $1 AND ce.conversation_id = $2
+                AND ce.timestamp > CURRENT_TIMESTAMP - INTERVAL '1 hour'
+                AND ce.significance >= 7
+                ORDER BY ce.timestamp DESC
+                LIMIT 5
+            """, self.user_id, self.conversation_id)
             
-        return True
-
-    def _aligns_with_motivation(self, action_type: str, action_details: Dict[str, Any], 
-                               character_state: Dict[str, Any]) -> bool:
-        """Check if an action aligns with character motivations."""
-        motivations = character_state.get("motivations", [])
-        goals = character_state.get("goals", [])
-        personality = character_state.get("personality_traits", [])
-        
-        # Analyze action against character profile
-        if action_type == "betray" and "loyal" in personality:
-            return False
-        if action_type == "steal" and "honest" in personality:
-            return False
-        if action_type == "help" and "selfish" in personality:
-            return False
+            # If many high-significance events recently, another major action might rush pacing
+            if len(recent_events) >= 3 and action_details.get('significance', 5) >= 7:
+                return True
             
-        # Check if action advances any goals
-        action_target = action_details.get("target", "")
-        action_objective = action_details.get("objective", "")
-        
-        for goal in goals:
-            if action_target in goal or action_objective in goal:
+            # Check if action type matches narrative stage expectations
+            stage_pacing_map = {
+                'introduction': ['explore', 'talk', 'observe'],
+                'rising_action': ['quest', 'conflict', 'relationship'],
+                'climax': ['confront', 'resolve', 'decide'],
+                'falling_action': ['aftermath', 'reconcile', 'rebuild'],
+                'resolution': ['reflect', 'celebrate', 'depart']
+            }
+            
+            expected_actions = stage_pacing_map.get(current_stage, [])
+            if action_type not in expected_actions and current_stage in stage_pacing_map:
+                # Action doesn't match narrative stage
                 return True
                 
-        # Default to checking if it's not explicitly against motivations
-        for motivation in motivations:
-            if action_type in ["abandon", "betray", "destroy"] and motivation in action_details.get("affects", []):
-                return False
-                
-        return True
+        return False
+    except Exception as e:
+        logger.error(f"Error checking pacing impact: {e}")
+        return False
 
+    async def _maintains_thematic_consistency(self, action_type: str, action_details: Dict[str, Any],
+                                             narrative_context: Dict[str, Any]) -> bool:
+        """Check if an action maintains thematic consistency with the setting and story."""
+        try:
+            async with get_db_connection_context() as conn:
+                # Get current setting
+                setting_name = await conn.fetchval("""
+                    SELECT value FROM CurrentRoleplay
+                    WHERE user_id = $1 AND conversation_id = $2 AND key = 'CurrentSetting'
+                """, self.user_id, self.conversation_id)
+                
+                if setting_name:
+                    # Get setting rules and themes
+                    setting_data = await conn.fetchrow("""
+                        SELECT mood_tone, enhanced_features
+                        FROM Settings
+                        WHERE name = $1
+                    """, setting_name)
+                    
+                    if setting_data:
+                        mood_tone = setting_data['mood_tone']
+                        features = json.loads(setting_data['enhanced_features']) if setting_data['enhanced_features'] else {}
+                        
+                        # Check if action conflicts with setting tone
+                        tone_conflicts = {
+                            'lighthearted': ['murder', 'torture', 'betray_deeply'],
+                            'serious': ['joke_inappropriately', 'break_fourth_wall'],
+                            'romantic': ['violence', 'cruelty', 'destroy_relationship'],
+                            'dark': ['pure_comedy', 'lighthearted_romance']
+                        }
+                        
+                        conflicting_actions = tone_conflicts.get(mood_tone, [])
+                        if action_type in conflicting_actions:
+                            return False
+                
+                # Check if action maintains world's matriarchal themes
+                if 'matriarchal' in narrative_context.get('themes', []):
+                    if action_type in ['undermine_female_authority', 'patriarchal_revolution']:
+                        return False
+                        
+            return True
+        except Exception as e:
+            logger.error(f"Error checking thematic consistency: {e}")
+            return True  # Default to maintaining consistency
+
+    async def _aligns_with_motivation(self, action_type: str, action_details: Dict[str, Any], 
+                                     character_state: Dict[str, Any]) -> bool:
+        """Check if an action aligns with character motivations using actual character data."""
+        try:
+            async with get_db_connection_context() as conn:
+                # Get player's current stats and state
+                player_stats = await conn.fetchrow("""
+                    SELECT * FROM PlayerStats
+                    WHERE user_id = $1 AND conversation_id = $2 AND player_name = 'Chase'
+                    ORDER BY timestamp DESC
+                    LIMIT 1
+                """, self.user_id, self.conversation_id)
+                
+                if not player_stats:
+                    return True  # No data, allow action
+                
+                # Get player's relationships
+                relationships = await conn.fetch("""
+                    SELECT sl.*, ns.npc_name
+                    FROM SocialLinks sl
+                    JOIN NPCStats ns ON sl.entity2_id = ns.npc_id
+                    WHERE sl.user_id = $1 AND sl.conversation_id = $2
+                    AND sl.entity1_type = 'player' AND sl.entity2_type = 'npc'
+                """, self.user_id, self.conversation_id)
+                
+                # Build relationship map
+                rel_map = {r['npc_name']: r for r in relationships}
+                
+                # Check action against character state
+                if action_type == 'betray':
+                    target = action_details.get('target', '')
+                    if target in rel_map:
+                        # High trust/closeness makes betrayal unlikely
+                        rel = rel_map[target]
+                        if rel['link_level'] > 75:  # Strong positive relationship
+                            return False
+                            
+                elif action_type == 'steal':
+                    # Check if aligns with corruption level
+                    if player_stats['corruption'] < 30:  # Low corruption
+                        return False
+                        
+                elif action_type == 'help_selflessly':
+                    # Check if aligns with personality
+                    if player_stats['corruption'] > 70:  # High corruption
+                        return False
+                
+                # Check against active addictions
+                if action_type == 'resist_temptation':
+                    target_npc = action_details.get('source', '')
+                    addiction = await conn.fetchrow("""
+                        SELECT level FROM PlayerAddictions
+                        WHERE user_id = $1 AND conversation_id = $2
+                        AND player_name = 'Chase' AND target_npc_id = (
+                            SELECT npc_id FROM NPCStats 
+                            WHERE npc_name = $3 AND user_id = $1 AND conversation_id = $2
+                        )
+                    """, self.user_id, self.conversation_id, target_npc)
+                    
+                    if addiction and addiction['level'] > 3:  # High addiction
+                        return False
+                        
+            return True
+        except Exception as e:
+            logger.error(f"Error checking motivation alignment: {e}")
+            return True
 
     def _disrupts_development(
         self,
@@ -3304,29 +3622,77 @@ class NyxUnifiedGovernor:
             
         return True
 
-    def _violates_world_rules(self, action_type: str, action_details: Dict[str, Any], 
-                             world_state: Dict[str, Any]) -> bool:
-        """Check if an action violates established world rules."""
-        rules = world_state.get("rules", {})
-        systems = world_state.get("systems", {})
-        
-        # Check against game rules
-        for rule_name, rule_data in rules.items():
-            condition = rule_data.get("condition", "")
-            
-            # Simple pattern matching for rule conditions
-            if action_type in condition:
-                # More sophisticated rule checking would go here
-                if "prohibited" in rule_data.get("effect", ""):
-                    return True
-                    
-        # Check against magic/physics systems
-        if "magic_system" in systems:
-            magic_rules = systems["magic_system"]
-            if action_type == "cast" and not self._has_required_resources(action_details, magic_rules):
-                return True
+    async def _violates_world_rules(self, action_type: str, action_details: Dict[str, Any], 
+                                   world_state: Dict[str, Any]) -> bool:
+        """Check if an action violates established world rules using GameRules table."""
+        try:
+            async with get_db_connection_context() as conn:
+                # Get all active game rules
+                rules = await conn.fetch("""
+                    SELECT rule_name, condition, effect
+                    FROM GameRules
+                """)
                 
-        return False
+                for rule in rules:
+                    condition = rule['condition'].lower()
+                    effect = rule['effect'].lower()
+                    
+                    # Parse conditions and check against action
+                    # This is a simplified version - you might want more complex parsing
+                    if action_type.lower() in condition:
+                        if 'prohibited' in effect or 'forbidden' in effect or 'cannot' in effect:
+                            return True
+                            
+                    # Check stat-based rules
+                    if 'stat:' in condition:
+                        # Extract stat requirements
+                        import re
+                        stat_match = re.search(r'stat:(\w+)\s*([<>=]+)\s*(\d+)', condition)
+                        if stat_match:
+                            stat_name = stat_match.group(1)
+                            operator = stat_match.group(2)
+                            value = int(stat_match.group(3))
+                            
+                            # Get player's current stat
+                            player_stat = await conn.fetchval(f"""
+                                SELECT {stat_name} FROM PlayerStats
+                                WHERE user_id = $1 AND conversation_id = $2 
+                                AND player_name = 'Chase'
+                                ORDER BY timestamp DESC
+                                LIMIT 1
+                            """, self.user_id, self.conversation_id)
+                            
+                            if player_stat is not None:
+                                if operator == '<' and player_stat < value:
+                                    if action_type in effect:
+                                        return True
+                                elif operator == '>' and player_stat > value:
+                                    if action_type in effect:
+                                        return True
+                                        
+                # Check location-based restrictions
+                if 'location' in action_details:
+                    location = action_details['location']
+                    location_data = await conn.fetchrow("""
+                        SELECT access_restrictions, local_customs
+                        FROM Locations
+                        WHERE user_id = $1 AND conversation_id = $2
+                        AND location_name = $3
+                    """, self.user_id, self.conversation_id, location)
+                    
+                    if location_data:
+                        restrictions = location_data['access_restrictions'] or []
+                        customs = location_data['local_customs'] or []
+                        
+                        # Check if action violates local customs
+                        for custom in customs:
+                            if action_type in custom.lower():
+                                return True
+                                
+            return False
+        except Exception as e:
+            logger.error(f"Error checking world rule violations: {e}")
+            return False
 
 
     def _maintains_logical_consistency(
@@ -3434,14 +3800,58 @@ class NyxUnifiedGovernor:
             
         return True
     
-    def _has_required_resources(self, action_details: Dict[str, Any], 
-                               magic_rules: Dict[str, Any]) -> bool:
-        """Check if player has resources required for magic action."""
-        # This would check mana, components, etc.
-        required = action_details.get("requirements", {})
-        available = action_details.get("available_resources", {})
-        
-        for resource, amount in required.items():
-            if available.get(resource, 0) < amount:
-                return False
-        return True
+    async def _has_required_resources(self, action_details: Dict[str, Any], 
+                                     requirements: Dict[str, Any]) -> bool:
+        """Check if player has resources required for an action."""
+        try:
+            async with get_db_connection_context() as conn:
+                # Get player's current resources
+                resources = await conn.fetchrow("""
+                    SELECT money, supplies, influence
+                    FROM PlayerResources
+                    WHERE user_id = $1 AND conversation_id = $2 
+                    AND player_name = 'Chase'
+                """, self.user_id, self.conversation_id)
+                
+                if not resources:
+                    return False
+                    
+                # Check each requirement
+                required = action_details.get('requirements', {})
+                
+                if 'money' in required and resources['money'] < required['money']:
+                    return False
+                if 'supplies' in required and resources['supplies'] < required['supplies']:
+                    return False  
+                if 'influence' in required and resources['influence'] < required['influence']:
+                    return False
+                    
+                # Check inventory requirements
+                if 'items' in required:
+                    for item_name in required['items']:
+                        has_item = await conn.fetchval("""
+                            SELECT COUNT(*) FROM PlayerInventory
+                            WHERE user_id = $1 AND conversation_id = $2
+                            AND player_name = 'Chase' AND item_name = $3
+                            AND quantity > 0
+                        """, self.user_id, self.conversation_id, item_name)
+                        
+                        if not has_item:
+                            return False
+                            
+                # Check perk requirements
+                if 'perks' in required:
+                    for perk_name in required['perks']:
+                        has_perk = await conn.fetchval("""
+                            SELECT COUNT(*) FROM PlayerPerks
+                            WHERE user_id = $1 AND conversation_id = $2
+                            AND perk_name = $3
+                        """, self.user_id, self.conversation_id, perk_name)
+                        
+                        if not has_perk:
+                            return False
+                            
+            return True
+        except Exception as e:
+            logger.error(f"Error checking resource requirements: {e}")
+            return True  # Default to allowing if check fails
