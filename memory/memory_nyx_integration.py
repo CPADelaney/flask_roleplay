@@ -45,19 +45,19 @@ class MemoryNyxBridge:
     3. Memory operations are tracked and reported to Nyx
     4. NPC agents can access memory functionality through Nyx
     """
-    
-    def __init__(self, user_id: int, conversation_id: int):
+    def __init__(
+        self,
+        user_id: int,
+        conversation_id: int,
+        governor: "NyxUnifiedGovernor | None" = None,
+    ):
         """
-        Initialize the bridge between memory agent and Nyx.
-        
-        Args:
-            user_id: User ID
-            conversation_id: Conversation ID
+        Bridge between the memory subsystem and Nyx governance.
         """
         self.user_id = user_id
         self.conversation_id = conversation_id
-        from nyx.nyx_governance import NyxUnifiedGovernor
-        self.governor = NyxUnifiedGovernor(user_id, conversation_id)
+        # just store whatever we were given – don’t create a fallback yet
+        self.governor = governor
         self.memory_context = MemorySystemContext(user_id, conversation_id)
         self.memory_agent = None
         self.memory_system = None
@@ -87,48 +87,79 @@ class MemoryNyxBridge:
         self.state_tracker["operation_count"] += 1
         self.state_tracker.update(details)
 
-    async def initialize(self):
-        """Initialize the bridge with proper error handling."""
+    async def initialize(self) -> "MemoryNyxBridge":
+        """
+        Bring the bridge online.
+    
+        Steps
+        -----
+        1.  Ensure we have a governor (lazy-loaded to avoid circular-import races).
+        2.  Create & wrap the low-level memory agent.
+        3.  Hydrate the shared MemorySystem and wire it into the context.
+        4.  Register the bridge with Nyx governance (once only).
+        5.  Issue the standing memory-management directive.
+        """
+        if getattr(self, "_initialized", False):
+            # Already done – make the method idempotent.
+            return self
+    
         try:
-            # Create the base memory agent using the OpenAI Agents SDK
+            # ------------------------------------------------------------ #
+            # 1. Governor – fetch or confirm                               #
+            # ------------------------------------------------------------ #
+            if self.governor is None:
+                from nyx.integrate import get_central_governance  # lazy import
+                self.governor = await get_central_governance(self.user_id,
+                                                             self.conversation_id)
+    
+            # ------------------------------------------------------------ #
+            # 2. Build the underlying memory agent                         #
+            # ------------------------------------------------------------ #
             base_agent = create_memory_agent(self.user_id, self.conversation_id)
-            
-            # Wrap it with our compatibility layer
             self.memory_agent = MemoryAgentWrapper(base_agent, self.memory_context)
-            
-            # Initialize memory system
+    
+            # ------------------------------------------------------------ #
+            # 3. MemorySystem hookup                                       #
+            # ------------------------------------------------------------ #
             self.memory_system = await MemorySystem.get_instance(
                 self.user_id, self.conversation_id
             )
             self.memory_context.memory_system = self.memory_system
-            
-            # Register the memory agent with Nyx's governance
-            await self.governor.register_agent(
-                agent_type=AgentType.MEMORY_MANAGER,
-                agent_instance=self.memory_agent,
-                agent_id="memory_manager"
-            )
-            
-            # Issue a general directive for memory management
-            await self.governor.issue_directive(
-                agent_type=AgentType.MEMORY_MANAGER,
-                agent_id="memory_manager",
-                directive_type=DirectiveType.ACTION,
-                directive_data={
-                    "instruction": "Maintain entity memories and ensure proper consolidation.",
-                    "scope": "global"
-                },
-                priority=DirectivePriority.MEDIUM,
-                duration_minutes=24*60  # 24 hours
-            )
-            
+    
+            # ------------------------------------------------------------ #
+            # 4. Governance registration                                   #
+            # ------------------------------------------------------------ #
+            if self.governor is not None:
+                await self.governor.register_agent(
+                    agent_type=AgentType.MEMORY_MANAGER,
+                    agent_id=f"memory_manager:{self.conversation_id}",  # unique ID
+                    agent_instance=self.memory_agent,
+                )
+    
+                # Standing directive (24 h rolling)
+                await self.governor.issue_directive(
+                    agent_type=AgentType.MEMORY_MANAGER,
+                    agent_id=f"memory_manager:{self.conversation_id}",
+                    directive_type=DirectiveType.ACTION,
+                    directive_data={
+                        "instruction": "Maintain entity memories and ensure proper consolidation.",
+                        "scope": "global",
+                    },
+                    priority=DirectivePriority.MEDIUM,
+                    duration_minutes=24 * 60,
+                )
+    
+            # ------------------------------------------------------------ #
+            # 5. Done                                                      #
+            # ------------------------------------------------------------ #
             self._track_state_change("initialization", {"status": "success"})
-            logger.info("Memory agent registered with Nyx governance system")
+            logger.info("MemoryNyxBridge initialized and registered with governance")
+            self._initialized = True
             return self
-            
+    
         except Exception as e:
             self._track_error("initialization", str(e))
-            logger.error(f"Failed to initialize MemoryNyxBridge: {str(e)}")
+            logger.error(f"Failed to initialize MemoryNyxBridge: {e}")
             raise
 
     # In the _process_significant_memory method
@@ -806,7 +837,7 @@ class MemoryNyxBridge:
         }
 
 # Helper function to get the memory-nyx bridge
-async def get_memory_nyx_bridge(user_id: int, conversation_id: int) -> MemoryNyxBridge:
+async def get_memory_nyx_bridge(user_id: int, conversation_id: int, governor: "NyxUnifiedGovernor | None" = None) -> MemoryNyxBridge:
     """
     Get (or create) the memory-nyx bridge for a user/conversation.
     
@@ -828,7 +859,7 @@ async def get_memory_nyx_bridge(user_id: int, conversation_id: int) -> MemoryNyx
         return get_memory_nyx_bridge.cache[cache_key]
     
     # Create new bridge
-    bridge = MemoryNyxBridge(user_id, conversation_id)
+    bridge = MemoryNyxBridge(user_id, conversation_id, governor=governor)
     await bridge.initialize()
     
     # Cache it
