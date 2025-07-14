@@ -448,7 +448,14 @@ class LoreDynamicsSystem(BaseLoreManager):
     @property
     def trace_group_id(self) -> str:
         """Get trace group ID for this system."""
+        if hasattr(self, '_trace_group_id'):
+            return self._trace_group_id
         return f"lore_dynamics_{self.user_id}_{self.conversation_id}"
+    
+    @trace_group_id.setter
+    def trace_group_id(self, value: str):
+        """Set trace group ID (used by base class during init)."""
+        self._trace_group_id = value
     
     @property
     def trace_metadata(self) -> Dict[str, Any]:
