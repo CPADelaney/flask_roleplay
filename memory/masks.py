@@ -104,6 +104,10 @@ class ProgressiveRevealManager:
         self.user_id = user_id
         self.conversation_id = conversation_id
     
+    def _get_safe_stat_value(self, value, default=50):
+        """Safely get a stat value, returning default if None"""
+        return value if value is not None else default
+    
     @with_transaction
     async def initialize_npc_mask(self, npc_id: int, overwrite: bool = False, conn = None) -> Dict[str, Any]:
         """
@@ -131,6 +135,10 @@ class ProgressiveRevealManager:
             return {"error": f"NPC with id {npc_id} not found"}
             
         npc_name, dominance, cruelty, personality_traits_json, archetype_summary = row
+        
+        # Handle null values with sensible defaults
+        dominance = self._get_safe_stat_value(dominance)
+        cruelty = self._get_safe_stat_value(cruelty)
         
         # Parse personality traits
         personality_traits = []
@@ -267,6 +275,10 @@ class ProgressiveRevealManager:
             return {"error": f"NPC with id {npc_id} not found"}
             
         npc_name, dominance, cruelty = npc_row
+        
+        # Handle null values
+        dominance = self._get_safe_stat_value(dominance)
+        cruelty = self._get_safe_stat_value(cruelty)
         
         # Create mask object
         mask = NPCMask.from_dict(mask_data)
@@ -533,8 +545,8 @@ class ProgressiveRevealManager:
             npc_id = row["npc_id"]
             mask_data_json = row["mask_data"]
             npc_name = row["npc_name"]
-            dominance = row["dominance"]
-            cruelty = row["cruelty"]
+            dominance = self._get_safe_stat_value(row["dominance"])
+            cruelty = self._get_safe_stat_value(row["cruelty"])
             
             mask_data = {}
             if mask_data_json:
@@ -604,6 +616,10 @@ class ProgressiveRevealManager:
             return {"error": f"NPC with id {npc_id} not found"}
             
         dominance, cruelty = row
+        
+        # Handle null values
+        dominance = self._get_safe_stat_value(dominance)
+        cruelty = self._get_safe_stat_value(cruelty)
         
         # Get player stats
         row = await conn.fetchrow("""
