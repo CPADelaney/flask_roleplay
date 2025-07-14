@@ -1,4 +1,5 @@
 # lore/systems/dynamics.py
+from __future__ import annotations
 
 import logging
 import json
@@ -6,8 +7,11 @@ import random
 import re
 import uuid
 from datetime import datetime
-from typing import Dict, List, Any, Optional, Union, AsyncGenerator
+from typing import Dict, List, Any, Optional, AsyncGenerator
 from pydantic import BaseModel, Field
+
+# Add canon import
+import lore.core.canon as canon
 
 # ------------------ AGENTS SDK IMPORTS ------------------
 from agents import (
@@ -18,7 +22,6 @@ from agents import (
     handoff,
     trace,
     InputGuardrail,
-    OutputGuardrail,
     GuardrailFunctionOutput,
     RunContextWrapper
 )
@@ -33,19 +36,23 @@ from embedding.vector_store import generate_embedding
 from lore.managers.base_manager import BaseLoreManager
 from lore.managers.geopolitical import GeopoliticalSystemManager
 from lore.utils.theming import MatriarchalThemingUtils
+from lore.utils.sql_safe import safe_table_name, safe_column_name, unquote_ident
 
 # ===========================================================================
 # PYDANTIC MODELS FOR STRUCTURED DATA
 # ===========================================================================
+
+# These are for the function tools
 
 class EventValidation(BaseModel):
     """Validation model for event descriptions"""
     is_valid: bool
     reasoning: str
 
+
 class LoreUpdate(BaseModel):
     """Model for lore updates"""
-    lore_id: str
+    lore_id: str | int
     lore_type: str
     name: str
     old_description: str
@@ -53,26 +60,83 @@ class LoreUpdate(BaseModel):
     update_reason: str
     impact_level: int = Field(..., ge=1, le=10)
 
+
 class LoreElement(BaseModel):
-    """Model for new lore elements"""
+    """Model for newly-created lore elements"""
     lore_type: str
     name: str
     description: str
     connection: str
     significance: int = Field(..., ge=1, le=10)
 
+
+# Wrapper for agents that need a list output_type
+class LoreElementList(BaseModel):
+    elements: List[LoreElement]
+
+
+# ────────────────────────────────────────────────────────────────────────────
+#  Function-tool request / response payloads
+# ────────────────────────────────────────────────────────────────────────────
+
+class AffectedLoreElement(BaseModel):
+    lore_type: str
+    lore_id: str | int
+    name: str
+    description: str
+    relevance: float = Field(..., ge=0.0, le=1.0)
+
+
+class IdentifyAffectedLoreInput(BaseModel):
+    event_description: str
+
+
+class IdentifyAffectedLoreOutput(BaseModel):
+    affected_elements: List[AffectedLoreElement]
+
+
+class GenerateLoreUpdatesInput(BaseModel):
+    affected_elements: List[AffectedLoreElement]
+    event_description: str
+
+
+class GenerateLoreUpdatesOutput(BaseModel):
+    updates: List[LoreUpdate]
+
+
+class ApplyLoreUpdatesInput(BaseModel):
+    updates: List[LoreUpdate]
+
+
+class ApplyLoreUpdatesOutput(BaseModel):
+    success: bool = True
+    applied_count: int = 0
+
+
+class GenerateConsequentialLoreInput(BaseModel):
+    event_description: str
+    affected_elements: List[AffectedLoreElement]
+
+
+class GenerateConsequentialLoreOutput(BaseModel):
+    new_elements: List[LoreElement]
+
+
+# ────────────────────────────────────────────────────────────────────────────
+#  Secondary / analytic models
+# ────────────────────────────────────────────────────────────────────────────
+
 class SocietalImpact(BaseModel):
-    """Model for societal impact analysis"""
     stability_impact: int = Field(..., ge=1, le=10)
     power_structure_change: str
     public_perception: str
 
+
 class EventType(BaseModel):
-    """Model for event type selection"""
     event_type: str
 
+
 class MythEvolution(BaseModel):
-    """Model for myth evolution"""
     myth_id: str
     name: str
     change_type: str
@@ -82,8 +146,8 @@ class MythEvolution(BaseModel):
     new_believability: Optional[int] = None
     new_spread: Optional[int] = None
 
+
 class CulturalEvolution(BaseModel):
-    """Model for cultural element evolution"""
     element_id: str
     name: str
     element_type: str
@@ -93,8 +157,8 @@ class CulturalEvolution(BaseModel):
     significance_before: int
     significance_after: int
 
+
 class GeopoliticalShift(BaseModel):
-    """Model for geopolitical changes"""
     change_type: str
     faction_id: Optional[str] = None
     faction_name: Optional[str] = None
@@ -102,8 +166,8 @@ class GeopoliticalShift(BaseModel):
     new_description: Optional[str] = None
     additional_data: Dict[str, Any] = {}
 
+
 class FigureEvolution(BaseModel):
-    """Model for notable figure evolution"""
     figure_id: str
     name: str
     change_type: str
@@ -112,8 +176,8 @@ class FigureEvolution(BaseModel):
     old_reputation: int
     new_reputation: int
 
+
 class EventCandidate(BaseModel):
-    """Model for event candidates in evolutionary selection"""
     event_type: str
     event_name: str
     description: str
@@ -124,34 +188,34 @@ class EventCandidate(BaseModel):
     selection_reasoning: Optional[str] = None
     evaluation: Optional[Dict[str, Any]] = None
 
+
 class MutationDirective(BaseModel):
-    """Model for mutation directives"""
     aspect: str
     directive: str
 
+
 class MutationDirectives(BaseModel):
-    """Container for mutation directives"""
     directives: List[MutationDirective]
 
+
 class EventSelection(BaseModel):
-    """Model for event selection results"""
     selected_index: int
     evaluation: Dict[str, Any]
     reasoning: str
 
+
 class NarrativeEvaluation(BaseModel):
-    """Model for narrative evaluation"""
     scores: Dict[str, int]
     overall_score: int
     feedback: List[str]
     suggestions: List[str]
 
+
 class ImprovementSuggestions(BaseModel):
-    """Model for improvement suggestions"""
     criteria: Dict[str, Dict[str, Any]]
 
+
 class PlanStep(BaseModel):
-    """Model for multi-step plan steps"""
     title: str
     type: str
     goal: str
@@ -162,18 +226,18 @@ class PlanStep(BaseModel):
     status: str = "pending"
     outcome: Optional[Dict[str, Any]] = None
 
+
 class NarrativePlan(BaseModel):
-    """Model for narrative plans"""
     overview: str
     steps: List[PlanStep]
 
+
 class WorldChangePhase(BaseModel):
-    """Model for world change phases"""
     phase: str
     content: str
 
+
 class EvolutionScenarioYear(BaseModel):
-    """Model for evolution scenario yearly data"""
     year: int
     content: str
 
@@ -475,10 +539,10 @@ class LoreDynamicsSystem(BaseLoreManager):
             # just to ensure we have structured data to return. The agent usage above
             # might do partial calls, but let's ensure we finalize them here.
             try:
-                affected_elements = await self._identify_affected_lore(event_description)
-                updates = await self._generate_lore_updates(affected_elements, event_description)
-                await self._apply_lore_updates(updates)
-                new_elements = await self._generate_consequential_lore(event_description, affected_elements)
+                affected_elements = await self._identify_affected_lore_impl(event_description)
+                updates = await self._generate_lore_updates_impl(affected_elements, event_description)
+                await self._apply_lore_updates_impl(updates)
+                new_elements = await self._generate_consequential_lore_impl(event_description, affected_elements)
                 
                 await self.report_action(
                     agent_type=AgentType.NARRATIVE_CRAFTER,
@@ -506,16 +570,14 @@ class LoreDynamicsSystem(BaseLoreManager):
                     "event_description": event_description,
                     "agent_output": result.final_output
                 }
-    
+                
     #===========================================================================
     # IDENTIFY AFFECTED LORE
     #===========================================================================
-    @function_tool(strict_mode=False)
-    async def _identify_affected_lore(self, event_description: str) -> List[Dict[str, Any]]:
+    async def _identify_affected_lore_impl(self, event_description: str) -> List[Dict[str, Any]]:
         """
         Identify lore elements that might be impacted by an event.
-        We keep the DB logic, but rely on embeddings for similarity. 
-        This is mostly 'technical'. 
+        Implementation method - can be called directly.
         """
         event_embedding = await generate_embedding(event_description)
         affected_elements = []
@@ -530,36 +592,50 @@ class LoreDynamicsSystem(BaseLoreManager):
             async with pool.acquire() as conn:
                 for lore_type in lore_types:
                     try:
-                        table_exists = await conn.fetchval(f"""
+                        # Use safe table name
+                        table_name_unquoted = lore_type.lower()
+                        table_name = safe_table_name(table_name_unquoted)
+                        
+                        # Check if table exists
+                        table_exists = await conn.fetchval("""
                             SELECT EXISTS (
                                 SELECT FROM information_schema.tables 
-                                WHERE table_name = '{lore_type.lower()}'
+                                WHERE table_name = $1
                             );
-                        """)
+                        """, table_name_unquoted)
+                        
                         if not table_exists:
                             continue
                         
-                        has_embedding = await conn.fetchval(f"""
+                        # Check if embedding column exists
+                        has_embedding = await conn.fetchval("""
                             SELECT EXISTS (
                                 SELECT FROM information_schema.columns 
-                                WHERE table_name = '{lore_type.lower()}' AND column_name = 'embedding'
+                                WHERE table_name = $1 AND column_name = 'embedding'
                             );
-                        """)
+                        """, table_name_unquoted)
+                        
                         if not has_embedding:
                             continue
                         
+                        # Determine id field
                         id_field = 'id'
                         if lore_type == 'LocationLore':
                             id_field = 'location_id'
                         
-                        rows = await conn.fetch(f"""
-                            SELECT {id_field} as id, name, description, 
+                        id_column = safe_column_name(id_field)
+                        
+                        # Build and execute query
+                        query = f"""
+                            SELECT {id_column} as id, name, description, 
                                    1 - (embedding <=> $1) as relevance
-                            FROM {lore_type}
+                            FROM {table_name}
                             WHERE embedding IS NOT NULL
                             ORDER BY embedding <=> $1
                             LIMIT 5
-                        """, event_embedding)
+                        """
+                        
+                        rows = await conn.fetch(query, event_embedding)
                         
                         # Filter only those with decent relevance
                         for row in rows:
@@ -580,27 +656,24 @@ class LoreDynamicsSystem(BaseLoreManager):
             affected_elements = affected_elements[:15]
         
         return affected_elements
+
     
     #===========================================================================
     # GENERATE LORE UPDATES
     #===========================================================================
-    @function_tool(strict_mode=False)
-    async def _generate_lore_updates(
+    async def _generate_lore_updates_impl(
         self, 
         affected_elements: List[Dict[str, Any]], 
         event_description: str
     ) -> List[Dict[str, Any]]:
         """
-        For each affected element, we agent-ify how we generate updates, 
-        relying on lore_update_agent with an *LLM-based approach* rather than 
-        direct random or code-based transformations.
+        For each affected element, generate updates using agent-based approach.
+        Implementation method - can be called directly.
         """
         updates = []
         world_state = await self._fetch_world_state()
         
         # Agentify the "societal impact" approach
-        # Instead of code-based keywords, we ask the agent for a JSON specifying:
-        # { stability_impact: int, power_structure_change: str, public_perception: str }
         societal_impact = await self._agent_calculate_societal_impact(
             event_description,
             world_state.get('stability_index', 8),
@@ -626,8 +699,6 @@ class LoreDynamicsSystem(BaseLoreManager):
                 hierarchy_position = await self._get_hierarchy_position(element)
                 update_history = await self._fetch_element_update_history(element.get('lore_id', ''))
                 
-                # We'll build the prompt, but the logic to finalize the "LoreUpdate" object 
-                # is in the lore_update_agent. We pass them as context in the prompt.
                 prompt = await self._build_lore_update_prompt(
                     element=element,
                     event_description=event_description,
@@ -646,7 +717,7 @@ class LoreDynamicsSystem(BaseLoreManager):
                 updates.append(update_data.dict())
         
         return updates
-    
+        
     #------------------------------------------------------------------------
     # AGENT-BASED SOCIETAL IMPACT INSTEAD OF KEYWORD SEARCH
     #------------------------------------------------------------------------
@@ -704,10 +775,10 @@ class LoreDynamicsSystem(BaseLoreManager):
     #===========================================================================
     # APPLY LORE UPDATES
     #===========================================================================
-    @function_tool(strict_mode=False)
-    async def _apply_lore_updates(self, updates: List[Dict[str, Any]]) -> None:
+    async def _apply_lore_updates_impl(self, updates: List[Dict[str, Any]]) -> None:
         """
         Apply the agent-generated updates to the database.
+        Implementation method - can be called directly.
         """
         async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
@@ -723,23 +794,34 @@ class LoreDynamicsSystem(BaseLoreManager):
                         id_field = 'location_id'
                     
                     try:
+                        # Use safe identifiers
+                        table_name = safe_table_name(lore_type.lower())
+                        id_column = safe_column_name(id_field)
+                        
                         await conn.execute(f"""
-                            UPDATE {lore_type}
+                            UPDATE {table_name}
                             SET description = $1
-                            WHERE {id_field} = $2
+                            WHERE {id_column} = $2
                         """, new_description, lore_id)
                         
                         # Generate embedding
                         item_name = update.get('name', 'Unknown')
                         embedding_text = f"{item_name} {new_description}"
-                        await self.generate_and_store_embedding(embedding_text, conn, lore_type, id_field, lore_id)
+                        new_embedding = await generate_embedding(embedding_text)
+                        
+                        # Update embedding
+                        await conn.execute(f"""
+                            UPDATE {table_name}
+                            SET embedding = $1
+                            WHERE {id_column} = $2
+                        """, new_embedding, lore_id)
                         
                         # Insert into LoreChangeHistory
                         await conn.execute("""
                             INSERT INTO LoreChangeHistory 
                             (lore_type, lore_id, previous_description, new_description, change_reason)
                             VALUES ($1, $2, $3, $4, $5)
-                        """, lore_type, lore_id, old_description, new_description, update['update_reason'])
+                        """, lore_type, str(lore_id), old_description, new_description, update['update_reason'])
                     except Exception as e:
                         logging.error(f"Error updating {lore_type} ID {lore_id}: {e}")
                     
@@ -748,15 +830,14 @@ class LoreDynamicsSystem(BaseLoreManager):
     #===========================================================================
     # GENERATE CONSEQUENTIAL LORE
     #===========================================================================
-    @function_tool(strict_mode=False)
-    async def _generate_consequential_lore(
+    async def _generate_consequential_lore_impl(
         self, 
         event_description: str, 
         affected_elements: List[Dict[str, Any]]
     ) -> List[Dict[str, Any]]:
         """
         Creates new lore elements triggered by the event.
-        Uses a LoreCreationAgent returning a list of LoreElement objects.
+        Implementation method - can be called directly.
         """
         with trace(
             "ConsequentialLoreGeneration", 
@@ -776,7 +857,7 @@ class LoreDynamicsSystem(BaseLoreManager):
             
             # Clone lore_creation_agent for structured output
             creation_agent = self._get_agent("lore_creation").clone(
-                output_type=List[LoreElement]
+                output_type=LoreElementList
             )
             
             prompt = f"""
@@ -792,11 +873,12 @@ class LoreDynamicsSystem(BaseLoreManager):
               - 'description': string,
               - 'connection': how it ties to the event or existing elements,
               - 'significance': integer 1-10
-            Return strictly valid JSON array with LoreElement objects, reinforcing matriarchal themes.
+            Return strictly valid JSON with 'elements' containing array of LoreElement objects, reinforcing matriarchal themes.
             """
             
             result = await Runner.run(creation_agent, prompt, context=run_ctx.context)
-            new_elements = result.final_output
+            new_elements_wrapper = result.final_output
+            new_elements = new_elements_wrapper.elements
             
             processed = []
             for element in new_elements:
@@ -809,7 +891,7 @@ class LoreDynamicsSystem(BaseLoreManager):
                 processed.append(element.dict())
             
             return processed
-    
+        
     async def _save_new_lore_element(self, element: LoreElement, event_description: str) -> None:
         """
         Persist newly generated lore elements through the canon system.
@@ -888,6 +970,54 @@ class LoreDynamicsSystem(BaseLoreManager):
                             
                 except Exception as e:
                     logging.error(f"Error saving new {lore_type} '{name}': {e}")
+
+    @function_tool
+    async def _identify_affected_lore(self, input: IdentifyAffectedLoreInput) -> IdentifyAffectedLoreOutput:
+        """
+        Identify lore elements that might be impacted by an event.
+        Tool wrapper for agents.
+        """
+        affected_elements = await self._identify_affected_lore_impl(input.event_description)
+        # Convert to Pydantic models
+        elements = [AffectedLoreElement(**elem) for elem in affected_elements]
+        return IdentifyAffectedLoreOutput(affected_elements=elements)
+    
+    @function_tool
+    async def _generate_lore_updates(self, input: GenerateLoreUpdatesInput) -> GenerateLoreUpdatesOutput:
+        """
+        Generate updates for affected lore elements.
+        Tool wrapper for agents.
+        """
+        # Convert Pydantic models back to dicts for implementation
+        affected_elements = [elem.dict() for elem in input.affected_elements]
+        updates = await self._generate_lore_updates_impl(affected_elements, input.event_description)
+        # Convert to Pydantic models
+        update_models = [LoreUpdate(**update) for update in updates]
+        return GenerateLoreUpdatesOutput(updates=update_models)
+    
+    @function_tool
+    async def _apply_lore_updates(self, input: ApplyLoreUpdatesInput) -> ApplyLoreUpdatesOutput:
+        """
+        Apply lore updates to the database.
+        Tool wrapper for agents.
+        """
+        # Convert Pydantic models back to dicts for implementation
+        updates = [update.dict() for update in input.updates]
+        await self._apply_lore_updates_impl(updates)
+        return ApplyLoreUpdatesOutput(success=True, applied_count=len(updates))
+    
+    @function_tool
+    async def _generate_consequential_lore(self, input: GenerateConsequentialLoreInput) -> GenerateConsequentialLoreOutput:
+        """
+        Generate new lore elements as consequences of an event.
+        Tool wrapper for agents.
+        """
+        # Convert Pydantic models back to dicts for implementation
+        affected_elements = [elem.dict() for elem in input.affected_elements]
+        new_elements = await self._generate_consequential_lore_impl(input.event_description, affected_elements)
+        # Convert to Pydantic models
+        element_models = [LoreElement(**elem) for elem in new_elements]
+        return GenerateConsequentialLoreOutput(new_elements=element_models)
     
     #===========================================================================
     # AGENT-IFY OUR EVENT TYPE DECISION
@@ -1299,7 +1429,7 @@ class LoreDynamicsSystem(BaseLoreManager):
                         WHERE lore_id = $1
                         ORDER BY timestamp DESC
                         LIMIT $2
-                    """, lore_id, limit)
+                    """, str(lore_id), limit)
                     return [dict(h) for h in history]
                 except Exception as e:
                     logging.error(f"Error fetching update history for {lore_id}: {e}")
