@@ -29,7 +29,7 @@ from logic.resource_management import ResourceManager
 from routes.settings_routes import generate_mega_setting_logic
 from logic.gpt_image_decision import should_generate_image_for_response
 from routes.ai_image_generator import generate_roleplay_image_from_gpt
-from lore.lore_system import LoreSystem
+from lore.core.lore_system import LoreSystem
 
 # Import IntegratedNPCSystem
 from logic.fully_integrated_npc_system import IntegratedNPCSystem
