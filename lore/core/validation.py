@@ -17,7 +17,7 @@ class CanonValidationAgent:
                 "Your task is to determine if a new proposed entity is a semantic duplicate of an existing one. "
                 "Base your final decision on the provided context. Respond with a single word: 'true' if it is a duplicate, 'false' if it is not."
             ),
-            model="gpt-4o-mini", # Use a smart and fast model
+            model="gpt-4.1-nano", # Use a smart and fast model
             model_settings={"temperature": 0.0}
         )
 
