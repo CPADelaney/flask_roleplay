@@ -1181,12 +1181,13 @@ class NPCAgentCoordinator:
                 lore_system = await LoreSystem.get_instance(self.user_id, self.conversation_id)
                 
                 # Create context for operations
-                class BatchContext:
-                    def __init__(self, user_id, conversation_id):
-                        self.user_id = user_id
-                        self.conversation_id = conversation_id
+                from agents import RunContextWrapper
                 
-                ctx = BatchContext(self.user_id, self.conversation_id)
+                ctx = RunContextWrapper(context={
+                    'user_id': self.user_id,
+                    'conversation_id': self.conversation_id
+                })
+
     
                 # ------------------------------------------------------------------
                 # LOCATION CHANGE
