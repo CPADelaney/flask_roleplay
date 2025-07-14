@@ -631,7 +631,10 @@ async def process_npc_creations_canonical(
 ) -> int:
     """Process NPC creations using canon."""
     count = 0
-    canon_ctx = type('obj', (object,), {'user_id': user_id, 'conversation_id': conversation_id})
+    canon_ctx = RunContextWrapper(context={
+        'user_id': user_id,
+        'conversation_id': conversation_id
+    })
     
     for npc in npc_creations:
         # Prepare NPC data package
@@ -752,7 +755,10 @@ async def process_character_stats_canonical(
     
     if not player_exists:
         # Create player using canon
-        canon_ctx = type('obj', (object,), {'user_id': user_id, 'conversation_id': conversation_id})
+        canon_ctx = RunContextWrapper(context={
+            'user_id': user_id,
+            'conversation_id': conversation_id
+        })
         await canon.find_or_create_player_stats(
             canon_ctx, conn, player_name,
             corruption=0, confidence=0, willpower=0, obedience=0,
@@ -808,7 +814,10 @@ async def process_social_links_canonical(
 ) -> int:
     """Process social link updates using canon."""
     count = 0
-    canon_ctx = type('obj', (object,), {'user_id': user_id, 'conversation_id': conversation_id})
+    canon_ctx = RunContextWrapper(context={
+        'user_id': user_id,
+        'conversation_id': conversation_id
+    })
     
     for link in social_links:
         # Use canon to find or create social link
@@ -876,7 +885,10 @@ async def process_roleplay_updates_canonical(
 ) -> int:
     """Process roleplay updates using canon."""
     count = 0
-    canon_ctx = type('obj', (object,), {'user_id': user_id, 'conversation_id': conversation_id})
+    canon_ctx = RunContextWrapper(context={
+        'user_id': user_id,
+        'conversation_id': conversation_id
+    })
     
     for key, value in roleplay_updates.items():
         if value is not None:
