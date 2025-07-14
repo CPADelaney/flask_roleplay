@@ -5,7 +5,7 @@ Coordinates multiple NPC agents for group interactions, using OpenAI Agents SDK.
 Refactored from the original agent_coordinator.py.
 """
 from lore.core import canon
-from lore.lore_system import LoreSystem
+from lore.core.lore_system import LoreSystem
 
 import logging
 import asyncio
