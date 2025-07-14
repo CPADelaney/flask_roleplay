@@ -276,7 +276,7 @@ class EmotionalMemoryManager:
         Detect the emotional fingerprint of *text* in one Responses-API call.
         Returns a dict matching the EmotionalAnalysis schema.
         """
-        model = model or getenv("EMOTION_ANALYSIS_MODEL", "gpt-4o-mini")
+        model = model or getenv("EMOTION_ANALYSIS_MODEL", "gpt-4.1-nano")
     
         try:
             client = get_openai_client()
