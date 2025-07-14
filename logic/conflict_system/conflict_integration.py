@@ -10,7 +10,7 @@ from agents import Agent, Runner, trace, function_tool, RunContextWrapper
 from nyx.integrate import get_central_governance
 from nyx.nyx_governance import AgentType, DirectiveType, DirectivePriority
 from nyx.governance_helpers import with_governance
-from lore.lore_system import LoreSystem
+from lore.core.lore_system import LoreSystem
 from db.connection import get_db_connection_context
 from lore.core import canon
 from logic.fully_integrated_npc_system import IntegratedNPCSystem
