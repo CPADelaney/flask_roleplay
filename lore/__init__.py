@@ -11,7 +11,7 @@ import warnings
 import functools
 
 # Main entry point for lore system - the consolidated implementation
-from .lore_system import LoreSystem
+from .core.lore_system import LoreSystem
 
 # API routes
 from .lore_routes import register_lore_routes
