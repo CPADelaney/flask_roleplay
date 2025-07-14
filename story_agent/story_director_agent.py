@@ -355,10 +355,10 @@ class StoryDirectorContext:
                 from lore.lore_system import LoreSystem
                 lore_system = await LoreSystem.get_instance(self.user_id, self.conversation_id)
                 
-                ctx = type('obj', (object,), {
-                    'user_id': self.user_id, 
-                    'conversation_id': self.conversation_id
-                })()
+                ctx = RunContextWrapper(context={
+                    'user_id': self.directive_handler.user_id,
+                    'conversation_id': self.directive_handler.conversation_id
+                })
                 
                 result = await self.conflict_manager.generate_conflict(conflict_type)
                 
@@ -381,11 +381,11 @@ class StoryDirectorContext:
                 from lore.lore_system import LoreSystem
                 lore_system = await LoreSystem.get_instance(self.user_id, self.conversation_id)
                 
-                ctx = type('obj', (object,), {
-                    'user_id': self.user_id, 
-                    'conversation_id': self.conversation_id
-                })()
-                
+                ctx = RunContextWrapper(context={
+                    'user_id': self.directive_handler.user_id,
+                    'conversation_id': self.directive_handler.conversation_id
+                })
+                            
                 try:
                     from logic.narrative_progression import advance_narrative_stage
                     result = await advance_narrative_stage(self.user_id, self.conversation_id, stage_name)
@@ -890,10 +890,10 @@ async def reset_story_director(ctx: Union[RunContextWrapper[StoryDirectorContext
     logger.info(f"Resetting story director for user {context.user_id}, conversation {context.conversation_id}")
     
     from lore.core import canon
-    governance_ctx = type('obj', (object,), {
-        'user_id': context.user_id, 
+    governance_ctx = RunContextWrapper(context={
+        'user_id': context.user_id,
         'conversation_id': context.conversation_id
-    })()
+    })
     
     async with get_db_connection_context() as conn:
         await canon.log_canonical_event(
@@ -1399,10 +1399,10 @@ async def update_resource(ctx: RunContextWrapper[StoryDirectorContext], resource
     current_value = resources.get(resource_type, 0)
     new_value = current_value + amount
     
-    governance_ctx = type('obj', (object,), {
-        'user_id': user_id, 
+    governance_ctx = RunContextWrapper(context={
+        'user_id': user_id,
         'conversation_id': conversation_id
-    })()
+    })
     
     result = await lore_system.propose_and_enact_change(
         ctx=governance_ctx,
@@ -1436,10 +1436,10 @@ async def progress_conflict(ctx: RunContextWrapper[StoryDirectorContext], confli
     from lore.lore_system import LoreSystem
     lore_system = await LoreSystem.get_instance(user_id, conversation_id)
     
-    governance_ctx = type('obj', (object,), {
-        'user_id': user_id, 
+    governance_ctx = RunContextWrapper(context={
+        'user_id': user_id,
         'conversation_id': conversation_id
-    })()
+    })
     
     conflict = await context.conflict_manager.get_conflict(conflict_id)
     if not conflict:
