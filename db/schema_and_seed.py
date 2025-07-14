@@ -2064,6 +2064,25 @@ async def create_all_tables():
                 ON strategy_reviews(status);
                 ''',
                 '''
+                CREATE TABLE IF NOT EXISTS MemorySchemas (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER NOT NULL,
+                    conversation_id INTEGER NOT NULL,
+                    entity_type TEXT NOT NULL,
+                    entity_id INTEGER NOT NULL,
+                    schema_name TEXT NOT NULL,
+                    pattern TEXT NOT NULL,
+                    influence_strength FLOAT NOT NULL DEFAULT 0.5,
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+                );
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_memory_schemas_entity 
+                ON MemorySchemas(user_id, conversation_id, entity_type, entity_id);
+                ''',
+                '''
                 CREATE TABLE IF NOT EXISTS scenario_states (
                     id SERIAL PRIMARY KEY,
                     user_id INTEGER NOT NULL,
