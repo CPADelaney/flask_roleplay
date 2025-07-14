@@ -24,7 +24,7 @@ from memory.wrapper import MemorySystem
 from nyx.nyx_governance import AgentType, DirectiveType, NyxUnifiedGovernor
 from nyx.governance_helpers import with_governance, with_governance_permission, with_action_reporting
 from npcs.npc_relationship import NPCRelationshipManager
-from lore.lore_system import LoreSystem
+from lore.core.lore_system import LoreSystem
 from lore.core import canon
 
 # Configure logging
