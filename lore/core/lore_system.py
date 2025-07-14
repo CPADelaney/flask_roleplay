@@ -472,18 +472,35 @@ class LoreSystem:
         reason: str
     ) -> Dict[str, Any]:
         """
-        The universal method for making a canonical change to the world state.
-        This is the method that NyxUnifiedGovernor calls.
-    
-        Args:
-            entity_type (str): The type of entity (e.g., 'Nations', 'Factions').
-            entity_identifier (Dict): A dict to find the entity (e.g., {'id': 123}).
-            updates (Dict): A dict of columns and their new values (e.g., {'leader_npc_id': 456}).
-            reason (str): The narrative reason for the change.
+        Canonical state-change helper.
+
+        • Skips “conflicts” when the existing value is effectively blank.
+        • Still triggers lore-conflict logic for real mismatches.
         """
-        # Import canon module
         from lore.core import canon
         from db.connection import get_db_connection_context
+
+        # ------------------------------------------------------------------ #
+        # Helpers                                                             #
+        # ------------------------------------------------------------------ #
+        def _is_effectively_empty(val) -> bool:
+            """
+            Returns True when *val* should be considered an “empty placeholder”.
+
+            Handles:
+              • NULL/None
+              • empty string / whitespace
+              • literal string placeholders: 'None', 'null', '{}', '[]'
+              • empty list / empty dict
+            """
+            if val is None:
+                return True
+            if isinstance(val, str):
+                stripped = val.strip()
+                return stripped in {"", "null", "None", "{}", "[]"}
+            if isinstance(val, (list, tuple, set, dict)):
+                return len(val) == 0
+            return False
         
         # Comprehensive mapping of entity types to their JSON/JSONB fields and array fields
         json_fields = {
@@ -606,150 +623,125 @@ class LoreSystem:
         
         # Convert Python objects to JSON strings for comparison and storage
         processed_updates = {}
-        entity_json_fields = json_fields.get(entity_type, [])
+        entity_json_fields  = json_fields.get(entity_type, [])
         entity_array_fields = array_fields.get(entity_type, [])
-        
+
         for field, value in updates.items():
             if field in entity_json_fields and value is not None and not isinstance(value, str):
-                # Convert lists and dicts to JSON strings
                 processed_updates[field] = json.dumps(value)
             elif field in entity_array_fields and value is not None:
-                # Array fields - ensure they're lists
                 if isinstance(value, str):
-                    # If it's a JSON string, parse it
                     try:
                         value = json.loads(value)
-                    except:
-                        # If not JSON, treat as single-element array
+                    except json.JSONDecodeError:
                         value = [value]
                 if not isinstance(value, list):
                     value = [value]
                 processed_updates[field] = value
             else:
                 processed_updates[field] = value
-        
+
         logger.info(f"Proposing change to {entity_type} ({entity_identifier}) because: {reason}")
-    
+
         try:
             async with get_db_connection_context() as conn:
                 async with conn.transaction():
-                    # Step 1: Find the current state of the entity
-                    where_clauses = [f"{key} = ${i+1}" for i, key in enumerate(entity_identifier.keys())]
-                    where_sql = " AND ".join(where_clauses)
-                    select_query = f"SELECT * FROM {entity_type} WHERE {where_sql}"
-                    
-                    existing_entity = await conn.fetchrow(select_query, *entity_identifier.values())
-    
-                    if not existing_entity:
-                        return {"status": "error", "message": f"Entity not found: {entity_type} with {entity_identifier}"}
-    
-                    # Step 2: Validate for conflicts (with special handling for JSON and array fields)
+                    # ------------------------------------------------------ #
+                    # 1. Fetch current row                                   #
+                    # ------------------------------------------------------ #
+                    where_sql = " AND ".join(f"{k} = ${i+1}"
+                                             for i, k in enumerate(entity_identifier))
+                    existing = await conn.fetchrow(
+                        f"SELECT * FROM {entity_type} WHERE {where_sql}",
+                        *entity_identifier.values()
+                    )
+                    if not existing:
+                        return {"status": "error",
+                                "message": f"{entity_type} not found with {entity_identifier}"}
+
+                    # ------------------------------------------------------ #
+                    # 2. Conflict detection                                  #
+                    # ------------------------------------------------------ #
                     conflicts = []
-                    for field, new_value in processed_updates.items():
-                        if field in existing_entity:
-                            current_value = existing_entity[field]
-                            
-                            # Special handling for JSON fields - compare as JSON objects
-                            if field in entity_json_fields:
-                                try:
-                                    # Parse current value if it's a string
-                                    if isinstance(current_value, str):
-                                        current_obj = json.loads(current_value) if current_value else {}
-                                    else:
-                                        current_obj = current_value if current_value is not None else {}
-                                    
-                                    # Parse new value if it's a string
-                                    if isinstance(new_value, str):
-                                        new_obj = json.loads(new_value) if new_value else {}
-                                    else:
-                                        new_obj = new_value if new_value is not None else {}
-                                    
-                                    # Special case: Don't conflict when adding to empty array
-                                    if isinstance(current_obj, list) and isinstance(new_obj, list):
-                                        # Don't conflict when adding to empty array
-                                        if len(current_obj) == 0 and len(new_obj) > 0:
-                                            continue
-                                        # Don't conflict if new array contains all items from current
-                                        if all(item in new_obj for item in current_obj):
-                                            continue
-                                    
-                                    # Special case: Don't conflict when adding to empty dict
-                                    if isinstance(current_obj, dict) and isinstance(new_obj, dict):
-                                        # Don't conflict when adding to empty dict
-                                        if len(current_obj) == 0 and len(new_obj) > 0:
-                                            continue
-                                        # Don't conflict if new dict is a superset
-                                        if all(k in new_obj and new_obj[k] == v for k, v in current_obj.items()):
-                                            continue
-                                    
-                                    # Compare as objects, not strings
-                                    if current_obj != new_obj:
-                                        conflict_detail = (
-                                            f"Conflict on field '{field}'. "
-                                            f"Current value: '{json.dumps(current_obj)}'. "
-                                            f"Proposed value: '{json.dumps(new_obj)}'."
-                                        )
-                                        conflicts.append(conflict_detail)
-                                        logger.warning(f"Conflict detected for {entity_type} ({entity_identifier}): {conflict_detail}")
-                                except json.JSONDecodeError as e:
-                                    # Fall back to string comparison if JSON parsing fails
-                                    if current_value != new_value:
-                                        conflict_detail = (
-                                            f"Conflict on field '{field}' (JSON parse error). "
-                                            f"Current value: '{current_value}'. "
-                                            f"Proposed value: '{new_value}'."
-                                        )
-                                        conflicts.append(conflict_detail)
-                                        logger.warning(f"Conflict detected for {entity_type} ({entity_identifier}): {conflict_detail}")
-                            # Special handling for array fields
-                            elif field in entity_array_fields:
-                                # Compare arrays element by element
-                                if current_value is not None:
-                                    current_set = set(current_value or [])
-                                    new_set = set(new_value or [])
-                                    # Allow adding to empty arrays
-                                    if not current_value and new_value:
-                                        continue
-                                    # Allow if new array contains all elements from current
-                                    if current_set.issubset(new_set):
-                                        continue
-                                    # Otherwise it's a conflict
-                                    if current_set != new_set:
-                                        conflict_detail = (
-                                            f"Conflict on array field '{field}'. "
-                                            f"Current value: {current_value}. "
-                                            f"Proposed value: {new_value}."
-                                        )
-                                        conflicts.append(conflict_detail)
-                                        logger.warning(f"Conflict detected for {entity_type} ({entity_identifier}): {conflict_detail}")
-                            else:
-                                # Regular field comparison
-                                if current_value is not None and current_value != new_value:
-                                    conflict_detail = (
-                                        f"Conflict on field '{field}'. "
-                                        f"Current value: '{current_value}'. "
-                                        f"Proposed value: '{new_value}'."
+
+                    for field, new_val in processed_updates.items():
+                        if field not in existing:
+                            continue  # column missing – ignore here
+
+                        current_val = existing[field]
+
+                        # SHORT-CIRCUIT: if the current value is “blank”, allow overwrite
+                        if _is_effectively_empty(current_val):
+                            continue
+
+                        # -------------------------------------------------- #
+                        # JSON fields                                        #
+                        # -------------------------------------------------- #
+                        if field in entity_json_fields:
+                            try:
+                                cur_obj = (json.loads(current_val)
+                                           if isinstance(current_val, str) else current_val) or {}
+                                new_obj = (json.loads(new_val)
+                                           if isinstance(new_val, str) else new_val) or {}
+
+                                # Another early exit: allow adding to empty dict/list
+                                if _is_effectively_empty(cur_obj):
+                                    continue
+                                if isinstance(cur_obj, list) and set(cur_obj).issubset(new_obj):
+                                    continue
+                                if isinstance(cur_obj, dict) and cur_obj.items() <= new_obj.items():
+                                    continue
+
+                                if cur_obj != new_obj:
+                                    conflicts.append(
+                                        f"Conflict on JSON field '{field}': "
+                                        f"{cur_obj!r} → {new_obj!r}"
                                     )
-                                    conflicts.append(conflict_detail)
-                                    logger.warning(f"Conflict detected for {entity_type} ({entity_identifier}): {conflict_detail}")
-    
-                    if conflicts:
-                        # Step 3a: Handle conflict by generating a new narrative event
-                        dynamics = await self.registry.get_lore_dynamics()
-                        conflict_event = self._create_conflict_event_description(
-                            entity_type, entity_identifier, existing_entity, updates, conflicts, reason
-                        )
-                        
-                        # Call the method directly without .fn
-                        if hasattr(dynamics, 'evolve_lore_with_event'):
-                            # It's a manager instance, call the method
-                            await dynamics.evolve_lore_with_event(ctx, conflict_event)
+                            except Exception:  # JSON decode error – fallback to string compare
+                                if str(current_val) != str(new_val):
+                                    conflicts.append(
+                                        f"Conflict on field '{field}' (parse error): "
+                                        f"{current_val!r} → {new_val!r}"
+                                    )
+
+                        # -------------------------------------------------- #
+                        # ARRAY fields                                       #
+                        # -------------------------------------------------- #
+                        elif field in entity_array_fields:
+                            cur_set = set(current_val or [])
+                            new_set = set(new_val or [])
+
+                            if _is_effectively_empty(cur_set):
+                                continue
+                            if cur_set.issubset(new_set):
+                                continue
+                            if cur_set != new_set:
+                                conflicts.append(
+                                    f"Conflict on array field '{field}': "
+                                    f"{list(cur_set)} → {list(new_set)}"
+                                )
+
+                        # -------------------------------------------------- #
+                        # Plain scalar fields                                #
+                        # -------------------------------------------------- #
                         else:
-                            # It might be the method directly
-                            await dynamics(ctx, conflict_event)
-                            
+                            if str(current_val) != str(new_val):
+                                conflicts.append(
+                                    f"Conflict on field '{field}': "
+                                    f"{current_val!r} → {new_val!r}"
+                                )
+
+                    # ------------------------------------------------------ #
+                    # 3. Handle conflicts or perform UPDATE                  #
+                    # ------------------------------------------------------ #
+                    if conflicts:
+                        dynamics = await self.registry.get_lore_dynamics()
+                        evt = self._create_conflict_event_description(
+                            entity_type, entity_identifier, existing, updates, conflicts, reason
+                        )
+                        await dynamics.evolve_lore_with_event(ctx, evt)
                         return {"status": "conflict_generated", "details": conflicts}
-    
+
                     # Step 3b: No conflict, commit the change
                     # Add type conversion for known boolean columns
                     boolean_columns = ['introduced', 'is_active', 'is_consolidated', 'is_archived',
@@ -759,67 +751,53 @@ class LoreSystem:
                                        'marked_for_review', 'dismissed', 'active']
                     
                     # Build SET clauses with proper casting for boolean and array columns
-                    set_clauses = []
-                    update_values = []
-                    
-                    for i, (key, value) in enumerate(processed_updates.items()):
-                        if key in boolean_columns:
-                            # Ensure it's a boolean and use explicit cast
-                            bool_value = bool(value) if not isinstance(value, bool) else value
-                            set_clauses.append(f"{key} = ${i+1}::boolean")
-                            update_values.append(bool_value)
-                        elif key in entity_array_fields:
-                            # Handle array fields with proper casting
-                            array_type = self._get_array_type(entity_type, key)
-                            set_clauses.append(f"{key} = ${i+1}::{array_type}")
-                            update_values.append(value)
+                    set_parts, vals = [], []
+                    for i, (col, val) in enumerate(processed_updates.items()):
+                        if col in boolean_columns:
+                            set_parts.append(f"{col} = ${i+1}::boolean")
+                        elif col in entity_array_fields:
+                            set_parts.append(f"{col} = ${i+1}::{self._get_array_type(entity_type, col)}")
                         else:
-                            set_clauses.append(f"{key} = ${i+1}")
-                            update_values.append(value)
-                    
-                    set_sql = ", ".join(set_clauses)
-                    
-                    # Build WHERE clause with proper placeholder numbering
-                    # Start numbering after the SET clause placeholders
-                    where_clauses_update = []
-                    num_updates = len(processed_updates)
-                    for i, key in enumerate(entity_identifier.keys()):
-                        placeholder_num = num_updates + i + 1
-                        where_clauses_update.append(f"{key} = ${placeholder_num}")
-                    where_sql_update = " AND ".join(where_clauses_update)
-                    
-                    # Add the entity identifier values
-                    update_values.extend(list(entity_identifier.values()))
-                    
-                    update_query = f"UPDATE {entity_type} SET {set_sql} WHERE {where_sql_update}"
-                    await conn.execute(update_query, *update_values)
-    
-                    # Step 4: Log the change as a canonical event in unified memory
-                    event_text = f"The {entity_type} identified by {entity_identifier} was updated. Reason: {reason}. Changes: {updates}"
-                    await canon.log_canonical_event(ctx, conn, event_text, tags=[entity_type.lower(), 'state_change'], significance=8)
-            
-            # Step 5: Propagate consequences to other systems (outside the transaction)
-            # Create a more specific event description that will pass validation
-            event_description = self._create_detailed_event_description(
+                            set_parts.append(f"{col} = ${i+1}")
+                        vals.append(val)
+
+                    where_parts = [f"{k} = ${len(vals) + j + 1}"
+                                   for j, k in enumerate(entity_identifier)]
+                    vals.extend(entity_identifier.values())
+
+                    await conn.execute(
+                        f"UPDATE {entity_type} SET {', '.join(set_parts)} "
+                        f"WHERE {' AND '.join(where_parts)}",
+                        *vals
+                    )
+
+                    # -------------------------------------------------- #
+                    # 5. Canonical event log                            #
+                    # -------------------------------------------------- #
+                    await canon.log_canonical_event(
+                        ctx, conn,
+                        f"{entity_type} {entity_identifier} updated. Reason: {reason}.",
+                        tags=[entity_type.lower(), "state_change"],
+                        significance=8
+                    )
+
+            # -------------------------------------------------------------- #
+            # 6. Post-commit lore evolution (if significant)                 #
+            # -------------------------------------------------------------- #
+            evt_desc = self._create_detailed_event_description(
                 entity_type, entity_identifier, updates, reason
             )
-            
-            # Only propagate if the event is significant enough
-            if event_description:
+            if evt_desc:
                 dynamics = await self.registry.get_lore_dynamics()
-                
-                # Call the method directly without .fn
-                if hasattr(dynamics, 'evolve_lore_with_event'):
-                    # It's a manager instance, call the method
-                    await dynamics.evolve_lore_with_event(ctx, event_description)
-                else:
-                    # It might be the method directly
-                    await dynamics(ctx, event_description)
-            
-            return {"status": "committed", "entity_type": entity_type, "identifier": entity_identifier, "changes": updates}
-    
+                await dynamics.evolve_lore_with_event(ctx, evt_desc)
+
+            return {"status": "committed",
+                    "entity_type": entity_type,
+                    "identifier": entity_identifier,
+                    "changes": updates}
+
         except Exception as e:
-            logger.exception(f"Failed to enact change for {entity_type} ({entity_identifier}): {e}")
+            logger.exception(f"Failed to enact change for {entity_type} {entity_identifier}: {e}")
             return {"status": "error", "message": str(e)}
     
     def _get_array_type(self, entity_type: str, field: str) -> str:
