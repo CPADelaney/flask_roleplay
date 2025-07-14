@@ -733,8 +733,11 @@ class NyxUnifiedGovernor(
         self.memory_integration = MemoryIntegration(self.user_id, self.conversation_id)
         await self.memory_integration.initialize()
 
+        logger.debug("[core] about to import JointMemoryGraph")
         from nyx.integrate import JointMemoryGraph
+        logger.debug("[core] imported JointMemoryGraph – constructing")
         self.memory_graph = JointMemoryGraph(self.user_id, self.conversation_id)
+        logger.debug("[core] JointMemoryGraph constructed")
         
         self.game_state = await self.initialize_game_state()
         
