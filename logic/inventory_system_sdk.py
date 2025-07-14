@@ -207,7 +207,7 @@ async def add_item_to_inventory(
         ).model_dump()
 
     # Get LoreSystem instance
-    from lore.lore_system import LoreSystem
+    from lore.core.lore_system import LoreSystem
     lore_system = await LoreSystem.get_instance(user_id, conversation_id)
     
     # Use canon to find or create item
@@ -308,7 +308,7 @@ async def remove_item_from_inventory(
         ).model_dump()
 
     # Get LoreSystem instance
-    from lore.lore_system import LoreSystem
+    from lore.core.lore_system import LoreSystem
     lore_system = await LoreSystem.get_instance(user_id, conversation_id)
     
     result = {}
@@ -479,7 +479,7 @@ async def update_item_effect(
         ).model_dump()
 
     # Get LoreSystem instance
-    from lore.lore_system import LoreSystem
+    from lore.core.lore_system import LoreSystem
     lore_system = await LoreSystem.get_instance(user_id, conversation_id)
     
     result = {}
@@ -590,7 +590,7 @@ async def categorize_items(
         }
 
     # Get LoreSystem instance
-    from lore.lore_system import LoreSystem
+    from lore.core.lore_system import LoreSystem
     lore_system = await LoreSystem.get_instance(user_id, conversation_id)
     
     results = {
