@@ -815,7 +815,7 @@ async def process_ai_response_with_nyx(user_id, conv_id, user_input, context, ag
         
         # Add any specific location-based lore if available
         if "location" in context and context["location"]:
-            from lore.lore_system import LoreSystem
+            from lore.core.lore_system import LoreSystem
             lore_system = LoreSystem.get_instance(user_id, conv_id)
             await lore_system.initialize()
             location_context = await lore_system.get_location_lore_context(context["location"])
