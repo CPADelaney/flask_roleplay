@@ -352,7 +352,7 @@ class StoryDirectorContext:
                 params = directive.get("parameters", {})
                 conflict_type = params.get("conflict_type", "standard")
                 
-                from lore.lore_system import LoreSystem
+                from lore.core.lore_system import LoreSystem
                 lore_system = await LoreSystem.get_instance(self.user_id, self.conversation_id)
                 
                 ctx = RunContextWrapper(context={
@@ -378,7 +378,7 @@ class StoryDirectorContext:
                 params = directive.get("parameters", {})
                 stage_name = params.get("target_stage")
                 
-                from lore.lore_system import LoreSystem
+                from lore.core.lore_system import LoreSystem
                 lore_system = await LoreSystem.get_instance(self.user_id, self.conversation_id)
                 
                 ctx = RunContextWrapper(context={
@@ -1392,7 +1392,7 @@ async def update_resource(ctx: RunContextWrapper[StoryDirectorContext], resource
     user_id = context.user_id
     conversation_id = context.conversation_id
     
-    from lore.lore_system import LoreSystem
+    from lore.core.lore_system import LoreSystem
     lore_system = await LoreSystem.get_instance(user_id, conversation_id)
     
     resources = await context.resource_manager.get_resources()
@@ -1433,7 +1433,7 @@ async def progress_conflict(ctx: RunContextWrapper[StoryDirectorContext], confli
     user_id = context.user_id
     conversation_id = context.conversation_id
     
-    from lore.lore_system import LoreSystem
+    from lore.core.lore_system import LoreSystem
     lore_system = await LoreSystem.get_instance(user_id, conversation_id)
     
     governance_ctx = RunContextWrapper(context={
