@@ -460,11 +460,18 @@ class LoreDynamicsSystem(BaseLoreManager):
     @property
     def trace_metadata(self) -> Dict[str, Any]:
         """Get trace metadata for this system."""
+        if hasattr(self, '_trace_metadata'):
+            return self._trace_metadata
         return {
             "user_id": str(self.user_id),
             "conversation_id": str(self.conversation_id),
             "system": "lore_dynamics"
         }
+    
+    @trace_metadata.setter
+    def trace_metadata(self, value: Dict[str, Any]):
+        """Set trace metadata (used by base class during init)."""
+        self._trace_metadata = value
     
     async def get_connection_pool(self):
         """Get database connection pool."""
