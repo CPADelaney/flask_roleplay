@@ -287,7 +287,7 @@ class MemorySchemaManager:
         """
     
         try:
-            resp = await client.responses.create(
+            resp = client.responses.create(
                 model="gpt-4.1-nano",
                 instructions="You detect patterns in memories to form schemas.",
                 input=prompt,
@@ -815,7 +815,7 @@ class MemorySchemaManager:
         """
     
         try:
-            resp = await client.responses.create(
+            resp = client.responses.create(
                 model="gpt-4.1-nano",
                 instructions="You rate memory/schema relevance.",
                 input=prompt,
@@ -996,7 +996,7 @@ class MemorySchemaManager:
         """
     
         try:
-            resp = await client.responses.create(
+            resp = client.responses.create(
                 model="gpt-4.1-nano",
                 instructions="You interpret memories through cognitive schemas.",
                 input=prompt,
@@ -1162,7 +1162,7 @@ class MemorySchemaManager:
         """
     
         try:
-            resp = await client.responses.create(
+            resp = client.responses.create(
                 model="gpt-4.1-nano",
                 instructions="You calculate schema/memory conflict.",
                 input=prompt,
@@ -1196,7 +1196,7 @@ class MemorySchemaManager:
         """
     
         try:
-            resp = await client.responses.create(
+            resp = client.responses.create(
                 model="gpt-4.1-nano",
                 instructions="You explain memory/schema conflicts.",
                 input=prompt,
@@ -1339,7 +1339,7 @@ class MemorySchemaManager:
         """
     
         try:
-            resp = await client.responses.create(
+            resp = client.responses.create(
                 model="gpt-4.1-nano",
                 instructions="You evolve schemas to handle conflicts.",
                 input=prompt,
@@ -1499,7 +1499,7 @@ class MemorySchemaManager:
         """
     
         try:
-            resp = await client.responses.create(
+            resp = client.responses.create(
                 model="gpt-4.1-nano",
                 instructions="You merge schemas.",
                 input=prompt,
@@ -1701,7 +1701,7 @@ class MemorySchemaManager:
         """
     
         try:
-            resp = await client.responses.create(
+            resp = client.responses.create(
                 model="gpt-4.1-nano",
                 instructions="You rate schema similarity.",
                 input=prompt,
