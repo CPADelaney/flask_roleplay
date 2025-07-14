@@ -754,7 +754,9 @@ class NyxUnifiedGovernor(
             logger.debug("[core] JointMemoryGraph ready")
     
         # --- everything else ----------------------------------------------
+        logger.debug("[core] about to init game_state")           # ①
         self.game_state = await self.initialize_game_state()
+        logger.debug("[core] game_state ready") 
     
         # discover/register other agents *once*
         await super().discover_and_register_agents()
