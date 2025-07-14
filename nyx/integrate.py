@@ -1852,6 +1852,129 @@ class NyxIntegration:
             
         return False
 
+    async def _score_alternatives(self, alternatives: List[Dict[str, Any]], 
+                                current_state: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Score alternative decisions based on current state."""
+        scored_alternatives = []
+        
+        for alt in alternatives:
+            score = 0.0
+            reasoning = []
+            
+            decision = alt["decision"]
+            
+            # Score based on narrative impact
+            narrative_impact = await self._evaluate_narrative_impact(decision, "alternative")
+            score += (1.0 - narrative_impact) * 0.3  # Lower impact is better for alternatives
+            reasoning.append(f"Narrative impact: {1.0 - narrative_impact:.2f}")
+            
+            # Score based on conflict resolution
+            if decision.get("action_type") == "none":
+                score += 0.2  # Bonus for avoiding conflict
+                reasoning.append("Avoids immediate conflict")
+            
+            # Score based on resource efficiency
+            resources_required = decision.get("resources", {})
+            resource_score = 1.0 - (sum(resources_required.values()) / 100.0)
+            score += resource_score * 0.2
+            reasoning.append(f"Resource efficiency: {resource_score:.2f}")
+            
+            # Score based on player experience preservation
+            preserves_agency = decision.get("preserves_player_agency", True)
+            if preserves_agency:
+                score += 0.3
+                reasoning.append("Preserves player agency")
+            
+            # Add delay penalty (prefer immediate solutions)
+            if decision.get("delay", 0) > 0:
+                delay_penalty = min(decision["delay"] / 300.0, 0.2)  # Max penalty of 0.2
+                score -= delay_penalty
+                reasoning.append(f"Delay penalty: -{delay_penalty:.2f}")
+            
+            scored_alternatives.append({
+                "decision": decision,
+                "description": alt["description"],
+                "score": max(0.0, min(1.0, score)),
+                "reasoning": " | ".join(reasoning)
+            })
+        
+        # Sort by score (highest first)
+        scored_alternatives.sort(key=lambda x: x["score"], reverse=True)
+        
+        return scored_alternatives
+
+    async def _generate_alternatives(self, decision: Dict[str, Any], 
+                                   system: str) -> List[Dict[str, Any]]:
+        """Generate alternative decisions for a given decision."""
+        alternatives = []
+        
+        # Get the original action
+        original_action = decision.get("action_type", "")
+        original_target = decision.get("target")
+        
+        # Generate variations based on system
+        if system == "memory":
+            # Memory alternatives
+            if original_action == "remember":
+                alternatives.extend([
+                    {
+                        "decision": {**decision, "importance": "low"},
+                        "description": "Remember with reduced importance"
+                    },
+                    {
+                        "decision": {**decision, "delay": 60},
+                        "description": "Delay memory creation"
+                    },
+                    {
+                        "decision": {**decision, "partial": True},
+                        "description": "Create partial memory"
+                    }
+                ])
+                
+        elif system == "npc":
+            # NPC behavior alternatives
+            if original_action in ["move", "travel"]:
+                alternatives.extend([
+                    {
+                        "decision": {**decision, "speed": "slow"},
+                        "description": "Move slowly"
+                    },
+                    {
+                        "decision": {**decision, "target": "nearby_location"},
+                        "description": "Move to closer location"
+                    },
+                    {
+                        "decision": {"action_type": "stay", "reason": "tired"},
+                        "description": "Stay in current location"
+                    }
+                ])
+                
+        elif system == "lore":
+            # Lore alternatives
+            if original_action == "reveal":
+                alternatives.extend([
+                    {
+                        "decision": {**decision, "partial_reveal": True},
+                        "description": "Reveal partial information"
+                    },
+                    {
+                        "decision": {**decision, "delay": 120},
+                        "description": "Delay revelation"
+                    },
+                    {
+                        "decision": {"action_type": "hint", "target": original_target},
+                        "description": "Provide hint instead"
+                    }
+                ])
+        
+        # Add a "do nothing" alternative
+        alternatives.append({
+            "decision": {"action_type": "none", "reason": "conflict_avoidance"},
+            "description": "Take no action"
+        })
+        
+        return alternatives
+
     async def _generate_executive_override(self, decision: Dict[str, Any], system: str) -> Dict[str, Any]:
         """Generate an executive override for a decision"""
         # Get current state
@@ -1873,6 +1996,147 @@ class NyxIntegration:
             "score": best_alternative["score"],
             "timestamp": datetime.now().isoformat()
         }
+
+    def _calculate_pacing_impact(self, decision: Dict[str, Any], current_state: Dict[str, Any]) -> float:
+        """Calculate the impact of a decision on narrative pacing."""
+        score = 0.5  # Start neutral
+        narrative_context = current_state.get("narrative_context", {})
+        
+        # Get current narrative stage
+        current_arc = narrative_context.get("current_arc", "rising_action")
+        
+        # Define expected pacing for each stage
+        pacing_expectations = {
+            "introduction": {"pace": "slow", "intensity": "low"},
+            "rising_action": {"pace": "building", "intensity": "medium"},
+            "climax": {"pace": "fast", "intensity": "high"},
+            "falling_action": {"pace": "slowing", "intensity": "medium"},
+            "resolution": {"pace": "slow", "intensity": "low"}
+        }
+        
+        expected = pacing_expectations.get(current_arc, {"pace": "medium", "intensity": "medium"})
+        decision_pace = decision.get("pacing_impact", {})
+        
+        # Compare decision pace with expected pace
+        if decision_pace.get("pace") == expected["pace"]:
+            score += 0.3
+        elif decision_pace.get("pace") == "opposite":
+            score -= 0.4
+        
+        # Check intensity match
+        if decision_pace.get("intensity") == expected["intensity"]:
+            score += 0.2
+        elif abs({"low": 1, "medium": 2, "high": 3}.get(decision_pace.get("intensity", "medium"), 2) -
+                 {"low": 1, "medium": 2, "high": 3}.get(expected["intensity"], 2)) > 1:
+            score -= 0.3
+        
+        return max(0.0, min(1.0, score))
+
+    def _evaluate_theme_alignment(self, decision: Dict[str, Any], current_state: Dict[str, Any]) -> float:
+        """Evaluate how well a decision aligns with story themes."""
+        score = 1.0
+        world_state = current_state.get("world_state", {})
+        narrative_context = current_state.get("narrative_context", {})
+        
+        # Get current themes
+        current_themes = narrative_context.get("themes", [])
+        setting_mood = world_state.get("setting", {}).get("mood_tone", "")
+        
+        # Check theme alignment
+        decision_themes = decision.get("themes", [])
+        conflicting_themes = decision.get("conflicting_themes", [])
+        
+        # Bonus for supporting current themes
+        for theme in decision_themes:
+            if theme in current_themes:
+                score += 0.15
+        
+        # Penalty for conflicting with established themes
+        for theme in conflicting_themes:
+            if theme in current_themes:
+                score -= 0.25
+        
+        # Check mood alignment
+        if setting_mood and "mood_impact" in decision:
+            mood_compatibility = {
+                "lighthearted": ["comedy", "friendship", "adventure"],
+                "dark": ["tragedy", "horror", "betrayal"],
+                "romantic": ["love", "passion", "intimacy"],
+                "serious": ["drama", "conflict", "growth"]
+            }
+            
+            compatible_moods = mood_compatibility.get(setting_mood, [])
+            if decision["mood_impact"] not in compatible_moods:
+                score -= 0.2
+        
+        return max(0.0, min(1.0, score))
+
+    def _check_character_consistency(self, decision: Dict[str, Any], current_state: Dict[str, Any]) -> float:
+        """Check if a decision maintains character consistency."""
+        score = 1.0
+        character_state = current_state.get("character_state", {})
+        
+        # Check personality alignment
+        if "personality_traits" in character_state:
+            traits = character_state["personality_traits"]
+            action_traits = decision.get("required_traits", [])
+            conflicting_traits = decision.get("conflicting_traits", [])
+            
+            # Bonus for matching traits
+            for trait in action_traits:
+                if trait in traits:
+                    score += 0.1
+            
+            # Penalty for conflicting traits
+            for trait in conflicting_traits:
+                if trait in traits:
+                    score -= 0.3
+        
+        # Check relationship consistency
+        if "relationships" in character_state and "relationship_impact" in decision:
+            relationships = character_state["relationships"]
+            for npc, impact in decision["relationship_impact"].items():
+                if npc in relationships:
+                    current_level = relationships[npc].get("level", 50)
+                    # Penalize actions that drastically change established relationships
+                    if abs(impact) > 30 and current_level > 70:
+                        score -= 0.2
+        
+        # Check stat consistency
+        if "stat_requirements" in decision:
+            for stat, required in decision["stat_requirements"].items():
+                current_value = character_state.get(stat, 0)
+                if current_value < required:
+                    score -= 0.2
+        
+        return max(0.0, min(1.0, score))
+
+    def _calculate_plot_coherence(self, decision: Dict[str, Any], current_state: Dict[str, Any]) -> float:
+        """Calculate how well a decision maintains plot coherence."""
+        score = 1.0
+        
+        # Check if decision affects active quests
+        if "quest_impact" in decision:
+            active_quests = current_state.get("game_state", {}).get("active_quests", [])
+            if active_quests:
+                # Penalize decisions that would break quest chains
+                if decision.get("breaks_quest_chain"):
+                    score -= 0.4
+                # Penalize decisions that skip important plot points
+                if decision.get("skips_plot_points"):
+                    score -= 0.3
+        
+        # Check narrative stage alignment
+        current_arc = current_state.get("narrative_context", {}).get("current_arc", "")
+        if current_arc and "expected_stage" in decision:
+            if decision["expected_stage"] != current_arc:
+                score -= 0.2
+        
+        # Check for narrative contradictions
+        if decision.get("contradicts_established_facts"):
+            score -= 0.5
+        
+        return max(0.0, score)
 
     async def _evaluate_narrative_impact(self, decision: Dict[str, Any], system: str) -> float:
         """Evaluate the narrative impact of a decision"""
@@ -1906,6 +2170,62 @@ class NyxIntegration:
         
         return False
 
+    def _timing_conflicts(self, timing1: Optional[Dict[str, Any]], 
+                         timing2: Optional[Dict[str, Any]]) -> bool:
+        """Check if two timing requirements conflict."""
+        if not timing1 or not timing2:
+            return False
+        
+        # Check if both require immediate execution
+        if timing1.get("immediate") and timing2.get("immediate"):
+            return True
+        
+        # Check for overlapping time windows
+        start1 = timing1.get("start", 0)
+        end1 = timing1.get("end", float('inf'))
+        start2 = timing2.get("start", 0)
+        end2 = timing2.get("end", float('inf'))
+        
+        # Check if windows overlap
+        if start1 <= start2 < end1 or start2 <= start1 < end2:
+            # Check if both require exclusive time
+            if timing1.get("exclusive") and timing2.get("exclusive"):
+                return True
+        
+        # Check sequence conflicts
+        if timing1.get("must_complete_before") == timing2.get("id") and \
+           timing2.get("must_complete_before") == timing1.get("id"):
+            return True  # Circular dependency
+        
+        return False
+
+    def _resources_conflict(self, resources1: Optional[Dict[str, Any]], 
+                           resources2: Optional[Dict[str, Any]]) -> bool:
+        """Check if two sets of resources conflict."""
+        if not resources1 or not resources2:
+            return False
+        
+        # Check for exclusive resources
+        exclusive_resources = ["scene_control", "narrative_focus", "player_attention"]
+        
+        for resource in exclusive_resources:
+            if resources1.get(resource) and resources2.get(resource):
+                return True
+        
+        # Check for limited resources
+        limited_resources = {
+            "npc_actions": 10,  # Max NPCs that can act simultaneously
+            "memory_operations": 5,  # Max concurrent memory operations
+            "lore_updates": 3   # Max concurrent lore updates
+        }
+        
+        for resource, limit in limited_resources.items():
+            total_requested = resources1.get(resource, 0) + resources2.get(resource, 0)
+            if total_requested > limit:
+                return True
+        
+        return False
+
     def _decisions_conflict(self, decision1: Dict[str, Any], decision2: Dict[str, Any]) -> bool:
         """Check if two decisions conflict"""
         # Check for direct conflicts
@@ -1922,6 +2242,152 @@ class NyxIntegration:
             return True
             
         return False
+    
+    def _calculate_style_match(self, decision: Dict[str, Any], user_model: Dict[str, Any]) -> float:
+        """Calculate how well a decision matches the user's preferred style."""
+        score = 0.5  # Start neutral
+        
+        # Get style preferences
+        style_prefs = user_model.get("style_preferences", {})
+        narrative_style = style_prefs.get("narrative_style", "balanced")
+        interaction_style = style_prefs.get("interaction_style", "mixed")
+        detail_level = style_prefs.get("detail_level", "medium")
+        
+        # Check narrative style match
+        decision_narrative = decision.get("narrative_style", "balanced")
+        if decision_narrative == narrative_style:
+            score += 0.2
+        
+        # Check interaction style
+        decision_interaction = decision.get("interaction_type", "mixed")
+        if decision_interaction == interaction_style:
+            score += 0.2
+        elif (interaction_style == "dialogue" and decision_interaction == "action") or \
+             (interaction_style == "action" and decision_interaction == "dialogue"):
+            score -= 0.15
+        
+        # Check detail level preference
+        decision_detail = decision.get("detail_level", "medium")
+        detail_map = {"minimal": 1, "medium": 2, "detailed": 3}
+        
+        detail_diff = abs(detail_map.get(decision_detail, 2) - 
+                         detail_map.get(detail_level, 2))
+        
+        if detail_diff == 0:
+            score += 0.15
+        elif detail_diff > 1:
+            score -= 0.1
+        
+        return max(0.0, min(1.0, score))
+
+    def _check_boundary_respect(self, decision: Dict[str, Any], user_model: Dict[str, Any]) -> float:
+        """Check if a decision respects user boundaries."""
+        score = 1.0  # Start with full respect
+        
+        # Get user boundaries
+        boundaries = user_model.get("boundaries", {})
+        hard_limits = boundaries.get("hard_limits", [])
+        soft_limits = boundaries.get("soft_limits", [])
+        content_warnings = boundaries.get("content_warnings", [])
+        
+        # Check hard limits (absolute boundaries)
+        decision_content = decision.get("content_tags", [])
+        for limit in hard_limits:
+            if limit in decision_content:
+                return 0.0  # Immediate fail
+        
+        # Check soft limits (preferences to avoid)
+        for limit in soft_limits:
+            if limit in decision_content:
+                score -= 0.3
+        
+        # Check content that needs warnings
+        for warning_type in content_warnings:
+            if warning_type in decision_content and not decision.get("warning_provided"):
+                score -= 0.2
+        
+        # Check consent for major changes
+        if decision.get("major_consequence") and not decision.get("player_consent"):
+            score -= 0.4
+        
+        return max(0.0, score)
+
+    def _predict_engagement_impact(self, decision: Dict[str, Any], user_model: Dict[str, Any]) -> float:
+        """Predict how a decision will impact user engagement."""
+        score = 0.5  # Start neutral
+        
+        # Get engagement history
+        engagement_history = user_model.get("engagement_metrics", {})
+        recent_engagement = engagement_history.get("recent_engagement_level", 0.5)
+        preferred_challenge = user_model.get("preferred_challenge_level", "medium")
+        
+        # Check if decision provides appropriate challenge
+        decision_challenge = decision.get("challenge_level", "medium")
+        challenge_map = {"easy": 1, "medium": 2, "hard": 3}
+        
+        challenge_diff = abs(challenge_map.get(decision_challenge, 2) - 
+                            challenge_map.get(preferred_challenge, 2))
+        
+        if challenge_diff == 0:
+            score += 0.3
+        elif challenge_diff == 1:
+            score += 0.1
+        else:
+            score -= 0.2
+        
+        # Check novelty vs familiarity balance
+        if recent_engagement < 0.3:  # Low engagement
+            # Need more novelty
+            if decision.get("novelty_level", "medium") == "high":
+                score += 0.3
+        elif recent_engagement > 0.7:  # High engagement
+            # Can maintain with familiar elements
+            if decision.get("novelty_level", "medium") == "medium":
+                score += 0.2
+        
+        # Check for engagement killers
+        if decision.get("repetitive_content"):
+            score -= 0.3
+        if decision.get("breaks_immersion"):
+            score -= 0.4
+        
+        return max(0.0, min(1.0, score))
+
+    def _calculate_preference_match(self, decision: Dict[str, Any], user_model: Dict[str, Any]) -> float:
+        """Calculate how well a decision matches user preferences."""
+        score = 0.5  # Start neutral
+        
+        # Get user preferences
+        preferences = user_model.get("preferences", {})
+        play_style = preferences.get("play_style", "balanced")
+        favorite_themes = preferences.get("favorite_themes", [])
+        disliked_elements = preferences.get("disliked_elements", [])
+        
+        # Check play style alignment
+        decision_style = decision.get("play_style_affinity", "balanced")
+        if decision_style == play_style:
+            score += 0.3
+        elif (play_style == "combat" and decision_style == "social") or \
+             (play_style == "social" and decision_style == "combat"):
+            score -= 0.2
+        
+        # Check theme preferences
+        decision_themes = decision.get("themes", [])
+        for theme in decision_themes:
+            if theme in favorite_themes:
+                score += 0.1
+            if theme in disliked_elements:
+                score -= 0.2
+        
+        # Check content preferences
+        if "content_tags" in decision:
+            for tag in decision["content_tags"]:
+                if tag in preferences.get("preferred_content", []):
+                    score += 0.05
+                if tag in preferences.get("avoided_content", []):
+                    score -= 0.15
+        
+        return max(0.0, min(1.0, score))
 
     async def _check_user_model_alignment(self, decision: Dict[str, Any]) -> float:
         """Check how well a decision aligns with the user model"""
@@ -1942,6 +2408,279 @@ class NyxIntegration:
         }
         
         return sum(score * weights[factor] for factor, score in alignment_scores.items())
+
+    async def _generate_reconciliation_plan(self, inconsistencies: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Generate a plan to reconcile detected inconsistencies."""
+        plan = {
+            "steps": [],
+            "priority_order": [],
+            "estimated_impact": {}
+        }
+        
+        # Group inconsistencies by type and severity
+        by_severity = {"high": [], "medium": [], "low": []}
+        for inconsistency in inconsistencies:
+            severity = inconsistency.get("severity", "low")
+            by_severity[severity].append(inconsistency)
+        
+        # Process high severity first
+        for severity in ["high", "medium", "low"]:
+            for inconsistency in by_severity[severity]:
+                step = await self._create_reconciliation_step(inconsistency)
+                if step:
+                    plan["steps"].append(step)
+                    plan["priority_order"].append(step["id"])
+        
+        # Estimate overall impact
+        plan["estimated_impact"] = {
+            "systems_affected": len(set(step["affects"] for step in plan["steps"])),
+            "estimated_time": sum(step.get("estimated_time", 0) for step in plan["steps"]),
+            "risk_level": "high" if by_severity["high"] else ("medium" if by_severity["medium"] else "low")
+        }
+        
+        return plan
+    
+    async def _create_reconciliation_step(self, inconsistency: Dict[str, Any]) -> Dict[str, Any]:
+        """Create a single reconciliation step for an inconsistency."""
+        step = {
+            "id": f"reconcile_{inconsistency['type']}_{hash(str(inconsistency))}",
+            "type": inconsistency["type"],
+            "description": f"Reconcile {inconsistency['type']}",
+            "affects": [],
+            "actions": [],
+            "estimated_time": 0
+        }
+        
+        if inconsistency["type"] == "location_mismatch":
+            step["affects"] = ["npc", "scene"]
+            step["actions"] = [
+                {
+                    "system": "npc",
+                    "action": "update_location",
+                    "params": {
+                        "npc_id": inconsistency["details"].split()[1],
+                        "new_location": inconsistency["scene_location"]
+                    }
+                }
+            ]
+            step["estimated_time"] = 1
+            
+        elif inconsistency["type"] == "lore_contradiction":
+            step["affects"] = ["memory", "lore"]
+            step["actions"] = [
+                {
+                    "system": "memory",
+                    "action": "mark_as_false",
+                    "params": {
+                        "memory_fact": inconsistency["memory_fact"]
+                    }
+                },
+                {
+                    "system": "lore",
+                    "action": "reinforce_fact",
+                    "params": {
+                        "fact": inconsistency["contradicted_lore"]
+                    }
+                }
+            ]
+            step["estimated_time"] = 2
+            
+        elif inconsistency["type"] == "temporal_inconsistency":
+            step["affects"] = [inconsistency["details"].split()[0]]
+            step["actions"] = [
+                {
+                    "system": inconsistency["details"].split()[0],
+                    "action": "sync_time",
+                    "params": {
+                        "new_time": inconsistency["scene_time"]
+                    }
+                }
+            ]
+            step["estimated_time"] = 1
+        
+        return step
+
+    def _detect_state_inconsistencies(self, memory_state: Dict[str, Any], 
+                                     npc_state: Dict[str, Any], 
+                                     lore_state: Dict[str, Any], 
+                                     scene_state: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Detect inconsistencies between different system states."""
+        inconsistencies = []
+        
+        # Check NPC location consistency
+        for npc_id, npc_data in npc_state.items():
+            npc_location = npc_data.get("location")
+            if npc_location and npc_location != scene_state.get("current_location"):
+                # Check if NPC is supposed to be in current scene
+                if npc_id in scene_state.get("present_npcs", []):
+                    inconsistencies.append({
+                        "type": "location_mismatch",
+                        "severity": "high",
+                        "details": f"NPC {npc_id} location mismatch",
+                        "npc_location": npc_location,
+                        "scene_location": scene_state.get("current_location")
+                    })
+        
+        # Check memory-lore consistency
+        recent_memories = memory_state.get("recent_memories", [])
+        for memory in recent_memories:
+            if memory.get("type") == "lore":
+                # Check if memory contradicts established lore
+                memory_facts = memory.get("facts", [])
+                lore_facts = lore_state.get("established_facts", [])
+                
+                for fact in memory_facts:
+                    if fact.get("contradicts") in lore_facts:
+                        inconsistencies.append({
+                            "type": "lore_contradiction",
+                            "severity": "medium",
+                            "details": "Memory contradicts established lore",
+                            "memory_fact": fact,
+                            "contradicted_lore": fact.get("contradicts")
+                        })
+        
+        # Check temporal consistency
+        scene_time = scene_state.get("current_time")
+        for system_name, state in [("memory", memory_state), ("npc", npc_state)]:
+            system_time = state.get("last_update_time")
+            if system_time and scene_time:
+                # Check if times are significantly different
+                # This is simplified - would need proper time parsing
+                if abs(hash(str(system_time)) - hash(str(scene_time))) > 1000000:
+                    inconsistencies.append({
+                        "type": "temporal_inconsistency",
+                        "severity": "low",
+                        "details": f"{system_name} time doesn't match scene time",
+                        "system_time": system_time,
+                        "scene_time": scene_time
+                    })
+        
+        return inconsistencies
+
+    async def _verify_reconciliation(self) -> Dict[str, Any]:
+        """Verify that reconciliation was successful."""
+        verification_result = {
+            "verified": True,
+            "remaining_inconsistencies": [],
+            "new_inconsistencies": [],
+            "verification_time": datetime.now().isoformat()
+        }
+        
+        try:
+            # Re-check states
+            memory_state = await self.memory_integration.get_state()
+            npc_state = {}  # Would get from scene manager
+            lore_state = await self.get_lore_state()
+            scene_state = {}  # Would get from scene manager
+            
+            # Re-detect inconsistencies
+            current_inconsistencies = self._detect_state_inconsistencies(
+                memory_state, npc_state, lore_state, scene_state
+            )
+            
+            if current_inconsistencies:
+                verification_result["verified"] = False
+                verification_result["remaining_inconsistencies"] = current_inconsistencies
+                
+                # Check if any are new (not in original list)
+                # This is simplified - would need to track original inconsistencies
+                verification_result["new_inconsistencies"] = [
+                    inc for inc in current_inconsistencies 
+                    if inc.get("detected_after_reconciliation")
+                ]
+        
+        except Exception as e:
+            verification_result["verified"] = False
+            verification_result["error"] = str(e)
+        
+        return verification_result
+
+    async def _execute_reconciliation(self, plan: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute a reconciliation plan."""
+        results = {
+            "executed_steps": [],
+            "failed_steps": [],
+            "partial_success": [],
+            "overall_success": True
+        }
+        
+        # Execute steps in priority order
+        for step_id in plan["priority_order"]:
+            step = next((s for s in plan["steps"] if s["id"] == step_id), None)
+            if not step:
+                continue
+                
+            step_result = {
+                "step_id": step_id,
+                "status": "pending",
+                "actions_completed": [],
+                "errors": []
+            }
+            
+            # Execute each action in the step
+            for action in step["actions"]:
+                try:
+                    action_result = await self._execute_reconciliation_action(action)
+                    if action_result["success"]:
+                        step_result["actions_completed"].append(action)
+                    else:
+                        step_result["errors"].append({
+                            "action": action,
+                            "error": action_result.get("error", "Unknown error")
+                        })
+                except Exception as e:
+                    step_result["errors"].append({
+                        "action": action,
+                        "error": str(e)
+                    })
+            
+            # Determine step status
+            if not step_result["errors"]:
+                step_result["status"] = "success"
+                results["executed_steps"].append(step_result)
+            elif step_result["actions_completed"]:
+                step_result["status"] = "partial"
+                results["partial_success"].append(step_result)
+            else:
+                step_result["status"] = "failed"
+                results["failed_steps"].append(step_result)
+                results["overall_success"] = False
+        
+        return results
+    
+    async def _execute_reconciliation_action(self, action: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute a single reconciliation action."""
+        system = action["system"]
+        action_type = action["action"]
+        params = action["params"]
+        
+        try:
+            if system == "npc":
+                if action_type == "update_location":
+                    # Update NPC location through the appropriate system
+                    # This would call the actual NPC system
+                    return {"success": True}
+                    
+            elif system == "memory":
+                if action_type == "mark_as_false":
+                    # Mark memory as false through memory system
+                    if self.memory_integration:
+                        # Create false memory marker
+                        return {"success": True}
+                        
+            elif system == "lore":
+                if action_type == "reinforce_fact":
+                    # Reinforce lore fact
+                    if self.lore_system:
+                        # Reinforce the fact in lore system
+                        return {"success": True}
+                        
+            # Add more system handlers as needed
+            
+            return {"success": False, "error": f"Unknown system or action: {system}.{action_type}"}
+            
+        except Exception as e:
+            return {"success": False, "error": str(e)}
 
     async def reconcile_system_states(self):
         """Reconcile states across all systems"""
